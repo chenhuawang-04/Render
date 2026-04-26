@@ -30,8 +30,8 @@ public:
         if constexpr (std::same_as<DimensionT, Dim2>) {
             component_.style.orthographic_height = 20.0F;
             component_.style.aspect_ratio = 16.0F / 9.0F;
-            component_.style.near_plane = -100.0F;
-            component_.style.far_plane = 100.0F;
+            component_.style.near_plane = 0.0F;
+            component_.style.far_plane = 1.0F;
             component_.style.zoom = 1.0F;
             component_.style.y_down = 0U;
             component_.style.reserved0 = 0U;
@@ -113,13 +113,10 @@ public:
                            float near_plane_,
                            float far_plane_) noexcept {
         if constexpr (std::same_as<DimensionT, Dim2>) {
-            if (near_plane_ <= far_plane_) {
-                component_.style.near_plane = near_plane_;
-                component_.style.far_plane = far_plane_;
-            } else {
-                component_.style.near_plane = far_plane_;
-                component_.style.far_plane = near_plane_;
-            }
+            const float near_plane = std::max(0.0F, near_plane_);
+            const float far_plane = std::max(near_plane + 1e-3F, far_plane_);
+            component_.style.near_plane = near_plane;
+            component_.style.far_plane = far_plane;
         } else {
             const float near_plane = std::max(1e-4F, near_plane_);
             const float far_plane = std::max(near_plane + 1e-3F, far_plane_);

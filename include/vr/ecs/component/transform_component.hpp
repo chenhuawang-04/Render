@@ -22,11 +22,9 @@ struct TransformHierarchyLink final {
 };
 
 struct TransformStyle2D final {
-    float position_x;
-    float position_y;
+    Float2 position;
     float rotation_radians;
-    float scale_x;
-    float scale_y;
+    Float2 scale;
 };
 
 struct TransformRuntime2D final {
@@ -43,7 +41,7 @@ struct TransformStyle3D final {
     Float3 position;
     Quaternion rotation;
     Float3 scale;
-    float reserved0;
+    std::uint32_t reserved0;
 };
 
 struct TransformRuntime3D final {

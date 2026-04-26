@@ -53,16 +53,14 @@ public:
 
     static void SetDefaultStyle(TransformType& component_) noexcept {
         if constexpr (std::same_as<DimensionT, Dim2>) {
-            component_.style.position_x = 0.0F;
-            component_.style.position_y = 0.0F;
+            component_.style.position = Float2{.x = 0.0F, .y = 0.0F};
             component_.style.rotation_radians = 0.0F;
-            component_.style.scale_x = 1.0F;
-            component_.style.scale_y = 1.0F;
+            component_.style.scale = Float2{.x = 1.0F, .y = 1.0F};
         } else {
             component_.style.position = Float3{.x = 0.0F, .y = 0.0F, .z = 0.0F};
             component_.style.rotation = Quaternion{.x = 0.0F, .y = 0.0F, .z = 0.0F, .w = 1.0F};
             component_.style.scale = Float3{.x = 1.0F, .y = 1.0F, .z = 1.0F};
-            component_.style.reserved0 = 0.0F;
+            component_.style.reserved0 = 0U;
         }
 
         MarkDirty(component_, transform_dirty_local_flag | transform_dirty_world_flag);
@@ -147,8 +145,8 @@ public:
                                  float y_) noexcept
     requires std::same_as<DimensionT, Dim2>
     {
-        component_.style.position_x = x_;
-        component_.style.position_y = y_;
+        component_.style.position.x = x_;
+        component_.style.position.y = y_;
         MarkDirty(component_, transform_dirty_local_flag | transform_dirty_world_flag);
     }
 
@@ -165,8 +163,8 @@ public:
                               float scale_y_) noexcept
     requires std::same_as<DimensionT, Dim2>
     {
-        component_.style.scale_x = scale_x_;
-        component_.style.scale_y = scale_y_;
+        component_.style.scale.x = scale_x_;
+        component_.style.scale.y = scale_y_;
         MarkDirty(component_, transform_dirty_local_flag | transform_dirty_world_flag);
     }
 
@@ -216,11 +214,11 @@ public:
 
     static void RebuildLocalMatrix(TransformType& component_) noexcept {
         if constexpr (std::same_as<DimensionT, Dim2>) {
-            component_.runtime.local_matrix = spatial_math::ComposeAffine2x3Trs(component_.style.position_x,
-                                                                                 component_.style.position_y,
+            component_.runtime.local_matrix = spatial_math::ComposeAffine2x3Trs(component_.style.position.x,
+                                                                                 component_.style.position.y,
                                                                                  component_.style.rotation_radians,
-                                                                                 component_.style.scale_x,
-                                                                                 component_.style.scale_y);
+                                                                                 component_.style.scale.x,
+                                                                                 component_.style.scale.y);
         } else {
             component_.style.rotation = spatial_math::NormalizeQuaternion(component_.style.rotation);
             component_.runtime.local_matrix = spatial_math::ComposeMatrix4x4Trs(component_.style.position,

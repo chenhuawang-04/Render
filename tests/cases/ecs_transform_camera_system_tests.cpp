@@ -6,12 +6,19 @@
 
 #include <array>
 #include <cmath>
+#include <cstdint>
 #include <type_traits>
 
 namespace {
 
 [[nodiscard]] bool NearlyEqual(float lhs_, float rhs_, float epsilon_ = 1e-4F) {
     return std::abs(lhs_ - rhs_) <= epsilon_;
+}
+
+[[nodiscard]] float Mat4At(const vr::ecs::Matrix4x4& matrix_,
+                           std::uint32_t row_,
+                           std::uint32_t column_) {
+    return matrix_.m[column_ * 4U + row_];
 }
 
 VR_TEST_CASE(EcsTransformCameraComponents_are_pure_pod, "unit;core;ecs;transform;camera") {
@@ -76,9 +83,9 @@ VR_TEST_CASE(EcsTransformSystem_dim3_hierarchy_and_revisions, "unit;core;ecs;tra
     TransformSystem3D::UpdateHierarchy(transforms.data(),
                                        static_cast<std::uint32_t>(transforms.size()));
 
-    VR_CHECK(NearlyEqual(transforms[1U].runtime.world_matrix.m03, 1.0F));
-    VR_CHECK(NearlyEqual(transforms[1U].runtime.world_matrix.m13, 2.0F));
-    VR_CHECK(NearlyEqual(transforms[1U].runtime.world_matrix.m23, 1.0F));
+    VR_CHECK(NearlyEqual(Mat4At(transforms[1U].runtime.world_matrix, 0U, 3U), 1.0F));
+    VR_CHECK(NearlyEqual(Mat4At(transforms[1U].runtime.world_matrix, 1U, 3U), 2.0F));
+    VR_CHECK(NearlyEqual(Mat4At(transforms[1U].runtime.world_matrix, 2U, 3U), 1.0F));
 
     const std::uint32_t child_world_revision_before = transforms[1U].runtime.world_revision;
     TransformSystem3D::SetLocalRotationEulerXyz(transforms[0U], 0.0F, 1.57079632679F, 0.0F);
@@ -87,9 +94,12 @@ VR_TEST_CASE(EcsTransformSystem_dim3_hierarchy_and_revisions, "unit;core;ecs;tra
 
     VR_CHECK(transforms[1U].runtime.world_revision > child_world_revision_before);
 
-    const float dx = transforms[1U].runtime.world_matrix.m03 - transforms[0U].runtime.world_matrix.m03;
-    const float dy = transforms[1U].runtime.world_matrix.m13 - transforms[0U].runtime.world_matrix.m13;
-    const float dz = transforms[1U].runtime.world_matrix.m23 - transforms[0U].runtime.world_matrix.m23;
+    const float dx = Mat4At(transforms[1U].runtime.world_matrix, 0U, 3U) -
+                     Mat4At(transforms[0U].runtime.world_matrix, 0U, 3U);
+    const float dy = Mat4At(transforms[1U].runtime.world_matrix, 1U, 3U) -
+                     Mat4At(transforms[0U].runtime.world_matrix, 1U, 3U);
+    const float dz = Mat4At(transforms[1U].runtime.world_matrix, 2U, 3U) -
+                     Mat4At(transforms[0U].runtime.world_matrix, 2U, 3U);
     const float distance_sq = dx * dx + dy * dy + dz * dz;
     VR_CHECK(NearlyEqual(distance_sq, 4.0F, 1e-3F));
 }
@@ -110,14 +120,14 @@ VR_TEST_CASE(EcsCameraSystem_dim2_projection_and_view_follow_transform, "unit;co
     CameraSystem2D::MarkViewDirty(camera);
     CameraSystem2D::Update(camera, transform);
 
-    VR_CHECK(NearlyEqual(camera.runtime.view_matrix.m03, -5.0F));
-    VR_CHECK(NearlyEqual(camera.runtime.view_matrix.m13, -3.0F));
-    VR_CHECK(camera.runtime.projection_matrix.m00 > 0.0F);
-    VR_CHECK(camera.runtime.projection_matrix.m11 > 0.0F);
+    VR_CHECK(NearlyEqual(Mat4At(camera.runtime.view_matrix, 0U, 3U), -5.0F));
+    VR_CHECK(NearlyEqual(Mat4At(camera.runtime.view_matrix, 1U, 3U), -3.0F));
+    VR_CHECK(Mat4At(camera.runtime.projection_matrix, 0U, 0U) > 0.0F);
+    VR_CHECK(Mat4At(camera.runtime.projection_matrix, 1U, 1U) > 0.0F);
 
     CameraSystem2D::SetYDown(camera, true);
     CameraSystem2D::Update(camera, transform);
-    VR_CHECK(camera.runtime.projection_matrix.m11 < 0.0F);
+    VR_CHECK(Mat4At(camera.runtime.projection_matrix, 1U, 1U) < 0.0F);
 }
 
 VR_TEST_CASE(EcsCameraSystem_dim3_perspective_and_ortho_modes, "unit;core;ecs;camera") {
@@ -136,14 +146,14 @@ VR_TEST_CASE(EcsCameraSystem_dim3_perspective_and_ortho_modes, "unit;core;ecs;ca
     CameraSystem3D::MarkViewDirty(camera);
     CameraSystem3D::Update(camera, transform);
 
-    VR_CHECK(NearlyEqual(camera.runtime.view_matrix.m23, -5.0F));
-    VR_CHECK(NearlyEqual(camera.runtime.projection_matrix.m32, -1.0F));
+    VR_CHECK(NearlyEqual(Mat4At(camera.runtime.view_matrix, 2U, 3U), -5.0F));
+    VR_CHECK(NearlyEqual(Mat4At(camera.runtime.projection_matrix, 3U, 2U), -1.0F));
 
     CameraSystem3D::SetProjectionMode(camera, vr::ecs::CameraProjectionMode::orthographic);
     CameraSystem3D::Update(camera, transform);
 
-    VR_CHECK(NearlyEqual(camera.runtime.projection_matrix.m32, 0.0F));
-    VR_CHECK(NearlyEqual(camera.runtime.projection_matrix.m33, 1.0F));
+    VR_CHECK(NearlyEqual(Mat4At(camera.runtime.projection_matrix, 3U, 2U), 0.0F));
+    VR_CHECK(NearlyEqual(Mat4At(camera.runtime.projection_matrix, 3U, 3U), 1.0F));
 }
 
 VR_TEST_CASE(EcsCameraSystem_update_aligned_batch, "unit;core;ecs;camera") {
@@ -166,9 +176,9 @@ VR_TEST_CASE(EcsCameraSystem_update_aligned_batch, "unit;core;ecs;camera") {
     TransformSystem2D::UpdateHierarchy(transforms.data(), static_cast<std::uint32_t>(transforms.size()));
     CameraSystem2D::UpdateAligned(cameras.data(), transforms.data(), static_cast<std::uint32_t>(transforms.size()));
 
-    VR_CHECK(NearlyEqual(cameras[0U].runtime.view_matrix.m03, 0.0F));
-    VR_CHECK(NearlyEqual(cameras[1U].runtime.view_matrix.m03, -1.0F));
-    VR_CHECK(NearlyEqual(cameras[2U].runtime.view_matrix.m03, -2.0F));
+    VR_CHECK(NearlyEqual(Mat4At(cameras[0U].runtime.view_matrix, 0U, 3U), 0.0F));
+    VR_CHECK(NearlyEqual(Mat4At(cameras[1U].runtime.view_matrix, 0U, 3U), -1.0F));
+    VR_CHECK(NearlyEqual(Mat4At(cameras[2U].runtime.view_matrix, 0U, 3U), -2.0F));
     VR_CHECK(cameras[2U].runtime.revision > 0U);
 }
 

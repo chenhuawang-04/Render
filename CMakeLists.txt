@@ -15,6 +15,7 @@ find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
 set(MEMORYCENTER_ROOT "E:/Project/MelosyneTest/MemoryCenterNew" CACHE PATH "Path to MemoryCenterNew")
 set(VECTOR_ROOT "E:/Project/MelosyneTest/Vector_New" CACHE PATH "Path to Vector_New")
+set(FAST_MATH_ROOT "E:/Project/MelosyneTest/Math/fast_math" CACHE PATH "Path to fast_math root")
 set(SDL3_ROOT "E:/Project/MelosyneTest/FinalRender/vender/SDL-release-3.4.0" CACHE PATH "Path to SDL3 source root")
 set(FREETYPE_ROOT "E:/Project/MelosyneTest/VulkanRender_New/freetype-master" CACHE PATH "Path to FreeType source root")
 
@@ -23,6 +24,9 @@ if(NOT EXISTS "${MEMORYCENTER_ROOT}/CMakeLists.txt")
 endif()
 if(NOT EXISTS "${VECTOR_ROOT}/include/Center/Memory/Container/Vector/McVector.hpp")
     message(FATAL_ERROR "VECTOR_ROOT is invalid: ${VECTOR_ROOT}")
+endif()
+if(NOT EXISTS "${FAST_MATH_ROOT}/include/fast_math/types.h")
+    message(FATAL_ERROR "FAST_MATH_ROOT is invalid: ${FAST_MATH_ROOT}")
 endif()
 if(NOT EXISTS "${SDL3_ROOT}/CMakeLists.txt")
     message(FATAL_ERROR "SDL3_ROOT is invalid: ${SDL3_ROOT}")
@@ -132,6 +136,7 @@ target_include_directories(vulkan_init
         ${VR_GENERATED_INCLUDE_DIR}
         ${MEMORYCENTER_ROOT}/include
         ${VECTOR_ROOT}/include
+        ${FAST_MATH_ROOT}/include
 )
 
 target_link_libraries(vulkan_init
