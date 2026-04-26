@@ -1,0 +1,88 @@
+#include "support/test_framework.hpp"
+#include "vr/render/render_runtime_host.hpp"
+
+#include <functional>
+#include <stdexcept>
+#include <string>
+#include <utility>
+
+namespace {
+
+using Runtime = vr::render::RenderRuntimeHost<vr::platform::ActiveBackendTag, 2U>;
+
+class NoopRecorder final {
+public:
+    void Record(const vr::render::FrameRecordContext& record_context_) {
+        (void)record_context_;
+    }
+};
+
+template<typename FnT>
+[[nodiscard]] bool ThrowsAnyException(FnT&& function_) {
+    try {
+        std::invoke(std::forward<FnT>(function_));
+    } catch (...) {
+        return true;
+    }
+    return false;
+}
+
+VR_TEST_CASE(RuntimeConfig_modules_default_to_enabled, "unit;core;runtime") {
+    vr::render::RuntimeModulesCreateInfo modules{};
+    VR_CHECK(modules.enable_upload_host);
+    VR_CHECK(modules.enable_descriptor_host);
+    VR_CHECK(modules.enable_pipeline_host);
+    VR_CHECK(modules.enable_sampler_host);
+}
+
+VR_TEST_CASE(RuntimeConfig_default_state_before_initialize_is_safe, "unit;core;runtime") {
+    Runtime runtime{};
+
+    VR_CHECK(!runtime.IsInitialized());
+    VR_CHECK(!runtime.IsRunning());
+    VR_CHECK(!runtime.HasUploadHost());
+    VR_CHECK(!runtime.HasDescriptorHost());
+    VR_CHECK(!runtime.HasPipelineHost());
+    VR_CHECK(!runtime.HasSamplerHost());
+
+    const Runtime::CreateInfo& config = runtime.Config();
+    VR_CHECK(config.modules.enable_upload_host);
+    VR_CHECK(config.modules.enable_descriptor_host);
+    VR_CHECK(config.modules.enable_pipeline_host);
+    VR_CHECK(config.modules.enable_sampler_host);
+}
+
+VR_TEST_CASE(RuntimeConfig_unavailable_modules_throw_before_initialize, "unit;core;runtime") {
+    Runtime runtime{};
+
+    VR_CHECK(ThrowsAnyException([&]() { (void)runtime.GpuMemory(); }));
+    VR_CHECK(ThrowsAnyException([&]() { (void)runtime.Upload(); }));
+    VR_CHECK(ThrowsAnyException([&]() { (void)runtime.Descriptor(); }));
+    VR_CHECK(ThrowsAnyException([&]() { (void)runtime.Pipeline(); }));
+    VR_CHECK(ThrowsAnyException([&]() { (void)runtime.Sampler(); }));
+}
+
+VR_TEST_CASE(RuntimeConfig_tick_requires_initialize, "unit;core;runtime") {
+    Runtime runtime{};
+    NoopRecorder recorder{};
+
+    VR_CHECK(ThrowsAnyException([&]() { (void)runtime.Tick(recorder); }));
+}
+
+VR_TEST_CASE(RuntimeConfig_resource_creation_requires_initialize, "unit;core;runtime") {
+    Runtime runtime{};
+
+    vr::resource::BufferCreateInfo buffer_create_info{};
+    buffer_create_info.size = 1024U;
+    buffer_create_info.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+
+    vr::resource::ImageCreateInfo image_create_info{};
+    image_create_info.extent = VkExtent3D{64U, 64U, 1U};
+    image_create_info.format = VK_FORMAT_R8G8B8A8_UNORM;
+    image_create_info.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+
+    VR_CHECK(ThrowsAnyException([&]() { (void)runtime.CreateBuffer(buffer_create_info); }));
+    VR_CHECK(ThrowsAnyException([&]() { (void)runtime.CreateImage(image_create_info); }));
+}
+
+} // namespace
