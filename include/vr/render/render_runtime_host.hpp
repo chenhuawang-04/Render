@@ -9,6 +9,9 @@
 #include "vr/resource/gpu_memory_host.hpp"
 #include "vr/resource/image_host.hpp"
 #include "vr/resource/sampler_host.hpp"
+#include "vr/text/freetype_host.hpp"
+#include "vr/text/glyph_atlas_host.hpp"
+#include "vr/text/glyph_upload_host.hpp"
 
 #include <cstdint>
 #include <limits>
@@ -22,6 +25,9 @@ struct RuntimeModulesCreateInfo {
     bool enable_descriptor_host = true;
     bool enable_pipeline_host = true;
     bool enable_sampler_host = true;
+    bool enable_freetype_host = true;
+    bool enable_glyph_atlas_host = true;
+    bool enable_glyph_upload_host = true;
 };
 
 struct RuntimePrepareContext {
@@ -32,6 +38,9 @@ struct RuntimePrepareContext {
     DescriptorHost* descriptor_host = nullptr;
     PipelineHost* pipeline_host = nullptr;
     resource::SamplerHost* sampler_host = nullptr;
+    text::FreeTypeHost* freetype_host = nullptr;
+    text::GlyphAtlasHost* glyph_atlas_host = nullptr;
+    text::GlyphUploadHost* glyph_upload_host = nullptr;
 };
 
 template<typename RecorderT>
@@ -68,6 +77,9 @@ public:
         DescriptorHostCreateInfo descriptor{};
         PipelineHostCreateInfo pipeline{};
         resource::SamplerHostCreateInfo sampler{};
+        text::FreeTypeHostCreateInfo freetype{};
+        text::GlyphAtlasCreateInfo glyph_atlas{};
+        text::GlyphUploadHostCreateInfo glyph_upload{};
 
         RuntimeModulesCreateInfo modules{};
         PipelineWarmupCreateInfo pipeline_warmup{};
@@ -116,6 +128,20 @@ public:
                 sampler_initialized = true;
             }
 
+            if (create_info_cache.modules.enable_freetype_host) {
+                freetype_host.Initialize(create_info_cache.freetype);
+                freetype_initialized = true;
+            }
+
+            if (create_info_cache.modules.enable_glyph_atlas_host) {
+                if (!freetype_initialized) {
+                    throw std::runtime_error(
+                        "RenderRuntimeHost::Initialize requires FreeTypeHost when glyph_atlas_host is enabled");
+                }
+                glyph_atlas_host.Initialize(freetype_host, create_info_cache.glyph_atlas);
+                glyph_atlas_initialized = true;
+            }
+
             if (create_info_cache.modules.enable_descriptor_host) {
                 DescriptorHostCreateInfo descriptor_info = create_info_cache.descriptor;
                 descriptor_info.frames_in_flight = frames_in_flight_v;
@@ -136,6 +162,26 @@ public:
                 InitializeUploadSyncObjects(platform_host.Context());
             }
 
+            if (create_info_cache.modules.enable_glyph_upload_host) {
+                if (!glyph_atlas_initialized) {
+                    throw std::runtime_error(
+                        "RenderRuntimeHost::Initialize requires GlyphAtlasHost when glyph_upload_host is enabled");
+                }
+                if (!sampler_initialized) {
+                    throw std::runtime_error(
+                        "RenderRuntimeHost::Initialize requires SamplerHost when glyph_upload_host is enabled");
+                }
+                if (!upload_initialized) {
+                    throw std::runtime_error(
+                        "RenderRuntimeHost::Initialize requires UploadHost when glyph_upload_host is enabled");
+                }
+                glyph_upload_host.Initialize(platform_host.Context(),
+                                             gpu_memory_host,
+                                             sampler_host,
+                                             create_info_cache.glyph_upload);
+                glyph_upload_initialized = true;
+            }
+
             render_loop.Initialize(platform_host.Context(),
                                    platform_host.SurfaceHost(),
                                    swapchain,
@@ -153,9 +199,17 @@ public:
                 : VK_NULL_HANDLE;
             DestroyUploadSyncObjects(device);
 
+            if (glyph_upload_initialized) {
+                glyph_upload_host.Shutdown(platform_host.Context());
+                glyph_upload_initialized = false;
+            }
             if (upload_initialized) {
                 upload_host.Shutdown(platform_host.Context());
                 upload_initialized = false;
+            }
+            if (glyph_atlas_initialized) {
+                glyph_atlas_host.Shutdown();
+                glyph_atlas_initialized = false;
             }
             if (pipeline_initialized) {
                 pipeline_host.Shutdown(platform_host.Context());
@@ -168,6 +222,10 @@ public:
             if (sampler_initialized) {
                 sampler_host.Shutdown(platform_host.Context());
                 sampler_initialized = false;
+            }
+            if (freetype_initialized) {
+                freetype_host.Shutdown();
+                freetype_initialized = false;
             }
             if (gpu_memory_initialized) {
                 gpu_memory_host.Shutdown();
@@ -195,9 +253,19 @@ public:
 
         DestroyUploadSyncObjects(device);
 
+        if (glyph_upload_initialized) {
+            glyph_upload_host.Shutdown(platform_host.Context());
+            glyph_upload_initialized = false;
+        }
+
         if (upload_initialized) {
             upload_host.Shutdown(platform_host.Context());
             upload_initialized = false;
+        }
+
+        if (glyph_atlas_initialized) {
+            glyph_atlas_host.Shutdown();
+            glyph_atlas_initialized = false;
         }
 
         if (pipeline_initialized) {
@@ -213,6 +281,11 @@ public:
         if (sampler_initialized) {
             sampler_host.Shutdown(platform_host.Context());
             sampler_initialized = false;
+        }
+
+        if (freetype_initialized) {
+            freetype_host.Shutdown();
+            freetype_initialized = false;
         }
 
         if (gpu_memory_initialized) {
@@ -279,7 +352,17 @@ public:
             prepare_context.descriptor_host = descriptor_initialized ? &descriptor_host : nullptr;
             prepare_context.pipeline_host = pipeline_initialized ? &pipeline_host : nullptr;
             prepare_context.sampler_host = sampler_initialized ? &sampler_host : nullptr;
+            prepare_context.freetype_host = freetype_initialized ? &freetype_host : nullptr;
+            prepare_context.glyph_atlas_host = glyph_atlas_initialized ? &glyph_atlas_host : nullptr;
+            prepare_context.glyph_upload_host = glyph_upload_initialized ? &glyph_upload_host : nullptr;
             recorder_.PrepareFrame(prepare_context);
+        }
+
+        if (upload_initialized && glyph_upload_initialized && glyph_atlas_initialized) {
+            glyph_upload_host.UploadDirtyPages(platform_host.Context(),
+                                               upload_host,
+                                               frame_index,
+                                               glyph_atlas_host);
         }
 
         FrameSubmitWait extra_wait{};
@@ -347,6 +430,18 @@ public:
 
     [[nodiscard]] bool HasSamplerHost() const noexcept {
         return sampler_initialized;
+    }
+
+    [[nodiscard]] bool HasFreeTypeHost() const noexcept {
+        return freetype_initialized;
+    }
+
+    [[nodiscard]] bool HasGlyphAtlasHost() const noexcept {
+        return glyph_atlas_initialized;
+    }
+
+    [[nodiscard]] bool HasGlyphUploadHost() const noexcept {
+        return glyph_upload_initialized;
     }
 
     void RequestClose() noexcept {
@@ -434,6 +529,27 @@ public:
             throw std::runtime_error("RenderRuntimeHost::Sampler requested but host is not initialized");
         }
         return sampler_host;
+    }
+
+    [[nodiscard]] text::FreeTypeHost& FreeType() {
+        if (!freetype_initialized) {
+            throw std::runtime_error("RenderRuntimeHost::FreeType requested but host is not initialized");
+        }
+        return freetype_host;
+    }
+
+    [[nodiscard]] text::GlyphAtlasHost& GlyphAtlas() {
+        if (!glyph_atlas_initialized) {
+            throw std::runtime_error("RenderRuntimeHost::GlyphAtlas requested but host is not initialized");
+        }
+        return glyph_atlas_host;
+    }
+
+    [[nodiscard]] text::GlyphUploadHost& GlyphUpload() {
+        if (!glyph_upload_initialized) {
+            throw std::runtime_error("RenderRuntimeHost::GlyphUpload requested but host is not initialized");
+        }
+        return glyph_upload_host;
     }
 
     [[nodiscard]] resource::BufferResource CreateBuffer(const resource::BufferCreateInfo& create_info_) {
@@ -557,6 +673,9 @@ private:
     DescriptorHost descriptor_host{};
     PipelineHost pipeline_host{};
     resource::SamplerHost sampler_host{};
+    text::FreeTypeHost freetype_host{};
+    text::GlyphAtlasHost glyph_atlas_host{};
+    text::GlyphUploadHost glyph_upload_host{};
 
     vr::McVector<VkSemaphore> upload_complete_semaphores{};
 
@@ -566,6 +685,9 @@ private:
     bool descriptor_initialized = false;
     bool pipeline_initialized = false;
     bool sampler_initialized = false;
+    bool freetype_initialized = false;
+    bool glyph_atlas_initialized = false;
+    bool glyph_upload_initialized = false;
     bool loop_initialized = false;
     bool upload_wait_required = false;
     bool initialized = false;

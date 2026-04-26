@@ -17,6 +17,10 @@ target_link_libraries(vr_bench_support
 add_executable(${VR_BENCH_TARGET}
     bench_main.cpp
     cases/vulkan_types_bench.cpp
+    cases/ecs_text_component_bench.cpp
+    cases/ecs_text_runtime_system_bench.cpp
+    cases/freetype_host_bench.cpp
+    cases/glyph_atlas_host_bench.cpp
     cases/frame_retire_host_bench.cpp
     cases/frame_sync_bench.cpp
 )

@@ -18,6 +18,10 @@ add_executable(${VR_TEST_TARGET}
     test_main.cpp
     cases/vulkan_types_tests.cpp
     cases/frame_retire_host_tests.cpp
+    cases/ecs_text_component_tests.cpp
+    cases/ecs_text_runtime_system_tests.cpp
+    cases/freetype_host_tests.cpp
+    cases/glyph_atlas_host_tests.cpp
     cases/runtime_configuration_tests.cpp
     cases/runtime_integration_tests.cpp
 )
@@ -42,4 +46,3 @@ set_tests_properties(vr_tests.integration PROPERTIES
     SKIP_RETURN_CODE 125
     LABELS "integration;gpu"
 )
-

@@ -33,6 +33,9 @@ VR_TEST_CASE(RuntimeConfig_modules_default_to_enabled, "unit;core;runtime") {
     VR_CHECK(modules.enable_descriptor_host);
     VR_CHECK(modules.enable_pipeline_host);
     VR_CHECK(modules.enable_sampler_host);
+    VR_CHECK(modules.enable_freetype_host);
+    VR_CHECK(modules.enable_glyph_atlas_host);
+    VR_CHECK(modules.enable_glyph_upload_host);
 }
 
 VR_TEST_CASE(RuntimeConfig_default_state_before_initialize_is_safe, "unit;core;runtime") {
@@ -44,12 +47,18 @@ VR_TEST_CASE(RuntimeConfig_default_state_before_initialize_is_safe, "unit;core;r
     VR_CHECK(!runtime.HasDescriptorHost());
     VR_CHECK(!runtime.HasPipelineHost());
     VR_CHECK(!runtime.HasSamplerHost());
+    VR_CHECK(!runtime.HasFreeTypeHost());
+    VR_CHECK(!runtime.HasGlyphAtlasHost());
+    VR_CHECK(!runtime.HasGlyphUploadHost());
 
     const Runtime::CreateInfo& config = runtime.Config();
     VR_CHECK(config.modules.enable_upload_host);
     VR_CHECK(config.modules.enable_descriptor_host);
     VR_CHECK(config.modules.enable_pipeline_host);
     VR_CHECK(config.modules.enable_sampler_host);
+    VR_CHECK(config.modules.enable_freetype_host);
+    VR_CHECK(config.modules.enable_glyph_atlas_host);
+    VR_CHECK(config.modules.enable_glyph_upload_host);
 }
 
 VR_TEST_CASE(RuntimeConfig_unavailable_modules_throw_before_initialize, "unit;core;runtime") {
@@ -60,6 +69,9 @@ VR_TEST_CASE(RuntimeConfig_unavailable_modules_throw_before_initialize, "unit;co
     VR_CHECK(ThrowsAnyException([&]() { (void)runtime.Descriptor(); }));
     VR_CHECK(ThrowsAnyException([&]() { (void)runtime.Pipeline(); }));
     VR_CHECK(ThrowsAnyException([&]() { (void)runtime.Sampler(); }));
+    VR_CHECK(ThrowsAnyException([&]() { (void)runtime.FreeType(); }));
+    VR_CHECK(ThrowsAnyException([&]() { (void)runtime.GlyphAtlas(); }));
+    VR_CHECK(ThrowsAnyException([&]() { (void)runtime.GlyphUpload(); }));
 }
 
 VR_TEST_CASE(RuntimeConfig_tick_requires_initialize, "unit;core;runtime") {

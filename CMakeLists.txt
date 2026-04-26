@@ -15,6 +15,7 @@ find_package(Vulkan REQUIRED)
 set(MEMORYCENTER_ROOT "E:/Project/MelosyneTest/MemoryCenterNew" CACHE PATH "Path to MemoryCenterNew")
 set(VECTOR_ROOT "E:/Project/MelosyneTest/Vector_New" CACHE PATH "Path to Vector_New")
 set(SDL3_ROOT "E:/Project/MelosyneTest/FinalRender/vender/SDL-release-3.4.0" CACHE PATH "Path to SDL3 source root")
+set(FREETYPE_ROOT "E:/Project/MelosyneTest/VulkanRender_New/freetype-master" CACHE PATH "Path to FreeType source root")
 
 if(NOT EXISTS "${MEMORYCENTER_ROOT}/CMakeLists.txt")
     message(FATAL_ERROR "MEMORYCENTER_ROOT is invalid: ${MEMORYCENTER_ROOT}")
@@ -24,6 +25,9 @@ if(NOT EXISTS "${VECTOR_ROOT}/include/Center/Memory/Container/Vector/McVector.hp
 endif()
 if(NOT EXISTS "${SDL3_ROOT}/CMakeLists.txt")
     message(FATAL_ERROR "SDL3_ROOT is invalid: ${SDL3_ROOT}")
+endif()
+if(NOT EXISTS "${FREETYPE_ROOT}/CMakeLists.txt")
+    message(FATAL_ERROR "FREETYPE_ROOT is invalid: ${FREETYPE_ROOT}")
 endif()
 
 add_subdirectory("${MEMORYCENTER_ROOT}" "${CMAKE_BINARY_DIR}/_deps/memorycenter" EXCLUDE_FROM_ALL)
@@ -36,12 +40,32 @@ set(SDL_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(SDL_INSTALL OFF CACHE BOOL "" FORCE)
 add_subdirectory("${SDL3_ROOT}" "${CMAKE_BINARY_DIR}/_deps/sdl3" EXCLUDE_FROM_ALL)
 
+set(FT_DISABLE_ZLIB ON CACHE BOOL "" FORCE)
+set(FT_DISABLE_BZIP2 ON CACHE BOOL "" FORCE)
+set(FT_DISABLE_PNG ON CACHE BOOL "" FORCE)
+set(FT_DISABLE_HARFBUZZ ON CACHE BOOL "" FORCE)
+set(FT_DISABLE_BROTLI ON CACHE BOOL "" FORCE)
+set(FT_DISABLE_HVF ON CACHE BOOL "" FORCE)
+set(FT_ENABLE_ERROR_STRINGS ON CACHE BOOL "" FORCE)
+add_subdirectory("${FREETYPE_ROOT}" "${CMAKE_BINARY_DIR}/_deps/freetype" EXCLUDE_FROM_ALL)
+if(TARGET freetype)
+    # Clang + Ninja 环境下 rc.exe 常出现 Windows SDK include 路径缺失，
+    # 先从构建源中移除 ftver.rc，避免影响 FreeType 主体静态库接入。
+    get_property(_freetype_sources TARGET freetype PROPERTY SOURCES)
+    list(REMOVE_ITEM _freetype_sources "src/base/ftver.rc")
+    list(REMOVE_ITEM _freetype_sources "${FREETYPE_ROOT}/src/base/ftver.rc")
+    set_property(TARGET freetype PROPERTY SOURCES "${_freetype_sources}")
+endif()
+
 add_library(vulkan_init STATIC
     src/vulkan_context.cpp
     src/render/frame_command_host.cpp
     src/render/upload_host.cpp
     src/render/descriptor_host.cpp
     src/render/pipeline_host.cpp
+    src/text/freetype_host.cpp
+    src/text/glyph_atlas_host.cpp
+    src/text/glyph_upload_host.cpp
     src/resource/buffer_host.cpp
     src/resource/image_host.cpp
     src/resource/gpu_memory_host.cpp
@@ -59,6 +83,7 @@ target_link_libraries(vulkan_init
     PUBLIC
         Vulkan::Vulkan
         Center.Memory.Headers
+        freetype
 )
 
 add_library(vulkan_platform_sdl INTERFACE)
