@@ -22,8 +22,12 @@ void main() {
     const vec2 pos_px = mix(in_rect.xy, in_rect.zw, corner);
     const vec2 uv = mix(in_uv_rect.xy, in_uv_rect.zw, corner);
 
+    // Vulkan 视口在正高度下采用 framebuffer Y 向下约定：
+    // NDC.y = -1 对应顶部，+1 对应底部。
+    // 运行时文本坐标使用左上角为原点（像素坐标，Y 向下），
+    // 因此这里应直接线性映射到 [-1, +1]，不能再做 OpenGL 风格的 Y 翻转。
     const vec2 ndc = vec2(pos_px.x * pc.inv_viewport.x * 2.0 - 1.0,
-                          1.0 - pos_px.y * pc.inv_viewport.y * 2.0);
+                          pos_px.y * pc.inv_viewport.y * 2.0 - 1.0);
 
     gl_Position = vec4(ndc, pc.depth, 1.0);
     out_uv = uv;
@@ -31,4 +35,3 @@ void main() {
     out_outline_color = in_outline_color;
     out_params = in_params;
 }
-

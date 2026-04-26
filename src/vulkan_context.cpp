@@ -1,7 +1,9 @@
 #include "vr/vulkan_context.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cstddef>
+#include <cstdlib>
 #include <cstring>
 #include <iostream>
 #include <limits>
@@ -140,6 +142,196 @@ void PushUniqueCString(McVector<const char*>& values_, const char* candidate_) {
         }
     }
     return true;
+}
+
+[[nodiscard]] bool IsEnabledEnvFlag(const char* env_name_) noexcept {
+    if (env_name_ == nullptr || env_name_[0] == '\0') {
+        return false;
+    }
+
+    std::string normalized{};
+#if defined(_WIN32)
+    char* value_buffer = nullptr;
+    std::size_t value_length = 0U;
+    const errno_t env_result = _dupenv_s(&value_buffer, &value_length, env_name_);
+    if (env_result != 0 || value_buffer == nullptr) {
+        if (value_buffer != nullptr) {
+            std::free(value_buffer);
+        }
+        return false;
+    }
+    normalized.assign(value_buffer);
+    std::free(value_buffer);
+#else
+    const char* value = std::getenv(env_name_);
+    if (value == nullptr) {
+        return false;
+    }
+    normalized.assign(value);
+#endif
+
+    if (normalized.empty()) {
+        return false;
+    }
+    for (char& ch : normalized) {
+        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    }
+
+    return normalized == "1" ||
+           normalized == "true" ||
+           normalized == "yes" ||
+           normalized == "on";
+}
+
+[[nodiscard]] bool DeviceSelectionVerboseLogEnabled() noexcept {
+    static const bool enabled = IsEnabledEnvFlag("VR_VK_LOG_DEVICE_SELECTION");
+    return enabled;
+}
+
+[[nodiscard]] const char* PhysicalDeviceTypeName(VkPhysicalDeviceType device_type_) noexcept {
+    switch (device_type_) {
+        case VK_PHYSICAL_DEVICE_TYPE_OTHER:
+            return "other";
+        case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU:
+            return "integrated";
+        case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU:
+            return "discrete";
+        case VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU:
+            return "virtual";
+        case VK_PHYSICAL_DEVICE_TYPE_CPU:
+            return "cpu";
+        default:
+            return "unknown";
+    }
+}
+
+void AppendMissingExtensions(std::ostringstream& stream_,
+                             const McVector<const char*>& required_extensions_,
+                             const PropertiesVector& available_extensions_) {
+    bool has_missing = false;
+    for (const char* required_extension : required_extensions_) {
+        bool found = false;
+        for (const auto& available_extension : available_extensions_) {
+            if (std::strcmp(required_extension, available_extension.extensionName) == 0) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            stream_ << (has_missing ? ", " : "");
+            stream_ << required_extension;
+            has_missing = true;
+        }
+    }
+    if (!has_missing) {
+        stream_ << "<none>";
+    }
+}
+
+void AppendMissingFeatureBits(std::ostringstream& stream_,
+                              const char* label_,
+                              const VkBool32* required_bits_,
+                              const VkBool32* supported_bits_,
+                              std::size_t bit_count_,
+                              std::size_t max_print_count_ = 8U) {
+    std::size_t missing_count = 0U;
+    for (std::size_t i = 0U; i < bit_count_; ++i) {
+        if (required_bits_[i] && !supported_bits_[i]) {
+            if (missing_count < max_print_count_) {
+                stream_ << (missing_count == 0U ? "" : ", ")
+                        << label_ << "[" << i << "]";
+            }
+            ++missing_count;
+        }
+    }
+
+    if (missing_count == 0U) {
+        stream_ << "<none>";
+        return;
+    }
+
+    if (missing_count > max_print_count_) {
+        stream_ << ", ... (+" << (missing_count - max_print_count_) << " more)";
+    }
+}
+
+[[nodiscard]] std::size_t CountEnabledFeatureBits(const VkBool32* bits_,
+                                                  std::size_t bit_count_) noexcept {
+    std::size_t count = 0U;
+    for (std::size_t i = 0U; i < bit_count_; ++i) {
+        if (bits_[i] != VK_FALSE) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+void NormalizeVulkan10FeatureBits(VkPhysicalDeviceFeatures& features_) noexcept {
+    constexpr std::size_t feature_count =
+        sizeof(VkPhysicalDeviceFeatures) / sizeof(VkBool32);
+    auto* bits = reinterpret_cast<VkBool32*>(&features_);
+    for (std::size_t i = 0U; i < feature_count; ++i) {
+        bits[i] = (bits[i] == VK_TRUE) ? VK_TRUE : VK_FALSE;
+    }
+}
+
+void NormalizeVulkan12FeatureBits(VkPhysicalDeviceVulkan12Features& features_) noexcept {
+    constexpr std::size_t first_feature_offset =
+        offsetof(VkPhysicalDeviceVulkan12Features, samplerMirrorClampToEdge);
+    constexpr std::size_t feature_count =
+        (sizeof(VkPhysicalDeviceVulkan12Features) - first_feature_offset) / sizeof(VkBool32);
+    auto* bits = reinterpret_cast<VkBool32*>(
+        reinterpret_cast<char*>(&features_) + first_feature_offset);
+    for (std::size_t i = 0U; i < feature_count; ++i) {
+        bits[i] = (bits[i] == VK_TRUE) ? VK_TRUE : VK_FALSE;
+    }
+}
+
+void NormalizeVulkan13FeatureBits(VkPhysicalDeviceVulkan13Features& features_) noexcept {
+    constexpr std::size_t first_feature_offset =
+        offsetof(VkPhysicalDeviceVulkan13Features, robustImageAccess);
+    constexpr std::size_t feature_count =
+        (sizeof(VkPhysicalDeviceVulkan13Features) - first_feature_offset) / sizeof(VkBool32);
+    auto* bits = reinterpret_cast<VkBool32*>(
+        reinterpret_cast<char*>(&features_) + first_feature_offset);
+    for (std::size_t i = 0U; i < feature_count; ++i) {
+        bits[i] = (bits[i] == VK_TRUE) ? VK_TRUE : VK_FALSE;
+    }
+}
+
+void AppendMissingVulkan13NamedFeatures(std::ostringstream& stream_,
+                                        const VkPhysicalDeviceVulkan13Features& required_features_,
+                                        const VkPhysicalDeviceVulkan13Features& supported_features_) {
+    bool first = true;
+    auto emit = [&](const char* name_) {
+        stream_ << (first ? "" : ", ") << name_;
+        first = false;
+    };
+
+    if (required_features_.dynamicRendering == VK_TRUE &&
+        supported_features_.dynamicRendering != VK_TRUE) {
+        emit("dynamicRendering");
+    }
+    if (required_features_.synchronization2 == VK_TRUE &&
+        supported_features_.synchronization2 != VK_TRUE) {
+        emit("synchronization2");
+    }
+    if (required_features_.maintenance4 == VK_TRUE &&
+        supported_features_.maintenance4 != VK_TRUE) {
+        emit("maintenance4");
+    }
+    if (required_features_.shaderDemoteToHelperInvocation == VK_TRUE &&
+        supported_features_.shaderDemoteToHelperInvocation != VK_TRUE) {
+        emit("shaderDemoteToHelperInvocation");
+    }
+    if (required_features_.subgroupSizeControl == VK_TRUE &&
+        supported_features_.subgroupSizeControl != VK_TRUE) {
+        emit("subgroupSizeControl");
+    }
+
+    if (first) {
+        stream_ << "<none>";
+    }
 }
 
 [[nodiscard]] bool SupportsRequiredFeatures(const VkPhysicalDeviceFeatures& supported_features_,
@@ -757,9 +949,23 @@ void VulkanContext::PickPhysicalDevice(const VulkanDeviceCreateInfo& create_info
     int best_score = std::numeric_limits<int>::min();
     VkPhysicalDevice best_device = VK_NULL_HANDLE;
     QueueFamilyIndices best_indices{};
+    VkPhysicalDeviceProperties best_device_properties{};
 
-    const bool needs_vulkan12_features = HasRequiredVulkan12Features(create_info_.required_vulkan12_features);
-    const bool needs_vulkan13_features = HasRequiredVulkan13Features(create_info_.required_vulkan13_features);
+    VkPhysicalDeviceFeatures required_features = create_info_.required_features;
+    NormalizeVulkan10FeatureBits(required_features);
+
+    VkPhysicalDeviceVulkan12Features required_vulkan12_features = create_info_.required_vulkan12_features;
+    required_vulkan12_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+    required_vulkan12_features.pNext = nullptr;
+    NormalizeVulkan12FeatureBits(required_vulkan12_features);
+
+    VkPhysicalDeviceVulkan13Features required_vulkan13_features = create_info_.required_vulkan13_features;
+    required_vulkan13_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
+    required_vulkan13_features.pNext = nullptr;
+    NormalizeVulkan13FeatureBits(required_vulkan13_features);
+
+    const bool needs_vulkan12_features = HasRequiredVulkan12Features(required_vulkan12_features);
+    const bool needs_vulkan13_features = HasRequiredVulkan13Features(required_vulkan13_features);
     const auto get_features2_fn = reinterpret_cast<PFN_vkGetPhysicalDeviceFeatures2>(
         vkGetInstanceProcAddr(instance, "vkGetPhysicalDeviceFeatures2"));
     if (get_features2_fn == nullptr &&
@@ -768,23 +974,109 @@ void VulkanContext::PickPhysicalDevice(const VulkanDeviceCreateInfo& create_info
             "Required Vulkan12/13 feature query unavailable: vkGetPhysicalDeviceFeatures2 is not supported");
     }
 
-    for (const VkPhysicalDevice candidate : devices) {
+    std::ostringstream diagnostics_stream;
+    diagnostics_stream << "[Vulkan] device selection diagnostics\n";
+    diagnostics_stream << "  candidate_count=" << devices.size() << '\n';
+    diagnostics_stream << "  surface_required=" << (surface != VK_NULL_HANDLE ? "true" : "false") << '\n';
+    diagnostics_stream << "  require_dedicated_transfer_queue="
+                       << (create_info_.require_dedicated_transfer_queue ? "true" : "false") << '\n';
+    diagnostics_stream << "  required_device_extensions=";
+    if (enabled_device_extensions.empty()) {
+        diagnostics_stream << "<none>";
+    } else {
+        for (std::size_t i = 0U; i < enabled_device_extensions.size(); ++i) {
+            diagnostics_stream << (i == 0U ? "" : ", ")
+                               << enabled_device_extensions[i];
+        }
+    }
+    diagnostics_stream << '\n';
+
+    constexpr std::size_t vk10_feature_count =
+        sizeof(VkPhysicalDeviceFeatures) / sizeof(VkBool32);
+    constexpr std::size_t vk12_first_feature_offset =
+        offsetof(VkPhysicalDeviceVulkan12Features, samplerMirrorClampToEdge);
+    constexpr std::size_t vk12_feature_count =
+        (sizeof(VkPhysicalDeviceVulkan12Features) - vk12_first_feature_offset) / sizeof(VkBool32);
+    constexpr std::size_t vk13_first_feature_offset =
+        offsetof(VkPhysicalDeviceVulkan13Features, robustImageAccess);
+    constexpr std::size_t vk13_feature_count =
+        (sizeof(VkPhysicalDeviceVulkan13Features) - vk13_first_feature_offset) / sizeof(VkBool32);
+
+    const auto* required_vk10_bits =
+        reinterpret_cast<const VkBool32*>(&required_features);
+    const auto* required_vk12_bits = reinterpret_cast<const VkBool32*>(
+        reinterpret_cast<const char*>(&required_vulkan12_features) + vk12_first_feature_offset);
+    const auto* required_vk13_bits = reinterpret_cast<const VkBool32*>(
+        reinterpret_cast<const char*>(&required_vulkan13_features) + vk13_first_feature_offset);
+
+    diagnostics_stream << "  required_feature_bit_counts={vk10="
+                       << CountEnabledFeatureBits(required_vk10_bits, vk10_feature_count)
+                       << ", vk12="
+                       << CountEnabledFeatureBits(required_vk12_bits, vk12_feature_count)
+                       << ", vk13="
+                       << CountEnabledFeatureBits(required_vk13_bits, vk13_feature_count)
+                       << "}\n";
+    diagnostics_stream << "  required_vulkan13_named={dynamicRendering="
+                       << (required_vulkan13_features.dynamicRendering == VK_TRUE ? "1" : "0")
+                       << ", synchronization2="
+                       << (required_vulkan13_features.synchronization2 == VK_TRUE ? "1" : "0")
+                       << "}\n";
+
+    auto queue_family_to_string = [](const std::optional<uint32_t>& value_) -> std::string {
+        return value_.has_value() ? std::to_string(value_.value()) : std::string("none");
+    };
+
+    for (std::size_t candidate_index = 0U; candidate_index < devices.size(); ++candidate_index) {
+        const VkPhysicalDevice candidate = devices[candidate_index];
+        VkPhysicalDeviceProperties properties{};
+        vkGetPhysicalDeviceProperties(candidate, &properties);
+
+        diagnostics_stream << "  candidate[" << candidate_index << "] "
+                           << properties.deviceName
+                           << " (type=" << PhysicalDeviceTypeName(properties.deviceType)
+                           << ", api=" << VK_VERSION_MAJOR(properties.apiVersion)
+                           << "." << VK_VERSION_MINOR(properties.apiVersion)
+                           << "." << VK_VERSION_PATCH(properties.apiVersion)
+                           << ", vendor=0x" << std::hex << properties.vendorID
+                           << ", device=0x" << properties.deviceID << std::dec << ")";
+
+        std::ostringstream reject_reason_stream;
+        bool candidate_supported = true;
+
         const QueueFamilyIndices indices = FindQueueFamilies(candidate, surface);
         const bool needs_present = surface != VK_NULL_HANDLE;
+        diagnostics_stream << " queues{g=" << queue_family_to_string(indices.graphics)
+                           << ", p=" << queue_family_to_string(indices.present)
+                           << ", c=" << queue_family_to_string(indices.compute)
+                           << ", t=" << queue_family_to_string(indices.transfer)
+                           << "}";
+
         if (!indices.Complete(needs_present)) {
-            continue;
+            candidate_supported = false;
+            reject_reason_stream << "incomplete queue families for requested surface";
         }
 
         if (create_info_.require_dedicated_transfer_queue &&
             indices.transfer.has_value() &&
             indices.graphics.has_value() &&
             indices.transfer.value() == indices.graphics.value()) {
-            continue;
+            if (!candidate_supported) {
+                reject_reason_stream << "; ";
+            }
+            candidate_supported = false;
+            reject_reason_stream << "dedicated transfer queue requested but transfer queue equals graphics queue";
         }
 
         const auto available_extensions = EnumerateDeviceExtensions(candidate);
         if (!HasRequiredExtensions(enabled_device_extensions, available_extensions)) {
-            continue;
+            if (!candidate_supported) {
+                reject_reason_stream << "; ";
+            }
+            candidate_supported = false;
+            reject_reason_stream << "missing required device extensions: ";
+            AppendMissingExtensions(reject_reason_stream,
+                                    enabled_device_extensions,
+                                    available_extensions);
         }
 
         if (get_features2_fn != nullptr) {
@@ -802,43 +1094,126 @@ void VulkanContext::PickPhysicalDevice(const VulkanDeviceCreateInfo& create_info
             supported_vulkan13_features.pNext = nullptr;
 
             get_features2_fn(candidate, &supported_features2);
-            if (!SupportsRequiredFeatures(supported_features2.features, create_info_.required_features)) {
-                continue;
+            if (!SupportsRequiredFeatures(supported_features2.features, required_features)) {
+                if (!candidate_supported) {
+                    reject_reason_stream << "; ";
+                }
+                candidate_supported = false;
+                reject_reason_stream << "missing required Vulkan 1.0 features: ";
+                constexpr std::size_t feature_count =
+                    sizeof(VkPhysicalDeviceFeatures) / sizeof(VkBool32);
+                const auto* required_bits =
+                    reinterpret_cast<const VkBool32*>(&required_features);
+                const auto* supported_bits =
+                    reinterpret_cast<const VkBool32*>(&supported_features2.features);
+                AppendMissingFeatureBits(reject_reason_stream,
+                                         "VkPhysicalDeviceFeatures",
+                                         required_bits,
+                                         supported_bits,
+                                         feature_count);
             }
             if (!SupportsRequiredVulkan12Features(supported_vulkan12_features,
-                                                  create_info_.required_vulkan12_features)) {
-                continue;
+                                                  required_vulkan12_features)) {
+                if (!candidate_supported) {
+                    reject_reason_stream << "; ";
+                }
+                candidate_supported = false;
+                reject_reason_stream << "missing required Vulkan 1.2 features: ";
+                constexpr std::size_t first_feature_offset =
+                    offsetof(VkPhysicalDeviceVulkan12Features, samplerMirrorClampToEdge);
+                constexpr std::size_t feature_count =
+                    (sizeof(VkPhysicalDeviceVulkan12Features) - first_feature_offset) / sizeof(VkBool32);
+                const auto* required_bits = reinterpret_cast<const VkBool32*>(
+                    reinterpret_cast<const char*>(&required_vulkan12_features) + first_feature_offset);
+                const auto* supported_bits = reinterpret_cast<const VkBool32*>(
+                    reinterpret_cast<const char*>(&supported_vulkan12_features) + first_feature_offset);
+                AppendMissingFeatureBits(reject_reason_stream,
+                                         "VkPhysicalDeviceVulkan12Features",
+                                         required_bits,
+                                         supported_bits,
+                                         feature_count);
             }
             if (!SupportsRequiredVulkan13Features(supported_vulkan13_features,
-                                                  create_info_.required_vulkan13_features)) {
-                continue;
+                                                  required_vulkan13_features)) {
+                if (!candidate_supported) {
+                    reject_reason_stream << "; ";
+                }
+                candidate_supported = false;
+                reject_reason_stream << "missing required Vulkan 1.3 features: ";
+                constexpr std::size_t first_feature_offset =
+                    offsetof(VkPhysicalDeviceVulkan13Features, robustImageAccess);
+                constexpr std::size_t feature_count =
+                    (sizeof(VkPhysicalDeviceVulkan13Features) - first_feature_offset) / sizeof(VkBool32);
+                const auto* required_bits = reinterpret_cast<const VkBool32*>(
+                    reinterpret_cast<const char*>(&required_vulkan13_features) + first_feature_offset);
+                const auto* supported_bits = reinterpret_cast<const VkBool32*>(
+                    reinterpret_cast<const char*>(&supported_vulkan13_features) + first_feature_offset);
+                AppendMissingFeatureBits(reject_reason_stream,
+                                         "VkPhysicalDeviceVulkan13Features",
+                                         required_bits,
+                                         supported_bits,
+                                         feature_count);
+                reject_reason_stream << " | named: ";
+                AppendMissingVulkan13NamedFeatures(reject_reason_stream,
+                                                   required_vulkan13_features,
+                                                   supported_vulkan13_features);
             }
         } else {
             VkPhysicalDeviceFeatures supported_features{};
             vkGetPhysicalDeviceFeatures(candidate, &supported_features);
-            if (!SupportsRequiredFeatures(supported_features, create_info_.required_features)) {
-                continue;
+            if (!SupportsRequiredFeatures(supported_features, required_features)) {
+                if (!candidate_supported) {
+                    reject_reason_stream << "; ";
+                }
+                candidate_supported = false;
+                reject_reason_stream << "missing required Vulkan 1.0 features";
             }
         }
 
         if (!CheckSwapchainAdequate(candidate, surface)) {
+            if (!candidate_supported) {
+                reject_reason_stream << "; ";
+            }
+            candidate_supported = false;
+            reject_reason_stream << "swapchain support inadequate (surface formats or present modes unavailable)";
+        }
+
+        if (!candidate_supported) {
+            diagnostics_stream << " -> rejected: " << reject_reason_stream.str() << '\n';
             continue;
         }
 
         const int score = ScorePhysicalDevice(candidate);
+        diagnostics_stream << " -> accepted(score=" << score << ")\n";
         if (score > best_score) {
             best_score = score;
             best_device = candidate;
             best_indices = indices;
+            best_device_properties = properties;
         }
     }
 
     if (best_device == VK_NULL_HANDLE) {
-        throw std::runtime_error("No suitable Vulkan physical device found");
+        std::ostringstream oss;
+        oss << "No suitable Vulkan physical device found\n"
+            << diagnostics_stream.str()
+            << "\nHint: enable 'VR_VK_LOG_DEVICE_SELECTION=1' for persistent startup logs.";
+        throw std::runtime_error(oss.str());
     }
 
     physical_device = best_device;
     queue_family_indices = best_indices;
+
+    if (DeviceSelectionVerboseLogEnabled()) {
+        std::cerr << diagnostics_stream.str();
+        std::cerr << "[Vulkan] selected physical device: " << best_device_properties.deviceName
+                  << " (score=" << best_score
+                  << ", graphics_queue=" << queue_family_to_string(best_indices.graphics)
+                  << ", present_queue=" << queue_family_to_string(best_indices.present)
+                  << ", compute_queue=" << queue_family_to_string(best_indices.compute)
+                  << ", transfer_queue=" << queue_family_to_string(best_indices.transfer)
+                  << ")\n";
+    }
 }
 
 void VulkanContext::CreateLogicalDevice(const VulkanDeviceCreateInfo& create_info_) {
@@ -876,18 +1251,23 @@ void VulkanContext::CreateLogicalDevice(const VulkanDeviceCreateInfo& create_inf
     device_create_info.enabledLayerCount = validation_enabled ? static_cast<uint32_t>(enabled_validation_layers.size()) : 0U;
     device_create_info.ppEnabledLayerNames = validation_enabled ? enabled_validation_layers.data() : nullptr;
 
+    VkPhysicalDeviceFeatures normalized_required_features = create_info_.required_features;
+    NormalizeVulkan10FeatureBits(normalized_required_features);
+
     VkPhysicalDeviceFeatures2 enabled_features2{};
     enabled_features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
-    enabled_features2.features = create_info_.required_features;
+    enabled_features2.features = normalized_required_features;
     enabled_features2.pNext = nullptr;
 
     VkPhysicalDeviceVulkan12Features enabled_vulkan12_features_local = create_info_.required_vulkan12_features;
     enabled_vulkan12_features_local.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
     enabled_vulkan12_features_local.pNext = nullptr;
+    NormalizeVulkan12FeatureBits(enabled_vulkan12_features_local);
 
     VkPhysicalDeviceVulkan13Features enabled_vulkan13_features_local = create_info_.required_vulkan13_features;
     enabled_vulkan13_features_local.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
     enabled_vulkan13_features_local.pNext = nullptr;
+    NormalizeVulkan13FeatureBits(enabled_vulkan13_features_local);
 
     VkBaseOutStructure* feature_chain_head = nullptr;
     VkBaseOutStructure** feature_chain_next = &feature_chain_head;
@@ -934,12 +1314,10 @@ void VulkanContext::CreateLogicalDevice(const VulkanDeviceCreateInfo& create_inf
         transfer_queue = compute_queue;
     }
 
-    enabled_features = create_info_.required_features;
-    enabled_vulkan12_features = create_info_.required_vulkan12_features;
-    enabled_vulkan12_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+    enabled_features = normalized_required_features;
+    enabled_vulkan12_features = enabled_vulkan12_features_local;
     enabled_vulkan12_features.pNext = nullptr;
-    enabled_vulkan13_features = create_info_.required_vulkan13_features;
-    enabled_vulkan13_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
+    enabled_vulkan13_features = enabled_vulkan13_features_local;
     enabled_vulkan13_features.pNext = nullptr;
 }
 
