@@ -19,6 +19,7 @@ add_executable(${VR_TEST_TARGET}
     cases/vulkan_types_tests.cpp
     cases/frame_retire_host_tests.cpp
     cases/ecs_text_component_tests.cpp
+    cases/ecs_transform_camera_system_tests.cpp
     cases/ecs_text_runtime_system_tests.cpp
     cases/freetype_host_tests.cpp
     cases/glyph_atlas_host_tests.cpp
