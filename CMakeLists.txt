@@ -11,6 +11,7 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
 endif()
 
 find_package(Vulkan REQUIRED)
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
 set(MEMORYCENTER_ROOT "E:/Project/MelosyneTest/MemoryCenterNew" CACHE PATH "Path to MemoryCenterNew")
 set(VECTOR_ROOT "E:/Project/MelosyneTest/Vector_New" CACHE PATH "Path to Vector_New")
@@ -28,6 +29,13 @@ if(NOT EXISTS "${SDL3_ROOT}/CMakeLists.txt")
 endif()
 if(NOT EXISTS "${FREETYPE_ROOT}/CMakeLists.txt")
     message(FATAL_ERROR "FREETYPE_ROOT is invalid: ${FREETYPE_ROOT}")
+endif()
+
+find_program(GLSLANG_VALIDATOR_EXECUTABLE
+    NAMES glslangValidator glslangValidator.exe
+    HINTS "$ENV{VULKAN_SDK}/Bin" "$ENV{VULKAN_SDK}/Bin32")
+if(NOT GLSLANG_VALIDATOR_EXECUTABLE)
+    message(FATAL_ERROR "glslangValidator was not found. Please install Vulkan SDK and ensure Bin is in PATH.")
 endif()
 
 add_subdirectory("${MEMORYCENTER_ROOT}" "${CMAKE_BINARY_DIR}/_deps/memorycenter" EXCLUDE_FROM_ALL)
@@ -57,6 +65,49 @@ if(TARGET freetype)
     set_property(TARGET freetype PROPERTY SOURCES "${_freetype_sources}")
 endif()
 
+set(VR_GENERATED_INCLUDE_DIR "${CMAKE_BINARY_DIR}/generated")
+set(VR_GENERATED_SHADER_DIR "${VR_GENERATED_INCLUDE_DIR}/vr/text/generated")
+set(VR_SHADER_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/shaders")
+
+function(vr_compile_shader_to_header input_file stage symbol_name output_header)
+    get_filename_component(_input_abs "${input_file}" ABSOLUTE)
+    get_filename_component(_output_abs "${output_header}" ABSOLUTE)
+    set(_spv_file "${CMAKE_BINARY_DIR}/generated/${symbol_name}.spv")
+
+    add_custom_command(
+        OUTPUT "${_spv_file}" "${_output_abs}"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_BINARY_DIR}/generated"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${VR_GENERATED_SHADER_DIR}"
+        COMMAND "${GLSLANG_VALIDATOR_EXECUTABLE}" -V --target-env vulkan1.3 -S "${stage}" -e main -o "${_spv_file}" "${_input_abs}"
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/spv_to_header.py"
+                --input "${_spv_file}"
+                --output "${_output_abs}"
+                --symbol "${symbol_name}"
+                --namespace "vr::text::generated"
+        DEPENDS "${_input_abs}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/spv_to_header.py"
+        COMMENT "Compiling shader ${_input_abs} -> ${_output_abs}"
+        VERBATIM
+    )
+endfunction()
+
+set(VR_TEXT_2D_VERT_HEADER "${VR_GENERATED_SHADER_DIR}/text_2d_vert_spv.hpp")
+set(VR_TEXT_2D_FRAG_HEADER "${VR_GENERATED_SHADER_DIR}/text_2d_frag_spv.hpp")
+
+vr_compile_shader_to_header("${VR_SHADER_SOURCE_DIR}/text_2d.vert"
+                            "vert"
+                            "k_text_2d_vert_spv"
+                            "${VR_TEXT_2D_VERT_HEADER}")
+vr_compile_shader_to_header("${VR_SHADER_SOURCE_DIR}/text_2d.frag"
+                            "frag"
+                            "k_text_2d_frag_spv"
+                            "${VR_TEXT_2D_FRAG_HEADER}")
+
+add_custom_target(vr_text_shaders
+    DEPENDS
+        "${VR_TEXT_2D_VERT_HEADER}"
+        "${VR_TEXT_2D_FRAG_HEADER}"
+)
+
 add_library(vulkan_init STATIC
     src/vulkan_context.cpp
     src/render/frame_command_host.cpp
@@ -66,15 +117,19 @@ add_library(vulkan_init STATIC
     src/text/freetype_host.cpp
     src/text/glyph_atlas_host.cpp
     src/text/glyph_upload_host.cpp
+    src/text/text_renderer_2d.cpp
     src/resource/buffer_host.cpp
     src/resource/image_host.cpp
     src/resource/gpu_memory_host.cpp
     src/resource/sampler_host.cpp
 )
 
+add_dependencies(vulkan_init vr_text_shaders)
+
 target_include_directories(vulkan_init
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${VR_GENERATED_INCLUDE_DIR}
         ${MEMORYCENTER_ROOT}/include
         ${VECTOR_ROOT}/include
 )
@@ -125,6 +180,15 @@ add_executable(sdl_runtime_demo
 )
 
 target_link_libraries(sdl_runtime_demo
+    PRIVATE
+        vulkan_platform_sdl
+)
+
+add_executable(sdl_text_demo
+    examples/sdl_text_demo.cpp
+)
+
+target_link_libraries(sdl_text_demo
     PRIVATE
         vulkan_platform_sdl
 )

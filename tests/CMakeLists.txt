@@ -24,6 +24,7 @@ add_executable(${VR_TEST_TARGET}
     cases/glyph_atlas_host_tests.cpp
     cases/runtime_configuration_tests.cpp
     cases/runtime_integration_tests.cpp
+    cases/runtime_text_renderer_integration_tests.cpp
 )
 
 target_link_libraries(${VR_TEST_TARGET}

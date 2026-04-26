@@ -23,6 +23,7 @@ add_executable(${VR_BENCH_TARGET}
     cases/glyph_atlas_host_bench.cpp
     cases/frame_retire_host_bench.cpp
     cases/frame_sync_bench.cpp
+    cases/runtime_text_renderer_bench.cpp
 )
 
 target_link_libraries(${VR_BENCH_TARGET}

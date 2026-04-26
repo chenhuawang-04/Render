@@ -4,6 +4,7 @@
 #include "vr/render/descriptor_host.hpp"
 #include "vr/render/pipeline_host.hpp"
 #include "vr/render/render_loop_host.hpp"
+#include "vr/render/runtime_prepare_context.hpp"
 #include "vr/render/upload_host.hpp"
 #include "vr/resource/buffer_host.hpp"
 #include "vr/resource/gpu_memory_host.hpp"
@@ -28,19 +29,6 @@ struct RuntimeModulesCreateInfo {
     bool enable_freetype_host = true;
     bool enable_glyph_atlas_host = true;
     bool enable_glyph_upload_host = true;
-};
-
-struct RuntimePrepareContext {
-    VulkanContext* context = nullptr;
-    uint32_t frame_index = 0U;
-    resource::GpuMemoryHost* gpu_memory_host = nullptr;
-    UploadHost* upload_host = nullptr;
-    DescriptorHost* descriptor_host = nullptr;
-    PipelineHost* pipeline_host = nullptr;
-    resource::SamplerHost* sampler_host = nullptr;
-    text::FreeTypeHost* freetype_host = nullptr;
-    text::GlyphAtlasHost* glyph_atlas_host = nullptr;
-    text::GlyphUploadHost* glyph_upload_host = nullptr;
 };
 
 template<typename RecorderT>

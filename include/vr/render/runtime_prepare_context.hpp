@@ -1,0 +1,40 @@
+#pragma once
+
+#include "vr/vulkan_context.hpp"
+
+#include <cstdint>
+
+namespace vr::render {
+class UploadHost;
+class DescriptorHost;
+class PipelineHost;
+} // namespace vr::render
+
+namespace vr::resource {
+class GpuMemoryHost;
+class SamplerHost;
+} // namespace vr::resource
+
+namespace vr::text {
+class FreeTypeHost;
+class GlyphAtlasHost;
+class GlyphUploadHost;
+} // namespace vr::text
+
+namespace vr::render {
+
+struct RuntimePrepareContext {
+    VulkanContext* context = nullptr;
+    std::uint32_t frame_index = 0U;
+    resource::GpuMemoryHost* gpu_memory_host = nullptr;
+    UploadHost* upload_host = nullptr;
+    DescriptorHost* descriptor_host = nullptr;
+    PipelineHost* pipeline_host = nullptr;
+    resource::SamplerHost* sampler_host = nullptr;
+    text::FreeTypeHost* freetype_host = nullptr;
+    text::GlyphAtlasHost* glyph_atlas_host = nullptr;
+    text::GlyphUploadHost* glyph_upload_host = nullptr;
+};
+
+} // namespace vr::render
+
