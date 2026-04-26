@@ -15,7 +15,7 @@ struct GlyphAtlasCreateInfo {
     std::uint32_t page_width = 2048U;
     std::uint32_t page_height = 2048U;
     std::uint32_t max_page_count = 16U;
-    std::uint32_t glyph_padding = 1U;
+    std::uint32_t glyph_padding = 2U;
     std::uint32_t reserve_page_count = 4U;
     std::uint32_t reserve_glyph_count = 4096U;
     std::uint32_t reserve_page_dirty_rect_count = 256U;

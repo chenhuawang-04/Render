@@ -31,6 +31,10 @@ struct TextRenderer2DCreateInfo {
     VkDeviceSize initial_vertex_buffer_bytes = 4U * 1024U * 1024U;
     float depth = 0.0F;
     float sdf_smooth = 1.0F;
+    float bitmap_gamma = 1.0F;
+    float bitmap_edge_sharpness = 1.0F;
+    bool enable_pixel_snap = true;
+    float pixel_snap_step = 1.0F;
     bool clear_swapchain = true;
     VkClearColorValue clear_color = {{0.07F, 0.08F, 0.11F, 1.0F}};
 };
@@ -96,23 +100,31 @@ private:
         float inv_viewport_y;
         float depth;
         float sdf_smooth;
+        float bitmap_gamma;
+        float bitmap_edge_sharpness;
     };
 
     static_assert(ecs::PurePodComponent<GpuTextInstance>);
-    static_assert(sizeof(PushConstants) == 16U);
+    static_assert(sizeof(PushConstants) == 24U);
 
     struct PerFrameState final {
         resource::BufferResource vertex_buffer{};
         VkDeviceSize vertex_buffer_capacity_bytes = 0U;
         std::uint32_t instance_count = 0U;
+        std::uint64_t uploaded_revision = 0U;
         TextRenderer2DMcVector<VkDescriptorSet> page_sets{};
         TextRenderer2DMcVector<std::uint32_t> page_set_epochs{};
         std::uint32_t page_set_epoch = 1U;
+        TextRenderer2DMcVector<std::uint32_t> page_touch_epochs{};
+        std::uint32_t page_touch_epoch = 1U;
     };
 
     [[nodiscard]] static std::uint32_t PackRgba8(const ecs::Rgba8& color_) noexcept;
     [[nodiscard]] static std::uint32_t PackParams(const ecs::TextGlyphQuad& quad_) noexcept;
     [[nodiscard]] static VkDeviceSize NextPow2(VkDeviceSize value_) noexcept;
+    [[nodiscard]] static float QuantizeToStep(float value_, float step_) noexcept;
+    [[nodiscard]] static bool AnyComponentDirty(const ecs::Text<ecs::Dim2>* components_,
+                                                std::uint32_t component_count_) noexcept;
 
     void ResetPerFrameDrawState(std::uint32_t frame_index_,
                                 std::uint32_t atlas_page_count_);
@@ -172,6 +184,11 @@ private:
     std::uint32_t active_frame_index = 0U;
     VkExtent2D swapchain_extent{};
     VkFormat swapchain_format = VK_FORMAT_UNDEFINED;
+    ecs::TextRuntimeBuildStats cached_build_stats{};
+    const ecs::Text<ecs::Dim2>* cached_components_ptr = nullptr;
+    std::uint32_t cached_component_count = 0U;
+    std::uint64_t runtime_geometry_revision = 1U;
+    bool runtime_geometry_valid = false;
     bool initialized = false;
 };
 

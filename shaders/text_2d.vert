@@ -10,6 +10,8 @@ layout(push_constant) uniform TextPushConstants {
     vec2 inv_viewport;
     float depth;
     float sdf_smooth;
+    float bitmap_gamma;
+    float bitmap_edge_sharpness;
 } pc;
 
 layout(location = 0) out vec2 out_uv;

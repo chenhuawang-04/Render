@@ -135,6 +135,7 @@ public:
                           std::uint32_t pixel_width_ = 0U);
 
     [[nodiscard]] bool IsFaceIdValid(FontFaceId face_id_) const noexcept;
+    [[nodiscard]] bool SupportsSdfRasterization() const noexcept;
     [[nodiscard]] std::uint32_t FaceCount() const noexcept;
     [[nodiscard]] std::uint32_t FaceRevision(FontFaceId face_id_) const;
     [[nodiscard]] FontFaceDescriptorView FaceDescriptor(FontFaceId face_id_) const;

@@ -252,7 +252,9 @@ public:
             NotifySwapchainRecreatedIfSupported(recorder_,
                                                 current_image_count,
                                                 current_extent,
-                                                current_format);
+                                                current_format,
+                                                frame_sync.LastSubmittedValue(),
+                                                frame_sync.CompletedSubmitValue());
             recorder_swapchain_notified = true;
         }
 
@@ -377,7 +379,27 @@ private:
     static void NotifySwapchainRecreatedIfSupported(RecorderT& recorder_,
                                                     uint32_t image_count_,
                                                     VkExtent2D extent_,
-                                                    VkFormat format_) {
+                                                    VkFormat format_,
+                                                    uint64_t last_submitted_value_,
+                                                    uint64_t completed_submit_value_) {
+        if constexpr (requires(RecorderT& recorder__,
+                               uint32_t image_count__,
+                               VkExtent2D extent__,
+                               VkFormat format__,
+                               uint64_t last_submitted_value__,
+                               uint64_t completed_submit_value__) {
+                          recorder__.OnSwapchainRecreated(image_count__,
+                                                          extent__,
+                                                          format__,
+                                                          last_submitted_value__,
+                                                          completed_submit_value__);
+                      }) {
+            recorder_.OnSwapchainRecreated(image_count_,
+                                           extent_,
+                                           format_,
+                                           last_submitted_value_,
+                                           completed_submit_value_);
+        } else
         if constexpr (requires(RecorderT& recorder__,
                                uint32_t image_count__,
                                VkExtent2D extent__,

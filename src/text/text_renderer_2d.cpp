@@ -9,6 +9,7 @@
 #include "vr/vulkan_context.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <limits>
 #include <stdexcept>
 
@@ -44,6 +45,26 @@ VkDeviceSize TextRenderer2D::NextPow2(VkDeviceSize value_) noexcept {
     return result;
 }
 
+float TextRenderer2D::QuantizeToStep(float value_, float step_) noexcept {
+    if (!(step_ > 0.0F) || !std::isfinite(step_) || !std::isfinite(value_)) {
+        return value_;
+    }
+    return std::round(value_ / step_) * step_;
+}
+
+bool TextRenderer2D::AnyComponentDirty(const ecs::Text<ecs::Dim2>* components_,
+                                       std::uint32_t component_count_) noexcept {
+    if (components_ == nullptr || component_count_ == 0U) {
+        return false;
+    }
+    for (std::uint32_t i = 0U; i < component_count_; ++i) {
+        if (components_[i].runtime.dirty_flags != 0U) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void TextRenderer2D::Initialize(const TextRenderer2DCreateInfo& create_info_) {
     if (initialized) {
         if (context != nullptr) {
@@ -57,6 +78,19 @@ void TextRenderer2D::Initialize(const TextRenderer2DCreateInfo& create_info_) {
     create_info_cache = create_info_;
     if (create_info_cache.initial_vertex_buffer_bytes == 0U) {
         create_info_cache.initial_vertex_buffer_bytes = 1U;
+    }
+    if (!(create_info_cache.sdf_smooth > 0.0F) || !std::isfinite(create_info_cache.sdf_smooth)) {
+        create_info_cache.sdf_smooth = 1.0F;
+    }
+    if (!(create_info_cache.bitmap_gamma > 0.0F) || !std::isfinite(create_info_cache.bitmap_gamma)) {
+        create_info_cache.bitmap_gamma = 1.0F;
+    }
+    if (!(create_info_cache.bitmap_edge_sharpness > 0.0F) ||
+        !std::isfinite(create_info_cache.bitmap_edge_sharpness)) {
+        create_info_cache.bitmap_edge_sharpness = 1.0F;
+    }
+    if (!(create_info_cache.pixel_snap_step > 0.0F) || !std::isfinite(create_info_cache.pixel_snap_step)) {
+        create_info_cache.pixel_snap_step = 1.0F;
     }
 
     if (create_info_cache.reserve_component_count > 0U ||
@@ -74,6 +108,11 @@ void TextRenderer2D::Initialize(const TextRenderer2DCreateInfo& create_info_) {
     descriptor_buffer_write_scratch.reserve(0U);
     descriptor_texel_write_scratch.reserve(0U);
 
+    cached_build_stats = {};
+    cached_components_ptr = nullptr;
+    cached_component_count = 0U;
+    runtime_geometry_revision = 1U;
+    runtime_geometry_valid = false;
     stats = {};
     initialized = true;
 }
@@ -83,9 +122,12 @@ void TextRenderer2D::Shutdown(VulkanContext& context_) {
         resource::BufferHost::DestroyBuffer(context_, frame_state.vertex_buffer);
         frame_state.vertex_buffer_capacity_bytes = 0U;
         frame_state.instance_count = 0U;
+        frame_state.uploaded_revision = 0U;
         frame_state.page_sets.clear();
         frame_state.page_set_epochs.clear();
         frame_state.page_set_epoch = 1U;
+        frame_state.page_touch_epochs.clear();
+        frame_state.page_touch_epoch = 1U;
     }
     frame_states.clear();
 
@@ -102,6 +144,7 @@ void TextRenderer2D::Shutdown(VulkanContext& context_) {
     runtime_scratch.line_x_offsets.clear();
     runtime_scratch.run_glyphs.clear();
     runtime_scratch.face_variants.clear();
+    runtime_scratch.glyph_resolve_cache.clear();
 
     descriptor_layout_id = {};
     pipeline_layout_id = {};
@@ -129,6 +172,11 @@ void TextRenderer2D::Shutdown(VulkanContext& context_) {
     active_frame_index = 0U;
     swapchain_extent = {};
     swapchain_format = VK_FORMAT_UNDEFINED;
+    cached_build_stats = {};
+    cached_components_ptr = nullptr;
+    cached_component_count = 0U;
+    runtime_geometry_revision = 1U;
+    runtime_geometry_valid = false;
     stats = {};
     initialized = false;
 }
@@ -175,24 +223,47 @@ void TextRenderer2D::PrepareFrame(const render::RuntimePrepareContext& prepare_c
     if (components == nullptr || component_count == 0U) {
         runtime_scratch.glyph_quads.clear();
         runtime_scratch.draw_batches.clear();
+        gpu_instances.clear();
+        cached_build_stats = {};
+        cached_components_ptr = nullptr;
+        cached_component_count = 0U;
+        runtime_geometry_valid = false;
         ResetPerFrameDrawState(active_frame_index, glyph_atlas_host->PageCount());
         return;
     }
 
-    const ecs::TextRuntimeBuildStats build_stats =
-        ecs::TextRuntimeSystem<ecs::Dim2>::Build(components,
-                                                 component_count,
-                                                 *glyph_atlas_host,
-                                                 *freetype_host,
-                                                 runtime_scratch,
-                                                 create_info_cache.runtime_build);
+    const bool rebuild_required = !runtime_geometry_valid ||
+                                  cached_components_ptr != components ||
+                                  cached_component_count != component_count ||
+                                  AnyComponentDirty(components, component_count);
 
-    stats.visible_component_count = build_stats.visible_component_count;
-    stats.built_component_count = build_stats.built_component_count;
-    stats.glyph_quad_count = build_stats.emitted_glyph_quad_count;
-    stats.draw_batch_count = build_stats.emitted_batch_count;
+    if (rebuild_required) {
+        cached_build_stats = ecs::TextRuntimeSystem<ecs::Dim2>::Build(components,
+                                                                       component_count,
+                                                                       *glyph_atlas_host,
+                                                                       *freetype_host,
+                                                                       runtime_scratch,
+                                                                       create_info_cache.runtime_build);
+        BuildGpuInstancesFromScratch();
+        cached_components_ptr = components;
+        cached_component_count = component_count;
+        runtime_geometry_valid = true;
 
-    BuildGpuInstancesFromScratch();
+        if (runtime_geometry_revision == std::numeric_limits<std::uint64_t>::max()) {
+            runtime_geometry_revision = 1U;
+        } else {
+            ++runtime_geometry_revision;
+            if (runtime_geometry_revision == 0U) {
+                runtime_geometry_revision = 1U;
+            }
+        }
+    }
+
+    stats.visible_component_count = cached_build_stats.visible_component_count;
+    stats.built_component_count = cached_build_stats.built_component_count;
+    stats.glyph_quad_count = static_cast<std::uint32_t>(gpu_instances.size());
+    stats.draw_batch_count = static_cast<std::uint32_t>(runtime_scratch.draw_batches.size());
+
     const VkDeviceSize required_bytes = static_cast<VkDeviceSize>(gpu_instances.size()) * sizeof(GpuTextInstance);
 
     EnsureGpuResourcesForFrame(*context, prepare_context_, active_frame_index, required_bytes);
@@ -202,6 +273,11 @@ void TextRenderer2D::PrepareFrame(const render::RuntimePrepareContext& prepare_c
     frame_state.instance_count = static_cast<std::uint32_t>(gpu_instances.size());
 
     if (required_bytes == 0U) {
+        return;
+    }
+
+    const bool needs_upload = frame_state.uploaded_revision != runtime_geometry_revision;
+    if (!needs_upload) {
         return;
     }
 
@@ -227,6 +303,7 @@ void TextRenderer2D::PrepareFrame(const render::RuntimePrepareContext& prepare_c
         upload_host->RecordBufferBarrier2(active_frame_index, barrier);
     }
 
+    frame_state.uploaded_revision = runtime_geometry_revision;
     stats.uploaded_bytes = required_bytes;
 }
 
@@ -313,6 +390,8 @@ void TextRenderer2D::Record(const render::FrameRecordContext& record_context_) {
     push_constants.inv_viewport_y = 1.0F / static_cast<float>(record_context_.extent.height);
     push_constants.depth = create_info_cache.depth;
     push_constants.sdf_smooth = create_info_cache.sdf_smooth;
+    push_constants.bitmap_gamma = create_info_cache.bitmap_gamma;
+    push_constants.bitmap_edge_sharpness = create_info_cache.bitmap_edge_sharpness;
     vkCmdPushConstants(record_context_.command_buffer,
                        pipeline_layout,
                        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
@@ -396,6 +475,8 @@ void TextRenderer2D::OnSwapchainRecreated(std::uint32_t image_count_,
         frame_state.page_sets.clear();
         frame_state.page_set_epochs.clear();
         frame_state.page_set_epoch = 1U;
+        frame_state.page_touch_epochs.clear();
+        frame_state.page_touch_epoch = 1U;
     }
 }
 
@@ -428,6 +509,18 @@ void TextRenderer2D::ResetPerFrameDrawState(std::uint32_t frame_index_,
         }
     }
 
+    if (frame_state.page_touch_epoch == std::numeric_limits<std::uint32_t>::max()) {
+        for (auto& page_epoch : frame_state.page_touch_epochs) {
+            page_epoch = 0U;
+        }
+        frame_state.page_touch_epoch = 1U;
+    } else {
+        ++frame_state.page_touch_epoch;
+        if (frame_state.page_touch_epoch == 0U) {
+            frame_state.page_touch_epoch = 1U;
+        }
+    }
+
     const std::size_t previous_set_size = frame_state.page_sets.size();
     frame_state.page_sets.resize(atlas_page_count_);
     for (std::size_t i = previous_set_size; i < frame_state.page_sets.size(); ++i) {
@@ -439,6 +532,12 @@ void TextRenderer2D::ResetPerFrameDrawState(std::uint32_t frame_index_,
     for (std::size_t i = previous_epoch_size; i < frame_state.page_set_epochs.size(); ++i) {
         frame_state.page_set_epochs[i] = 0U;
     }
+
+    const std::size_t previous_touch_size = frame_state.page_touch_epochs.size();
+    frame_state.page_touch_epochs.resize(atlas_page_count_);
+    for (std::size_t i = previous_touch_size; i < frame_state.page_touch_epochs.size(); ++i) {
+        frame_state.page_touch_epochs[i] = 0U;
+    }
 }
 
 void TextRenderer2D::BuildGpuInstancesFromScratch() {
@@ -446,6 +545,9 @@ void TextRenderer2D::BuildGpuInstancesFromScratch() {
     if (runtime_scratch.glyph_quads.empty()) {
         return;
     }
+
+    const bool pixel_snap_enabled = create_info_cache.enable_pixel_snap;
+    const float pixel_snap_step = create_info_cache.pixel_snap_step;
 
     gpu_instances.resize(runtime_scratch.glyph_quads.size());
     for (std::size_t i = 0; i < runtime_scratch.glyph_quads.size(); ++i) {
@@ -455,6 +557,12 @@ void TextRenderer2D::BuildGpuInstancesFromScratch() {
         instance.rect_y0 = quad.y0;
         instance.rect_x1 = quad.x1;
         instance.rect_y1 = quad.y1;
+        if (pixel_snap_enabled) {
+            instance.rect_x0 = QuantizeToStep(instance.rect_x0, pixel_snap_step);
+            instance.rect_y0 = QuantizeToStep(instance.rect_y0, pixel_snap_step);
+            instance.rect_x1 = QuantizeToStep(instance.rect_x1, pixel_snap_step);
+            instance.rect_y1 = QuantizeToStep(instance.rect_y1, pixel_snap_step);
+        }
         instance.uv_u0 = quad.u0;
         instance.uv_v0 = quad.v0;
         instance.uv_u1 = quad.u1;
@@ -492,6 +600,7 @@ void TextRenderer2D::EnsureGpuResourcesForFrame(VulkanContext& context_,
 
     resource::BufferHost::DestroyBuffer(context_, frame_state.vertex_buffer);
     frame_state.vertex_buffer_capacity_bytes = 0U;
+    frame_state.uploaded_revision = 0U;
 
     if (required_capacity == 0U) {
         return;
@@ -515,6 +624,7 @@ void TextRenderer2D::EnsureGpuResourcesForFrame(VulkanContext& context_,
                                                                    buffer_create_info,
                                                                    *gpu_memory_host);
     frame_state.vertex_buffer_capacity_bytes = required_capacity;
+    frame_state.uploaded_revision = 0U;
 }
 
 void TextRenderer2D::PreparePageDescriptorSetsForFrame(std::uint32_t frame_index_) {
@@ -549,6 +659,13 @@ void TextRenderer2D::PreparePageDescriptorSetsForFrame(std::uint32_t frame_index
             frame_state.page_set_epochs[i] = 0U;
         }
     }
+    if (frame_state.page_touch_epochs.size() < atlas_page_count) {
+        const std::size_t previous_touch_size = frame_state.page_touch_epochs.size();
+        frame_state.page_touch_epochs.resize(atlas_page_count);
+        for (std::size_t i = previous_touch_size; i < frame_state.page_touch_epochs.size(); ++i) {
+            frame_state.page_touch_epochs[i] = 0U;
+        }
+    }
 
     for (const auto& batch : runtime_scratch.draw_batches) {
         if (batch.glyph_count == 0U) {
@@ -557,6 +674,10 @@ void TextRenderer2D::PreparePageDescriptorSetsForFrame(std::uint32_t frame_index
         if (batch.atlas_page_id >= atlas_page_count) {
             continue;
         }
+        if (frame_state.page_touch_epochs[batch.atlas_page_id] == frame_state.page_touch_epoch) {
+            continue;
+        }
+        frame_state.page_touch_epochs[batch.atlas_page_id] = frame_state.page_touch_epoch;
         (void)EnsurePageDescriptorSet(*context,
                                       *descriptor_host,
                                       frame_index_,

@@ -15,6 +15,12 @@ namespace vr::text {
 
 namespace {
 
+#if defined(FT_RENDER_MODE_SDF) && defined(FT_PIXEL_MODE_SDF)
+inline constexpr bool k_ft_sdf_supported = true;
+#else
+inline constexpr bool k_ft_sdf_supported = false;
+#endif
+
 [[nodiscard]] std::uint64_t HashBytes(const void* data_, std::size_t size_bytes_) noexcept {
     const auto* ptr = static_cast<const std::uint8_t*>(data_);
     std::uint64_t hash = 0xcbf29ce484222325ULL;
@@ -370,6 +376,10 @@ bool FreeTypeHost::IsFaceIdValid(FontFaceId face_id_) const noexcept {
     const std::uint32_t face_entry_index = face_id_.value - 1U;
     return face_entry_index < face_entries.size() &&
            face_entries[face_entry_index].face != nullptr;
+}
+
+bool FreeTypeHost::SupportsSdfRasterization() const noexcept {
+    return k_ft_sdf_supported;
 }
 
 std::uint32_t FreeTypeHost::FaceCount() const noexcept {

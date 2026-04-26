@@ -1,13 +1,13 @@
-#version 460
+﻿#version 460
 
 layout(set = 0, binding = 0) uniform sampler2D atlas_sampler;
 
-layout(push_constant) uniform TextPushConstants {
-    vec2 inv_viewport;
-    float depth;
+layout(push_constant) uniform Text3DPushConstants {
+    mat4 view_projection;
     float sdf_smooth;
     float bitmap_gamma;
     float bitmap_edge_sharpness;
+    float reserved0;
 } pc;
 
 layout(location = 0) in vec2 in_uv;

@@ -96,6 +96,8 @@ endfunction()
 
 set(VR_TEXT_2D_VERT_HEADER "${VR_GENERATED_SHADER_DIR}/text_2d_vert_spv.hpp")
 set(VR_TEXT_2D_FRAG_HEADER "${VR_GENERATED_SHADER_DIR}/text_2d_frag_spv.hpp")
+set(VR_TEXT_3D_VERT_HEADER "${VR_GENERATED_SHADER_DIR}/text_3d_vert_spv.hpp")
+set(VR_TEXT_3D_FRAG_HEADER "${VR_GENERATED_SHADER_DIR}/text_3d_frag_spv.hpp")
 
 vr_compile_shader_to_header("${VR_SHADER_SOURCE_DIR}/text_2d.vert"
                             "vert"
@@ -105,11 +107,21 @@ vr_compile_shader_to_header("${VR_SHADER_SOURCE_DIR}/text_2d.frag"
                             "frag"
                             "k_text_2d_frag_spv"
                             "${VR_TEXT_2D_FRAG_HEADER}")
+vr_compile_shader_to_header("${VR_SHADER_SOURCE_DIR}/text_3d.vert"
+                            "vert"
+                            "k_text_3d_vert_spv"
+                            "${VR_TEXT_3D_VERT_HEADER}")
+vr_compile_shader_to_header("${VR_SHADER_SOURCE_DIR}/text_3d.frag"
+                            "frag"
+                            "k_text_3d_frag_spv"
+                            "${VR_TEXT_3D_FRAG_HEADER}")
 
 add_custom_target(vr_text_shaders
     DEPENDS
         "${VR_TEXT_2D_VERT_HEADER}"
         "${VR_TEXT_2D_FRAG_HEADER}"
+        "${VR_TEXT_3D_VERT_HEADER}"
+        "${VR_TEXT_3D_FRAG_HEADER}"
 )
 
 add_library(vulkan_init STATIC
@@ -122,6 +134,7 @@ add_library(vulkan_init STATIC
     src/text/glyph_atlas_host.cpp
     src/text/glyph_upload_host.cpp
     src/text/text_renderer_2d.cpp
+    src/text/text_renderer_3d.cpp
     src/resource/buffer_host.cpp
     src/resource/image_host.cpp
     src/resource/gpu_memory_host.cpp
@@ -194,6 +207,15 @@ add_executable(sdl_text_demo
 )
 
 target_link_libraries(sdl_text_demo
+    PRIVATE
+        vulkan_platform_sdl
+)
+
+add_executable(sdl_text_3d_demo
+    examples/sdl_text_3d_demo.cpp
+)
+
+target_link_libraries(sdl_text_3d_demo
     PRIVATE
         vulkan_platform_sdl
 )

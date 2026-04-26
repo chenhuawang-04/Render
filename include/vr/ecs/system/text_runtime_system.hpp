@@ -50,10 +50,12 @@ struct TextDrawBatch final {
 
 struct TextRuntimeBuildConfig {
     std::uint32_t tab_space_count = 4U;
+    std::int32_t glyph_load_flags = 0;
     float dim3_pixels_per_world_unit = 96.0F;
     float pixel_size_quantization = 1.0F;
     float min_pixel_size = 8.0F;
     float max_pixel_size = 256.0F;
+    text::GlyphRenderMode bitmap_render_mode = text::GlyphRenderMode::light;
     bool enable_kerning = true;
 };
 
@@ -87,6 +89,18 @@ struct TextRuntimeScratch final {
         std::uint32_t codepoint = 0U;
     };
 
+    struct GlyphResolveCacheEntry {
+        std::uint64_t hash = 0U;
+        std::uint32_t face_id_value = 0U;
+        std::uint32_t codepoint = 0U;
+        std::int32_t load_flags = 0;
+        std::uint8_t render_mode = 0U;
+        std::uint8_t reserved0 = 0U;
+        std::uint8_t reserved1 = 0U;
+        std::uint8_t reserved2 = 0U;
+        text::GlyphAtlasResolvedEntry resolved{};
+    };
+
     TextRuntimeMcVector<TextGlyphQuad> glyph_quads{};
     TextRuntimeMcVector<TextDrawBatch> draw_batches{};
     TextBatchScratch<DimensionT> batch_scratch{};
@@ -96,6 +110,7 @@ struct TextRuntimeScratch final {
     TextRuntimeMcVector<float> line_x_offsets{};
     TextRuntimeMcVector<RunGlyphRecord> run_glyphs{};
     TextRuntimeMcVector<FaceVariantCacheEntry> face_variants{};
+    TextRuntimeMcVector<GlyphResolveCacheEntry> glyph_resolve_cache{};
 };
 
 static_assert(PurePodComponent<TextGlyphQuad>);
@@ -126,6 +141,9 @@ public:
             if (scratch_.utf32_codepoints.capacity() < glyph_reserve) {
                 scratch_.utf32_codepoints.reserve(glyph_reserve);
             }
+            if (scratch_.glyph_resolve_cache.capacity() < glyph_reserve) {
+                scratch_.glyph_resolve_cache.reserve(glyph_reserve);
+            }
         }
     }
 
@@ -143,6 +161,7 @@ public:
         scratch_.line_widths.clear();
         scratch_.line_x_offsets.clear();
         scratch_.run_glyphs.clear();
+        scratch_.glyph_resolve_cache.clear();
 
         if (components_ == nullptr || component_count_ == 0U) {
             stats.face_variant_cache_entries = static_cast<std::uint32_t>(scratch_.face_variants.size());
@@ -195,6 +214,11 @@ public:
             }
 
             const std::uint32_t pixel_height = QuantizePixelHeight(component, build_config_);
+            float glyph_world_scale = 1.0F;
+            if constexpr (std::same_as<DimensionT, Dim3>) {
+                const float safe_world_size = std::max(1e-6F, std::abs(component.style.world_size));
+                glyph_world_scale = safe_world_size / static_cast<float>(std::max(1U, pixel_height));
+            }
             const text::FontFaceId variant_face_id = AcquireVariantFaceId(component.runtime.font_id,
                                                                           pixel_height,
                                                                           atlas_host_,
@@ -240,6 +264,7 @@ public:
             const std::uint32_t glyph_begin = static_cast<std::uint32_t>(scratch_.glyph_quads.size());
             EmitGlyphQuadsAndBatches(component,
                                      component_index,
+                                     glyph_world_scale,
                                      scratch_,
                                      stats);
             const std::uint32_t glyph_count = static_cast<std::uint32_t>(scratch_.glyph_quads.size()) - glyph_begin;
@@ -261,6 +286,98 @@ public:
     }
 
 private:
+    [[nodiscard]] static std::uint64_t HashGlyphResolveRequest(std::uint32_t face_id_value_,
+                                                                std::uint32_t codepoint_,
+                                                                std::int32_t load_flags_,
+                                                                text::GlyphRenderMode render_mode_) noexcept {
+        std::uint64_t hash = 0xcbf29ce484222325ULL;
+        hash ^= static_cast<std::uint64_t>(face_id_value_);
+        hash *= 0x100000001b3ULL;
+        hash ^= static_cast<std::uint64_t>(codepoint_);
+        hash *= 0x100000001b3ULL;
+        hash ^= static_cast<std::uint64_t>(static_cast<std::uint32_t>(load_flags_));
+        hash *= 0x100000001b3ULL;
+        hash ^= static_cast<std::uint64_t>(static_cast<std::uint8_t>(render_mode_));
+        hash *= 0x100000001b3ULL;
+        return hash;
+    }
+
+    [[nodiscard]] static std::uint32_t LowerBoundGlyphResolveCache(
+        const TextRuntimeMcVector<typename ScratchType::GlyphResolveCacheEntry>& cache_,
+        std::uint64_t hash_) noexcept {
+        std::uint32_t first = 0U;
+        std::uint32_t count = static_cast<std::uint32_t>(cache_.size());
+        while (count > 0U) {
+            const std::uint32_t step = count / 2U;
+            const std::uint32_t it = first + step;
+            if (cache_[it].hash < hash_) {
+                first = it + 1U;
+                count -= step + 1U;
+            } else {
+                count = step;
+            }
+        }
+        return first;
+    }
+
+    [[nodiscard]] static text::GlyphRenderMode NormalizeBitmapRenderMode(
+        text::GlyphRenderMode mode_) noexcept {
+        switch (mode_) {
+            case text::GlyphRenderMode::normal:
+            case text::GlyphRenderMode::light:
+            case text::GlyphRenderMode::mono:
+                return mode_;
+            default:
+                return text::GlyphRenderMode::light;
+        }
+    }
+
+    [[nodiscard]] static text::GlyphAtlasResolvedEntry ResolveGlyphCached(
+        text::GlyphAtlasHost& atlas_host_,
+        text::FontFaceId face_id_,
+        std::uint32_t codepoint_,
+        std::int32_t load_flags_,
+        text::GlyphRenderMode render_mode_,
+        ScratchType& scratch_) {
+        const std::uint64_t hash = HashGlyphResolveRequest(face_id_.value,
+                                                           codepoint_,
+                                                           load_flags_,
+                                                           render_mode_);
+        const std::uint32_t insert_pos = LowerBoundGlyphResolveCache(scratch_.glyph_resolve_cache, hash);
+        for (std::uint32_t i = insert_pos; i < scratch_.glyph_resolve_cache.size(); ++i) {
+            const auto& entry = scratch_.glyph_resolve_cache[i];
+            if (entry.hash != hash) {
+                break;
+            }
+            if (entry.face_id_value == face_id_.value &&
+                entry.codepoint == codepoint_ &&
+                entry.load_flags == load_flags_ &&
+                entry.render_mode == static_cast<std::uint8_t>(render_mode_)) {
+                return entry.resolved;
+            }
+        }
+
+        const text::GlyphAtlasResolvedEntry resolved = atlas_host_.ResolveGlyphWithFace(face_id_,
+                                                                                         codepoint_,
+                                                                                         load_flags_,
+                                                                                         render_mode_);
+        typename ScratchType::GlyphResolveCacheEntry cache_entry{};
+        cache_entry.hash = hash;
+        cache_entry.face_id_value = face_id_.value;
+        cache_entry.codepoint = codepoint_;
+        cache_entry.load_flags = load_flags_;
+        cache_entry.render_mode = static_cast<std::uint8_t>(render_mode_);
+        cache_entry.resolved = resolved;
+        scratch_.glyph_resolve_cache.push_back(cache_entry);
+        for (std::uint32_t i = static_cast<std::uint32_t>(scratch_.glyph_resolve_cache.size() - 1U);
+             i > insert_pos;
+             --i) {
+            scratch_.glyph_resolve_cache[i] = scratch_.glyph_resolve_cache[i - 1U];
+        }
+        scratch_.glyph_resolve_cache[insert_pos] = cache_entry;
+        return resolved;
+    }
+
     [[nodiscard]] static std::uint32_t QuantizePixelHeight(const TextType& component_,
                                                            const TextRuntimeBuildConfig& build_config_) noexcept {
         float pixel_size = build_config_.min_pixel_size;
@@ -488,10 +605,14 @@ private:
         const float line_step = face_height_px * ResolveLineSpacing(component_);
         const float letter_spacing = ResolveLetterSpacing(component_);
         const std::uint32_t tab_count = std::max(1U, build_config_.tab_space_count);
-        const text::GlyphRenderMode render_mode =
-            component_.style.enable_sdf != 0U
-                ? text::GlyphRenderMode::sdf
-                : text::GlyphRenderMode::normal;
+        const bool request_sdf = component_.style.enable_sdf != 0U;
+        const bool use_sdf = request_sdf && freetype_host_.SupportsSdfRasterization();
+        const text::GlyphRenderMode bitmap_render_mode =
+            NormalizeBitmapRenderMode(build_config_.bitmap_render_mode);
+        const text::GlyphRenderMode render_mode = use_sdf
+            ? text::GlyphRenderMode::sdf
+            : bitmap_render_mode;
+        const std::int32_t load_flags = build_config_.glyph_load_flags;
 
         scratch_.line_widths.push_back(0.0F);
 
@@ -513,10 +634,12 @@ private:
 
             pen_x += kerning_x;
 
-            const text::GlyphAtlasResolvedEntry resolved = atlas_host_.ResolveGlyphWithFace(face_id_,
-                                                                                             codepoint_,
-                                                                                             0,
-                                                                                             render_mode);
+            const text::GlyphAtlasResolvedEntry resolved = ResolveGlyphCached(atlas_host_,
+                                                                              face_id_,
+                                                                              codepoint_,
+                                                                              load_flags,
+                                                                              render_mode,
+                                                                              scratch_);
             ++stats_.glyph_resolve_count;
 
             typename ScratchType::RunGlyphRecord record{};
@@ -653,6 +776,7 @@ private:
 
     static void EmitGlyphQuadsAndBatches(TextType& component_,
                                          std::uint32_t component_index_,
+                                         float glyph_world_scale_,
                                          ScratchType& scratch_,
                                          TextRuntimeBuildStats& stats_) {
         const std::uint32_t glyph_begin = static_cast<std::uint32_t>(scratch_.glyph_quads.size());
@@ -668,14 +792,16 @@ private:
                 continue;
             }
 
-            TextGlyphQuad quad{};
-            const float bearing_left = static_cast<float>(resolved.metrics.bearing_left);
-            const float bearing_top = static_cast<float>(resolved.metrics.bearing_top);
-            const float glyph_width = static_cast<float>(resolved.region.pixel_rect.width);
-            const float glyph_height = static_cast<float>(resolved.region.pixel_rect.height);
-            const float baseline_y = run_glyph.baseline_y;
+            const float units_scale = std::max(1e-6F, glyph_world_scale_);
 
-            quad.x0 = run_glyph.pen_x + bearing_left;
+            TextGlyphQuad quad{};
+            const float bearing_left = static_cast<float>(resolved.metrics.bearing_left) * units_scale;
+            const float bearing_top = static_cast<float>(resolved.metrics.bearing_top) * units_scale;
+            const float glyph_width = static_cast<float>(resolved.region.pixel_rect.width) * units_scale;
+            const float glyph_height = static_cast<float>(resolved.region.pixel_rect.height) * units_scale;
+            const float baseline_y = run_glyph.baseline_y * units_scale;
+
+            quad.x0 = run_glyph.pen_x * units_scale + bearing_left;
             quad.y0 = baseline_y - bearing_top;
             quad.x1 = quad.x0 + glyph_width;
             quad.y1 = quad.y0 + glyph_height;
@@ -685,10 +811,15 @@ private:
             quad.u1 = resolved.region.uv_rect.u1;
             quad.v1 = resolved.region.uv_rect.v1;
 
+            const bool glyph_is_sdf = component_.style.enable_sdf != 0U &&
+                                      resolved.pixel_mode == text::GlyphPixelMode::sdf;
+
             quad.color = component_.style.color;
-            quad.sdf_enabled = component_.style.enable_sdf;
-            quad.outline_enabled = component_.style.enable_outline;
-            quad.outline_width_px = component_.style.outline_width_px;
+            quad.sdf_enabled = glyph_is_sdf ? 1U : 0U;
+            quad.outline_enabled = (glyph_is_sdf && component_.style.enable_outline != 0U) ? 1U : 0U;
+            quad.outline_width_px = quad.outline_enabled != 0U
+                ? component_.style.outline_width_px
+                : 0U;
             quad.reserved0 = 0U;
             quad.outline_color = component_.style.outline_color;
             quad.atlas_page_id = resolved.region.page_index;

@@ -1,5 +1,9 @@
 ﻿#pragma once
 
+#if defined(__SSE__) || defined(__SSE2__) || defined(_M_X64) || defined(_M_IX86_FP)
+#include <immintrin.h>
+#endif
+
 #include "fast_math/mat3.h"
 #include "fast_math/mat4.h"
 #include "fast_math/mat4_d3d.h"

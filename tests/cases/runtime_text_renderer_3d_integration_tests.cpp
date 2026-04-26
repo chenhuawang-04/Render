@@ -1,0 +1,293 @@
+#include "support/test_framework.hpp"
+#include "vr/ecs/system/camera_system.hpp"
+#include "vr/ecs/system/text_system.hpp"
+#include "vr/ecs/system/transform_system.hpp"
+#include "vr/render/render_runtime_host.hpp"
+#include "vr/text/text_renderer_3d.hpp"
+
+#include <SDL3/SDL.h>
+
+#include <algorithm>
+#include <array>
+#include <cctype>
+#include <cstdint>
+#include <cstdio>
+#include <filesystem>
+#include <string>
+#include <string_view>
+
+namespace {
+
+using Runtime = vr::render::RenderRuntimeHost<vr::platform::ActiveBackendTag, 2U>;
+using Text3D = vr::ecs::Text<vr::ecs::Dim3>;
+using TextSystem3D = vr::ecs::TextSystem<vr::ecs::Dim3>;
+using Transform3D = vr::ecs::Transform<vr::ecs::Dim3>;
+using TransformSystem3D = vr::ecs::TransformSystem<vr::ecs::Dim3>;
+using Camera3D = vr::ecs::Camera<vr::ecs::Dim3>;
+using CameraSystem3D = vr::ecs::CameraSystem<vr::ecs::Dim3>;
+
+[[nodiscard]] std::string FindTestFontPath() {
+    namespace fs = std::filesystem;
+
+    constexpr std::array<const char*, 6U> candidate_paths{
+        "C:/Windows/Fonts/segoeui.ttf",
+        "C:/Windows/Fonts/arial.ttf",
+        "C:/Windows/Fonts/consola.ttf",
+        "C:/Windows/Fonts/tahoma.ttf",
+        "C:/Windows/Fonts/calibri.ttf",
+        "C:/Windows/Fonts/msyh.ttc"
+    };
+
+    for (const char* path : candidate_paths) {
+        const fs::path candidate(path);
+        if (fs::exists(candidate) && fs::is_regular_file(candidate)) {
+            return candidate.string();
+        }
+    }
+    return {};
+}
+
+[[nodiscard]] std::string ToLower(std::string_view value_) {
+    std::string lowered{};
+    lowered.reserve(value_.size());
+    for (const unsigned char ch : value_) {
+        lowered.push_back(static_cast<char>(std::tolower(ch)));
+    }
+    return lowered;
+}
+
+[[nodiscard]] bool ContainsCaseInsensitive(std::string_view text_,
+                                           std::string_view needle_) {
+    const std::string lowered_text = ToLower(text_);
+    const std::string lowered_needle = ToLower(needle_);
+    return lowered_text.find(lowered_needle) != std::string::npos;
+}
+
+[[nodiscard]] bool IsEnvironmentSkipError(std::string_view message_) {
+    constexpr std::array<std::string_view, 17U> patterns{
+        "sdl_initsubsystem",
+        "sdl_createwindow",
+        "sdl_vulkan_getinstanceextensions",
+        "sdl_vulkan_createsurface",
+        "vkcreateinstance",
+        "vkenumeratephysicaldevices",
+        "no vulkan physical devices found",
+        "no suitable vulkan physical device found",
+        "missing required instance extension",
+        "vkcreatedevice",
+        "vkgetphysicaldevicesurfacesupportkhr",
+        "vkgetphysicaldevicesurfaceformatskhr",
+        "vkgetphysicaldevicesurfacepresentmodeskhr",
+        "dynamicrendering",
+        "synchronization2",
+        "ft_new_face",
+        "freetypehost::registerface"
+    };
+
+    for (const auto pattern : patterns) {
+        if (ContainsCaseInsensitive(message_, pattern)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void InitializeTextComponent(Text3D& component_,
+                             std::uint32_t font_id_,
+                             std::uint32_t material_id_,
+                             std::string_view text_) {
+    TextSystem3D::Initialize(component_);
+    TextSystem3D::SetRuntimeRoute(component_, font_id_, material_id_, 0U, 0U);
+    TextSystem3D::SetColor(component_, vr::ecs::Rgba8{255U, 255U, 255U, 255U});
+    TextSystem3D::SetOutlineEnabled(component_, true);
+    TextSystem3D::SetOutlineWidthPx(component_, 1U);
+    TextSystem3D::SetOutlineColor(component_, vr::ecs::Rgba8{12U, 15U, 22U, 255U});
+    TextSystem3D::SetBillboard(component_, true);
+    TextSystem3D::SetWorldSize(component_, 0.45F);
+    (void)TextSystem3D::SetText(component_, text_);
+}
+
+VR_TEST_CASE(RuntimeIntegration_text_renderer_3d_end_to_end_smoke, "integration;gpu;sdl;runtime;text") {
+    const std::string font_path = FindTestFontPath();
+    if (font_path.empty()) {
+        VR_SKIP("No usable system font found for runtime 3D text renderer integration test.");
+    }
+
+    Runtime runtime{};
+    vr::text::TextRenderer3D text_renderer{};
+    bool runtime_initialized = false;
+    bool renderer_initialized = false;
+
+    std::array<Text3D, 3U> text_components{};
+    InitializeTextComponent(text_components[0U], 1U, 3U, "Melosyne 3D Text");
+    TextSystem3D::SetWorldSize(text_components[0U], 0.7F);
+    TextSystem3D::SetBillboard(text_components[0U], false);
+    TextSystem3D::SetDepthWrite(text_components[0U], true);
+
+    InitializeTextComponent(text_components[1U], 1U, 3U, "Billboard + Camera Driven");
+    TextSystem3D::SetWorldSize(text_components[1U], 0.45F);
+    TextSystem3D::SetBillboard(text_components[1U], true);
+
+    InitializeTextComponent(text_components[2U], 1U, 3U, "Frame: 0");
+    TextSystem3D::SetWorldSize(text_components[2U], 0.5F);
+    TextSystem3D::SetColor(text_components[2U], vr::ecs::Rgba8{200U, 245U, 170U, 255U});
+    TextSystem3D::SetBillboard(text_components[2U], true);
+
+    std::array<Transform3D, 3U> text_transforms{};
+    for (auto& transform : text_transforms) {
+        TransformSystem3D::Initialize(transform);
+    }
+
+    TransformSystem3D::SetLocalPosition(text_transforms[0U],
+                                        vr::ecs::Float3{.x = -1.25F, .y = 0.4F, .z = 0.0F});
+    TransformSystem3D::SetLocalRotationEulerXyz(text_transforms[0U],
+                                                 0.0F,
+                                                 0.0F,
+                                                 0.35F);
+    TransformSystem3D::SetLocalScale(text_transforms[0U],
+                                     vr::ecs::Float3{.x = 1.0F, .y = 1.0F, .z = 1.0F});
+
+    TransformSystem3D::SetLocalPosition(text_transforms[1U],
+                                        vr::ecs::Float3{.x = -1.8F, .y = -0.4F, .z = 0.0F});
+    TransformSystem3D::SetLocalScale(text_transforms[1U],
+                                     vr::ecs::Float3{.x = 1.0F, .y = 1.0F, .z = 1.0F});
+
+    TransformSystem3D::SetLocalPosition(text_transforms[2U],
+                                        vr::ecs::Float3{.x = -1.6F, .y = -1.1F, .z = 0.0F});
+    TransformSystem3D::SetLocalScale(text_transforms[2U],
+                                     vr::ecs::Float3{.x = 1.0F, .y = 1.0F, .z = 1.0F});
+
+    TransformSystem3D::UpdateHierarchy(text_transforms.data(),
+                                       static_cast<std::uint32_t>(text_transforms.size()));
+
+    Camera3D camera{};
+    CameraSystem3D::Initialize(camera);
+    CameraSystem3D::SetAspectRatio(camera, 1280.0F / 720.0F);
+    CameraSystem3D::SetNearFar(camera, 0.05F, 256.0F);
+    CameraSystem3D::SetVerticalFovRadians(camera, 60.0F * 0.01745329251994329577F);
+
+    Transform3D camera_transform{};
+    TransformSystem3D::Initialize(camera_transform);
+    TransformSystem3D::SetLocalPosition(camera_transform,
+                                        vr::ecs::Float3{.x = 0.0F, .y = 0.0F, .z = 4.0F});
+    TransformSystem3D::SetLocalRotationEulerXyz(camera_transform,
+                                                 0.0F,
+                                                 0.0F,
+                                                 0.0F);
+    TransformSystem3D::UpdateHierarchy(&camera_transform, 1U);
+    CameraSystem3D::MarkViewDirty(camera);
+    CameraSystem3D::Update(camera, camera_transform);
+
+    try {
+        Runtime::CreateInfo create_info{};
+        create_info.platform.window.title = "vr_tests_runtime_text_3d_smoke";
+        create_info.platform.window.width = 640;
+        create_info.platform.window.height = 360;
+        create_info.platform.window.resizable = true;
+        create_info.platform.window.high_pixel_density = true;
+        create_info.platform.instance.enable_validation = false;
+        create_info.platform.device.required_vulkan13_features.dynamicRendering = VK_TRUE;
+        create_info.platform.device.required_vulkan13_features.synchronization2 = VK_TRUE;
+        create_info.render_loop.swapchain.enable_vsync = false;
+        create_info.render_loop.swapchain.preferred_image_count = 2U;
+        create_info.render_loop.commands.initial_primary_per_frame = 2U;
+        create_info.render_loop.commands.primary_growth_chunk = 2U;
+        create_info.poll_events_each_tick = true;
+
+        runtime.Initialize(create_info);
+        runtime_initialized = true;
+
+        vr::text::FontFaceCreateInfo face_create_info{};
+        face_create_info.file_path = font_path;
+        face_create_info.pixel_height = 32U;
+        const vr::text::FontFaceId base_face_id = runtime.FreeType().RegisterFace(face_create_info);
+        runtime.GlyphAtlas().MapFont(1U, base_face_id);
+
+        vr::text::TextRenderer3DCreateInfo text_renderer_create_info{};
+        text_renderer_create_info.runtime_build.pixel_size_quantization = 1.0F;
+        text_renderer_create_info.runtime_build.enable_kerning = true;
+        text_renderer_create_info.reserve_component_count = static_cast<std::uint32_t>(text_components.size());
+        text_renderer_create_info.reserve_glyph_count = 8192U;
+        text_renderer_create_info.initial_vertex_buffer_bytes = 2U * 1024U * 1024U;
+        text_renderer_create_info.clear_swapchain = true;
+        text_renderer.Initialize(text_renderer_create_info);
+        renderer_initialized = true;
+        text_renderer.SetSceneData(text_components.data(),
+                                   text_transforms.data(),
+                                   static_cast<std::uint32_t>(text_components.size()),
+                                   &camera,
+                                   &camera_transform);
+
+        std::uint32_t submitted_frames = 0U;
+        std::uint32_t max_instance_count = 0U;
+        std::uint32_t max_draw_batches = 0U;
+        std::uint32_t max_draw_calls = 0U;
+        std::uint32_t max_billboard_instances = 0U;
+        std::uint32_t max_depth_test_batches = 0U;
+        std::uint32_t max_depth_write_batches = 0U;
+
+        constexpr std::uint32_t max_ticks = 18U;
+        for (std::uint32_t tick_index = 0U;
+             tick_index < max_ticks && runtime.IsRunning();
+             ++tick_index) {
+            char frame_text[64]{};
+            std::snprintf(frame_text, sizeof(frame_text), "Frame: %u", tick_index);
+            (void)TextSystem3D::SetText(text_components[2U], frame_text);
+
+            TransformSystem3D::SetLocalRotationEulerXyz(text_transforms[0U],
+                                                         0.0F,
+                                                         0.0F,
+                                                         0.35F + 0.015F * static_cast<float>(tick_index));
+            TransformSystem3D::UpdateHierarchy(text_transforms.data(),
+                                               static_cast<std::uint32_t>(text_transforms.size()));
+
+            const Runtime::RuntimeTickResult tick_result = runtime.Tick(text_renderer);
+            if (tick_result.render.code == vr::render::TickCode::Submitted ||
+                tick_result.render.code == vr::render::TickCode::RecreateRequested) {
+                ++submitted_frames;
+            }
+
+            const vr::text::TextRenderer3DStats& stats = text_renderer.Stats();
+            max_instance_count = std::max(max_instance_count, stats.instance_count);
+            max_draw_batches = std::max(max_draw_batches, stats.draw_batch_count);
+            max_draw_calls = std::max(max_draw_calls, stats.draw_call_count);
+            max_billboard_instances = std::max(max_billboard_instances, stats.billboard_instance_count);
+            max_depth_test_batches = std::max(max_depth_test_batches, stats.depth_test_batch_count);
+            max_depth_write_batches = std::max(max_depth_write_batches, stats.depth_write_batch_count);
+            VR_CHECK(stats.descriptor_set_update_count <= stats.draw_batch_count);
+            VR_CHECK(stats.descriptor_set_bind_count <= stats.draw_call_count);
+
+            SDL_Delay(1U);
+        }
+
+        VR_REQUIRE(submitted_frames > 0U);
+        VR_CHECK(max_instance_count > 0U);
+        VR_CHECK(max_draw_batches > 0U);
+        VR_CHECK(max_draw_calls > 0U);
+        VR_CHECK(max_billboard_instances > 0U);
+        VR_CHECK(max_depth_test_batches > 0U);
+        VR_CHECK(max_depth_write_batches > 0U);
+        VR_CHECK(runtime.GlyphUpload().Stats().uploaded_rect_count > 0U);
+
+        text_renderer.Shutdown(runtime.Context());
+        renderer_initialized = false;
+        runtime.Shutdown();
+        runtime_initialized = false;
+    } catch (const std::exception& exception_) {
+        if (renderer_initialized && runtime_initialized && runtime.IsInitialized()) {
+            text_renderer.Shutdown(runtime.Context());
+            renderer_initialized = false;
+        }
+        if (runtime_initialized && runtime.IsInitialized()) {
+            runtime.Shutdown();
+            runtime_initialized = false;
+        }
+
+        if (IsEnvironmentSkipError(exception_.what())) {
+            VR_SKIP(exception_.what());
+        }
+        throw;
+    }
+}
+
+} // namespace

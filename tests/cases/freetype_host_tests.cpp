@@ -36,6 +36,15 @@ VR_TEST_CASE(FreeTypeHost_initialize_and_shutdown, "unit;core;text;freetype") {
     VR_CHECK(!host.IsInitialized());
 }
 
+VR_TEST_CASE(FreeTypeHost_supports_sdf_query_is_stable, "unit;core;text;freetype") {
+    vr::text::FreeTypeHost host{};
+    const bool support_before_initialize = host.SupportsSdfRasterization();
+    host.Initialize();
+    const bool support_after_initialize = host.SupportsSdfRasterization();
+    VR_CHECK(support_before_initialize == support_after_initialize);
+    host.Shutdown();
+}
+
 VR_TEST_CASE(FreeTypeHost_register_face_and_rasterize_ascii, "unit;core;text;freetype") {
     const std::string font_path = FindTestFontPath();
     if (font_path.empty()) {
@@ -109,4 +118,3 @@ VR_TEST_CASE(FreeTypeHost_set_face_pixel_size_updates_metrics, "unit;core;text;f
 }
 
 } // namespace
-

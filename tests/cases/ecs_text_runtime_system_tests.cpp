@@ -148,6 +148,62 @@ VR_TEST_CASE(EcsTextRuntimeSystem_font_size_variant_cache_reuse, "unit;core;ecs;
     VR_CHECK(freetype_host.FaceCount() == face_count_after_first_build);
 }
 
+VR_TEST_CASE(EcsTextRuntimeSystem_sdf_flags_match_actual_raster_mode, "unit;core;ecs;text;runtime") {
+    const std::string font_path = FindTestFontPath();
+    if (font_path.empty()) {
+        VR_SKIP("No usable system font found for TextRuntimeSystem test.");
+    }
+
+    vr::text::FreeTypeHost freetype_host{};
+    freetype_host.Initialize();
+
+    vr::text::FontFaceCreateInfo face_create_info{};
+    face_create_info.file_path = font_path;
+    face_create_info.pixel_height = 24U;
+    const vr::text::FontFaceId base_face = freetype_host.RegisterFace(face_create_info);
+    VR_REQUIRE(base_face.IsValid());
+
+    vr::text::GlyphAtlasHost atlas_host{};
+    atlas_host.Initialize(freetype_host);
+    atlas_host.MapFont(9U, base_face);
+
+    using TextSystem2D = vr::ecs::TextSystem<vr::ecs::Dim2>;
+    vr::ecs::Text<vr::ecs::Dim2> component{};
+    TextSystem2D::Initialize(component);
+    TextSystem2D::SetRuntimeRoute(component, 9U, 1U, 0U, 0U);
+    TextSystem2D::SetSdfEnabled(component, true);
+    TextSystem2D::SetOutlineEnabled(component, true);
+    TextSystem2D::SetOutlineWidthPx(component, 2U);
+    VR_REQUIRE(TextSystem2D::SetText(component, "SDF Probe"));
+
+    vr::ecs::TextRuntimeScratch<vr::ecs::Dim2> scratch{};
+    const auto stats = vr::ecs::TextRuntimeSystem<vr::ecs::Dim2>::Build(&component,
+                                                                         1U,
+                                                                         atlas_host,
+                                                                         freetype_host,
+                                                                         scratch);
+    VR_REQUIRE(stats.built_component_count == 1U);
+    VR_REQUIRE(!scratch.glyph_quads.empty());
+
+    bool any_sdf_quad = false;
+    for (const auto& quad : scratch.glyph_quads) {
+        if (quad.sdf_enabled != 0U) {
+            any_sdf_quad = true;
+            VR_CHECK(quad.outline_enabled != 0U);
+            VR_CHECK(quad.outline_width_px > 0U);
+        } else {
+            VR_CHECK(quad.outline_enabled == 0U);
+            VR_CHECK(quad.outline_width_px == 0U);
+        }
+    }
+
+    if (freetype_host.SupportsSdfRasterization()) {
+        VR_CHECK(any_sdf_quad);
+    } else {
+        VR_CHECK(!any_sdf_quad);
+    }
+}
+
 VR_TEST_CASE(EcsTextRuntimeSystem_dim3_world_size_build, "unit;core;ecs;text;runtime") {
     const std::string font_path = FindTestFontPath();
     if (font_path.empty()) {
@@ -188,6 +244,61 @@ VR_TEST_CASE(EcsTextRuntimeSystem_dim3_world_size_build, "unit;core;ecs;text;run
     VR_CHECK(component.runtime.glyph_count > 0U);
     VR_CHECK(!scratch.glyph_quads.empty());
     VR_CHECK(!scratch.draw_batches.empty());
+}
+
+VR_TEST_CASE(EcsTextRuntimeSystem_dim3_world_size_scales_glyph_geometry, "unit;core;ecs;text;runtime") {
+    const std::string font_path = FindTestFontPath();
+    if (font_path.empty()) {
+        VR_SKIP("No usable system font found for TextRuntimeSystem test.");
+    }
+
+    vr::text::FreeTypeHost freetype_host{};
+    freetype_host.Initialize();
+
+    vr::text::FontFaceCreateInfo face_create_info{};
+    face_create_info.file_path = font_path;
+    face_create_info.pixel_height = 20U;
+    const vr::text::FontFaceId base_face = freetype_host.RegisterFace(face_create_info);
+    VR_REQUIRE(base_face.IsValid());
+
+    vr::text::GlyphAtlasHost atlas_host{};
+    atlas_host.Initialize(freetype_host);
+    atlas_host.MapFont(13U, base_face);
+
+    using TextSystem3D = vr::ecs::TextSystem<vr::ecs::Dim3>;
+    std::array<vr::ecs::Text<vr::ecs::Dim3>, 2U> components{};
+    for (auto& component : components) {
+        TextSystem3D::Initialize(component);
+        TextSystem3D::SetRuntimeRoute(component, 13U, 11U, 0U, 0U);
+        VR_REQUIRE(TextSystem3D::SetText(component, "Scale3D"));
+    }
+    TextSystem3D::SetWorldSize(components[0U], 0.5F);
+    TextSystem3D::SetWorldSize(components[1U], 1.0F);
+
+    vr::ecs::TextRuntimeScratch<vr::ecs::Dim3> scratch{};
+    vr::ecs::TextRuntimeBuildConfig build_config{};
+    build_config.dim3_pixels_per_world_unit = 96.0F;
+
+    const auto stats = vr::ecs::TextRuntimeSystem<vr::ecs::Dim3>::Build(components.data(),
+                                                                         static_cast<std::uint32_t>(components.size()),
+                                                                         atlas_host,
+                                                                         freetype_host,
+                                                                         scratch,
+                                                                         build_config);
+    VR_REQUIRE(stats.built_component_count == 2U);
+    VR_REQUIRE(components[0U].runtime.glyph_count > 0U);
+    VR_REQUIRE(components[1U].runtime.glyph_count > 0U);
+
+    const vr::ecs::TextGlyphQuad& quad_small =
+        scratch.glyph_quads[components[0U].runtime.glyph_begin];
+    const vr::ecs::TextGlyphQuad& quad_large =
+        scratch.glyph_quads[components[1U].runtime.glyph_begin];
+
+    const float width_small = quad_small.x1 - quad_small.x0;
+    const float width_large = quad_large.x1 - quad_large.x0;
+    VR_CHECK(width_small > 0.0F);
+    VR_CHECK(width_large > width_small);
+    VR_CHECK(width_large / width_small > 1.5F);
 }
 
 } // namespace
