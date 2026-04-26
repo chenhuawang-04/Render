@@ -129,6 +129,9 @@ public:
         for (auto& slot_value : slot_submit_value) {
             slot_value = 0U;
         }
+        for (auto& reuse_waited : frame_reuse_waited) {
+            reuse_waited = false;
+        }
         next_submit_value = 1U;
         last_submitted_value = 0U;
         completed_submit_value = 0U;
@@ -197,6 +200,9 @@ public:
         for (auto& slot_value : slot_submit_value) {
             slot_value = 0U;
         }
+        for (auto& reuse_waited : frame_reuse_waited) {
+            reuse_waited = false;
+        }
         completed_submit_value = last_submitted_value;
         current_frame = 0U;
         initialized = false;
@@ -209,6 +215,16 @@ public:
         }
     }
 
+    void PrepareCurrentFrame(VulkanContext& context_) {
+        if (!initialized) {
+            throw std::runtime_error("FrameSyncHost::PrepareCurrentFrame called before Initialize");
+        }
+        if (!context_.IsDeviceInitialized()) {
+            throw std::runtime_error("FrameSyncHost::PrepareCurrentFrame requires initialized Vulkan device");
+        }
+        WaitCurrentFrameFenceIfNeeded(context_);
+    }
+
     template<SwapchainBridge SwapchainHostT>
     [[nodiscard]] FrameBeginResult BeginFrame(VulkanContext& context_, SwapchainHostT& swapchain_) {
         if (!initialized) {
@@ -218,16 +234,10 @@ public:
             throw std::runtime_error("FrameSyncHost::BeginFrame requires initialized Vulkan device");
         }
 
-        const VkDevice device_ = context_.Device();
-        FrameSlot& slot = slots[current_frame];
+        WaitCurrentFrameFenceIfNeeded(context_);
 
-        CheckVk("vkWaitForFences(current frame)",
-                vkWaitForFences(device_,
-                                1U,
-                                &slot.in_flight,
-                                VK_TRUE,
-                                std::numeric_limits<uint64_t>::max()));
-        completed_submit_value = std::max(completed_submit_value, slot_submit_value[current_frame]);
+        FrameSlot& slot = slots[current_frame];
+        frame_reuse_waited[current_frame] = false;
 
         const uint32_t swapchain_image_count = swapchain_.ImageCount();
         if (image_owner_fence.size() != swapchain_image_count) {
@@ -259,7 +269,7 @@ public:
         VkFence owner_fence = image_owner_fence[image_index];
         if (owner_fence != VK_NULL_HANDLE && owner_fence != slot.in_flight) {
             CheckVk("vkWaitForFences(image owner)",
-                    vkWaitForFences(device_,
+                    vkWaitForFences(context_.Device(),
                                     1U,
                                     &owner_fence,
                                     VK_TRUE,
@@ -398,6 +408,7 @@ public:
                                                           &submit_info2,
                                                           token_.submit_fence);
             CheckVk("vkQueueSubmit2(graphics)", submit_result);
+            frame_reuse_waited[token_.frame_index] = false;
             slot_submit_value[token_.frame_index] = token_.submit_value;
             last_submitted_value = std::max(last_submitted_value, token_.submit_value);
             return submit_result;
@@ -418,6 +429,7 @@ public:
                                                      &submit_info,
                                                      token_.submit_fence);
         CheckVk("vkQueueSubmit(graphics)", submit_result);
+        frame_reuse_waited[token_.frame_index] = false;
         slot_submit_value[token_.frame_index] = token_.submit_value;
         last_submitted_value = std::max(last_submitted_value, token_.submit_value);
         return submit_result;
@@ -494,10 +506,31 @@ private:
         }
     }
 
+    void WaitCurrentFrameFenceIfNeeded(VulkanContext& context_) {
+        if (current_frame >= frames_in_flight_v) {
+            throw std::runtime_error("FrameSyncHost::WaitCurrentFrameFenceIfNeeded current_frame out of range");
+        }
+        if (frame_reuse_waited[current_frame]) {
+            return;
+        }
+
+        const VkDevice device = context_.Device();
+        FrameSlot& slot = slots[current_frame];
+        CheckVk("vkWaitForFences(current frame)",
+                vkWaitForFences(device,
+                                1U,
+                                &slot.in_flight,
+                                VK_TRUE,
+                                std::numeric_limits<uint64_t>::max()));
+        completed_submit_value = std::max(completed_submit_value, slot_submit_value[current_frame]);
+        frame_reuse_waited[current_frame] = true;
+    }
+
 private:
     std::array<FrameSlot, frames_in_flight_v> slots{};
     FrameMcVector<VkFence> image_owner_fence{};
     std::array<uint64_t, frames_in_flight_v> slot_submit_value{};
+    std::array<bool, frames_in_flight_v> frame_reuse_waited{};
     uint64_t next_submit_value = 1U;
     uint64_t last_submitted_value = 0U;
     uint64_t completed_submit_value = 0U;

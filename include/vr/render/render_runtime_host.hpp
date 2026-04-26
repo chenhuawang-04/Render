@@ -322,6 +322,8 @@ public:
                 create_info_cache.pipeline_warmup.max_compute_compiles_per_tick);
         }
 
+        render_loop.Sync().PrepareCurrentFrame(platform_host.Context());
+
         const uint32_t frame_index = render_loop.Sync().CurrentFrameIndex();
         if (descriptor_initialized) {
             descriptor_host.BeginFrame(platform_host.Context(), frame_index);
