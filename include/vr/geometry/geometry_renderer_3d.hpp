@@ -1,0 +1,219 @@
+#pragma once
+
+#include "Center/Memory/Container/Vector/McVector.hpp"
+#include "vr/ecs/component/camera_component.hpp"
+#include "vr/ecs/system/geometry_runtime_system.hpp"
+#include "vr/geometry/geometry_resource_host.hpp"
+#include "vr/geometry/geometry_upload_host.hpp"
+#include "vr/render/pipeline_host.hpp"
+#include "vr/resource/image_host.hpp"
+
+#include <array>
+#include <cstdint>
+
+namespace vr {
+class VulkanContext;
+}
+
+namespace vr::render {
+struct RuntimePrepareContext;
+struct FrameRecordContext;
+}
+
+namespace vr::geometry {
+
+template<typename T>
+using GeometryRenderer3DMcVector = Center::Memory::mc_vector<T, Center::Memory::Tags::Container>;
+
+struct GeometryRenderer3DCreateInfo {
+    ecs::Geometry3DRuntimeBuildConfig runtime_build{};
+    std::uint32_t reserve_component_count = 4096U;
+    std::uint32_t reserve_instance_count = 8192U;
+    bool enable_depth = true;
+    VkFormat preferred_depth_format = VK_FORMAT_D32_SFLOAT;
+    bool clear_depth = true;
+    float clear_depth_value = 1.0F;
+    std::uint32_t clear_stencil_value = 0U;
+    bool clear_swapchain = false;
+    VkClearColorValue clear_color = {{0.07F, 0.08F, 0.11F, 1.0F}};
+    float directional_light_x = 0.5F;
+    float directional_light_y = -1.0F;
+    float directional_light_z = 0.35F;
+    float directional_light_intensity = 1.0F;
+};
+
+struct GeometryRenderer3DStats {
+    std::uint32_t component_count = 0U;
+    std::uint32_t visible_component_count = 0U;
+    std::uint32_t instance_count = 0U;
+    std::uint32_t draw_batch_count = 0U;
+    std::uint32_t draw_call_count = 0U;
+    std::uint32_t skipped_batch_count = 0U;
+    std::uint32_t depth_test_batch_count = 0U;
+    std::uint32_t depth_write_batch_count = 0U;
+    std::uint32_t shadow_cast_batch_count = 0U;
+    std::uint32_t uploaded_instance_count = 0U;
+    std::uint64_t uploaded_bytes = 0U;
+    bool cache_reused = false;
+    bool transform_only_update = false;
+};
+
+class GeometryRenderer3D final {
+public:
+    GeometryRenderer3D() = default;
+    ~GeometryRenderer3D() = default;
+
+    GeometryRenderer3D(const GeometryRenderer3D&) = delete;
+    GeometryRenderer3D& operator=(const GeometryRenderer3D&) = delete;
+
+    GeometryRenderer3D(GeometryRenderer3D&&) = delete;
+    GeometryRenderer3D& operator=(GeometryRenderer3D&&) = delete;
+
+    void Initialize(const GeometryRenderer3DCreateInfo& create_info_ = {});
+    void Shutdown(VulkanContext& context_);
+
+    void SetHosts(GeometryResourceHost* resource_host_,
+                  GeometryUploadHost* upload_host_) noexcept;
+    void SetSceneData(ecs::Geometry<ecs::Dim3>* geometry_components_,
+                      ecs::Transform<ecs::Dim3>* transforms_,
+                      std::uint32_t component_count_,
+                      ecs::Camera<ecs::Dim3>* camera_component_,
+                      ecs::Transform<ecs::Dim3>* camera_transform_) noexcept;
+
+    void PrepareFrame(const render::RuntimePrepareContext& prepare_context_);
+    void Record(const render::FrameRecordContext& record_context_);
+    void OnSwapchainRecreated(std::uint32_t image_count_,
+                              VkExtent2D extent_,
+                              VkFormat format_);
+    void OnSwapchainRecreated(std::uint32_t image_count_,
+                              VkExtent2D extent_,
+                              VkFormat format_,
+                              std::uint64_t last_submitted_value_,
+                              std::uint64_t completed_submit_value_);
+
+    [[nodiscard]] bool IsInitialized() const noexcept;
+    [[nodiscard]] const GeometryRenderer3DStats& Stats() const noexcept;
+
+private:
+    struct PushConstants final {
+        ecs::Matrix4x4 view_projection;
+        float directional_light_x;
+        float directional_light_y;
+        float directional_light_z;
+        float directional_light_intensity;
+    };
+
+    static_assert(sizeof(PushConstants) == 80U);
+
+    enum class PipelineMode : std::uint8_t {
+        no_depth = 0U,
+        depth_read = 1U,
+        depth_read_write = 2U,
+        count = 3U
+    };
+
+    enum class TopologyMode : std::uint8_t {
+        triangles = 0U,
+        lines = 1U,
+        points = 2U,
+        count = 3U
+    };
+
+    enum class CullMode : std::uint8_t {
+        back = 0U,
+        none = 1U,
+        count = 2U
+    };
+
+    struct RetiredDepthImage final {
+        resource::ImageResource resource{};
+        std::uint64_t retire_value = 0U;
+    };
+
+    [[nodiscard]] static bool IsDepthFormatSupported(VulkanContext& context_, VkFormat format_) noexcept;
+    [[nodiscard]] static bool DepthFormatHasStencil(VkFormat format_) noexcept;
+    [[nodiscard]] static VkImageAspectFlags DepthImageAspectMask(VkFormat format_) noexcept;
+    [[nodiscard]] static VkFormat ResolveDepthFormat(VulkanContext& context_, VkFormat preferred_format_);
+    [[nodiscard]] static std::size_t PipelineModeIndex(PipelineMode mode_) noexcept;
+    [[nodiscard]] static std::size_t TopologyModeIndex(TopologyMode mode_) noexcept;
+    [[nodiscard]] static std::size_t CullModeIndex(CullMode mode_) noexcept;
+    [[nodiscard]] static PipelineMode ResolvePipelineMode(const ecs::Geometry3DDrawBatch& batch_,
+                                                          bool use_depth_) noexcept;
+    [[nodiscard]] static TopologyMode ResolveTopologyMode(VkPrimitiveTopology mesh_topology_,
+                                                          const ecs::Geometry3DDrawBatch& batch_) noexcept;
+    [[nodiscard]] static CullMode ResolveCullMode(const ecs::Geometry3DDrawBatch& batch_) noexcept;
+
+    void EnsurePipelineObjects(VulkanContext& context_,
+                               render::PipelineHost& pipeline_host_,
+                               VkFormat color_format_,
+                               VkFormat depth_format_);
+    [[nodiscard]] render::GraphicsPipelineId EnsurePipelineForMode(VulkanContext& context_,
+                                                                   render::PipelineHost& pipeline_host_,
+                                                                   VkFormat color_format_,
+                                                                   VkFormat depth_format_,
+                                                                   PipelineMode mode_,
+                                                                   TopologyMode topology_mode_,
+                                                                   CullMode cull_mode_);
+    void EnsureDepthResources(VulkanContext& context_,
+                              std::uint32_t image_count_,
+                              VkExtent2D extent_);
+    void RetireDepthResources(std::uint64_t retire_value_);
+    void CollectRetiredDepthResources(VulkanContext& context_,
+                                      std::uint64_t completed_value_);
+    void DestroyDepthResources(VulkanContext& context_);
+    void DestroyRetiredDepthResources(VulkanContext& context_);
+    void RecordImageTransitionToColorAttachment(const render::FrameRecordContext& record_context_,
+                                                bool has_previous_content_) const;
+    void RecordImageTransitionToPresent(const render::FrameRecordContext& record_context_) const;
+    void RecordDepthTransitionToAttachment(VkCommandBuffer command_buffer_,
+                                           const resource::ImageResource& depth_resource_,
+                                           bool initialized_) const;
+
+private:
+    GeometryRenderer3DCreateInfo create_info_cache{};
+    GeometryRenderer3DStats stats{};
+
+    ecs::Geometry<ecs::Dim3>* geometry_components = nullptr;
+    ecs::Transform<ecs::Dim3>* transforms = nullptr;
+    std::uint32_t component_count = 0U;
+    ecs::Camera<ecs::Dim3>* camera_component = nullptr;
+    ecs::Transform<ecs::Dim3>* camera_transform = nullptr;
+
+    ecs::Geometry3DRuntimeScratch runtime_scratch{};
+    ecs::Geometry3DRuntimeBuildStats runtime_stats{};
+
+    GeometryResourceHost* geometry_resource_host = nullptr;
+    GeometryUploadHost* geometry_upload_host = nullptr;
+
+    VulkanContext* context = nullptr;
+    render::UploadHost* upload_host = nullptr;
+    render::PipelineHost* pipeline_host = nullptr;
+    resource::GpuMemoryHost* gpu_memory_host = nullptr;
+
+    render::PipelineLayoutId pipeline_layout_id{};
+    render::ShaderModuleId shader_vertex_id{};
+    render::ShaderModuleId shader_fragment_id{};
+    std::array<std::array<std::array<render::GraphicsPipelineId,
+                                     static_cast<std::size_t>(CullMode::count)>,
+                          static_cast<std::size_t>(TopologyMode::count)>,
+               static_cast<std::size_t>(PipelineMode::count)> pipeline_ids{};
+    VkFormat pipeline_color_format = VK_FORMAT_UNDEFINED;
+    VkFormat pipeline_depth_format = VK_FORMAT_UNDEFINED;
+
+    VkFormat depth_format = VK_FORMAT_UNDEFINED;
+    GeometryRenderer3DMcVector<resource::ImageResource> depth_images{};
+    GeometryRenderer3DMcVector<std::uint8_t> depth_image_initialized{};
+    GeometryRenderer3DMcVector<RetiredDepthImage> retired_depth_images{};
+    GeometryRenderer3DMcVector<std::uint8_t> image_initialized{};
+
+    std::uint32_t active_frame_index = 0U;
+    VkExtent2D swapchain_extent{};
+    VkFormat swapchain_format = VK_FORMAT_UNDEFINED;
+    GeometryUploadRange instance_range{};
+
+    std::uint64_t last_submitted_value_seen = 0U;
+    std::uint64_t completed_submit_value_seen = 0U;
+    bool initialized = false;
+};
+
+} // namespace vr::geometry

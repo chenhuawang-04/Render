@@ -10,6 +10,8 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
+#include <limits>
 
 namespace vr::ecs {
 
@@ -54,12 +56,24 @@ struct Geometry2DRuntimeBuildStats final {
     std::uint32_t approximated_quad_count = 0U;
     std::uint32_t approximated_cubic_count = 0U;
     std::uint32_t truncated_component_count = 0U;
+    std::uint64_t build_signature = 0U;
+    bool cache_reused = false;
+};
+
+struct Geometry2DRuntimeCache final {
+    const Geometry<Dim2>* components = nullptr;
+    std::uint32_t component_count = 0U;
+    std::uint64_t signature = 0U;
+    Geometry2DRuntimeBuildConfig build_config{};
+    Geometry2DRuntimeBuildStats last_stats{};
+    bool valid = false;
 };
 
 struct Geometry2DRuntimeScratch final {
     GeometryBatchScratch<Dim2> batch_scratch{};
     GeometryRuntimeMcVector<Geometry2DPathPrimitive> primitives{};
     GeometryRuntimeMcVector<Geometry2DDrawBatch> draw_batches{};
+    Geometry2DRuntimeCache cache{};
 };
 
 struct Geometry3DGpuInstance final {
@@ -131,12 +145,28 @@ struct Geometry3DRuntimeBuildStats final {
     std::uint32_t depth_test_batch_count = 0U;
     std::uint32_t depth_write_batch_count = 0U;
     std::uint32_t shadow_cast_batch_count = 0U;
+    std::uint64_t geometry_signature = 0U;
+    std::uint64_t transform_signature = 0U;
+    bool cache_reused = false;
+    bool transform_only_update = false;
+};
+
+struct Geometry3DRuntimeCache final {
+    const Geometry<Dim3>* components = nullptr;
+    const Transform<Dim3>* transforms = nullptr;
+    std::uint32_t component_count = 0U;
+    std::uint64_t geometry_signature = 0U;
+    std::uint64_t transform_signature = 0U;
+    Geometry3DRuntimeBuildConfig build_config{};
+    Geometry3DRuntimeBuildStats last_stats{};
+    bool valid = false;
 };
 
 struct Geometry3DRuntimeScratch final {
     GeometryBatchScratch<Dim3> batch_scratch{};
     GeometryRuntimeMcVector<Geometry3DGpuInstance> instances{};
     GeometryRuntimeMcVector<Geometry3DDrawBatch> draw_batches{};
+    Geometry3DRuntimeCache cache{};
 };
 
 static_assert(PurePodGeometryComponent<Geometry2DPathPrimitive>);
@@ -175,18 +205,41 @@ public:
                                                            ScratchType& scratch_,
                                                            const Geometry2DRuntimeBuildConfig& build_config_ = {}) {
         Geometry2DRuntimeBuildStats stats{};
-        scratch_.primitives.clear();
-        scratch_.draw_batches.clear();
 
         if (components_ == nullptr || component_count_ == 0U) {
+            scratch_.cache.valid = false;
+            scratch_.primitives.clear();
+            scratch_.draw_batches.clear();
             return stats;
         }
+
+        const std::uint64_t signature = ComputeBuildSignature(components_, component_count_);
+        stats.build_signature = signature;
+        if (scratch_.cache.valid &&
+            scratch_.cache.components == components_ &&
+            scratch_.cache.component_count == component_count_ &&
+            scratch_.cache.signature == signature &&
+            IsBuildConfigEqual(scratch_.cache.build_config, build_config_)) {
+            stats = scratch_.cache.last_stats;
+            stats.cache_reused = true;
+            return stats;
+        }
+
+        scratch_.primitives.clear();
+        scratch_.draw_batches.clear();
 
         stats.batch = BatchSystemType::BuildAndSort(components_,
                                                     component_count_,
                                                     scratch_.batch_scratch,
                                                     build_config_.build_ordered_indices);
         if (stats.batch.visible_count == 0U) {
+            stats.cache_reused = false;
+            scratch_.cache.components = components_;
+            scratch_.cache.component_count = component_count_;
+            scratch_.cache.signature = signature;
+            scratch_.cache.build_config = build_config_;
+            scratch_.cache.last_stats = stats;
+            scratch_.cache.valid = true;
             return stats;
         }
 
@@ -231,6 +284,15 @@ public:
         stats.emitted_batch_count = static_cast<std::uint32_t>(scratch_.draw_batches.size());
         stats.approximated_quad_count = quad_subdivision;
         stats.approximated_cubic_count = cubic_subdivision;
+        stats.build_signature = signature;
+        stats.cache_reused = false;
+
+        scratch_.cache.components = components_;
+        scratch_.cache.component_count = component_count_;
+        scratch_.cache.signature = signature;
+        scratch_.cache.build_config = build_config_;
+        scratch_.cache.last_stats = stats;
+        scratch_.cache.valid = true;
         return stats;
     }
 
@@ -256,6 +318,55 @@ private:
         params |= (static_cast<std::uint32_t>(component_.style.line_join) & 0x3U) << 4U;
         params |= (static_cast<std::uint32_t>(component_.style.line_cap) & 0x3U) << 6U;
         return params;
+    }
+
+    [[nodiscard]] static std::uint32_t FloatBits(float value_) noexcept {
+        std::uint32_t bits = 0U;
+        std::memcpy(&bits, &value_, sizeof(bits));
+        return bits;
+    }
+
+    static void HashCombine(std::uint64_t& hash_, std::uint64_t value_) noexcept {
+        hash_ ^= value_ + 0x9e3779b97f4a7c15ULL + (hash_ << 6U) + (hash_ >> 2U);
+    }
+
+    [[nodiscard]] static bool IsBuildConfigEqual(const Geometry2DRuntimeBuildConfig& lhs_,
+                                                 const Geometry2DRuntimeBuildConfig& rhs_) noexcept {
+        return lhs_.quad_subdivision == rhs_.quad_subdivision &&
+               lhs_.cubic_subdivision == rhs_.cubic_subdivision &&
+               lhs_.max_primitives_per_component == rhs_.max_primitives_per_component &&
+               FloatBits(lhs_.zero_length_epsilon) == FloatBits(rhs_.zero_length_epsilon) &&
+               lhs_.build_ordered_indices == rhs_.build_ordered_indices;
+    }
+
+    [[nodiscard]] static std::uint64_t ComputeBuildSignature(const GeometryType* components_,
+                                                             std::uint32_t component_count_) noexcept {
+        std::uint64_t hash = 0xcbf29ce484222325ULL;
+        for (std::uint32_t i = 0U; i < component_count_; ++i) {
+            const GeometryType& component = components_[i];
+            HashCombine(hash, static_cast<std::uint64_t>(component.runtime.route.visible));
+            if (component.runtime.route.visible == 0U) {
+                continue;
+            }
+
+            HashCombine(hash, component.runtime.route.sort_key);
+            HashCombine(hash, static_cast<std::uint64_t>(component.runtime.route.geometry_id));
+            HashCombine(hash, static_cast<std::uint64_t>(component.runtime.route.material_id));
+            HashCombine(hash, static_cast<std::uint64_t>(component.runtime.route.user_data));
+            HashCombine(hash, static_cast<std::uint64_t>(component.path.revision));
+            HashCombine(hash, static_cast<std::uint64_t>(component.runtime.path_data_hash));
+            HashCombine(hash, static_cast<std::uint64_t>(PackRgba8(component.style.fill_color)));
+            HashCombine(hash, static_cast<std::uint64_t>(PackRgba8(component.style.stroke_color)));
+            HashCombine(hash, static_cast<std::uint64_t>(FloatBits(component.style.stroke_width_px)));
+            HashCombine(hash, static_cast<std::uint64_t>(FloatBits(component.style.miter_limit)));
+            HashCombine(hash, static_cast<std::uint64_t>(component.style.layer));
+            HashCombine(hash, static_cast<std::uint64_t>(component.style.antialiasing));
+            HashCombine(hash, static_cast<std::uint64_t>(component.style.topology));
+            HashCombine(hash, static_cast<std::uint64_t>(component.style.fill_rule));
+            HashCombine(hash, static_cast<std::uint64_t>(component.style.line_join));
+            HashCombine(hash, static_cast<std::uint64_t>(component.style.line_cap));
+        }
+        return hash;
     }
 
     [[nodiscard]] static float LengthSquared(const Float2& delta_) noexcept {
@@ -364,14 +475,13 @@ private:
                                                               state.has_current = true;
                                                               break;
                                                           }
-                                                          if (TryEmitLineSegment(component_,
-                                                                                 component_index_,
-                                                                                 state.current_point,
-                                                                                 command->to,
-                                                                                 zero_length_epsilon_,
-                                                                                 scratch_)) {
-                                                              state.current_point = command->to;
-                                                          }
+                                                          (void)TryEmitLineSegment(component_,
+                                                                                   component_index_,
+                                                                                   state.current_point,
+                                                                                   command->to,
+                                                                                   zero_length_epsilon_,
+                                                                                   scratch_);
+                                                          state.current_point = command->to;
                                                       }
                                                       break;
                                                   case GeometryPathCommandType::quad_to:
@@ -522,18 +632,66 @@ public:
                                                            ScratchType& scratch_,
                                                            const Geometry3DRuntimeBuildConfig& build_config_ = {}) {
         Geometry3DRuntimeBuildStats stats{};
-        scratch_.instances.clear();
-        scratch_.draw_batches.clear();
 
         if (components_ == nullptr || component_count_ == 0U) {
+            scratch_.cache.valid = false;
+            scratch_.instances.clear();
+            scratch_.draw_batches.clear();
             return stats;
         }
+
+        const std::uint64_t geometry_signature = ComputeGeometrySignature(components_, component_count_);
+        const std::uint64_t transform_signature = ComputeTransformSignature(components_,
+                                                                            transforms_,
+                                                                            component_count_);
+        stats.geometry_signature = geometry_signature;
+        stats.transform_signature = transform_signature;
+        if (scratch_.cache.valid &&
+            scratch_.cache.components == components_ &&
+            scratch_.cache.transforms == transforms_ &&
+            scratch_.cache.component_count == component_count_ &&
+            scratch_.cache.geometry_signature == geometry_signature &&
+            IsBuildConfigEqual(scratch_.cache.build_config, build_config_)) {
+            if (scratch_.cache.transform_signature == transform_signature) {
+                stats = scratch_.cache.last_stats;
+                stats.cache_reused = true;
+                stats.transform_only_update = false;
+                stats.geometry_signature = geometry_signature;
+                stats.transform_signature = transform_signature;
+                return stats;
+            }
+
+            UpdateInstanceWorldMatrices(scratch_.instances, transforms_, component_count_);
+            scratch_.cache.transform_signature = transform_signature;
+            stats = scratch_.cache.last_stats;
+            stats.cache_reused = true;
+            stats.transform_only_update = true;
+            stats.geometry_signature = geometry_signature;
+            stats.transform_signature = transform_signature;
+            scratch_.cache.last_stats = stats;
+            return stats;
+        }
+
+        scratch_.instances.clear();
+        scratch_.draw_batches.clear();
 
         stats.batch = BatchSystemType::BuildAndSort(components_,
                                                     component_count_,
                                                     scratch_.batch_scratch,
                                                     build_config_.build_ordered_indices);
         if (stats.batch.visible_count == 0U) {
+            stats.cache_reused = false;
+            stats.transform_only_update = false;
+            stats.geometry_signature = geometry_signature;
+            stats.transform_signature = transform_signature;
+            scratch_.cache.components = components_;
+            scratch_.cache.transforms = transforms_;
+            scratch_.cache.component_count = component_count_;
+            scratch_.cache.geometry_signature = geometry_signature;
+            scratch_.cache.transform_signature = transform_signature;
+            scratch_.cache.build_config = build_config_;
+            scratch_.cache.last_stats = stats;
+            scratch_.cache.valid = true;
             return stats;
         }
 
@@ -551,22 +709,7 @@ public:
             }
 
             Geometry3DGpuInstance instance{};
-            instance.world_m00 = world_matrix.m[0];
-            instance.world_m01 = world_matrix.m[1];
-            instance.world_m02 = world_matrix.m[2];
-            instance.world_m03 = world_matrix.m[3];
-            instance.world_m10 = world_matrix.m[4];
-            instance.world_m11 = world_matrix.m[5];
-            instance.world_m12 = world_matrix.m[6];
-            instance.world_m13 = world_matrix.m[7];
-            instance.world_m20 = world_matrix.m[8];
-            instance.world_m21 = world_matrix.m[9];
-            instance.world_m22 = world_matrix.m[10];
-            instance.world_m23 = world_matrix.m[11];
-            instance.world_m30 = world_matrix.m[12];
-            instance.world_m31 = world_matrix.m[13];
-            instance.world_m32 = world_matrix.m[14];
-            instance.world_m33 = world_matrix.m[15];
+            WriteWorldMatrixToInstance(instance, world_matrix);
 
             instance.bounds_min_x = component.runtime.bounds_min.x;
             instance.bounds_min_y = component.runtime.bounds_min.y;
@@ -613,6 +756,19 @@ public:
 
         stats.emitted_instance_count = static_cast<std::uint32_t>(scratch_.instances.size());
         stats.emitted_batch_count = static_cast<std::uint32_t>(scratch_.draw_batches.size());
+        stats.geometry_signature = geometry_signature;
+        stats.transform_signature = transform_signature;
+        stats.cache_reused = false;
+        stats.transform_only_update = false;
+
+        scratch_.cache.components = components_;
+        scratch_.cache.transforms = transforms_;
+        scratch_.cache.component_count = component_count_;
+        scratch_.cache.geometry_signature = geometry_signature;
+        scratch_.cache.transform_signature = transform_signature;
+        scratch_.cache.build_config = build_config_;
+        scratch_.cache.last_stats = stats;
+        scratch_.cache.valid = true;
         return stats;
     }
 
@@ -635,6 +791,106 @@ private:
         params |= (static_cast<std::uint32_t>(component_.style.shading_model) & 0x1U) << 7U;
         params |= (static_cast<std::uint32_t>(component_.mesh.lod_index) & 0xFFFFU) << 8U;
         return params;
+    }
+
+    [[nodiscard]] static std::uint32_t FloatBits(float value_) noexcept {
+        std::uint32_t bits = 0U;
+        std::memcpy(&bits, &value_, sizeof(bits));
+        return bits;
+    }
+
+    static void HashCombine(std::uint64_t& hash_, std::uint64_t value_) noexcept {
+        hash_ ^= value_ + 0x9e3779b97f4a7c15ULL + (hash_ << 6U) + (hash_ >> 2U);
+    }
+
+    [[nodiscard]] static bool IsBuildConfigEqual(const Geometry3DRuntimeBuildConfig& lhs_,
+                                                 const Geometry3DRuntimeBuildConfig& rhs_) noexcept {
+        return lhs_.build_ordered_indices == rhs_.build_ordered_indices;
+    }
+
+    [[nodiscard]] static std::uint64_t ComputeGeometrySignature(const GeometryType* components_,
+                                                                std::uint32_t component_count_) noexcept {
+        std::uint64_t hash = 0xcbf29ce484222325ULL;
+        for (std::uint32_t i = 0U; i < component_count_; ++i) {
+            const GeometryType& component = components_[i];
+            HashCombine(hash, static_cast<std::uint64_t>(component.runtime.route.visible));
+            if (component.runtime.route.visible == 0U) {
+                continue;
+            }
+
+            HashCombine(hash, component.runtime.route.sort_key);
+            HashCombine(hash, static_cast<std::uint64_t>(component.runtime.route.geometry_id));
+            HashCombine(hash, static_cast<std::uint64_t>(component.runtime.route.material_id));
+            HashCombine(hash, static_cast<std::uint64_t>(component.runtime.route.user_data));
+            HashCombine(hash, static_cast<std::uint64_t>(component.mesh.submesh_index));
+            HashCombine(hash, static_cast<std::uint64_t>(component.mesh.lod_index));
+            HashCombine(hash, static_cast<std::uint64_t>(component.mesh.flags));
+            HashCombine(hash, static_cast<std::uint64_t>(component.runtime.mesh_revision));
+            HashCombine(hash, static_cast<std::uint64_t>(PackRgba8(component.style.albedo_color)));
+            HashCombine(hash, static_cast<std::uint64_t>(PackParams(component)));
+            HashCombine(hash, static_cast<std::uint64_t>(FloatBits(component.style.metallic)));
+            HashCombine(hash, static_cast<std::uint64_t>(FloatBits(component.style.roughness)));
+            HashCombine(hash, static_cast<std::uint64_t>(FloatBits(component.style.normal_scale)));
+            HashCombine(hash, static_cast<std::uint64_t>(FloatBits(component.style.line_width)));
+            HashCombine(hash, static_cast<std::uint64_t>(FloatBits(component.runtime.bounds_min.x)));
+            HashCombine(hash, static_cast<std::uint64_t>(FloatBits(component.runtime.bounds_min.y)));
+            HashCombine(hash, static_cast<std::uint64_t>(FloatBits(component.runtime.bounds_min.z)));
+            HashCombine(hash, static_cast<std::uint64_t>(FloatBits(component.runtime.bounds_max.x)));
+            HashCombine(hash, static_cast<std::uint64_t>(FloatBits(component.runtime.bounds_max.y)));
+            HashCombine(hash, static_cast<std::uint64_t>(FloatBits(component.runtime.bounds_max.z)));
+        }
+        return hash;
+    }
+
+    [[nodiscard]] static std::uint64_t ComputeTransformSignature(const GeometryType* components_,
+                                                                 const TransformType* transforms_,
+                                                                 std::uint32_t component_count_) noexcept {
+        if (transforms_ == nullptr || components_ == nullptr) {
+            return 0U;
+        }
+
+        std::uint64_t hash = 0xcbf29ce484222325ULL;
+        for (std::uint32_t i = 0U; i < component_count_; ++i) {
+            if (components_[i].runtime.route.visible == 0U) {
+                continue;
+            }
+            HashCombine(hash, static_cast<std::uint64_t>(transforms_[i].runtime.world_revision));
+        }
+        return hash;
+    }
+
+    static void WriteWorldMatrixToInstance(Geometry3DGpuInstance& instance_,
+                                           const Matrix4x4& world_matrix_) noexcept {
+        instance_.world_m00 = world_matrix_.m[0];
+        instance_.world_m01 = world_matrix_.m[1];
+        instance_.world_m02 = world_matrix_.m[2];
+        instance_.world_m03 = world_matrix_.m[3];
+        instance_.world_m10 = world_matrix_.m[4];
+        instance_.world_m11 = world_matrix_.m[5];
+        instance_.world_m12 = world_matrix_.m[6];
+        instance_.world_m13 = world_matrix_.m[7];
+        instance_.world_m20 = world_matrix_.m[8];
+        instance_.world_m21 = world_matrix_.m[9];
+        instance_.world_m22 = world_matrix_.m[10];
+        instance_.world_m23 = world_matrix_.m[11];
+        instance_.world_m30 = world_matrix_.m[12];
+        instance_.world_m31 = world_matrix_.m[13];
+        instance_.world_m32 = world_matrix_.m[14];
+        instance_.world_m33 = world_matrix_.m[15];
+    }
+
+    static void UpdateInstanceWorldMatrices(GeometryRuntimeMcVector<Geometry3DGpuInstance>& instances_,
+                                            const TransformType* transforms_,
+                                            std::uint32_t component_count_) noexcept {
+        const Matrix4x4 identity = spatial_math::IdentityMatrix4x4();
+        for (auto& instance : instances_) {
+            if (transforms_ == nullptr || instance.component_index >= component_count_) {
+                WriteWorldMatrixToInstance(instance, identity);
+                continue;
+            }
+            WriteWorldMatrixToInstance(instance,
+                                       transforms_[instance.component_index].runtime.world_matrix);
+        }
     }
 
     static void AppendOrMergeBatch(const GeometryType& component_,
