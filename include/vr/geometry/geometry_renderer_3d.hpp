@@ -3,9 +3,13 @@
 #include "Center/Memory/Container/Vector/McVector.hpp"
 #include "vr/ecs/component/camera_component.hpp"
 #include "vr/ecs/system/geometry_runtime_system.hpp"
+#include "vr/geometry/geometry_image_host.hpp"
+#include "vr/geometry/geometry_material_host.hpp"
 #include "vr/geometry/geometry_resource_host.hpp"
 #include "vr/geometry/geometry_upload_host.hpp"
+#include "vr/render/descriptor_host.hpp"
 #include "vr/render/pipeline_host.hpp"
+#include "vr/resource/sampler_host.hpp"
 #include "vr/resource/image_host.hpp"
 
 #include <array>
@@ -29,6 +33,7 @@ struct GeometryRenderer3DCreateInfo {
     ecs::Geometry3DRuntimeBuildConfig runtime_build{};
     std::uint32_t reserve_component_count = 4096U;
     std::uint32_t reserve_instance_count = 8192U;
+    std::uint32_t reserve_material_set_count = 512U;
     bool enable_depth = true;
     VkFormat preferred_depth_format = VK_FORMAT_D32_SFLOAT;
     bool clear_depth = true;
@@ -40,6 +45,11 @@ struct GeometryRenderer3DCreateInfo {
     float directional_light_y = -1.0F;
     float directional_light_z = 0.35F;
     float directional_light_intensity = 1.0F;
+    bool compile_required_pipelines_in_prepare = true;
+    bool prewarm_common_pipelines = true;
+    bool prewarm_depth_read_variant = true;
+    bool prewarm_double_sided_variant = true;
+    bool prewarm_line_and_point_variants = false;
 };
 
 struct GeometryRenderer3DStats {
@@ -53,6 +63,11 @@ struct GeometryRenderer3DStats {
     std::uint32_t depth_write_batch_count = 0U;
     std::uint32_t shadow_cast_batch_count = 0U;
     std::uint32_t uploaded_instance_count = 0U;
+    std::uint32_t descriptor_set_bind_count = 0U;
+    std::uint32_t descriptor_set_update_count = 0U;
+    std::uint32_t material_set_count = 0U;
+    std::uint32_t prewarmed_pipeline_count = 0U;
+    std::uint32_t prepare_compiled_pipeline_count = 0U;
     std::uint64_t uploaded_bytes = 0U;
     bool cache_reused = false;
     bool transform_only_update = false;
@@ -74,6 +89,8 @@ public:
 
     void SetHosts(GeometryResourceHost* resource_host_,
                   GeometryUploadHost* upload_host_) noexcept;
+    void SetMaterialHosts(GeometryMaterialHost* material_host_,
+                          GeometryImageHost* image_host_) noexcept;
     void SetSceneData(ecs::Geometry<ecs::Dim3>* geometry_components_,
                       ecs::Transform<ecs::Dim3>* transforms_,
                       std::uint32_t component_count_,
@@ -130,6 +147,11 @@ private:
         std::uint64_t retire_value = 0U;
     };
 
+    struct MaterialSetEntry final {
+        std::uint32_t material_id = 0U;
+        VkDescriptorSet descriptor_set = VK_NULL_HANDLE;
+    };
+
     [[nodiscard]] static bool IsDepthFormatSupported(VulkanContext& context_, VkFormat format_) noexcept;
     [[nodiscard]] static bool DepthFormatHasStencil(VkFormat format_) noexcept;
     [[nodiscard]] static VkImageAspectFlags DepthImageAspectMask(VkFormat format_) noexcept;
@@ -137,6 +159,9 @@ private:
     [[nodiscard]] static std::size_t PipelineModeIndex(PipelineMode mode_) noexcept;
     [[nodiscard]] static std::size_t TopologyModeIndex(TopologyMode mode_) noexcept;
     [[nodiscard]] static std::size_t CullModeIndex(CullMode mode_) noexcept;
+    [[nodiscard]] static std::size_t LowerBoundMaterialSetIndex(
+        const GeometryRenderer3DMcVector<MaterialSetEntry>& entries_,
+        std::uint32_t material_id_) noexcept;
     [[nodiscard]] static PipelineMode ResolvePipelineMode(const ecs::Geometry3DDrawBatch& batch_,
                                                           bool use_depth_) noexcept;
     [[nodiscard]] static TopologyMode ResolveTopologyMode(VkPrimitiveTopology mesh_topology_,
@@ -154,6 +179,19 @@ private:
                                                                    PipelineMode mode_,
                                                                    TopologyMode topology_mode_,
                                                                    CullMode cull_mode_);
+    void PrewarmCommonPipelines(VulkanContext& context_,
+                                render::PipelineHost& pipeline_host_,
+                                VkFormat color_format_,
+                                VkFormat depth_format_);
+    void CompileRequiredPipelinesForCurrentFrame(VulkanContext& context_,
+                                                 render::PipelineHost& pipeline_host_,
+                                                 VkFormat color_format_,
+                                                 VkFormat depth_format_);
+    void EnsureMaterialPipelineObjects(VulkanContext& context_,
+                                       render::DescriptorHost& descriptor_host_);
+    void EnsureFallbackMaterialResources(VulkanContext& context_);
+    [[nodiscard]] VkDescriptorSet AcquireMaterialDescriptorSet(std::uint32_t frame_index_,
+                                                               std::uint32_t material_id_);
     void EnsureDepthResources(VulkanContext& context_,
                               std::uint32_t image_count_,
                               VkExtent2D extent_);
@@ -184,12 +222,17 @@ private:
 
     GeometryResourceHost* geometry_resource_host = nullptr;
     GeometryUploadHost* geometry_upload_host = nullptr;
+    GeometryMaterialHost* geometry_material_host = nullptr;
+    GeometryImageHost* geometry_image_host = nullptr;
 
     VulkanContext* context = nullptr;
     render::UploadHost* upload_host = nullptr;
+    render::DescriptorHost* descriptor_host = nullptr;
     render::PipelineHost* pipeline_host = nullptr;
     resource::GpuMemoryHost* gpu_memory_host = nullptr;
+    resource::SamplerHost* sampler_host = nullptr;
 
+    render::DescriptorSetLayoutId descriptor_layout_id{};
     render::PipelineLayoutId pipeline_layout_id{};
     render::ShaderModuleId shader_vertex_id{};
     render::ShaderModuleId shader_fragment_id{};
@@ -205,6 +248,14 @@ private:
     GeometryRenderer3DMcVector<std::uint8_t> depth_image_initialized{};
     GeometryRenderer3DMcVector<RetiredDepthImage> retired_depth_images{};
     GeometryRenderer3DMcVector<std::uint8_t> image_initialized{};
+    GeometryRenderer3DMcVector<GeometryRenderer3DMcVector<MaterialSetEntry>> frame_material_sets{};
+    render::DescriptorMcVector<render::DescriptorImageWrite> descriptor_image_write_scratch{};
+    render::DescriptorMcVector<render::DescriptorBufferWrite> descriptor_buffer_write_scratch{};
+    render::DescriptorMcVector<render::DescriptorTexelBufferWrite> descriptor_texel_write_scratch{};
+
+    resource::ImageResource fallback_material_image{};
+    resource::SamplerId fallback_material_sampler_id{};
+    VkImageLayout fallback_material_layout = VK_IMAGE_LAYOUT_UNDEFINED;
 
     std::uint32_t active_frame_index = 0U;
     VkExtent2D swapchain_extent{};

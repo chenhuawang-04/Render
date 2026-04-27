@@ -2,6 +2,8 @@
 #include "vr/ecs/system/camera_system.hpp"
 #include "vr/ecs/system/geometry_system.hpp"
 #include "vr/ecs/system/transform_system.hpp"
+#include "vr/geometry/geometry_image_host.hpp"
+#include "vr/geometry/geometry_material_host.hpp"
 #include "vr/geometry/geometry_renderer_3d.hpp"
 #include "vr/render/render_runtime_host.hpp"
 
@@ -92,11 +94,15 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_end_to_end_smoke, "integrat
     Runtime runtime{};
     vr::geometry::GeometryResourceHost geometry_resource_host{};
     vr::geometry::GeometryUploadHost geometry_upload_host{};
+    vr::geometry::GeometryImageHost geometry_image_host{};
+    vr::geometry::GeometryMaterialHost geometry_material_host{};
     vr::geometry::GeometryRenderer3D geometry_renderer{};
 
     bool runtime_initialized = false;
     bool geometry_resource_host_initialized = false;
     bool geometry_upload_host_initialized = false;
+    bool geometry_image_host_initialized = false;
+    bool geometry_material_host_initialized = false;
     bool geometry_renderer_initialized = false;
 
     std::array<vr::geometry::GeometryMeshVertex, 4U> vertices{
@@ -109,6 +115,16 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_end_to_end_smoke, "integrat
     std::array<vr::geometry::GeometrySubmeshRange, 1U> submeshes{
         vr::geometry::GeometrySubmeshRange{.first_index = 0U, .index_count = 6U, .vertex_offset = 0, .reserved0 = 0U}
     };
+    std::array<std::uint32_t, 16U> pixels_material_11{};
+    std::array<std::uint32_t, 16U> pixels_material_22{};
+    for (std::uint32_t y = 0U; y < 4U; ++y) {
+        for (std::uint32_t x = 0U; x < 4U; ++x) {
+            const std::size_t index = static_cast<std::size_t>(y) * 4U + x;
+            const bool checker = ((x ^ y) & 1U) != 0U;
+            pixels_material_11[index] = checker ? 0xFFBFA57BU : 0xFFF4E9D0U;
+            pixels_material_22[index] = checker ? 0xFF6FC6FFU : 0xFF2D456BU;
+        }
+    }
 
     vr::geometry::GeometryMeshUploadInfo mesh_upload_info{};
     mesh_upload_info.geometry_id = 1U;
@@ -202,6 +218,17 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_end_to_end_smoke, "integrat
         geometry_upload_host.Initialize(runtime.Context(), runtime.GpuMemory(), upload_create_info);
         geometry_upload_host_initialized = true;
 
+        vr::geometry::GeometryImageHostCreateInfo image_create_info{};
+        image_create_info.reserve_image_count = 32U;
+        image_create_info.reserve_retired_image_count = 32U;
+        geometry_image_host.Initialize(runtime.Context(), runtime.GpuMemory(), image_create_info);
+        geometry_image_host_initialized = true;
+
+        vr::geometry::GeometryMaterialHostCreateInfo material_create_info{};
+        material_create_info.reserve_material_count = 64U;
+        geometry_material_host.Initialize(material_create_info);
+        geometry_material_host_initialized = true;
+
         runtime.Upload().BeginFrame(runtime.Context(), 0U);
         geometry_resource_host.UploadMesh(runtime.Context(),
                                           runtime.Upload(),
@@ -222,12 +249,50 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_end_to_end_smoke, "integrat
                                           0U,
                                           0U,
                                           mesh_upload_info);
+
+        vr::geometry::GeometryImageUploadInfo upload_image_11{};
+        upload_image_11.image_id = 101U;
+        upload_image_11.pixels = pixels_material_11.data();
+        upload_image_11.width = 4U;
+        upload_image_11.height = 4U;
+        upload_image_11.format = VK_FORMAT_R8G8B8A8_UNORM;
+        upload_image_11.bytes_per_pixel = 4U;
+        upload_image_11.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        upload_image_11.shader_read_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        upload_image_11.aspect_mask = VK_IMAGE_ASPECT_COLOR_BIT;
+        geometry_image_host.UploadImage(runtime.Context(),
+                                        runtime.Upload(),
+                                        0U,
+                                        0U,
+                                        0U,
+                                        upload_image_11);
+
+        vr::geometry::GeometryImageUploadInfo upload_image_22 = upload_image_11;
+        upload_image_22.image_id = 202U;
+        upload_image_22.pixels = pixels_material_22.data();
+        geometry_image_host.UploadImage(runtime.Context(),
+                                        runtime.Upload(),
+                                        0U,
+                                        0U,
+                                        0U,
+                                        upload_image_22);
         const vr::render::UploadEndFrameResult upload_end = runtime.Upload().EndFrameAndSubmit(runtime.Context(),
                                                                                                 0U);
         if (upload_end.submitted) {
             runtime.Upload().WaitFrame(runtime.Context(), 0U);
         }
         geometry_resource_host.BeginFrame(runtime.Context(), 0U);
+        geometry_image_host.BeginFrame(runtime.Context(), 0U);
+
+        vr::geometry::GeometryMaterialDesc material_11{};
+        material_11.material_id = 11U;
+        material_11.image_id = 101U;
+        geometry_material_host.UpsertMaterial(material_11);
+
+        vr::geometry::GeometryMaterialDesc material_22{};
+        material_22.material_id = 22U;
+        material_22.image_id = 202U;
+        geometry_material_host.UpsertMaterial(material_22);
 
         vr::geometry::GeometryRenderer3DCreateInfo renderer_create_info{};
         renderer_create_info.reserve_component_count = static_cast<std::uint32_t>(geometry_components.size());
@@ -242,6 +307,7 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_end_to_end_smoke, "integrat
         geometry_renderer.Initialize(renderer_create_info);
         geometry_renderer_initialized = true;
         geometry_renderer.SetHosts(&geometry_resource_host, &geometry_upload_host);
+        geometry_renderer.SetMaterialHosts(&geometry_material_host, &geometry_image_host);
         geometry_renderer.SetSceneData(geometry_components.data(),
                                        transforms.data(),
                                        static_cast<std::uint32_t>(geometry_components.size()),
@@ -254,6 +320,8 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_end_to_end_smoke, "integrat
         std::uint32_t max_instances = 0U;
         std::uint32_t max_depth_test_batches = 0U;
         std::uint32_t max_depth_write_batches = 0U;
+        std::uint32_t max_descriptor_updates = 0U;
+        std::uint32_t max_material_sets = 0U;
 
         constexpr std::uint32_t max_ticks = 16U;
         for (std::uint32_t tick_index = 0U;
@@ -283,6 +351,8 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_end_to_end_smoke, "integrat
             max_instances = std::max(max_instances, renderer_stats.instance_count);
             max_depth_test_batches = std::max(max_depth_test_batches, renderer_stats.depth_test_batch_count);
             max_depth_write_batches = std::max(max_depth_write_batches, renderer_stats.depth_write_batch_count);
+            max_descriptor_updates = std::max(max_descriptor_updates, renderer_stats.descriptor_set_update_count);
+            max_material_sets = std::max(max_material_sets, renderer_stats.material_set_count);
             SDL_Delay(1U);
         }
 
@@ -292,13 +362,21 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_end_to_end_smoke, "integrat
         VR_CHECK(max_instances > 0U);
         VR_CHECK(max_depth_test_batches > 0U);
         VR_CHECK(max_depth_write_batches > 0U);
+        VR_CHECK(max_descriptor_updates > 0U);
+        VR_CHECK(max_material_sets > 0U);
         VR_CHECK(geometry_resource_host.Stats().mesh_count > 0U);
         VR_CHECK(geometry_resource_host.Stats().reused_vertex_buffer_count > 0U);
         VR_CHECK(geometry_resource_host.Stats().reused_index_buffer_count > 0U);
         VR_CHECK(geometry_upload_host.Stats().upload_count > 0U);
+        VR_CHECK(geometry_image_host.Stats().image_count >= 2U);
+        VR_CHECK(geometry_material_host.Stats().material_count >= 2U);
 
         geometry_renderer.Shutdown(runtime.Context());
         geometry_renderer_initialized = false;
+        geometry_material_host.Shutdown();
+        geometry_material_host_initialized = false;
+        geometry_image_host.Shutdown(runtime.Context());
+        geometry_image_host_initialized = false;
         geometry_upload_host.Shutdown(runtime.Context());
         geometry_upload_host_initialized = false;
         geometry_resource_host.Shutdown(runtime.Context());
@@ -309,6 +387,14 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_end_to_end_smoke, "integrat
         if (geometry_renderer_initialized && runtime_initialized && runtime.IsInitialized()) {
             geometry_renderer.Shutdown(runtime.Context());
             geometry_renderer_initialized = false;
+        }
+        if (geometry_material_host_initialized) {
+            geometry_material_host.Shutdown();
+            geometry_material_host_initialized = false;
+        }
+        if (geometry_image_host_initialized && runtime_initialized && runtime.IsInitialized()) {
+            geometry_image_host.Shutdown(runtime.Context());
+            geometry_image_host_initialized = false;
         }
         if (geometry_upload_host_initialized && runtime_initialized && runtime.IsInitialized()) {
             geometry_upload_host.Shutdown(runtime.Context());
@@ -331,4 +417,3 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_end_to_end_smoke, "integrat
 }
 
 } // namespace
-

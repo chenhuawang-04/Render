@@ -170,6 +170,7 @@ add_library(vulkan_init STATIC
     src/text/text_renderer_2d.cpp
     src/text/text_renderer_3d.cpp
     src/geometry/geometry_resource_host.cpp
+    src/geometry/geometry_material_host.cpp
     src/geometry/geometry_image_host.cpp
     src/geometry/geometry_upload_host.cpp
     src/geometry/geometry_renderer_2d.cpp
@@ -237,6 +238,15 @@ add_executable(sdl_runtime_demo
 )
 
 target_link_libraries(sdl_runtime_demo
+    PRIVATE
+        vulkan_platform_sdl
+)
+
+add_executable(sdl_geometry_unified_demo
+    examples/sdl_geometry_unified_demo.cpp
+)
+
+target_link_libraries(sdl_geometry_unified_demo
     PRIVATE
         vulkan_platform_sdl
 )

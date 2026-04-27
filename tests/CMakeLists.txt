@@ -31,6 +31,7 @@ add_executable(${VR_TEST_TARGET}
     cases/runtime_integration_tests.cpp
     cases/runtime_text_renderer_integration_tests.cpp
     cases/runtime_text_renderer_3d_integration_tests.cpp
+    cases/runtime_geometry_material_host_tests.cpp
     cases/runtime_geometry_image_host_integration_tests.cpp
     cases/runtime_geometry_renderer_2d_integration_tests.cpp
     cases/runtime_geometry_renderer_3d_integration_tests.cpp

@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <limits>
 #include <stdexcept>
+#include <utility>
 
 namespace vr::geometry {
 
@@ -73,6 +74,24 @@ std::size_t GeometryRenderer3D::CullModeIndex(CullMode mode_) noexcept {
     return static_cast<std::size_t>(mode_);
 }
 
+std::size_t GeometryRenderer3D::LowerBoundMaterialSetIndex(
+    const GeometryRenderer3DMcVector<MaterialSetEntry>& entries_,
+    std::uint32_t material_id_) noexcept {
+    std::size_t first = 0U;
+    std::size_t count = entries_.size();
+    while (count > 0U) {
+        const std::size_t step = count / 2U;
+        const std::size_t it = first + step;
+        if (entries_[it].material_id < material_id_) {
+            first = it + 1U;
+            count -= step + 1U;
+        } else {
+            count = step;
+        }
+    }
+    return first;
+}
+
 GeometryRenderer3D::PipelineMode GeometryRenderer3D::ResolvePipelineMode(
     const ecs::Geometry3DDrawBatch& batch_,
     bool use_depth_) noexcept {
@@ -128,6 +147,7 @@ void GeometryRenderer3D::Initialize(const GeometryRenderer3DCreateInfo& create_i
     }
     create_info_cache.clear_depth_value = std::clamp(create_info_cache.clear_depth_value, 0.0F, 1.0F);
 
+    descriptor_layout_id = {};
     pipeline_layout_id = {};
     shader_vertex_id = {};
     shader_fragment_id = {};
@@ -145,8 +165,15 @@ void GeometryRenderer3D::Initialize(const GeometryRenderer3DCreateInfo& create_i
     depth_image_initialized.clear();
     retired_depth_images.clear();
     image_initialized.clear();
+    frame_material_sets.clear();
+    descriptor_image_write_scratch.clear();
+    descriptor_buffer_write_scratch.clear();
+    descriptor_texel_write_scratch.clear();
     runtime_stats = {};
     instance_range = {};
+    fallback_material_image = {};
+    fallback_material_sampler_id = {};
+    fallback_material_layout = VK_IMAGE_LAYOUT_UNDEFINED;
     last_submitted_value_seen = 0U;
     completed_submit_value_seen = 0U;
     stats = {};
@@ -165,7 +192,19 @@ void GeometryRenderer3D::Shutdown(VulkanContext& context_) {
     DestroyDepthResources(context_);
     DestroyRetiredDepthResources(context_);
     image_initialized.clear();
+    for (auto& frame_sets : frame_material_sets) {
+        frame_sets.clear();
+    }
+    frame_material_sets.clear();
 
+    if (fallback_material_image.image != VK_NULL_HANDLE) {
+        resource::ImageHost::DestroyImage(context_, fallback_material_image);
+    }
+    fallback_material_image = {};
+    fallback_material_sampler_id = {};
+    fallback_material_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+    descriptor_layout_id = {};
     pipeline_layout_id = {};
     shader_vertex_id = {};
     shader_fragment_id = {};
@@ -187,11 +226,15 @@ void GeometryRenderer3D::Shutdown(VulkanContext& context_) {
     camera_transform = nullptr;
     geometry_resource_host = nullptr;
     geometry_upload_host = nullptr;
+    geometry_material_host = nullptr;
+    geometry_image_host = nullptr;
 
     context = nullptr;
     upload_host = nullptr;
+    descriptor_host = nullptr;
     pipeline_host = nullptr;
     gpu_memory_host = nullptr;
+    sampler_host = nullptr;
     active_frame_index = 0U;
     swapchain_extent = {};
     swapchain_format = VK_FORMAT_UNDEFINED;
@@ -202,8 +245,13 @@ void GeometryRenderer3D::Shutdown(VulkanContext& context_) {
     runtime_scratch.batch_scratch.visible_items.clear();
     runtime_scratch.batch_scratch.radix_scratch.clear();
     runtime_scratch.batch_scratch.ordered_indices.clear();
+    runtime_scratch.cache = {};
     runtime_stats = {};
     stats = {};
+
+    descriptor_image_write_scratch.clear();
+    descriptor_buffer_write_scratch.clear();
+    descriptor_texel_write_scratch.clear();
 
     last_submitted_value_seen = 0U;
     completed_submit_value_seen = 0U;
@@ -214,6 +262,12 @@ void GeometryRenderer3D::SetHosts(GeometryResourceHost* resource_host_,
                                   GeometryUploadHost* upload_host_) noexcept {
     geometry_resource_host = resource_host_;
     geometry_upload_host = upload_host_;
+}
+
+void GeometryRenderer3D::SetMaterialHosts(GeometryMaterialHost* material_host_,
+                                          GeometryImageHost* image_host_) noexcept {
+    geometry_material_host = material_host_;
+    geometry_image_host = image_host_;
 }
 
 void GeometryRenderer3D::SetSceneData(ecs::Geometry<ecs::Dim3>* geometry_components_,
@@ -234,8 +288,10 @@ void GeometryRenderer3D::PrepareFrame(const render::RuntimePrepareContext& prepa
     }
     if (prepare_context_.context == nullptr ||
         prepare_context_.upload_host == nullptr ||
+        prepare_context_.descriptor_host == nullptr ||
         prepare_context_.pipeline_host == nullptr ||
-        prepare_context_.gpu_memory_host == nullptr) {
+        prepare_context_.gpu_memory_host == nullptr ||
+        prepare_context_.sampler_host == nullptr) {
         throw std::runtime_error("GeometryRenderer3D::PrepareFrame missing runtime dependencies");
     }
     if (geometry_resource_host == nullptr || !geometry_resource_host->IsInitialized()) {
@@ -247,21 +303,38 @@ void GeometryRenderer3D::PrepareFrame(const render::RuntimePrepareContext& prepa
 
     context = prepare_context_.context;
     upload_host = prepare_context_.upload_host;
+    descriptor_host = prepare_context_.descriptor_host;
     pipeline_host = prepare_context_.pipeline_host;
     gpu_memory_host = prepare_context_.gpu_memory_host;
+    sampler_host = prepare_context_.sampler_host;
     active_frame_index = prepare_context_.frame_index;
     last_submitted_value_seen = std::max(last_submitted_value_seen, prepare_context_.last_submitted_value);
     completed_submit_value_seen = std::max(completed_submit_value_seen, prepare_context_.completed_submit_value);
+
     CollectRetiredDepthResources(*context, completed_submit_value_seen);
     geometry_resource_host->BeginFrame(*context, completed_submit_value_seen);
     geometry_upload_host->BeginFrame(*context, active_frame_index);
+    if (geometry_image_host != nullptr && geometry_image_host->IsInitialized()) {
+        geometry_image_host->BeginFrame(*context, completed_submit_value_seen);
+    }
+
+    EnsureFallbackMaterialResources(*context);
+    EnsureMaterialPipelineObjects(*context, *descriptor_host);
+
+    if (active_frame_index >= frame_material_sets.size()) {
+        frame_material_sets.resize(active_frame_index + 1U);
+    }
+    frame_material_sets[active_frame_index].clear();
+    if (create_info_cache.reserve_material_set_count > 0U &&
+        frame_material_sets[active_frame_index].capacity() < create_info_cache.reserve_material_set_count) {
+        frame_material_sets[active_frame_index].reserve(create_info_cache.reserve_material_set_count);
+    }
 
     stats = {};
     stats.component_count = component_count;
     instance_range = {};
 
-    if (geometry_components == nullptr ||
-        component_count == 0U) {
+    if (geometry_components == nullptr || component_count == 0U) {
         runtime_scratch.instances.clear();
         runtime_scratch.draw_batches.clear();
         runtime_stats = {};
@@ -282,21 +355,34 @@ void GeometryRenderer3D::PrepareFrame(const render::RuntimePrepareContext& prepa
     stats.cache_reused = runtime_stats.cache_reused;
     stats.transform_only_update = runtime_stats.transform_only_update;
 
-    if (runtime_scratch.instances.empty()) {
-        return;
+    if (!runtime_scratch.instances.empty()) {
+        const std::uint64_t upload_revision =
+            runtime_stats.geometry_signature ^ (runtime_stats.transform_signature * 0x9e3779b97f4a7c15ULL);
+        instance_range = geometry_upload_host->Upload3DInstances(*context,
+                                                                 *upload_host,
+                                                                 active_frame_index,
+                                                                 runtime_scratch.instances.data(),
+                                                                 static_cast<std::uint32_t>(runtime_scratch.instances.size()),
+                                                                 upload_revision);
+        if (instance_range.uploaded) {
+            stats.uploaded_instance_count = instance_range.element_count;
+            stats.uploaded_bytes = instance_range.size_bytes;
+        }
     }
 
-    const std::uint64_t upload_revision =
-        runtime_stats.geometry_signature ^ (runtime_stats.transform_signature * 0x9e3779b97f4a7c15ULL);
-    instance_range = geometry_upload_host->Upload3DInstances(*context,
-                                                             *upload_host,
-                                                             active_frame_index,
-                                                             runtime_scratch.instances.data(),
-                                                             static_cast<std::uint32_t>(runtime_scratch.instances.size()),
-                                                             upload_revision);
-    if (instance_range.uploaded) {
-        stats.uploaded_instance_count = instance_range.element_count;
-        stats.uploaded_bytes = instance_range.size_bytes;
+    if (swapchain_format != VK_FORMAT_UNDEFINED) {
+        const bool use_depth = create_info_cache.enable_depth;
+        const VkFormat active_depth_format = use_depth
+            ? ResolveDepthFormat(*context, create_info_cache.preferred_depth_format)
+            : VK_FORMAT_UNDEFINED;
+        EnsurePipelineObjects(*context, *pipeline_host, swapchain_format, active_depth_format);
+
+        if (create_info_cache.prewarm_common_pipelines) {
+            PrewarmCommonPipelines(*context, *pipeline_host, swapchain_format, active_depth_format);
+        }
+        if (create_info_cache.compile_required_pipelines_in_prepare) {
+            CompileRequiredPipelinesForCurrentFrame(*context, *pipeline_host, swapchain_format, active_depth_format);
+        }
     }
 }
 
@@ -304,7 +390,7 @@ void GeometryRenderer3D::Record(const render::FrameRecordContext& record_context
     if (!initialized) {
         throw std::runtime_error("GeometryRenderer3D::Record called before Initialize");
     }
-    if (context == nullptr || pipeline_host == nullptr || geometry_resource_host == nullptr) {
+    if (context == nullptr || descriptor_host == nullptr || pipeline_host == nullptr || geometry_resource_host == nullptr) {
         throw std::runtime_error("GeometryRenderer3D::Record called before PrepareFrame");
     }
     if (record_context_.command_buffer == VK_NULL_HANDLE ||
@@ -421,9 +507,12 @@ void GeometryRenderer3D::Record(const render::FrameRecordContext& record_context
     push_constants.directional_light_z = create_info_cache.directional_light_z;
     push_constants.directional_light_intensity = std::max(0.0F, create_info_cache.directional_light_intensity);
 
-    if (pipeline_layout_id.IsValid()) {
+    const VkPipelineLayout pipeline_layout = pipeline_layout_id.IsValid()
+        ? pipeline_host->GetPipelineLayout(pipeline_layout_id)
+        : VK_NULL_HANDLE;
+    if (pipeline_layout != VK_NULL_HANDLE) {
         vkCmdPushConstants(record_context_.command_buffer,
-                           pipeline_host->GetPipelineLayout(pipeline_layout_id),
+                           pipeline_layout,
                            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                            0U,
                            sizeof(PushConstants),
@@ -433,8 +522,12 @@ void GeometryRenderer3D::Record(const render::FrameRecordContext& record_context
     render::GraphicsPipelineId active_pipeline_id{};
     VkBuffer active_vertex_buffer = VK_NULL_HANDLE;
     VkBuffer active_index_buffer = VK_NULL_HANDLE;
+    VkDescriptorSet active_descriptor_set = VK_NULL_HANDLE;
+    std::uint32_t cached_material_id = std::numeric_limits<std::uint32_t>::max();
+    VkDescriptorSet cached_material_descriptor_set = VK_NULL_HANDLE;
     std::uint32_t cached_geometry_id = 0U;
     const GeometryResourceHost::MeshRecord* cached_mesh = nullptr;
+
     if (instance_range.buffer != VK_NULL_HANDLE && !runtime_scratch.draw_batches.empty()) {
         const VkBuffer instance_vertex_buffer = instance_range.buffer;
         const VkDeviceSize instance_vertex_offset = instance_range.offset;
@@ -487,11 +580,40 @@ void GeometryRenderer3D::Record(const render::FrameRecordContext& record_context
                 continue;
             }
 
+            VkDescriptorSet descriptor_set = VK_NULL_HANDLE;
+            if (batch.material_id == cached_material_id) {
+                descriptor_set = cached_material_descriptor_set;
+            } else {
+                descriptor_set = AcquireMaterialDescriptorSet(active_frame_index,
+                                                              batch.material_id);
+                if (descriptor_set != VK_NULL_HANDLE) {
+                    cached_material_id = batch.material_id;
+                    cached_material_descriptor_set = descriptor_set;
+                }
+            }
+            if (descriptor_set == VK_NULL_HANDLE) {
+                ++stats.skipped_batch_count;
+                continue;
+            }
+
             if (active_pipeline_id.value != pipeline_id.value) {
                 vkCmdBindPipeline(record_context_.command_buffer,
                                   VK_PIPELINE_BIND_POINT_GRAPHICS,
                                   pipeline_host->GetGraphicsPipeline(pipeline_id));
                 active_pipeline_id = pipeline_id;
+            }
+
+            if (active_descriptor_set != descriptor_set) {
+                vkCmdBindDescriptorSets(record_context_.command_buffer,
+                                        VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                        pipeline_layout,
+                                        0U,
+                                        1U,
+                                        &descriptor_set,
+                                        0U,
+                                        nullptr);
+                active_descriptor_set = descriptor_set;
+                ++stats.descriptor_set_bind_count;
             }
 
             if (active_vertex_buffer != mesh->vertex_buffer.buffer) {
@@ -521,6 +643,10 @@ void GeometryRenderer3D::Record(const render::FrameRecordContext& record_context
                              batch.instance_begin);
             ++stats.draw_call_count;
         }
+    }
+
+    if (active_frame_index < frame_material_sets.size()) {
+        stats.material_set_count = static_cast<std::uint32_t>(frame_material_sets[active_frame_index].size());
     }
 
     vkCmdEndRendering(record_context_.command_buffer);
@@ -571,6 +697,21 @@ const GeometryRenderer3DStats& GeometryRenderer3D::Stats() const noexcept {
     return stats;
 }
 
+void GeometryRenderer3D::EnsureMaterialPipelineObjects(VulkanContext& context_,
+                                                       render::DescriptorHost& descriptor_host_) {
+    if (!descriptor_layout_id.IsValid()) {
+        render::DescriptorSetLayoutDesc layout_desc{};
+        VkDescriptorSetLayoutBinding binding{};
+        binding.binding = 0U;
+        binding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        binding.descriptorCount = 1U;
+        binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        binding.pImmutableSamplers = nullptr;
+        layout_desc.bindings.push_back(binding);
+        descriptor_layout_id = descriptor_host_.RegisterLayout(context_, layout_desc);
+    }
+}
+
 void GeometryRenderer3D::EnsurePipelineObjects(VulkanContext& context_,
                                                render::PipelineHost& pipeline_host_,
                                                VkFormat color_format_,
@@ -578,6 +719,11 @@ void GeometryRenderer3D::EnsurePipelineObjects(VulkanContext& context_,
     if (context_.EnabledVulkan13Features().dynamicRendering != VK_TRUE) {
         throw std::runtime_error("GeometryRenderer3D requires Vulkan 1.3 dynamicRendering");
     }
+    if (descriptor_host == nullptr) {
+        throw std::runtime_error("GeometryRenderer3D requires DescriptorHost");
+    }
+
+    EnsureMaterialPipelineObjects(context_, *descriptor_host);
 
     if (!shader_vertex_id.IsValid()) {
         render::ShaderModuleCreateInfo shader_info{};
@@ -593,6 +739,7 @@ void GeometryRenderer3D::EnsurePipelineObjects(VulkanContext& context_,
     }
     if (!pipeline_layout_id.IsValid()) {
         render::PipelineLayoutDesc layout_desc{};
+        layout_desc.set_layouts.push_back(descriptor_host->GetLayout(descriptor_layout_id));
         layout_desc.push_constant_ranges.push_back({
             .stage_flags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
             .offset = 0U,
@@ -731,6 +878,291 @@ render::GraphicsPipelineId GeometryRenderer3D::EnsurePipelineForMode(VulkanConte
     const render::GraphicsPipelineId pipeline_id = pipeline_host_.RegisterGraphicsPipeline(context_, desc);
     pipeline_ids[mode_index][topology_index][cull_index] = pipeline_id;
     return pipeline_id;
+}
+
+void GeometryRenderer3D::PrewarmCommonPipelines(VulkanContext& context_,
+                                                render::PipelineHost& pipeline_host_,
+                                                VkFormat color_format_,
+                                                VkFormat depth_format_) {
+    auto warm_variant = [&](PipelineMode mode_, TopologyMode topology_, CullMode cull_) {
+        if (mode_ != PipelineMode::no_depth && depth_format_ == VK_FORMAT_UNDEFINED) {
+            return;
+        }
+        const std::size_t mode_index = PipelineModeIndex(mode_);
+        const std::size_t topology_index = TopologyModeIndex(topology_);
+        const std::size_t cull_index = CullModeIndex(cull_);
+        if (pipeline_ids[mode_index][topology_index][cull_index].IsValid()) {
+            return;
+        }
+        (void)EnsurePipelineForMode(context_,
+                                    pipeline_host_,
+                                    color_format_,
+                                    depth_format_,
+                                    mode_,
+                                    topology_,
+                                    cull_);
+        ++stats.prewarmed_pipeline_count;
+    };
+
+    warm_variant(PipelineMode::no_depth, TopologyMode::triangles, CullMode::back);
+    if (create_info_cache.enable_depth) {
+        warm_variant(PipelineMode::depth_read_write, TopologyMode::triangles, CullMode::back);
+        if (create_info_cache.prewarm_depth_read_variant) {
+            warm_variant(PipelineMode::depth_read, TopologyMode::triangles, CullMode::back);
+        }
+    }
+
+    if (create_info_cache.prewarm_double_sided_variant) {
+        warm_variant(PipelineMode::no_depth, TopologyMode::triangles, CullMode::none);
+        if (create_info_cache.enable_depth) {
+            warm_variant(PipelineMode::depth_read_write, TopologyMode::triangles, CullMode::none);
+            if (create_info_cache.prewarm_depth_read_variant) {
+                warm_variant(PipelineMode::depth_read, TopologyMode::triangles, CullMode::none);
+            }
+        }
+    }
+
+    if (create_info_cache.prewarm_line_and_point_variants) {
+        warm_variant(PipelineMode::no_depth, TopologyMode::lines, CullMode::none);
+        warm_variant(PipelineMode::no_depth, TopologyMode::points, CullMode::none);
+        if (create_info_cache.enable_depth) {
+            warm_variant(PipelineMode::depth_read, TopologyMode::lines, CullMode::none);
+            warm_variant(PipelineMode::depth_read, TopologyMode::points, CullMode::none);
+        }
+    }
+}
+
+void GeometryRenderer3D::CompileRequiredPipelinesForCurrentFrame(VulkanContext& context_,
+                                                                 render::PipelineHost& pipeline_host_,
+                                                                 VkFormat color_format_,
+                                                                 VkFormat depth_format_) {
+    if (runtime_scratch.draw_batches.empty()) {
+        return;
+    }
+
+    const bool use_depth = depth_format_ != VK_FORMAT_UNDEFINED;
+    for (const ecs::Geometry3DDrawBatch& batch : runtime_scratch.draw_batches) {
+        if (batch.instance_count == 0U) {
+            continue;
+        }
+        const GeometryResourceHost::MeshRecord* mesh = geometry_resource_host->FindMesh(batch.geometry_id);
+        if (mesh == nullptr) {
+            continue;
+        }
+        const PipelineMode mode = ResolvePipelineMode(batch, use_depth);
+        const TopologyMode topology = ResolveTopologyMode(mesh->topology, batch);
+        const CullMode cull = ResolveCullMode(batch);
+        const std::size_t mode_index = PipelineModeIndex(mode);
+        const std::size_t topology_index = TopologyModeIndex(topology);
+        const std::size_t cull_index = CullModeIndex(cull);
+        const bool already_compiled = pipeline_ids[mode_index][topology_index][cull_index].IsValid();
+        (void)EnsurePipelineForMode(context_,
+                                    pipeline_host_,
+                                    color_format_,
+                                    depth_format_,
+                                    mode,
+                                    topology,
+                                    cull);
+        if (!already_compiled) {
+            ++stats.prepare_compiled_pipeline_count;
+        }
+    }
+}
+
+void GeometryRenderer3D::EnsureFallbackMaterialResources(VulkanContext& context_) {
+    if (sampler_host == nullptr || upload_host == nullptr || gpu_memory_host == nullptr) {
+        throw std::runtime_error("GeometryRenderer3D missing runtime hosts required for fallback material resources");
+    }
+    if (fallback_material_sampler_id.IsValid() &&
+        fallback_material_image.image != VK_NULL_HANDLE &&
+        fallback_material_image.default_view != VK_NULL_HANDLE &&
+        fallback_material_layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
+        return;
+    }
+    if (context_.EnabledVulkan13Features().synchronization2 != VK_TRUE) {
+        throw std::runtime_error("GeometryRenderer3D fallback material texture requires synchronization2");
+    }
+
+    if (!fallback_material_sampler_id.IsValid()) {
+        resource::SamplerDesc sampler_desc{};
+        sampler_desc.mag_filter = VK_FILTER_LINEAR;
+        sampler_desc.min_filter = VK_FILTER_LINEAR;
+        sampler_desc.mipmap_mode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+        sampler_desc.address_mode_u = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        sampler_desc.address_mode_v = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        sampler_desc.address_mode_w = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        sampler_desc.min_lod = 0.0F;
+        sampler_desc.max_lod = 0.0F;
+        fallback_material_sampler_id = sampler_host->RegisterSampler(context_, sampler_desc);
+    }
+
+    if (fallback_material_image.image == VK_NULL_HANDLE) {
+        resource::ImageCreateInfo image_create_info{};
+        image_create_info.image_type = VK_IMAGE_TYPE_2D;
+        image_create_info.format = VK_FORMAT_R8G8B8A8_UNORM;
+        image_create_info.extent = VkExtent3D{1U, 1U, 1U};
+        image_create_info.mip_levels = 1U;
+        image_create_info.array_layers = 1U;
+        image_create_info.samples = VK_SAMPLE_COUNT_1_BIT;
+        image_create_info.tiling = VK_IMAGE_TILING_OPTIMAL;
+        image_create_info.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        image_create_info.sharing_mode = VK_SHARING_MODE_EXCLUSIVE;
+        image_create_info.initial_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+        image_create_info.memory_properties = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+        image_create_info.create_default_view = true;
+        image_create_info.default_view_type = VK_IMAGE_VIEW_TYPE_2D;
+        image_create_info.default_view_aspect = VK_IMAGE_ASPECT_COLOR_BIT;
+        image_create_info.default_base_mip_level = 0U;
+        image_create_info.default_level_count = 1U;
+        image_create_info.default_base_array_layer = 0U;
+        image_create_info.default_layer_count = 1U;
+        fallback_material_image = resource::ImageHost::CreateImage(context_, image_create_info, *gpu_memory_host);
+        fallback_material_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+    }
+
+    if (fallback_material_layout != VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
+        VkImageMemoryBarrier2 to_transfer{};
+        to_transfer.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+        to_transfer.srcStageMask = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
+        to_transfer.srcAccessMask = 0U;
+        to_transfer.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+        to_transfer.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+        to_transfer.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        to_transfer.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        to_transfer.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        to_transfer.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        to_transfer.image = fallback_material_image.image;
+        to_transfer.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        to_transfer.subresourceRange.baseMipLevel = 0U;
+        to_transfer.subresourceRange.levelCount = 1U;
+        to_transfer.subresourceRange.baseArrayLayer = 0U;
+        to_transfer.subresourceRange.layerCount = 1U;
+        upload_host->RecordImageBarrier2(active_frame_index, to_transfer);
+
+        const std::uint32_t white_pixel = 0xFFFFFFFFU;
+        VkBufferImageCopy copy_region{};
+        copy_region.bufferOffset = 0U;
+        copy_region.bufferRowLength = 0U;
+        copy_region.bufferImageHeight = 0U;
+        copy_region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        copy_region.imageSubresource.mipLevel = 0U;
+        copy_region.imageSubresource.baseArrayLayer = 0U;
+        copy_region.imageSubresource.layerCount = 1U;
+        copy_region.imageOffset = VkOffset3D{0, 0, 0};
+        copy_region.imageExtent = VkExtent3D{1U, 1U, 1U};
+        upload_host->StageAndRecordCopyImage(active_frame_index,
+                                             fallback_material_image.image,
+                                             VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                             copy_region,
+                                             &white_pixel,
+                                             static_cast<VkDeviceSize>(sizeof(white_pixel)),
+                                             4U);
+
+        VkImageMemoryBarrier2 to_shader_read{};
+        to_shader_read.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+        to_shader_read.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+        to_shader_read.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+        to_shader_read.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+        to_shader_read.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+        to_shader_read.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        to_shader_read.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        to_shader_read.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        to_shader_read.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        to_shader_read.image = fallback_material_image.image;
+        to_shader_read.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        to_shader_read.subresourceRange.baseMipLevel = 0U;
+        to_shader_read.subresourceRange.levelCount = 1U;
+        to_shader_read.subresourceRange.baseArrayLayer = 0U;
+        to_shader_read.subresourceRange.layerCount = 1U;
+        upload_host->RecordImageBarrier2(active_frame_index, to_shader_read);
+
+        fallback_material_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    }
+}
+
+VkDescriptorSet GeometryRenderer3D::AcquireMaterialDescriptorSet(std::uint32_t frame_index_,
+                                                                 std::uint32_t material_id_) {
+    if (context == nullptr || descriptor_host == nullptr || sampler_host == nullptr) {
+        throw std::runtime_error("GeometryRenderer3D::AcquireMaterialDescriptorSet requires prepared runtime hosts");
+    }
+    if (!descriptor_layout_id.IsValid()) {
+        return VK_NULL_HANDLE;
+    }
+    if (frame_index_ >= frame_material_sets.size()) {
+        throw std::out_of_range("GeometryRenderer3D::AcquireMaterialDescriptorSet frame index out of range");
+    }
+
+    GeometryRenderer3DMcVector<MaterialSetEntry>& entries = frame_material_sets[frame_index_];
+    const std::size_t lower_bound_index = LowerBoundMaterialSetIndex(entries, material_id_);
+    if (lower_bound_index < entries.size() && entries[lower_bound_index].material_id == material_id_) {
+        return entries[lower_bound_index].descriptor_set;
+    }
+
+    VkImageView image_view = fallback_material_image.default_view;
+    VkImageLayout image_layout = fallback_material_layout;
+    VkSampler sampler = fallback_material_sampler_id.IsValid()
+        ? sampler_host->GetSampler(fallback_material_sampler_id)
+        : VK_NULL_HANDLE;
+
+    if (geometry_material_host != nullptr && geometry_material_host->IsInitialized()) {
+        const GeometryMaterialHost::MaterialRecord* material_record =
+            geometry_material_host->FindMaterial(material_id_);
+        if (material_record != nullptr) {
+            if (material_record->desc.image_id != 0U &&
+                geometry_image_host != nullptr &&
+                geometry_image_host->IsInitialized()) {
+                const GeometryImageHost::ImageRecord* image_record =
+                    geometry_image_host->FindImage(material_record->desc.image_id);
+                if (image_record != nullptr &&
+                    image_record->resource.default_view != VK_NULL_HANDLE &&
+                    image_record->current_layout != VK_IMAGE_LAYOUT_UNDEFINED) {
+                    image_view = image_record->resource.default_view;
+                    image_layout = image_record->current_layout;
+                }
+            }
+            if (material_record->desc.sampler_id.IsValid()) {
+                const VkSampler candidate_sampler = sampler_host->GetSampler(material_record->desc.sampler_id);
+                if (candidate_sampler != VK_NULL_HANDLE) {
+                    sampler = candidate_sampler;
+                }
+            }
+        }
+    }
+
+    if (sampler == VK_NULL_HANDLE || image_view == VK_NULL_HANDLE || image_layout == VK_IMAGE_LAYOUT_UNDEFINED) {
+        return VK_NULL_HANDLE;
+    }
+
+    const VkDescriptorSet descriptor_set = descriptor_host->AllocateSet(*context, frame_index_, descriptor_layout_id);
+
+    descriptor_buffer_write_scratch.clear();
+    descriptor_image_write_scratch.clear();
+    descriptor_texel_write_scratch.clear();
+    descriptor_image_write_scratch.push_back({
+        .binding = 0U,
+        .array_element = 0U,
+        .descriptor_type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+        .sampler = sampler,
+        .image_view = image_view,
+        .image_layout = image_layout
+    });
+    descriptor_host->UpdateSet(*context,
+                               descriptor_set,
+                               descriptor_buffer_write_scratch,
+                               descriptor_image_write_scratch,
+                               descriptor_texel_write_scratch);
+    ++stats.descriptor_set_update_count;
+
+    const std::size_t old_size = entries.size();
+    entries.resize(old_size + 1U);
+    for (std::size_t index = old_size; index > lower_bound_index; --index) {
+        entries[index] = std::move(entries[index - 1U]);
+    }
+    entries[lower_bound_index] = MaterialSetEntry{
+        .material_id = material_id_,
+        .descriptor_set = descriptor_set
+    };
+    return descriptor_set;
 }
 
 void GeometryRenderer3D::EnsureDepthResources(VulkanContext& context_,
