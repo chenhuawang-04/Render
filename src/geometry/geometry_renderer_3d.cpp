@@ -92,6 +92,24 @@ std::size_t GeometryRenderer3D::LowerBoundMaterialSetIndex(
     return first;
 }
 
+std::size_t GeometryRenderer3D::LowerBoundResolvedMaterialIndex(
+    const GeometryRenderer3DMcVector<ResolvedMaterialEntry>& entries_,
+    std::uint32_t material_id_) noexcept {
+    std::size_t first = 0U;
+    std::size_t count = entries_.size();
+    while (count > 0U) {
+        const std::size_t step = count / 2U;
+        const std::size_t it = first + step;
+        if (entries_[it].material_id < material_id_) {
+            first = it + 1U;
+            count -= step + 1U;
+        } else {
+            count = step;
+        }
+    }
+    return first;
+}
+
 GeometryRenderer3D::PipelineMode GeometryRenderer3D::ResolvePipelineMode(
     const ecs::Geometry3DDrawBatch& batch_,
     bool use_depth_) noexcept {
@@ -140,6 +158,8 @@ void GeometryRenderer3D::Initialize(const GeometryRenderer3DCreateInfo& create_i
         ecs::GeometryRuntimeSystem<ecs::Dim3>::Reserve(runtime_scratch,
                                                        create_info_cache.reserve_component_count,
                                                        create_info_cache.reserve_instance_count);
+        ecs::CullingSystem<ecs::Dim3>::Reserve(culling_scratch,
+                                               create_info_cache.reserve_component_count);
     }
 
     if (!std::isfinite(create_info_cache.clear_depth_value)) {
@@ -166,16 +186,24 @@ void GeometryRenderer3D::Initialize(const GeometryRenderer3DCreateInfo& create_i
     retired_depth_images.clear();
     image_initialized.clear();
     frame_material_sets.clear();
+    resolved_materials.clear();
     descriptor_image_write_scratch.clear();
     descriptor_buffer_write_scratch.clear();
     descriptor_texel_write_scratch.clear();
+    descriptor_image_write_scratch.reserve(1U);
+    if (create_info_cache.reserve_material_set_count > 0U) {
+        resolved_materials.reserve(create_info_cache.reserve_material_set_count);
+    }
     runtime_stats = {};
+    culling_stats = {};
     instance_range = {};
     fallback_material_image = {};
     fallback_material_sampler_id = {};
     fallback_material_layout = VK_IMAGE_LAYOUT_UNDEFINED;
     last_submitted_value_seen = 0U;
     completed_submit_value_seen = 0U;
+    material_host_revision_seen = 0U;
+    image_host_revision_seen = 0U;
     stats = {};
     initialized = true;
 }
@@ -196,6 +224,7 @@ void GeometryRenderer3D::Shutdown(VulkanContext& context_) {
         frame_sets.clear();
     }
     frame_material_sets.clear();
+    resolved_materials.clear();
 
     if (fallback_material_image.image != VK_NULL_HANDLE) {
         resource::ImageHost::DestroyImage(context_, fallback_material_image);
@@ -224,6 +253,7 @@ void GeometryRenderer3D::Shutdown(VulkanContext& context_) {
     component_count = 0U;
     camera_component = nullptr;
     camera_transform = nullptr;
+    bounds_components = nullptr;
     geometry_resource_host = nullptr;
     geometry_upload_host = nullptr;
     geometry_material_host = nullptr;
@@ -247,6 +277,9 @@ void GeometryRenderer3D::Shutdown(VulkanContext& context_) {
     runtime_scratch.batch_scratch.ordered_indices.clear();
     runtime_scratch.cache = {};
     runtime_stats = {};
+    culling_scratch.visible_indices.clear();
+    culling_scratch.visibility_bits.clear();
+    culling_stats = {};
     stats = {};
 
     descriptor_image_write_scratch.clear();
@@ -255,6 +288,8 @@ void GeometryRenderer3D::Shutdown(VulkanContext& context_) {
 
     last_submitted_value_seen = 0U;
     completed_submit_value_seen = 0U;
+    material_host_revision_seen = 0U;
+    image_host_revision_seen = 0U;
     initialized = false;
 }
 
@@ -266,6 +301,11 @@ void GeometryRenderer3D::SetHosts(GeometryResourceHost* resource_host_,
 
 void GeometryRenderer3D::SetMaterialHosts(GeometryMaterialHost* material_host_,
                                           GeometryImageHost* image_host_) noexcept {
+    if (geometry_material_host != material_host_ || geometry_image_host != image_host_) {
+        resolved_materials.clear();
+        material_host_revision_seen = 0U;
+        image_host_revision_seen = 0U;
+    }
     geometry_material_host = material_host_;
     geometry_image_host = image_host_;
 }
@@ -274,12 +314,17 @@ void GeometryRenderer3D::SetSceneData(ecs::Geometry<ecs::Dim3>* geometry_compone
                                       ecs::Transform<ecs::Dim3>* transforms_,
                                       std::uint32_t component_count_,
                                       ecs::Camera<ecs::Dim3>* camera_component_,
-                                      ecs::Transform<ecs::Dim3>* camera_transform_) noexcept {
+                                      ecs::Transform<ecs::Dim3>* camera_transform_,
+                                      ecs::Bounds<ecs::Dim3>* bounds_components_) noexcept {
     geometry_components = geometry_components_;
     transforms = transforms_;
     component_count = component_count_;
     camera_component = camera_component_;
     camera_transform = camera_transform_;
+    bounds_components = bounds_components_;
+    if (component_count_ > 0U) {
+        ecs::CullingSystem<ecs::Dim3>::Reserve(culling_scratch, component_count_);
+    }
 }
 
 void GeometryRenderer3D::PrepareFrame(const render::RuntimePrepareContext& prepare_context_) {
@@ -318,6 +363,21 @@ void GeometryRenderer3D::PrepareFrame(const render::RuntimePrepareContext& prepa
         geometry_image_host->BeginFrame(*context, completed_submit_value_seen);
     }
 
+    std::uint32_t material_revision_now = 0U;
+    if (geometry_material_host != nullptr && geometry_material_host->IsInitialized()) {
+        material_revision_now = geometry_material_host->Stats().revision;
+    }
+    std::uint32_t image_revision_now = 0U;
+    if (geometry_image_host != nullptr && geometry_image_host->IsInitialized()) {
+        image_revision_now = geometry_image_host->Stats().revision;
+    }
+    if (material_revision_now != material_host_revision_seen ||
+        image_revision_now != image_host_revision_seen) {
+        resolved_materials.clear();
+        material_host_revision_seen = material_revision_now;
+        image_host_revision_seen = image_revision_now;
+    }
+
     EnsureFallbackMaterialResources(*context);
     EnsureMaterialPipelineObjects(*context, *descriptor_host);
 
@@ -332,20 +392,56 @@ void GeometryRenderer3D::PrepareFrame(const render::RuntimePrepareContext& prepa
 
     stats = {};
     stats.component_count = component_count;
+    stats.material_resolve_cache_entry_count = static_cast<std::uint32_t>(resolved_materials.size());
     instance_range = {};
+    culling_stats = {};
 
     if (geometry_components == nullptr || component_count == 0U) {
         runtime_scratch.instances.clear();
         runtime_scratch.draw_batches.clear();
         runtime_stats = {};
+        culling_scratch.visible_indices.clear();
+        culling_scratch.visibility_bits.clear();
         return;
+    }
+
+    ecs::Geometry3DRuntimeBuildHint build_hint{};
+    if (bounds_components != nullptr && camera_component != nullptr) {
+        const ecs::CullingBuildOptions culling_options{
+            .enable_culling_mask_filter = true,
+            .enable_frustum_culling = true,
+            .enable_aabb_refine = true,
+            .write_visibility_bits = false
+        };
+        culling_stats = ecs::CullingSystem<ecs::Dim3>::BuildVisibleSet(bounds_components,
+                                                                        component_count,
+                                                                        camera_component,
+                                                                        culling_scratch,
+                                                                        culling_options);
+        build_hint.visible_component_indices = culling_scratch.visible_indices.data();
+        build_hint.visible_component_count = culling_stats.visible_count;
+        build_hint.use_visible_component_indices = 1U;
+        build_hint.external_visible_set_signature = culling_stats.visible_set_signature;
+        build_hint.use_external_visible_set_signature = 1U;
+
+        stats.used_bounds_culling = true;
+        stats.culling_input_count = culling_stats.input_count;
+        stats.culling_visible_count = culling_stats.visible_count;
+        stats.culling_culled_count = culling_stats.culled_by_mask_count +
+                                     culling_stats.culled_by_frustum_count +
+                                     culling_stats.culled_by_invalid_bounds_count;
+        stats.culling_mask_reject_count = culling_stats.culled_by_mask_count;
+        stats.culling_frustum_reject_count = culling_stats.culled_by_frustum_count;
+        stats.culling_invalid_bounds_count = culling_stats.culled_by_invalid_bounds_count;
+        stats.culling_plane_test_count = culling_stats.plane_test_count;
     }
 
     runtime_stats = ecs::GeometryRuntimeSystem<ecs::Dim3>::Build(geometry_components,
                                                                   transforms,
                                                                   component_count,
                                                                   runtime_scratch,
-                                                                  create_info_cache.runtime_build);
+                                                                  create_info_cache.runtime_build,
+                                                                  build_hint);
     stats.visible_component_count = runtime_stats.batch.visible_count;
     stats.instance_count = runtime_stats.emitted_instance_count;
     stats.draw_batch_count = runtime_stats.emitted_batch_count;
@@ -665,6 +761,7 @@ void GeometryRenderer3D::Record(const render::FrameRecordContext& record_context
     if (active_frame_index < frame_material_sets.size()) {
         stats.material_set_count = static_cast<std::uint32_t>(frame_material_sets[active_frame_index].size());
     }
+    stats.material_resolve_cache_entry_count = static_cast<std::uint32_t>(resolved_materials.size());
 
     vkCmdEndRendering(record_context_.command_buffer);
     RecordImageTransitionToPresent(record_context_);
@@ -758,7 +855,12 @@ void GeometryRenderer3D::EnsurePipelineObjects(VulkanContext& context_,
         render::PipelineLayoutDesc layout_desc{};
         layout_desc.set_layouts.push_back(descriptor_host->GetLayout(descriptor_layout_id));
         layout_desc.push_constant_ranges.push_back({
-            .stage_flags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+            .stage_flags = VK_SHADER_STAGE_VERTEX_BIT,
+            .offset = 0U,
+            .size = sizeof(FramePushConstants)
+        });
+        layout_desc.push_constant_ranges.push_back({
+            .stage_flags = VK_SHADER_STAGE_FRAGMENT_BIT,
             .offset = 0U,
             .size = sizeof(PushConstants)
         });
@@ -1098,7 +1200,7 @@ void GeometryRenderer3D::EnsureFallbackMaterialResources(VulkanContext& context_
 }
 
 GeometryRenderer3D::MaterialPushConstants GeometryRenderer3D::BuildMaterialPushConstants(
-    std::uint32_t material_id_) const noexcept {
+    const GeometryMaterialDesc* material_desc_) noexcept {
     MaterialPushConstants push_constants{};
     push_constants.uv_scale_u = 1.0F;
     push_constants.uv_scale_v = 1.0F;
@@ -1109,13 +1211,7 @@ GeometryRenderer3D::MaterialPushConstants GeometryRenderer3D::BuildMaterialPushC
     push_constants.reserved0 = 0.0F;
     push_constants.reserved1 = 0.0F;
 
-    if (geometry_material_host == nullptr || !geometry_material_host->IsInitialized()) {
-        return push_constants;
-    }
-
-    const GeometryMaterialHost::MaterialRecord* material_record =
-        geometry_material_host->FindMaterial(material_id_);
-    if (material_record == nullptr) {
+    if (material_desc_ == nullptr) {
         return push_constants;
     }
 
@@ -1123,15 +1219,124 @@ GeometryRenderer3D::MaterialPushConstants GeometryRenderer3D::BuildMaterialPushC
         return std::isfinite(value_) ? value_ : fallback_;
     };
 
-    push_constants.uv_scale_u = sanitize_value(material_record->desc.uv_scale_u, 1.0F);
-    push_constants.uv_scale_v = sanitize_value(material_record->desc.uv_scale_v, 1.0F);
-    push_constants.uv_bias_u = sanitize_value(material_record->desc.uv_bias_u, 0.0F);
-    push_constants.uv_bias_v = sanitize_value(material_record->desc.uv_bias_v, 0.0F);
-    push_constants.flags = material_record->desc.flags;
-    push_constants.alpha_cutoff = std::clamp(sanitize_value(material_record->desc.alpha_cutoff, 0.0F),
+    push_constants.uv_scale_u = sanitize_value(material_desc_->uv_scale_u, 1.0F);
+    push_constants.uv_scale_v = sanitize_value(material_desc_->uv_scale_v, 1.0F);
+    push_constants.uv_bias_u = sanitize_value(material_desc_->uv_bias_u, 0.0F);
+    push_constants.uv_bias_v = sanitize_value(material_desc_->uv_bias_v, 0.0F);
+    push_constants.flags = material_desc_->flags;
+    push_constants.alpha_cutoff = std::clamp(sanitize_value(material_desc_->alpha_cutoff, 0.0F),
                                              0.0F,
                                              1.0F);
     return push_constants;
+}
+
+bool GeometryRenderer3D::ResolveMaterialBinding(std::uint32_t material_id_,
+                                                VkSampler& out_sampler_,
+                                                VkImageView& out_image_view_,
+                                                VkImageLayout& out_image_layout_,
+                                                MaterialPushConstants& out_material_push_constants_) {
+    out_sampler_ = fallback_material_sampler_id.IsValid()
+        ? sampler_host->GetSampler(fallback_material_sampler_id)
+        : VK_NULL_HANDLE;
+    out_image_view_ = fallback_material_image.default_view;
+    out_image_layout_ = fallback_material_layout;
+    out_material_push_constants_ = BuildMaterialPushConstants(nullptr);
+
+    std::size_t lower_bound_index = 0U;
+    bool use_append_fast_path = false;
+    if (!resolved_materials.empty()) {
+        const ResolvedMaterialEntry& back_entry = resolved_materials.back();
+        if (back_entry.material_id == material_id_) {
+            out_sampler_ = back_entry.sampler;
+            out_image_view_ = back_entry.image_view;
+            out_image_layout_ = back_entry.image_layout;
+            out_material_push_constants_ = back_entry.material_push_constants;
+            ++stats.material_resolve_cache_hit_count;
+            return out_sampler_ != VK_NULL_HANDLE &&
+                   out_image_view_ != VK_NULL_HANDLE &&
+                   out_image_layout_ != VK_IMAGE_LAYOUT_UNDEFINED;
+        }
+        if (back_entry.material_id < material_id_) {
+            lower_bound_index = resolved_materials.size();
+            use_append_fast_path = true;
+        }
+    }
+    if (!use_append_fast_path) {
+        lower_bound_index = LowerBoundResolvedMaterialIndex(resolved_materials, material_id_);
+        if (lower_bound_index < resolved_materials.size() &&
+            resolved_materials[lower_bound_index].material_id == material_id_) {
+            const ResolvedMaterialEntry& cached_entry = resolved_materials[lower_bound_index];
+            out_sampler_ = cached_entry.sampler;
+            out_image_view_ = cached_entry.image_view;
+            out_image_layout_ = cached_entry.image_layout;
+            out_material_push_constants_ = cached_entry.material_push_constants;
+            ++stats.material_resolve_cache_hit_count;
+            return out_sampler_ != VK_NULL_HANDLE &&
+                   out_image_view_ != VK_NULL_HANDLE &&
+                   out_image_layout_ != VK_IMAGE_LAYOUT_UNDEFINED;
+        }
+    }
+
+    ++stats.material_resolve_cache_miss_count;
+
+    const GeometryMaterialHost::MaterialRecord* material_record = nullptr;
+    if (geometry_material_host != nullptr && geometry_material_host->IsInitialized()) {
+        material_record = geometry_material_host->FindMaterial(material_id_);
+    }
+
+    const GeometryMaterialDesc* material_desc = material_record != nullptr
+        ? &material_record->desc
+        : nullptr;
+    out_material_push_constants_ = BuildMaterialPushConstants(material_desc);
+
+    std::uint32_t image_id = 0U;
+    std::uint32_t image_revision = 0U;
+    if (material_desc != nullptr) {
+        image_id = material_desc->image_id;
+        if (material_desc->sampler_id.IsValid()) {
+            const VkSampler candidate_sampler = sampler_host->GetSampler(material_desc->sampler_id);
+            if (candidate_sampler != VK_NULL_HANDLE) {
+                out_sampler_ = candidate_sampler;
+            }
+        }
+        if (image_id != 0U &&
+            geometry_image_host != nullptr &&
+            geometry_image_host->IsInitialized()) {
+            const GeometryImageHost::ImageRecord* image_record = geometry_image_host->FindImage(image_id);
+            if (image_record != nullptr &&
+                image_record->resource.default_view != VK_NULL_HANDLE &&
+                image_record->current_layout != VK_IMAGE_LAYOUT_UNDEFINED) {
+                out_image_view_ = image_record->resource.default_view;
+                out_image_layout_ = image_record->current_layout;
+                image_revision = image_record->revision;
+            }
+        }
+    }
+
+    if (out_sampler_ == VK_NULL_HANDLE ||
+        out_image_view_ == VK_NULL_HANDLE ||
+        out_image_layout_ == VK_IMAGE_LAYOUT_UNDEFINED) {
+        return false;
+    }
+
+    const std::size_t old_size = resolved_materials.size();
+    resolved_materials.resize(old_size + 1U);
+    if (lower_bound_index < old_size) {
+        for (std::size_t index = old_size; index > lower_bound_index; --index) {
+            resolved_materials[index] = std::move(resolved_materials[index - 1U]);
+        }
+    }
+    resolved_materials[lower_bound_index] = ResolvedMaterialEntry{
+        .material_id = material_id_,
+        .material_revision = material_record != nullptr ? material_record->revision : 0U,
+        .image_id = image_id,
+        .image_revision = image_revision,
+        .image_view = out_image_view_,
+        .image_layout = out_image_layout_,
+        .sampler = out_sampler_,
+        .material_push_constants = out_material_push_constants_
+    };
+    return true;
 }
 
 VkDescriptorSet GeometryRenderer3D::AcquireMaterialDescriptorSet(std::uint32_t frame_index_,
@@ -1148,50 +1353,43 @@ VkDescriptorSet GeometryRenderer3D::AcquireMaterialDescriptorSet(std::uint32_t f
     }
 
     GeometryRenderer3DMcVector<MaterialSetEntry>& entries = frame_material_sets[frame_index_];
-    const std::size_t lower_bound_index = LowerBoundMaterialSetIndex(entries, material_id_);
-    if (lower_bound_index < entries.size() && entries[lower_bound_index].material_id == material_id_) {
-        if (out_material_push_constants_ != nullptr) {
-            *out_material_push_constants_ = entries[lower_bound_index].material_push_constants;
+    std::size_t lower_bound_index = 0U;
+    bool use_append_fast_path = false;
+    if (!entries.empty()) {
+        const MaterialSetEntry& back_entry = entries.back();
+        if (back_entry.material_id == material_id_) {
+            if (out_material_push_constants_ != nullptr) {
+                *out_material_push_constants_ = back_entry.material_push_constants;
+            }
+            return back_entry.descriptor_set;
         }
-        return entries[lower_bound_index].descriptor_set;
+        if (back_entry.material_id < material_id_) {
+            lower_bound_index = entries.size();
+            use_append_fast_path = true;
+        }
     }
-
-    VkImageView image_view = fallback_material_image.default_view;
-    VkImageLayout image_layout = fallback_material_layout;
-    VkSampler sampler = fallback_material_sampler_id.IsValid()
-        ? sampler_host->GetSampler(fallback_material_sampler_id)
-        : VK_NULL_HANDLE;
-
-    if (geometry_material_host != nullptr && geometry_material_host->IsInitialized()) {
-        const GeometryMaterialHost::MaterialRecord* material_record =
-            geometry_material_host->FindMaterial(material_id_);
-        if (material_record != nullptr) {
-            if (material_record->desc.image_id != 0U &&
-                geometry_image_host != nullptr &&
-                geometry_image_host->IsInitialized()) {
-                const GeometryImageHost::ImageRecord* image_record =
-                    geometry_image_host->FindImage(material_record->desc.image_id);
-                if (image_record != nullptr &&
-                    image_record->resource.default_view != VK_NULL_HANDLE &&
-                    image_record->current_layout != VK_IMAGE_LAYOUT_UNDEFINED) {
-                    image_view = image_record->resource.default_view;
-                    image_layout = image_record->current_layout;
-                }
+    if (!use_append_fast_path) {
+        lower_bound_index = LowerBoundMaterialSetIndex(entries, material_id_);
+        if (lower_bound_index < entries.size() && entries[lower_bound_index].material_id == material_id_) {
+            if (out_material_push_constants_ != nullptr) {
+                *out_material_push_constants_ = entries[lower_bound_index].material_push_constants;
             }
-            if (material_record->desc.sampler_id.IsValid()) {
-                const VkSampler candidate_sampler = sampler_host->GetSampler(material_record->desc.sampler_id);
-                if (candidate_sampler != VK_NULL_HANDLE) {
-                    sampler = candidate_sampler;
-                }
-            }
+            return entries[lower_bound_index].descriptor_set;
         }
     }
 
-    if (sampler == VK_NULL_HANDLE || image_view == VK_NULL_HANDLE || image_layout == VK_IMAGE_LAYOUT_UNDEFINED) {
+    VkSampler sampler = VK_NULL_HANDLE;
+    VkImageView image_view = VK_NULL_HANDLE;
+    VkImageLayout image_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+    MaterialPushConstants material_push_constants{};
+    if (!ResolveMaterialBinding(material_id_,
+                                sampler,
+                                image_view,
+                                image_layout,
+                                material_push_constants)) {
         return VK_NULL_HANDLE;
     }
 
-    const MaterialPushConstants material_push_constants = BuildMaterialPushConstants(material_id_);
     const VkDescriptorSet descriptor_set = descriptor_host->AllocateSet(*context, frame_index_, descriptor_layout_id);
 
     descriptor_buffer_write_scratch.clear();
@@ -1214,8 +1412,10 @@ VkDescriptorSet GeometryRenderer3D::AcquireMaterialDescriptorSet(std::uint32_t f
 
     const std::size_t old_size = entries.size();
     entries.resize(old_size + 1U);
-    for (std::size_t index = old_size; index > lower_bound_index; --index) {
-        entries[index] = std::move(entries[index - 1U]);
+    if (lower_bound_index < old_size) {
+        for (std::size_t index = old_size; index > lower_bound_index; --index) {
+            entries[index] = std::move(entries[index - 1U]);
+        }
     }
     entries[lower_bound_index] = MaterialSetEntry{
         .material_id = material_id_,

@@ -18,9 +18,14 @@ set(VECTOR_ROOT "E:/Project/MelosyneTest/Vector_New" CACHE PATH "Path to Vector_
 set(FAST_MATH_ROOT "E:/Project/MelosyneTest/Math/fast_math" CACHE PATH "Path to fast_math root")
 set(SDL3_ROOT "E:/Project/MelosyneTest/FinalRender/vender/SDL-release-3.4.0" CACHE PATH "Path to SDL3 source root")
 set(FREETYPE_ROOT "E:/Project/MelosyneTest/VulkanRender_New/freetype-master" CACHE PATH "Path to FreeType source root")
+set(CRASH_TRACER_ROOT "E:/Project/MelosyneTest/CrashTracer" CACHE PATH "Path to CrashTracer root")
+set(MEMORYCENTER_MIMALLOC_INCLUDE_DIR "${MEMORYCENTER_ROOT}/third_party/mimalloc/include")
 
 if(NOT EXISTS "${MEMORYCENTER_ROOT}/CMakeLists.txt")
     message(FATAL_ERROR "MEMORYCENTER_ROOT is invalid: ${MEMORYCENTER_ROOT}")
+endif()
+if(NOT EXISTS "${MEMORYCENTER_MIMALLOC_INCLUDE_DIR}/mimalloc.h")
+    message(FATAL_ERROR "MemoryCenter mimalloc header is invalid: ${MEMORYCENTER_MIMALLOC_INCLUDE_DIR}/mimalloc.h")
 endif()
 if(NOT EXISTS "${VECTOR_ROOT}/include/Center/Memory/Container/Vector/McVector.hpp")
     message(FATAL_ERROR "VECTOR_ROOT is invalid: ${VECTOR_ROOT}")
@@ -72,6 +77,7 @@ endif()
 set(VR_GENERATED_INCLUDE_DIR "${CMAKE_BINARY_DIR}/generated")
 set(VR_GENERATED_TEXT_SHADER_DIR "${VR_GENERATED_INCLUDE_DIR}/vr/text/generated")
 set(VR_GENERATED_GEOMETRY_SHADER_DIR "${VR_GENERATED_INCLUDE_DIR}/vr/geometry/generated")
+set(VR_GENERATED_SURFACE_SHADER_DIR "${VR_GENERATED_INCLUDE_DIR}/vr/surface/generated")
 set(VR_SHADER_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/shaders")
 
 function(vr_compile_shader_to_header input_file stage symbol_name output_header output_namespace)
@@ -84,6 +90,7 @@ function(vr_compile_shader_to_header input_file stage symbol_name output_header 
         COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_BINARY_DIR}/generated"
         COMMAND ${CMAKE_COMMAND} -E make_directory "${VR_GENERATED_TEXT_SHADER_DIR}"
         COMMAND ${CMAKE_COMMAND} -E make_directory "${VR_GENERATED_GEOMETRY_SHADER_DIR}"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${VR_GENERATED_SURFACE_SHADER_DIR}"
         COMMAND "${GLSLANG_VALIDATOR_EXECUTABLE}" -V --target-env vulkan1.3 -S "${stage}" -e main -o "${_spv_file}" "${_input_abs}"
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/spv_to_header.py"
                 --input "${_spv_file}"
@@ -104,6 +111,10 @@ set(VR_GEOMETRY_2D_VERT_HEADER "${VR_GENERATED_GEOMETRY_SHADER_DIR}/geometry_2d_
 set(VR_GEOMETRY_2D_FRAG_HEADER "${VR_GENERATED_GEOMETRY_SHADER_DIR}/geometry_2d_frag_spv.hpp")
 set(VR_GEOMETRY_3D_VERT_HEADER "${VR_GENERATED_GEOMETRY_SHADER_DIR}/geometry_3d_vert_spv.hpp")
 set(VR_GEOMETRY_3D_FRAG_HEADER "${VR_GENERATED_GEOMETRY_SHADER_DIR}/geometry_3d_frag_spv.hpp")
+set(VR_SURFACE_2D_VERT_HEADER "${VR_GENERATED_SURFACE_SHADER_DIR}/surface_2d_vert_spv.hpp")
+set(VR_SURFACE_2D_FRAG_HEADER "${VR_GENERATED_SURFACE_SHADER_DIR}/surface_2d_frag_spv.hpp")
+set(VR_SURFACE_3D_VERT_HEADER "${VR_GENERATED_SURFACE_SHADER_DIR}/surface_3d_vert_spv.hpp")
+set(VR_SURFACE_3D_FRAG_HEADER "${VR_GENERATED_SURFACE_SHADER_DIR}/surface_3d_frag_spv.hpp")
 
 vr_compile_shader_to_header("${VR_SHADER_SOURCE_DIR}/text_2d.vert"
                             "vert"
@@ -145,6 +156,26 @@ vr_compile_shader_to_header("${VR_SHADER_SOURCE_DIR}/geometry_2d.frag"
                             "k_geometry_2d_frag_spv"
                             "${VR_GEOMETRY_2D_FRAG_HEADER}"
                             "vr::geometry::generated")
+vr_compile_shader_to_header("${VR_SHADER_SOURCE_DIR}/surface_2d.vert"
+                            "vert"
+                            "k_surface_2d_vert_spv"
+                            "${VR_SURFACE_2D_VERT_HEADER}"
+                            "vr::surface::generated")
+vr_compile_shader_to_header("${VR_SHADER_SOURCE_DIR}/surface_2d.frag"
+                            "frag"
+                            "k_surface_2d_frag_spv"
+                            "${VR_SURFACE_2D_FRAG_HEADER}"
+                            "vr::surface::generated")
+vr_compile_shader_to_header("${VR_SHADER_SOURCE_DIR}/surface_3d.vert"
+                            "vert"
+                            "k_surface_3d_vert_spv"
+                            "${VR_SURFACE_3D_VERT_HEADER}"
+                            "vr::surface::generated")
+vr_compile_shader_to_header("${VR_SHADER_SOURCE_DIR}/surface_3d.frag"
+                            "frag"
+                            "k_surface_3d_frag_spv"
+                            "${VR_SURFACE_3D_FRAG_HEADER}"
+                            "vr::surface::generated")
 
 add_custom_target(vr_generated_shaders
     DEPENDS
@@ -156,6 +187,10 @@ add_custom_target(vr_generated_shaders
         "${VR_GEOMETRY_2D_FRAG_HEADER}"
         "${VR_GEOMETRY_3D_VERT_HEADER}"
         "${VR_GEOMETRY_3D_FRAG_HEADER}"
+        "${VR_SURFACE_2D_VERT_HEADER}"
+        "${VR_SURFACE_2D_FRAG_HEADER}"
+        "${VR_SURFACE_3D_VERT_HEADER}"
+        "${VR_SURFACE_3D_FRAG_HEADER}"
 )
 
 add_library(vulkan_init STATIC
@@ -175,6 +210,10 @@ add_library(vulkan_init STATIC
     src/geometry/geometry_upload_host.cpp
     src/geometry/geometry_renderer_2d.cpp
     src/geometry/geometry_renderer_3d.cpp
+    src/surface/surface_image_host.cpp
+    src/surface/surface_upload_host.cpp
+    src/surface/surface_renderer_2d.cpp
+    src/surface/surface_renderer_3d.cpp
     src/resource/buffer_host.cpp
     src/resource/image_host.cpp
     src/resource/gpu_memory_host.cpp
@@ -188,6 +227,7 @@ target_include_directories(vulkan_init
         ${CMAKE_CURRENT_SOURCE_DIR}/include
         ${VR_GENERATED_INCLUDE_DIR}
         ${MEMORYCENTER_ROOT}/include
+        ${MEMORYCENTER_MIMALLOC_INCLUDE_DIR}
         ${VECTOR_ROOT}/include
         ${FAST_MATH_ROOT}/include
 )
@@ -251,6 +291,15 @@ target_link_libraries(sdl_geometry_unified_demo
         vulkan_platform_sdl
 )
 
+add_executable(sdl_surface_unified_demo
+    examples/sdl_surface_unified_demo.cpp
+)
+
+target_link_libraries(sdl_surface_unified_demo
+    PRIVATE
+        vulkan_platform_sdl
+)
+
 add_executable(sdl_text_demo
     examples/sdl_text_demo.cpp
 )
@@ -276,6 +325,7 @@ endif()
 option(VR_BUILD_TESTS "Build VulkanRender_New test suite" ${_vr_default_build_tests})
 
 option(VR_BUILD_BENCHMARKS "Build VulkanRender_New benchmark suite" OFF)
+option(VR_BENCH_ENABLE_CRASH_TRACER "Enable CrashTracer for vr_bench_runner" ON)
 if(VR_BUILD_TESTS OR VR_BUILD_BENCHMARKS)
     enable_testing()
 endif()
@@ -285,5 +335,17 @@ if(VR_BUILD_TESTS)
 endif()
 
 if(VR_BUILD_BENCHMARKS)
+    if(VR_BENCH_ENABLE_CRASH_TRACER)
+        if(NOT EXISTS "${CRASH_TRACER_ROOT}/CMakeLists.txt")
+            message(FATAL_ERROR "CRASH_TRACER_ROOT is invalid: ${CRASH_TRACER_ROOT}")
+        endif()
+        add_subdirectory("${CRASH_TRACER_ROOT}" "${CMAKE_BINARY_DIR}/_deps/crash_tracer" EXCLUDE_FROM_ALL)
+        if(NOT TARGET Center.Debug.CrashTracer)
+            message(FATAL_ERROR "CrashTracer target Center.Debug.CrashTracer was not found")
+        endif()
+        set(VR_BENCH_CRASH_TRACER_ENABLED ON)
+    else()
+        set(VR_BENCH_CRASH_TRACER_ENABLED OFF)
+    endif()
     add_subdirectory(bench)
 endif()

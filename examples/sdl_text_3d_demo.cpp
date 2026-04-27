@@ -1,3 +1,4 @@
+#include "vr/ecs/system/bounds_system.hpp"
 #include "vr/ecs/system/camera_system.hpp"
 #include "vr/ecs/system/text_system.hpp"
 #include "vr/ecs/system/transform_system.hpp"
@@ -22,6 +23,8 @@ using Text3D = vr::ecs::Text<vr::ecs::Dim3>;
 using TextSystem3D = vr::ecs::TextSystem<vr::ecs::Dim3>;
 using Transform3D = vr::ecs::Transform<vr::ecs::Dim3>;
 using TransformSystem3D = vr::ecs::TransformSystem<vr::ecs::Dim3>;
+using Bounds3D = vr::ecs::Bounds<vr::ecs::Dim3>;
+using BoundsSystem3D = vr::ecs::BoundsSystem<vr::ecs::Dim3>;
 using Camera3D = vr::ecs::Camera<vr::ecs::Dim3>;
 using CameraSystem3D = vr::ecs::CameraSystem<vr::ecs::Dim3>;
 
@@ -221,7 +224,7 @@ int main() {
                                 0U,
                                 vr::ecs::Rgba8{0U, 0U, 0U, 255U},
                                 70U,
-                                "Depth back (test on, write off)");
+                                "Z-Spin Back (depth test on, write off)");
 
         InitializeTextComponent(components[depth_front_write],
                                 1U,
@@ -237,7 +240,7 @@ int main() {
                                 1U,
                                 vr::ecs::Rgba8{36U, 18U, 6U, 255U},
                                 80U,
-                                "Depth front (test+write)");
+                                "Z-Spin Front (depth test+write)");
 
         InitializeTextComponent(components[no_depth_overlay],
                                 1U,
@@ -345,12 +348,12 @@ int main() {
                             vr::ecs::Float3{.x = 0.0F, .y = 0.0F, .z = 0.0F},
                             vr::ecs::Float3{.x = 1.0F, .y = 1.0F, .z = 1.0F});
         InitializeTransform(transforms[depth_back],
-                            vr::ecs::Float3{.x = -1.7F, .y = -0.20F, .z = 0.45F},
-                            vr::ecs::Float3{.x = 0.0F, .y = 0.0F, .z = 0.0F},
+                            vr::ecs::Float3{.x = -0.85F, .y = -0.18F, .z = 0.52F},
+                            vr::ecs::Float3{.x = 0.0F, .y = 0.0F, .z = -0.34F},
                             vr::ecs::Float3{.x = 1.0F, .y = 1.0F, .z = 1.0F});
         InitializeTransform(transforms[depth_front_write],
-                            vr::ecs::Float3{.x = -1.72F, .y = -0.22F, .z = 0.16F},
-                            vr::ecs::Float3{.x = 0.0F, .y = 0.0F, .z = 0.12F},
+                            vr::ecs::Float3{.x = -0.85F, .y = -0.18F, .z = 0.12F},
+                            vr::ecs::Float3{.x = 0.0F, .y = 0.0F, .z = 0.22F},
                             vr::ecs::Float3{.x = 1.0F, .y = 1.0F, .z = 1.0F});
         InitializeTransform(transforms[no_depth_overlay],
                             vr::ecs::Float3{.x = -1.6F, .y = -0.86F, .z = -0.20F},
@@ -377,6 +380,14 @@ int main() {
                             vr::ecs::Float3{.x = 0.0F, .y = 0.0F, .z = 0.0F},
                             vr::ecs::Float3{.x = 1.0F, .y = 1.0F, .z = 1.0F});
 
+        std::array<Bounds3D, k_component_count> bounds{};
+        for (Bounds3D& bounds_component : bounds) {
+            BoundsSystem3D::Initialize(bounds_component);
+            BoundsSystem3D::SetLocalCenterExtents(bounds_component,
+                                                  vr::ecs::Float3{.x = 0.0F, .y = 0.0F, .z = 0.0F},
+                                                  vr::ecs::Float3{.x = 2.8F, .y = 0.8F, .z = 0.14F});
+        }
+
         Camera3D camera{};
         CameraSystem3D::Initialize(camera);
         CameraSystem3D::SetAspectRatio(camera, 1280.0F / 720.0F);
@@ -393,6 +404,9 @@ int main() {
 
         TransformSystem3D::UpdateHierarchy(transforms.data(),
                                            static_cast<std::uint32_t>(transforms.size()));
+        (void)BoundsSystem3D::UpdateAligned(bounds.data(),
+                                            transforms.data(),
+                                            static_cast<std::uint32_t>(bounds.size()));
         TransformSystem3D::UpdateHierarchy(&camera_transform, 1U);
         CameraSystem3D::MarkViewDirty(camera);
         CameraSystem3D::Update(camera, camera_transform);
@@ -418,7 +432,8 @@ int main() {
                                    transforms.data(),
                                    static_cast<std::uint32_t>(components.size()),
                                    &camera,
-                                   &camera_transform);
+                                   &camera_transform,
+                                   bounds.data());
 
         const std::string primary_name = FileNameOnly(fonts.primary);
         const std::string secondary_name = FileNameOnly(fonts.secondary);
@@ -430,7 +445,7 @@ int main() {
         const std::uint64_t demo_start_ticks = SDL_GetTicks();
 
         bool reverse_z_enabled = false;
-        vr::ecs::CameraProjectionMode projection_mode = vr::ecs::CameraProjectionMode::perspective;
+        constexpr vr::ecs::CameraProjectionMode projection_mode = vr::ecs::CameraProjectionMode::perspective;
         float cached_aspect_ratio = 1280.0F / 720.0F;
 
         std::cout << "sdl_text_3d_demo running (3D showcase). Close window to exit.\n";
@@ -445,18 +460,6 @@ int main() {
                 CameraSystem3D::SetReverseZ(camera, reverse_z_enabled);
             }
 
-            const vr::ecs::CameraProjectionMode target_projection_mode =
-                ((elapsed_ms / 18000U) % 2U) == 0U
-                    ? vr::ecs::CameraProjectionMode::perspective
-                    : vr::ecs::CameraProjectionMode::orthographic;
-            if (target_projection_mode != projection_mode) {
-                projection_mode = target_projection_mode;
-                CameraSystem3D::SetProjectionMode(camera, projection_mode);
-                if (projection_mode == vr::ecs::CameraProjectionMode::orthographic) {
-                    CameraSystem3D::SetOrthographicHeight(camera, 4.8F);
-                }
-            }
-
             const VkExtent2D extent = runtime.Swapchain().Extent();
             if (extent.width > 0U && extent.height > 0U) {
                 const float aspect_ratio = static_cast<float>(extent.width) /
@@ -467,26 +470,48 @@ int main() {
                 }
             }
 
+            // 透视旋转：引入 X/Y 轴旋转（而非只做屏幕内 Z 轴 roll）
+            // 这样字形平面会有“近大远小”的透视变化。
             TransformSystem3D::SetLocalRotationEulerXyz(transforms[rotating_title],
-                                                        0.0F,
-                                                        0.0F,
-                                                        0.30F + 0.55F * std::sin(time_seconds * 0.8F));
+                                                        0.22F * std::sin(time_seconds * 0.63F),
+                                                        1.05F * std::sin(time_seconds * 0.89F),
+                                                        0.18F + 0.20F * std::sin(time_seconds * 0.52F));
+            TransformSystem3D::SetLocalPosition(transforms[rotating_title],
+                                                vr::ecs::Float3{
+                                                    .x = -2.1F,
+                                                    .y = 1.25F,
+                                                    .z = 0.20F + 0.20F * std::sin(time_seconds * 0.61F)});
             TransformSystem3D::SetLocalPosition(transforms[billboard_subtitle],
                                                 vr::ecs::Float3{
                                                     .x = -2.3F,
                                                     .y = 0.62F + 0.15F * std::sin(time_seconds * 1.1F),
                                                     .z = 0.00F});
 
-            const float depth_front_z = 0.14F + 0.34F * std::sin(time_seconds * 0.9F);
+            const float depth_spin_phase = time_seconds * 1.45F;
+            const float depth_pair_x = -0.85F + 0.18F * std::sin(time_seconds * 0.52F);
+            const float depth_pair_y = -0.18F + 0.06F * std::cos(time_seconds * 0.77F);
+            const float depth_back_z = 0.50F + 0.28F * std::sin(time_seconds * 0.93F);
+            const float depth_front_z = 0.14F - 0.24F * std::sin(time_seconds * 0.93F);
+
+            TransformSystem3D::SetLocalPosition(transforms[depth_back],
+                                                vr::ecs::Float3{
+                                                    .x = depth_pair_x,
+                                                    .y = depth_pair_y,
+                                                    .z = depth_back_z});
+            TransformSystem3D::SetLocalRotationEulerXyz(transforms[depth_back],
+                                                        0.10F * std::sin(time_seconds * 0.70F),
+                                                        1.35F * std::sin(depth_spin_phase * 0.92F),
+                                                        -0.20F + 0.30F * std::sin(time_seconds * 0.44F));
+
             TransformSystem3D::SetLocalPosition(transforms[depth_front_write],
                                                 vr::ecs::Float3{
-                                                    .x = -1.72F,
-                                                    .y = -0.22F,
+                                                    .x = depth_pair_x,
+                                                    .y = depth_pair_y,
                                                     .z = depth_front_z});
             TransformSystem3D::SetLocalRotationEulerXyz(transforms[depth_front_write],
-                                                        0.0F,
-                                                        0.0F,
-                                                        0.10F + 0.20F * std::sin(time_seconds * 1.2F));
+                                                        -0.12F * std::sin(time_seconds * 0.77F),
+                                                        -1.55F * std::sin(depth_spin_phase * 1.06F),
+                                                        0.24F - 0.28F * std::sin(time_seconds * 0.49F));
 
             const std::uint8_t pulse =
                 static_cast<std::uint8_t>(120.0F + 120.0F * (0.5F + 0.5F * std::sin(time_seconds * 2.3F)));
@@ -495,6 +520,9 @@ int main() {
 
             TransformSystem3D::UpdateHierarchy(transforms.data(),
                                                static_cast<std::uint32_t>(transforms.size()));
+            (void)BoundsSystem3D::UpdateAligned(bounds.data(),
+                                                transforms.data(),
+                                                static_cast<std::uint32_t>(bounds.size()));
             CameraSystem3D::Update(camera, camera_transform);
 
             const char* projection_name =
@@ -505,7 +533,7 @@ int main() {
             char mode_text[240]{};
             std::snprintf(mode_text,
                           sizeof(mode_text),
-                          "Mode: %s | ReverseZ: %s | Font1:%s | Font2:%s",
+                          "Mode: %s | ReverseZ: %s | PerspectiveSpin:ON | Font1:%s | Font2:%s",
                           projection_name,
                           reverse_z_enabled ? "ON" : "OFF",
                           primary_name.c_str(),
@@ -529,14 +557,16 @@ int main() {
             char stats_text[240]{};
             std::snprintf(stats_text,
                           sizeof(stats_text),
-                          "FPS: %.1f Frame:%llu Draw:%u Batch:%u Inst:%u DT:%u DW:%u",
+                          "FPS: %.1f Frame:%llu Draw:%u Batch:%u Inst:%u DT:%u DW:%u C:%u/%u",
                           fps,
                           static_cast<unsigned long long>(frame_counter),
                           stats.draw_call_count,
                           stats.draw_batch_count,
                           stats.instance_count,
                           stats.depth_test_batch_count,
-                          stats.depth_write_batch_count);
+                          stats.depth_write_batch_count,
+                          stats.culling_visible_count,
+                          stats.culling_input_count);
             (void)TextSystem3D::SetText(components[runtime_stats], stats_text);
 
             SDL_Delay(8U);

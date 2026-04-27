@@ -1,6 +1,8 @@
 ﻿#pragma once
 
 #include "Center/Memory/Container/Vector/McVector.hpp"
+#include "vr/ecs/component/bounds_component.hpp"
+#include "vr/ecs/system/culling_system.hpp"
 #include "vr/ecs/system/text_render_3d_system.hpp"
 #include "vr/render/descriptor_host.hpp"
 #include "vr/render/pipeline_host.hpp"
@@ -59,7 +61,15 @@ struct TextRenderer3DStats {
     std::uint32_t skipped_draw_batch_count = 0U;
     std::uint32_t depth_pipeline_bind_count = 0U;
     std::uint32_t reverse_z_draw_call_count = 0U;
+    std::uint32_t culling_input_count = 0U;
+    std::uint32_t culling_visible_count = 0U;
+    std::uint32_t culling_culled_count = 0U;
+    std::uint32_t culling_mask_reject_count = 0U;
+    std::uint32_t culling_frustum_reject_count = 0U;
+    std::uint32_t culling_invalid_bounds_count = 0U;
+    std::uint32_t culling_plane_test_count = 0U;
     std::uint64_t uploaded_bytes = 0U;
+    bool used_bounds_culling = false;
 };
 
 class TextRenderer3D final {
@@ -80,7 +90,8 @@ public:
                       ecs::Transform<ecs::Dim3>* text_transforms_,
                       std::uint32_t component_count_,
                       ecs::Camera<ecs::Dim3>* camera_component_,
-                      ecs::Transform<ecs::Dim3>* camera_transform_) noexcept;
+                      ecs::Transform<ecs::Dim3>* camera_transform_,
+                      ecs::Bounds<ecs::Dim3>* bounds_components_ = nullptr) noexcept;
 
     void PrepareFrame(const render::RuntimePrepareContext& prepare_context_);
     void Record(const render::FrameRecordContext& record_context_);
@@ -145,7 +156,10 @@ private:
     [[nodiscard]] static std::size_t PipelineModeIndex(DepthPipelineMode mode_) noexcept;
     [[nodiscard]] static std::uint64_t ComputeTransformRevisionSignature(
         const ecs::Transform<ecs::Dim3>* transforms_,
-        std::uint32_t component_count_) noexcept;
+        std::uint32_t component_count_,
+        const std::uint32_t* candidate_component_indices_,
+        std::uint32_t candidate_component_count_,
+        bool use_candidate_indices_) noexcept;
     [[nodiscard]] static DepthPipelineMode ResolveDepthPipelineMode(const ecs::Text3DDrawBatch& batch_,
                                                                     bool use_depth_,
                                                                     bool reverse_z_) noexcept;
@@ -198,8 +212,11 @@ private:
     std::uint32_t component_count = 0U;
     ecs::Camera<ecs::Dim3>* camera_component = nullptr;
     ecs::Transform<ecs::Dim3>* camera_transform = nullptr;
+    ecs::Bounds<ecs::Dim3>* bounds_components = nullptr;
 
     ecs::TextRender3DScratch render_scratch{};
+    ecs::CullingScratch<ecs::Dim3> culling_scratch{};
+    ecs::CullingBuildStats culling_stats{};
     TextRenderer3DMcVector<PerFrameState> frame_states{};
     TextRenderer3DMcVector<std::uint8_t> image_initialized{};
 

@@ -203,6 +203,7 @@ void GeometryImageHost::UploadImage(VulkanContext& context_,
     stats.uploaded_bytes += upload_size_bytes;
     stats.image_count = static_cast<std::uint32_t>(images.size());
     stats.retired_image_count = static_cast<std::uint32_t>(retired_images.size());
+    ++stats.revision;
 }
 
 bool GeometryImageHost::RemoveImage(VulkanContext& context_,
@@ -230,6 +231,7 @@ bool GeometryImageHost::RemoveImage(VulkanContext& context_,
     ++stats.removed_image_count;
     stats.image_count = static_cast<std::uint32_t>(images.size());
     stats.retired_image_count = static_cast<std::uint32_t>(retired_images.size());
+    ++stats.revision;
     return true;
 }
 
@@ -375,4 +377,3 @@ void GeometryImageHost::RecordImageBarrier(render::UploadHost& upload_host_,
 }
 
 } // namespace vr::geometry
-

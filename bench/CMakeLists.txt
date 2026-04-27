@@ -2,6 +2,7 @@ set(VR_BENCH_TARGET vr_bench_runner)
 
 add_library(vr_bench_support STATIC
     support/bench_framework.cpp
+    support/bench_crash_tracer.cpp
 )
 
 target_include_directories(vr_bench_support
@@ -14,10 +15,26 @@ target_link_libraries(vr_bench_support
         vulkan_init
 )
 
+if(VR_BENCH_CRASH_TRACER_ENABLED)
+    target_link_libraries(vr_bench_support
+        PRIVATE
+            Center.Debug.CrashTracer
+    )
+    target_compile_definitions(vr_bench_support
+        PRIVATE
+            VR_BENCH_HAS_CRASH_TRACER=1
+    )
+endif()
+
 add_executable(${VR_BENCH_TARGET}
     bench_main.cpp
     cases/vulkan_types_bench.cpp
     cases/ecs_text_component_bench.cpp
+    cases/ecs_geometry_runtime_system_bench.cpp
+    cases/ecs_bounds_system_bench.cpp
+    cases/ecs_culling_system_bench.cpp
+    cases/ecs_surface_runtime_system_bench.cpp
+    cases/ecs_surface_upload_plan_system_bench.cpp
     cases/ecs_text_runtime_system_bench.cpp
     cases/freetype_host_bench.cpp
     cases/glyph_atlas_host_bench.cpp

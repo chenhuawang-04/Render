@@ -12,6 +12,10 @@
 #include <string>
 #include <utility>
 
+#if defined(_WIN32)
+#include <Windows.h>
+#endif
+
 namespace vr {
 
 namespace {
@@ -151,17 +155,22 @@ void PushUniqueCString(McVector<const char*>& values_, const char* candidate_) {
 
     std::string normalized{};
 #if defined(_WIN32)
-    char* value_buffer = nullptr;
-    std::size_t value_length = 0U;
-    const errno_t env_result = _dupenv_s(&value_buffer, &value_length, env_name_);
-    if (env_result != 0 || value_buffer == nullptr) {
-        if (value_buffer != nullptr) {
-            std::free(value_buffer);
-        }
+    const DWORD required_length = ::GetEnvironmentVariableA(env_name_, nullptr, 0U);
+    if (required_length == 0U) {
         return false;
     }
-    normalized.assign(value_buffer);
-    std::free(value_buffer);
+
+    McVector<char> value_buffer{};
+    value_buffer.resize(static_cast<std::size_t>(required_length) + 1U);
+    const DWORD copied_length = ::GetEnvironmentVariableA(
+        env_name_,
+        value_buffer.data(),
+        static_cast<DWORD>(value_buffer.size()));
+    if (copied_length == 0U ||
+        copied_length >= static_cast<DWORD>(value_buffer.size())) {
+        return false;
+    }
+    normalized.assign(value_buffer.data(), static_cast<std::size_t>(copied_length));
 #else
     const char* value = std::getenv(env_name_);
     if (value == nullptr) {

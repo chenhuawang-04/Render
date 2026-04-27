@@ -1,7 +1,9 @@
 #pragma once
 
 #include "Center/Memory/Container/Vector/McVector.hpp"
+#include "vr/ecs/component/bounds_component.hpp"
 #include "vr/ecs/component/camera_component.hpp"
+#include "vr/ecs/system/culling_system.hpp"
 #include "vr/ecs/system/geometry_runtime_system.hpp"
 #include "vr/geometry/geometry_image_host.hpp"
 #include "vr/geometry/geometry_material_host.hpp"
@@ -66,12 +68,23 @@ struct GeometryRenderer3DStats {
     std::uint32_t descriptor_set_bind_count = 0U;
     std::uint32_t descriptor_set_update_count = 0U;
     std::uint32_t material_push_constant_update_count = 0U;
+    std::uint32_t material_resolve_cache_hit_count = 0U;
+    std::uint32_t material_resolve_cache_miss_count = 0U;
     std::uint32_t material_set_count = 0U;
+    std::uint32_t material_resolve_cache_entry_count = 0U;
     std::uint32_t prewarmed_pipeline_count = 0U;
     std::uint32_t prepare_compiled_pipeline_count = 0U;
+    std::uint32_t culling_input_count = 0U;
+    std::uint32_t culling_visible_count = 0U;
+    std::uint32_t culling_culled_count = 0U;
+    std::uint32_t culling_mask_reject_count = 0U;
+    std::uint32_t culling_frustum_reject_count = 0U;
+    std::uint32_t culling_invalid_bounds_count = 0U;
+    std::uint32_t culling_plane_test_count = 0U;
     std::uint64_t uploaded_bytes = 0U;
     bool cache_reused = false;
     bool transform_only_update = false;
+    bool used_bounds_culling = false;
 };
 
 class GeometryRenderer3D final {
@@ -96,7 +109,8 @@ public:
                       ecs::Transform<ecs::Dim3>* transforms_,
                       std::uint32_t component_count_,
                       ecs::Camera<ecs::Dim3>* camera_component_,
-                      ecs::Transform<ecs::Dim3>* camera_transform_) noexcept;
+                      ecs::Transform<ecs::Dim3>* camera_transform_,
+                      ecs::Bounds<ecs::Dim3>* bounds_components_ = nullptr) noexcept;
 
     void PrepareFrame(const render::RuntimePrepareContext& prepare_context_);
     void Record(const render::FrameRecordContext& record_context_);
@@ -172,6 +186,17 @@ private:
         MaterialPushConstants material_push_constants{};
     };
 
+    struct ResolvedMaterialEntry final {
+        std::uint32_t material_id = 0U;
+        std::uint32_t material_revision = 0U;
+        std::uint32_t image_id = 0U;
+        std::uint32_t image_revision = 0U;
+        VkImageView image_view = VK_NULL_HANDLE;
+        VkImageLayout image_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+        VkSampler sampler = VK_NULL_HANDLE;
+        MaterialPushConstants material_push_constants{};
+    };
+
     [[nodiscard]] static bool IsDepthFormatSupported(VulkanContext& context_, VkFormat format_) noexcept;
     [[nodiscard]] static bool DepthFormatHasStencil(VkFormat format_) noexcept;
     [[nodiscard]] static VkImageAspectFlags DepthImageAspectMask(VkFormat format_) noexcept;
@@ -181,6 +206,9 @@ private:
     [[nodiscard]] static std::size_t CullModeIndex(CullMode mode_) noexcept;
     [[nodiscard]] static std::size_t LowerBoundMaterialSetIndex(
         const GeometryRenderer3DMcVector<MaterialSetEntry>& entries_,
+        std::uint32_t material_id_) noexcept;
+    [[nodiscard]] static std::size_t LowerBoundResolvedMaterialIndex(
+        const GeometryRenderer3DMcVector<ResolvedMaterialEntry>& entries_,
         std::uint32_t material_id_) noexcept;
     [[nodiscard]] static PipelineMode ResolvePipelineMode(const ecs::Geometry3DDrawBatch& batch_,
                                                           bool use_depth_) noexcept;
@@ -210,7 +238,13 @@ private:
     void EnsureMaterialPipelineObjects(VulkanContext& context_,
                                        render::DescriptorHost& descriptor_host_);
     void EnsureFallbackMaterialResources(VulkanContext& context_);
-    [[nodiscard]] MaterialPushConstants BuildMaterialPushConstants(std::uint32_t material_id_) const noexcept;
+    [[nodiscard]] static MaterialPushConstants BuildMaterialPushConstants(
+        const GeometryMaterialDesc* material_desc_) noexcept;
+    [[nodiscard]] bool ResolveMaterialBinding(std::uint32_t material_id_,
+                                              VkSampler& out_sampler_,
+                                              VkImageView& out_image_view_,
+                                              VkImageLayout& out_image_layout_,
+                                              MaterialPushConstants& out_material_push_constants_);
     [[nodiscard]] VkDescriptorSet AcquireMaterialDescriptorSet(std::uint32_t frame_index_,
                                                                std::uint32_t material_id_,
                                                                MaterialPushConstants* out_material_push_constants_ = nullptr);
@@ -238,9 +272,12 @@ private:
     std::uint32_t component_count = 0U;
     ecs::Camera<ecs::Dim3>* camera_component = nullptr;
     ecs::Transform<ecs::Dim3>* camera_transform = nullptr;
+    ecs::Bounds<ecs::Dim3>* bounds_components = nullptr;
 
     ecs::Geometry3DRuntimeScratch runtime_scratch{};
     ecs::Geometry3DRuntimeBuildStats runtime_stats{};
+    ecs::CullingScratch<ecs::Dim3> culling_scratch{};
+    ecs::CullingBuildStats culling_stats{};
 
     GeometryResourceHost* geometry_resource_host = nullptr;
     GeometryUploadHost* geometry_upload_host = nullptr;
@@ -271,6 +308,7 @@ private:
     GeometryRenderer3DMcVector<RetiredDepthImage> retired_depth_images{};
     GeometryRenderer3DMcVector<std::uint8_t> image_initialized{};
     GeometryRenderer3DMcVector<GeometryRenderer3DMcVector<MaterialSetEntry>> frame_material_sets{};
+    GeometryRenderer3DMcVector<ResolvedMaterialEntry> resolved_materials{};
     render::DescriptorMcVector<render::DescriptorImageWrite> descriptor_image_write_scratch{};
     render::DescriptorMcVector<render::DescriptorBufferWrite> descriptor_buffer_write_scratch{};
     render::DescriptorMcVector<render::DescriptorTexelBufferWrite> descriptor_texel_write_scratch{};
@@ -286,6 +324,8 @@ private:
 
     std::uint64_t last_submitted_value_seen = 0U;
     std::uint64_t completed_submit_value_seen = 0U;
+    std::uint32_t material_host_revision_seen = 0U;
+    std::uint32_t image_host_revision_seen = 0U;
     bool initialized = false;
 };
 

@@ -146,7 +146,8 @@ public:
                                                        text::GlyphAtlasHost& atlas_host_,
                                                        text::FreeTypeHost& freetype_host_,
                                                        TextRender3DScratch& scratch_,
-                                                       const TextRuntimeBuildConfig& build_config_ = {}) {
+                                                       const TextRuntimeBuildConfig& build_config_ = {},
+                                                       const TextRuntimeBuildHint& runtime_build_hint_ = {}) {
         TextRender3DBuildStats stats{};
 
         scratch_.instances.clear();
@@ -161,7 +162,8 @@ public:
                                                        atlas_host_,
                                                        freetype_host_,
                                                        scratch_.runtime_scratch,
-                                                       build_config_);
+                                                       build_config_,
+                                                       runtime_build_hint_);
 
         const TextRender3DBuildStats compose_stats = BuildFromRuntime(components_,
                                                                        transforms_,

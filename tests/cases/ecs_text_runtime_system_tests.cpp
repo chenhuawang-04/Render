@@ -301,4 +301,78 @@ VR_TEST_CASE(EcsTextRuntimeSystem_dim3_world_size_scales_glyph_geometry, "unit;c
     VR_CHECK(width_large / width_small > 1.5F);
 }
 
+VR_TEST_CASE(EcsTextRuntimeSystem_dim3_candidate_visibility_hint_limits_build_scope, "unit;core;ecs;text;runtime") {
+    const std::string font_path = FindTestFontPath();
+    if (font_path.empty()) {
+        VR_SKIP("No usable system font found for TextRuntimeSystem candidate visibility test.");
+    }
+
+    vr::text::FreeTypeHost freetype_host{};
+    freetype_host.Initialize();
+
+    vr::text::FontFaceCreateInfo face_create_info{};
+    face_create_info.file_path = font_path;
+    face_create_info.pixel_height = 24U;
+    const vr::text::FontFaceId base_face = freetype_host.RegisterFace(face_create_info);
+    VR_REQUIRE(base_face.IsValid());
+
+    vr::text::GlyphAtlasHost atlas_host{};
+    atlas_host.Initialize(freetype_host);
+    atlas_host.MapFont(21U, base_face);
+
+    using TextSystem3D = vr::ecs::TextSystem<vr::ecs::Dim3>;
+    std::array<vr::ecs::Text<vr::ecs::Dim3>, 3U> components{};
+    for (auto& component : components) {
+        TextSystem3D::Initialize(component);
+        TextSystem3D::SetRuntimeRoute(component, 21U, 3U, 0U, 0U);
+        TextSystem3D::SetWorldSize(component, 0.45F);
+    }
+    VR_REQUIRE(TextSystem3D::SetText(components[0U], "Candidate-A"));
+    VR_REQUIRE(TextSystem3D::SetText(components[1U], "Candidate-B"));
+    VR_REQUIRE(TextSystem3D::SetText(components[2U], "Candidate-C"));
+
+    vr::ecs::TextRuntimeScratch<vr::ecs::Dim3> scratch{};
+    const std::array<std::uint32_t, 2U> visible_indices{
+        0U,
+        2U
+    };
+    vr::ecs::TextRuntimeBuildHint build_hint{};
+    build_hint.visible_component_indices = visible_indices.data();
+    build_hint.visible_component_count = static_cast<std::uint32_t>(visible_indices.size());
+    build_hint.use_visible_component_indices = 1U;
+
+    const auto stats = vr::ecs::TextRuntimeSystem<vr::ecs::Dim3>::Build(components.data(),
+                                                                         static_cast<std::uint32_t>(components.size()),
+                                                                         atlas_host,
+                                                                         freetype_host,
+                                                                         scratch,
+                                                                         {},
+                                                                         build_hint);
+    VR_CHECK(stats.total_component_count == static_cast<std::uint32_t>(components.size()));
+    VR_CHECK(stats.candidate_component_count == 2U);
+    VR_CHECK(stats.used_visible_component_indices);
+    VR_CHECK(stats.visible_component_count == 2U);
+    VR_CHECK(stats.built_component_count == 2U);
+    VR_CHECK(stats.visible_set_signature != 0U);
+    VR_CHECK(components[0U].runtime.glyph_count > 0U);
+    VR_CHECK(components[2U].runtime.glyph_count > 0U);
+    VR_CHECK(components[1U].runtime.glyph_count == 0U);
+
+    vr::ecs::TextRuntimeBuildHint hinted_signature = build_hint;
+    hinted_signature.external_visible_set_signature = stats.visible_set_signature + 7U;
+    hinted_signature.use_external_visible_set_signature = 1U;
+    const auto stats_with_external_signature =
+        vr::ecs::TextRuntimeSystem<vr::ecs::Dim3>::Build(components.data(),
+                                                         static_cast<std::uint32_t>(components.size()),
+                                                         atlas_host,
+                                                         freetype_host,
+                                                         scratch,
+                                                         {},
+                                                         hinted_signature);
+    VR_CHECK(stats_with_external_signature.visible_set_signature_from_hint);
+    VR_CHECK(stats_with_external_signature.visible_set_signature ==
+             hinted_signature.external_visible_set_signature);
+    VR_CHECK(stats_with_external_signature.candidate_component_count == 2U);
+}
+
 } // namespace

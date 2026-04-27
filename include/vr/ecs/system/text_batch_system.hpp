@@ -23,9 +23,14 @@ struct TextBatchItem final {
 
 struct TextBatchBuildStats final {
     std::uint32_t total_count;
+    std::uint32_t scanned_count;
     std::uint32_t visible_count;
     std::uint32_t hidden_count;
     std::uint32_t empty_count;
+    std::uint32_t out_of_range_candidate_count;
+    std::uint8_t used_candidate_indices;
+    std::uint8_t reserved0;
+    std::uint16_t reserved1;
 };
 
 static_assert(PurePodComponent<TextBatchItem>);
@@ -70,40 +75,45 @@ public:
                                                                std::uint32_t component_count_,
                                                                ScratchType& scratch_,
                                                                bool build_ordered_indices_ = false) {
-        TextBatchBuildStats stats{};
-        stats.total_count = component_count_;
-        stats.visible_count = 0U;
-        stats.hidden_count = 0U;
-        stats.empty_count = 0U;
+        return BuildVisibleItemsInternal(components_,
+                                         component_count_,
+                                         nullptr,
+                                         0U,
+                                         false,
+                                         scratch_,
+                                         build_ordered_indices_);
+    }
 
-        scratch_.visible_items.clear();
-        scratch_.ordered_indices.clear();
+    [[nodiscard]] static TextBatchBuildStats BuildVisibleItemsFromCandidates(
+        const TextType* components_,
+        std::uint32_t component_count_,
+        const std::uint32_t* candidate_component_indices_,
+        std::uint32_t candidate_count_,
+        ScratchType& scratch_,
+        bool build_ordered_indices_ = false) {
+        return BuildVisibleItemsInternal(components_,
+                                         component_count_,
+                                         candidate_component_indices_,
+                                         candidate_count_,
+                                         true,
+                                         scratch_,
+                                         build_ordered_indices_);
+    }
 
-        if (components_ == nullptr || component_count_ == 0U) {
-            return stats;
+    [[nodiscard]] static TextBatchBuildStats BuildAndSort(const TextType* components_,
+                                                          std::uint32_t component_count_,
+                                                          ScratchType& scratch_,
+                                                          bool build_ordered_indices_ = true) {
+        TextBatchBuildStats stats = BuildVisibleItemsInternal(components_,
+                                                              component_count_,
+                                                              nullptr,
+                                                              0U,
+                                                              false,
+                                                              scratch_,
+                                                              false);
+        if (stats.visible_count > 1U) {
+            RadixSortBySortKey(scratch_);
         }
-
-        Reserve(scratch_, component_count_);
-
-        for (std::uint32_t i = 0U; i < component_count_; ++i) {
-            const TextType& component = components_[i];
-            if (component.text.size_bytes == 0U) {
-                ++stats.empty_count;
-                continue;
-            }
-            if (component.runtime.visible == 0U) {
-                ++stats.hidden_count;
-                continue;
-            }
-
-            scratch_.visible_items.emplace_back(TextBatchItem{
-                .sort_key = component.runtime.sort_key,
-                .component_index = i,
-                .reserved0 = 0U
-            });
-        }
-
-        stats.visible_count = static_cast<std::uint32_t>(scratch_.visible_items.size());
 
         if (build_ordered_indices_) {
             BuildOrderedIndices(scratch_);
@@ -111,14 +121,20 @@ public:
         return stats;
     }
 
-    [[nodiscard]] static TextBatchBuildStats BuildAndSort(const TextType* components_,
-                                                          std::uint32_t component_count_,
-                                                          ScratchType& scratch_,
-                                                          bool build_ordered_indices_ = true) {
-        TextBatchBuildStats stats = BuildVisibleItems(components_,
-                                                      component_count_,
-                                                      scratch_,
-                                                      false);
+    [[nodiscard]] static TextBatchBuildStats BuildAndSortFromCandidates(
+        const TextType* components_,
+        std::uint32_t component_count_,
+        const std::uint32_t* candidate_component_indices_,
+        std::uint32_t candidate_count_,
+        ScratchType& scratch_,
+        bool build_ordered_indices_ = true) {
+        TextBatchBuildStats stats = BuildVisibleItemsInternal(components_,
+                                                              component_count_,
+                                                              candidate_component_indices_,
+                                                              candidate_count_,
+                                                              true,
+                                                              scratch_,
+                                                              false);
         if (stats.visible_count > 1U) {
             RadixSortBySortKey(scratch_);
         }
@@ -209,6 +225,89 @@ public:
     }
 
 private:
+    [[nodiscard]] static TextBatchBuildStats BuildVisibleItemsInternal(
+        const TextType* components_,
+        std::uint32_t component_count_,
+        const std::uint32_t* candidate_component_indices_,
+        std::uint32_t candidate_count_,
+        bool use_candidate_indices_,
+        ScratchType& scratch_,
+        bool build_ordered_indices_) {
+        TextBatchBuildStats stats{};
+        stats.total_count = component_count_;
+        stats.scanned_count = use_candidate_indices_ ? candidate_count_ : component_count_;
+        stats.visible_count = 0U;
+        stats.hidden_count = 0U;
+        stats.empty_count = 0U;
+        stats.out_of_range_candidate_count = 0U;
+        stats.used_candidate_indices = use_candidate_indices_ ? 1U : 0U;
+        stats.reserved0 = 0U;
+        stats.reserved1 = 0U;
+
+        scratch_.visible_items.clear();
+        scratch_.ordered_indices.clear();
+
+        if (components_ == nullptr || component_count_ == 0U) {
+            return stats;
+        }
+
+        Reserve(scratch_, component_count_);
+
+        if (use_candidate_indices_) {
+            if (candidate_component_indices_ == nullptr) {
+                stats.out_of_range_candidate_count = candidate_count_;
+            } else {
+                for (std::uint32_t i = 0U; i < candidate_count_; ++i) {
+                    const std::uint32_t component_index = candidate_component_indices_[i];
+                    if (component_index >= component_count_) {
+                        ++stats.out_of_range_candidate_count;
+                        continue;
+                    }
+
+                    const TextType& component = components_[component_index];
+                    if (component.text.size_bytes == 0U) {
+                        ++stats.empty_count;
+                        continue;
+                    }
+                    if (component.runtime.visible == 0U) {
+                        ++stats.hidden_count;
+                        continue;
+                    }
+
+                    scratch_.visible_items.emplace_back(TextBatchItem{
+                        .sort_key = component.runtime.sort_key,
+                        .component_index = component_index,
+                        .reserved0 = 0U
+                    });
+                }
+            }
+        } else {
+            for (std::uint32_t i = 0U; i < component_count_; ++i) {
+                const TextType& component = components_[i];
+                if (component.text.size_bytes == 0U) {
+                    ++stats.empty_count;
+                    continue;
+                }
+                if (component.runtime.visible == 0U) {
+                    ++stats.hidden_count;
+                    continue;
+                }
+
+                scratch_.visible_items.emplace_back(TextBatchItem{
+                    .sort_key = component.runtime.sort_key,
+                    .component_index = i,
+                    .reserved0 = 0U
+                });
+            }
+        }
+
+        stats.visible_count = static_cast<std::uint32_t>(scratch_.visible_items.size());
+        if (build_ordered_indices_) {
+            BuildOrderedIndices(scratch_);
+        }
+        return stats;
+    }
+
     static void BuildOrderedIndices(ScratchType& scratch_) {
         const std::uint32_t count = static_cast<std::uint32_t>(scratch_.visible_items.size());
         scratch_.ordered_indices.resize(count);

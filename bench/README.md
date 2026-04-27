@@ -1,14 +1,12 @@
-# VulkanRender_New Benchmark 框架说明
+# VulkanRender_New Bench 框架说明
 
 ## 目标
 
-`bench/` 提供一个**轻量、可扩展、可脚本化**的 benchmark runner，用于评估 CPU 热路径与渲染框架关键逻辑。
+`bench/` 提供一套轻量、可扩展、可脚本化的 Benchmark Runner，用于：
 
-设计重点：
-
-- 低耦合：注册机制 + 独立 runner；
-- 可扩展：标签、过滤、自动校准、JSON 报告；
-- 可维护：统计和执行流程清晰分层。
+- 追踪 CPU 热路径性能
+- 做基线对比（baseline compare）
+- 在 CI 中启用性能回退门禁
 
 ---
 
@@ -19,6 +17,8 @@ bench/
   support/
     bench_framework.hpp
     bench_framework.cpp
+    bench_crash_tracer.hpp
+    bench_crash_tracer.cpp
   cases/
     *.cpp
   bench_main.cpp
@@ -29,49 +29,12 @@ bench/
 
 ## 核心能力
 
-- `VR_BENCHMARK_CASE(name, "tag1;tag2")`：静态注册
-- `BenchmarkContext`：
-  - `Iterations()`
-  - `AddItems(n)`
-  - `AddBytes(n)`
-  - `DoNotOptimize(value)`
-  - `ClobberMemory()`
-- `VR_BENCH_SKIP(reason)`：在环境不满足时跳过
-- CLI：
-  - `--filter <pattern>`
-  - `--include-tag <tag>`
-  - `--exclude-tag <tag>`
-  - `--iterations <n>`（0 表示自动校准）
-  - `--warmup <n>`
-  - `--runs <n>`
-  - `--min-duration-ms <n>`
-  - `--baseline-json <path>`
-  - `--fail-on-regression-percent <n>`
-  - `--require-baseline-match`
-  - `--fail-on-empty-selection`
-  - `--report-json <path>`
-- 统计项：
-  - `min / max / mean / median / p95 / stddev`
-  - `items/s`
-  - `bytes/s`
-
----
-
-## 新增 benchmark
-
-1. 在 `bench/cases/` 新建 `xxx_bench.cpp`
-2. 包含头文件：
-
-```cpp
-#include "support/bench_framework.hpp"
-```
-
-3. 添加用例：
+### 1) 用例注册
 
 ```cpp
 VR_BENCHMARK_CASE(MyHotPath, "core;cpu") {
-    std::uint64_t sum = 0;
-    for (std::uint64_t i = 0; i < bench_context_.Iterations(); ++i) {
+    std::uint64_t sum = 0U;
+    for (std::uint64_t i = 0U; i < bench_context_.Iterations(); ++i) {
         sum += i;
     }
     bench_context_.AddItems(bench_context_.Iterations());
@@ -79,45 +42,103 @@ VR_BENCHMARK_CASE(MyHotPath, "core;cpu") {
 }
 ```
 
-4. 在 `bench/CMakeLists.txt` 将该文件加入 `vr_bench_runner` 源列表
+### 2) 统计指标
+
+- 时延：`min / max / mean / median / p95 / stddev`（ms）
+- 归一化时延：`min/max/mean/median/p95/stddev_ns_per_iteration`
+- 吞吐：`items_per_second`、`bytes_per_second`
+
+> 推荐对比时优先看 `mean_ns_per_iteration`，可避免 auto-calibrate 导致的“迭代数不同”误判。
+
+### 3) 基线回归比较
+
+支持按以下 metric 做回归判定：
+
+- `mean_ns_per_iteration`（默认，推荐）
+- `mean_ms`
+- `items_per_second`
+- `bytes_per_second`
+
+其中：
+
+- 时延类（`mean_ns_per_iteration` / `mean_ms`）为 **越小越好**
+- 吞吐类（`items_per_second` / `bytes_per_second`）为 **越大越好**
+
+---
+
+## CLI
+
+```text
+--help, -h
+--list
+--filter <pattern>
+--include-tag <tag>
+--exclude-tag <tag>
+--iterations <n>                 # 0 = auto calibrate
+--min-iterations <n>             # auto-calibrate 下迭代次数下限，默认 8
+--warmup <n>
+--runs <n>
+--min-duration-ms <n>
+--baseline-json <path>
+--baseline-metric <name>         # mean_ns_per_iteration (default) / mean_ms / items_per_second / bytes_per_second
+--fail-on-regression-percent <n>
+--require-baseline-match
+--fail-on-empty-selection
+--report-json <path>
+--verbose
+```
 
 ---
 
 ## 常用命令
 
 ```powershell
-# 列出 benchmark
+# 列出所有 benchmark
 .\build\bench\vr_bench_runner.exe --list
 
-# 跑某一类 benchmark
-.\build\bench\vr_bench_runner.exe --filter FrameSync --runs 5 --warmup 1 --min-duration-ms 10
+# 跑指定用例
+.\build\bench\vr_bench_runner.exe --filter EcsGeometryRuntimeSystem --runs 9 --warmup 2 --min-duration-ms 40
 
-# 固定迭代次数
-.\build\bench\vr_bench_runner.exe --iterations 1000000 --runs 7
+# Auto calibrate 但至少 64 iterations（降低小迭代噪声）
+.\build\bench\vr_bench_runner.exe --filter EcsGeometryRuntimeSystem --min-iterations 64 --runs 9 --warmup 2
 
-# 输出 JSON 报告
-.\build\bench\vr_bench_runner.exe --report-json .\build\reports\bench.json
+# 固定迭代（做严格 A/B 对比）
+.\build\bench\vr_bench_runner.exe --filter EcsGeometryRuntimeSystem --iterations 512 --runs 9 --warmup 2
 
-# 以历史结果作为 baseline，超过 8% 性能回退则失败
+# 输出报告
+.\build\bench\vr_bench_runner.exe --filter EcsGeometryRuntimeSystem --report-json .\bench\baselines\report.json
+
+# 与 baseline 做门禁（推荐按 ns/iter）
 .\build\bench\vr_bench_runner.exe `
-  --baseline-json .\build\reports\bench_prev.json `
+  --filter EcsGeometryRuntimeSystem `
+  --baseline-json .\bench\baselines\baseline.json `
+  --baseline-metric mean_ns_per_iteration `
   --fail-on-regression-percent 8 `
-  --report-json .\build\reports\bench_now.json
-
-# 通过 CTest 运行 benchmark smoke
-ctest --test-dir build -L bench --output-on-failure
+  --report-json .\bench\baselines\current.json
 ```
 
 ---
 
-## 回归门禁建议
+## CI 建议
 
-推荐 CI 两阶段：
+建议分两步：
 
-1. 固定环境生成 baseline（例如每个主分支 release tag）
-2. PR/变更分支运行：
-   - `--baseline-json`
-   - `--fail-on-regression-percent 5~10`
-   - `--require-baseline-match`（保证关键 case 不被漏跑）
+1. 固定机器/驱动/电源策略，生成并提交 baseline
+2. PR 上做对比并设门禁
 
-这样可以把 benchmark 从“观察工具”升级成“可自动拦截性能退化的门禁”。  
+推荐参数：
+
+- `--baseline-metric mean_ns_per_iteration`
+- `--fail-on-regression-percent 5~10`
+- `--require-baseline-match`
+
+---
+
+## 一键脚本（推荐）
+
+仓库已提供脚本：
+
+- `scripts/bench/new_golden_baseline.ps1`：生成黄金基线
+- `scripts/bench/run_bench_gate.ps1`：执行性能门禁
+
+详见：`scripts/bench/README.md`

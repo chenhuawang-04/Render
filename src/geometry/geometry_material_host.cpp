@@ -55,6 +55,7 @@ void GeometryMaterialHost::UpsertMaterial(const GeometryMaterialDesc& desc_) {
     }
 
     stats.material_count = static_cast<std::uint32_t>(materials.size());
+    ++stats.revision;
 }
 
 bool GeometryMaterialHost::RemoveMaterial(std::uint32_t material_id_) noexcept {
@@ -71,6 +72,7 @@ bool GeometryMaterialHost::RemoveMaterial(std::uint32_t material_id_) noexcept {
     materials.erase(materials.begin() + static_cast<std::ptrdiff_t>(lower_bound_index));
     ++stats.removed_material_count;
     stats.material_count = static_cast<std::uint32_t>(materials.size());
+    ++stats.revision;
     return true;
 }
 
@@ -115,4 +117,3 @@ std::size_t GeometryMaterialHost::LowerBoundMaterialIndex(std::uint32_t material
 }
 
 } // namespace vr::geometry
-

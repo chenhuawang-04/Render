@@ -42,6 +42,7 @@ struct GeometryImageHostStats {
     std::uint32_t removed_image_count = 0U;
     std::uint32_t retired_image_count = 0U;
     std::uint32_t barrier_count = 0U;
+    std::uint32_t revision = 0U;
     std::uint64_t uploaded_bytes = 0U;
 };
 
@@ -131,4 +132,3 @@ private:
 };
 
 } // namespace vr::geometry
-

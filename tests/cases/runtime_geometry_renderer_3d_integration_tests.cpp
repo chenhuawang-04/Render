@@ -1,4 +1,5 @@
 #include "support/test_framework.hpp"
+#include "vr/ecs/system/bounds_system.hpp"
 #include "vr/ecs/system/camera_system.hpp"
 #include "vr/ecs/system/geometry_system.hpp"
 #include "vr/ecs/system/transform_system.hpp"
@@ -19,6 +20,8 @@
 namespace {
 
 using Runtime = vr::render::RenderRuntimeHost<vr::platform::ActiveBackendTag, 2U>;
+using Bounds3D = vr::ecs::Bounds<vr::ecs::Dim3>;
+using BoundsSystem3D = vr::ecs::BoundsSystem<vr::ecs::Dim3>;
 using Geometry3D = vr::ecs::Geometry<vr::ecs::Dim3>;
 using GeometrySystem3D = vr::ecs::GeometrySystem<vr::ecs::Dim3>;
 using Transform3D = vr::ecs::Transform<vr::ecs::Dim3>;
@@ -171,6 +174,17 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_end_to_end_smoke, "integrat
     TransformSystem3D::SetLocalScale(transforms[1U], vr::ecs::Float3{.x = 1.5F, .y = 1.5F, .z = 1.0F});
     TransformSystem3D::UpdateHierarchy(transforms.data(), static_cast<std::uint32_t>(transforms.size()));
 
+    std::array<Bounds3D, 2U> bounds_components{};
+    for (std::uint32_t i = 0U; i < bounds_components.size(); ++i) {
+        BoundsSystem3D::Initialize(bounds_components[i]);
+        BoundsSystem3D::SetLocalAabb(bounds_components[i],
+                                     vr::ecs::Float3{.x = -0.5F, .y = -0.5F, .z = -0.05F},
+                                     vr::ecs::Float3{.x = 0.5F, .y = 0.5F, .z = 0.05F});
+    }
+    (void)BoundsSystem3D::UpdateAligned(bounds_components.data(),
+                                        transforms.data(),
+                                        static_cast<std::uint32_t>(bounds_components.size()));
+
     Camera3D camera{};
     CameraSystem3D::Initialize(camera);
     CameraSystem3D::SetAspectRatio(camera, 1280.0F / 720.0F);
@@ -320,7 +334,8 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_end_to_end_smoke, "integrat
                                        transforms.data(),
                                        static_cast<std::uint32_t>(geometry_components.size()),
                                        &camera,
-                                       &camera_transform);
+                                       &camera_transform,
+                                       bounds_components.data());
 
         std::uint32_t submitted_frames = 0U;
         std::uint32_t max_draw_calls = 0U;
@@ -331,6 +346,9 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_end_to_end_smoke, "integrat
         std::uint32_t max_descriptor_updates = 0U;
         std::uint32_t max_material_push_constant_updates = 0U;
         std::uint32_t max_material_sets = 0U;
+        std::uint32_t max_culling_input_count = 0U;
+        std::uint32_t max_culling_visible_count = 0U;
+        bool observed_bounds_culling = false;
 
         constexpr std::uint32_t max_ticks = 16U;
         for (std::uint32_t tick_index = 0U;
@@ -346,6 +364,9 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_end_to_end_smoke, "integrat
                                                          0.0F);
             TransformSystem3D::UpdateHierarchy(transforms.data(),
                                                static_cast<std::uint32_t>(transforms.size()));
+            (void)BoundsSystem3D::UpdateAligned(bounds_components.data(),
+                                                transforms.data(),
+                                                static_cast<std::uint32_t>(bounds_components.size()));
             CameraSystem3D::Update(camera, camera_transform);
 
             const Runtime::RuntimeTickResult tick_result = runtime.Tick(geometry_renderer);
@@ -364,6 +385,9 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_end_to_end_smoke, "integrat
             max_material_push_constant_updates = std::max(max_material_push_constant_updates,
                                                           renderer_stats.material_push_constant_update_count);
             max_material_sets = std::max(max_material_sets, renderer_stats.material_set_count);
+            max_culling_input_count = std::max(max_culling_input_count, renderer_stats.culling_input_count);
+            max_culling_visible_count = std::max(max_culling_visible_count, renderer_stats.culling_visible_count);
+            observed_bounds_culling = observed_bounds_culling || renderer_stats.used_bounds_culling;
             SDL_Delay(1U);
         }
 
@@ -376,6 +400,9 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_end_to_end_smoke, "integrat
         VR_CHECK(max_descriptor_updates > 0U);
         VR_CHECK(max_material_push_constant_updates > 0U);
         VR_CHECK(max_material_sets > 0U);
+        VR_CHECK(observed_bounds_culling);
+        VR_CHECK(max_culling_input_count == static_cast<std::uint32_t>(geometry_components.size()));
+        VR_CHECK(max_culling_visible_count > 0U);
         VR_CHECK(geometry_resource_host.Stats().mesh_count > 0U);
         VR_CHECK(geometry_resource_host.Stats().reused_vertex_buffer_count > 0U);
         VR_CHECK(geometry_resource_host.Stats().reused_index_buffer_count > 0U);

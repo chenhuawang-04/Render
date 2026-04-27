@@ -22,6 +22,11 @@ add_executable(${VR_TEST_TARGET}
     cases/ecs_geometry_batch_system_tests.cpp
     cases/ecs_geometry_runtime_system_tests.cpp
     cases/ecs_text_component_tests.cpp
+    cases/ecs_surface_component_tests.cpp
+    cases/ecs_bounds_system_tests.cpp
+    cases/ecs_culling_system_tests.cpp
+    cases/ecs_surface_batch_runtime_system_tests.cpp
+    cases/ecs_surface_upload_plan_system_tests.cpp
     cases/ecs_transform_camera_system_tests.cpp
     cases/ecs_text_render_3d_system_tests.cpp
     cases/ecs_text_runtime_system_tests.cpp
@@ -33,6 +38,8 @@ add_executable(${VR_TEST_TARGET}
     cases/runtime_text_renderer_3d_integration_tests.cpp
     cases/runtime_geometry_material_host_tests.cpp
     cases/runtime_geometry_image_host_integration_tests.cpp
+    cases/surface_upload_host_policy_tests.cpp
+    cases/runtime_surface_upload_host_integration_tests.cpp
     cases/runtime_geometry_renderer_2d_integration_tests.cpp
     cases/runtime_geometry_renderer_3d_integration_tests.cpp
 )

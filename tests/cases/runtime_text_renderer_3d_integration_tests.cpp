@@ -1,4 +1,5 @@
 #include "support/test_framework.hpp"
+#include "vr/ecs/system/bounds_system.hpp"
 #include "vr/ecs/system/camera_system.hpp"
 #include "vr/ecs/system/text_system.hpp"
 #include "vr/ecs/system/transform_system.hpp"
@@ -23,6 +24,8 @@ using Text3D = vr::ecs::Text<vr::ecs::Dim3>;
 using TextSystem3D = vr::ecs::TextSystem<vr::ecs::Dim3>;
 using Transform3D = vr::ecs::Transform<vr::ecs::Dim3>;
 using TransformSystem3D = vr::ecs::TransformSystem<vr::ecs::Dim3>;
+using Bounds3D = vr::ecs::Bounds<vr::ecs::Dim3>;
+using BoundsSystem3D = vr::ecs::BoundsSystem<vr::ecs::Dim3>;
 using Camera3D = vr::ecs::Camera<vr::ecs::Dim3>;
 using CameraSystem3D = vr::ecs::CameraSystem<vr::ecs::Dim3>;
 
@@ -138,6 +141,11 @@ VR_TEST_CASE(RuntimeIntegration_text_renderer_3d_end_to_end_smoke, "integration;
         TransformSystem3D::Initialize(transform);
     }
 
+    std::array<Bounds3D, 3U> bounds_components{};
+    for (auto& bounds : bounds_components) {
+        BoundsSystem3D::Initialize(bounds);
+    }
+
     TransformSystem3D::SetLocalPosition(text_transforms[0U],
                                         vr::ecs::Float3{.x = -1.25F, .y = 0.4F, .z = 0.0F});
     TransformSystem3D::SetLocalRotationEulerXyz(text_transforms[0U],
@@ -157,8 +165,21 @@ VR_TEST_CASE(RuntimeIntegration_text_renderer_3d_end_to_end_smoke, "integration;
     TransformSystem3D::SetLocalScale(text_transforms[2U],
                                      vr::ecs::Float3{.x = 1.0F, .y = 1.0F, .z = 1.0F});
 
+    BoundsSystem3D::SetLocalCenterExtents(bounds_components[0U],
+                                          vr::ecs::Float3{.x = 0.0F, .y = 0.0F, .z = 0.0F},
+                                          vr::ecs::Float3{.x = 2.4F, .y = 0.6F, .z = 0.12F});
+    BoundsSystem3D::SetLocalCenterExtents(bounds_components[1U],
+                                          vr::ecs::Float3{.x = 0.0F, .y = 0.0F, .z = 0.0F},
+                                          vr::ecs::Float3{.x = 2.9F, .y = 0.6F, .z = 0.12F});
+    BoundsSystem3D::SetLocalCenterExtents(bounds_components[2U],
+                                          vr::ecs::Float3{.x = 0.0F, .y = 0.0F, .z = 0.0F},
+                                          vr::ecs::Float3{.x = 1.4F, .y = 0.55F, .z = 0.12F});
+
     TransformSystem3D::UpdateHierarchy(text_transforms.data(),
                                        static_cast<std::uint32_t>(text_transforms.size()));
+    (void)BoundsSystem3D::UpdateAligned(bounds_components.data(),
+                                        text_transforms.data(),
+                                        static_cast<std::uint32_t>(bounds_components.size()));
 
     Camera3D camera{};
     CameraSystem3D::Initialize(camera);
@@ -216,7 +237,8 @@ VR_TEST_CASE(RuntimeIntegration_text_renderer_3d_end_to_end_smoke, "integration;
                                    text_transforms.data(),
                                    static_cast<std::uint32_t>(text_components.size()),
                                    &camera,
-                                   &camera_transform);
+                                   &camera_transform,
+                                   bounds_components.data());
 
         std::uint32_t submitted_frames = 0U;
         std::uint32_t max_instance_count = 0U;
@@ -225,6 +247,9 @@ VR_TEST_CASE(RuntimeIntegration_text_renderer_3d_end_to_end_smoke, "integration;
         std::uint32_t max_billboard_instances = 0U;
         std::uint32_t max_depth_test_batches = 0U;
         std::uint32_t max_depth_write_batches = 0U;
+        std::uint32_t max_culling_input_count = 0U;
+        std::uint32_t max_culling_visible_count = 0U;
+        bool observed_bounds_culling = false;
 
         constexpr std::uint32_t max_ticks = 18U;
         for (std::uint32_t tick_index = 0U;
@@ -240,6 +265,9 @@ VR_TEST_CASE(RuntimeIntegration_text_renderer_3d_end_to_end_smoke, "integration;
                                                          0.35F + 0.015F * static_cast<float>(tick_index));
             TransformSystem3D::UpdateHierarchy(text_transforms.data(),
                                                static_cast<std::uint32_t>(text_transforms.size()));
+            (void)BoundsSystem3D::UpdateAligned(bounds_components.data(),
+                                                text_transforms.data(),
+                                                static_cast<std::uint32_t>(bounds_components.size()));
 
             const Runtime::RuntimeTickResult tick_result = runtime.Tick(text_renderer);
             if (tick_result.render.code == vr::render::TickCode::Submitted ||
@@ -254,6 +282,9 @@ VR_TEST_CASE(RuntimeIntegration_text_renderer_3d_end_to_end_smoke, "integration;
             max_billboard_instances = std::max(max_billboard_instances, stats.billboard_instance_count);
             max_depth_test_batches = std::max(max_depth_test_batches, stats.depth_test_batch_count);
             max_depth_write_batches = std::max(max_depth_write_batches, stats.depth_write_batch_count);
+            max_culling_input_count = std::max(max_culling_input_count, stats.culling_input_count);
+            max_culling_visible_count = std::max(max_culling_visible_count, stats.culling_visible_count);
+            observed_bounds_culling = observed_bounds_culling || stats.used_bounds_culling;
             VR_CHECK(stats.descriptor_set_update_count <= stats.draw_batch_count);
             VR_CHECK(stats.descriptor_set_bind_count <= stats.draw_call_count);
 
@@ -267,6 +298,9 @@ VR_TEST_CASE(RuntimeIntegration_text_renderer_3d_end_to_end_smoke, "integration;
         VR_CHECK(max_billboard_instances > 0U);
         VR_CHECK(max_depth_test_batches > 0U);
         VR_CHECK(max_depth_write_batches > 0U);
+        VR_CHECK(observed_bounds_culling);
+        VR_CHECK(max_culling_input_count == static_cast<std::uint32_t>(text_components.size()));
+        VR_CHECK(max_culling_visible_count > 0U);
         VR_CHECK(runtime.GlyphUpload().Stats().uploaded_rect_count > 0U);
 
         text_renderer.Shutdown(runtime.Context());

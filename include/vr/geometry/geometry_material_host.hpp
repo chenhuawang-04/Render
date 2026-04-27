@@ -35,6 +35,7 @@ struct GeometryMaterialHostStats {
     std::uint32_t added_material_count = 0U;
     std::uint32_t updated_material_count = 0U;
     std::uint32_t removed_material_count = 0U;
+    std::uint32_t revision = 0U;
 };
 
 class GeometryMaterialHost final {

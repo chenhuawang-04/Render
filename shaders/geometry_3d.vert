@@ -15,10 +15,6 @@ layout(location = 9) in uint in_instance_params;
 layout(push_constant) uniform Geometry3DPushConstants {
     mat4 view_projection;
     vec4 light_direction_intensity;
-    vec4 material_uv_transform;
-    uint material_flags;
-    float alpha_cutoff;
-    vec2 material_reserved;
 } pc;
 
 layout(location = 0) out vec3 out_normal_world;

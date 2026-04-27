@@ -168,9 +168,12 @@ VR_TEST_CASE(EcsTextBatchSystem_dim2_build_sort_and_group, "unit;core;ecs;text;b
                                                     true);
 
     VR_CHECK(stats.total_count == static_cast<std::uint32_t>(components.size()));
+    VR_CHECK(stats.scanned_count == static_cast<std::uint32_t>(components.size()));
     VR_CHECK(stats.visible_count == 4U);
     VR_CHECK(stats.hidden_count == 1U);
     VR_CHECK(stats.empty_count == 1U);
+    VR_CHECK(stats.out_of_range_candidate_count == 0U);
+    VR_CHECK(stats.used_candidate_indices == 0U);
 
     VR_CHECK(BatchSystem2D::OrderedIndexCount(scratch) == 4U);
     const std::uint32_t* indices = BatchSystem2D::OrderedIndices(scratch);
@@ -257,6 +260,41 @@ VR_TEST_CASE(EcsTextBatchSystem_dim3_binding_key_ignores_depth_and_batch, "unit;
 
     VR_CHECK(binding_group_count == 1U);
     VR_CHECK(grouped_items == 3U);
+}
+
+VR_TEST_CASE(EcsTextBatchSystem_dim3_candidate_indices_filter_and_oob, "unit;core;ecs;text;batch") {
+    using Text3D = vr::ecs::Text<vr::ecs::Dim3>;
+    using TextSystem3D = vr::ecs::TextSystem<vr::ecs::Dim3>;
+    using BatchSystem3D = vr::ecs::TextBatchSystem<vr::ecs::Dim3>;
+
+    std::array<Text3D, 5U> components{};
+    for (auto& component : components) {
+        TextSystem3D::Initialize(component);
+        TextSystem3D::SetRuntimeRoute(component, 2U, 5U, 1U, 0U);
+        VR_REQUIRE(TextSystem3D::SetText(component, "Text"));
+    }
+    TextSystem3D::SetVisible(components[1U], false);
+    TextSystem3D::ClearText(components[3U]);
+
+    const std::array<std::uint32_t, 6U> candidates{
+        4U, 1U, 99U, 3U, 0U, 2U
+    };
+
+    vr::ecs::TextBatchScratch<vr::ecs::Dim3> scratch{};
+    const auto stats = BatchSystem3D::BuildAndSortFromCandidates(components.data(),
+                                                                  static_cast<std::uint32_t>(components.size()),
+                                                                  candidates.data(),
+                                                                  static_cast<std::uint32_t>(candidates.size()),
+                                                                  scratch,
+                                                                  true);
+    VR_CHECK(stats.total_count == static_cast<std::uint32_t>(components.size()));
+    VR_CHECK(stats.scanned_count == static_cast<std::uint32_t>(candidates.size()));
+    VR_CHECK(stats.visible_count == 3U);
+    VR_CHECK(stats.hidden_count == 1U);
+    VR_CHECK(stats.empty_count == 1U);
+    VR_CHECK(stats.out_of_range_candidate_count == 1U);
+    VR_CHECK(stats.used_candidate_indices == 1U);
+    VR_CHECK(BatchSystem3D::OrderedIndexCount(scratch) == 3U);
 }
 
 VR_TEST_CASE(EcsTextComponent_dimension_meta_matches_expectation, "unit;core;ecs;text") {

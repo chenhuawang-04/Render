@@ -5,6 +5,7 @@
 #include "vr/ecs/system/geometry_system.hpp"
 
 #include <array>
+#include <cstdint>
 
 namespace {
 
@@ -136,5 +137,46 @@ VR_TEST_CASE(EcsGeometryBatchSystem_dim3_depth_bin_affects_binding, "unit;core;e
     VR_CHECK(grouped_item_count == stats.visible_count);
 }
 
-} // namespace
+VR_TEST_CASE(EcsGeometryBatchSystem_dim3_candidate_scan_preserves_candidate_order_before_sort,
+             "unit;core;ecs;geometry;batch") {
+    using Geometry3D = vr::ecs::Geometry<vr::ecs::Dim3>;
+    using GeometrySystem3D = vr::ecs::GeometrySystem<vr::ecs::Dim3>;
+    using MeshSystem = vr::ecs::GeometryMeshSystem;
+    using BatchSystem = vr::ecs::GeometryBatchSystem<vr::ecs::Dim3>;
 
+    std::array<Geometry3D, 5U> components{};
+    for (std::uint32_t i = 0U; i < components.size(); ++i) {
+        MeshSystem::Initialize(components[i]);
+        MeshSystem::SetMeshRoute(components[i], 12U, 0U, 0U);
+        GeometrySystem3D::SetMaterialId(components[i], 10U + i);
+    }
+    GeometrySystem3D::SetVisible(components[2U], false);
+
+    const std::uint32_t candidates[6U] = {4U, 2U, 1U, 99U, 1U, 0U};
+
+    vr::ecs::GeometryBatchScratch<vr::ecs::Dim3> scratch{};
+    const auto stats = BatchSystem::BuildAndSortFromCandidates(components.data(),
+                                                                static_cast<std::uint32_t>(components.size()),
+                                                                candidates,
+                                                                6U,
+                                                                scratch,
+                                                                true);
+    VR_CHECK(stats.total_count == static_cast<std::uint32_t>(components.size()));
+    VR_CHECK(stats.scanned_count == 6U);
+    VR_CHECK(stats.used_candidate_indices == 1U);
+    VR_CHECK(stats.hidden_count == 1U);
+    VR_CHECK(stats.empty_count == 0U);
+    VR_CHECK(stats.out_of_range_candidate_count == 1U);
+    VR_CHECK(stats.visible_count == 4U);
+
+    const std::uint32_t* indices = BatchSystem::OrderedIndices(scratch);
+    VR_REQUIRE(indices != nullptr);
+    VR_CHECK(BatchSystem::OrderedIndexCount(scratch) == 4U);
+    // sorted by sort_key (material id ascending): 0,1,1,4
+    VR_CHECK(indices[0U] == 0U);
+    VR_CHECK(indices[1U] == 1U);
+    VR_CHECK(indices[2U] == 1U);
+    VR_CHECK(indices[3U] == 4U);
+}
+
+} // namespace

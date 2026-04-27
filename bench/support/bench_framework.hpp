@@ -28,6 +28,12 @@ struct BenchmarkMetrics {
     double median_ms = 0.0;
     double p95_ms = 0.0;
     double stddev_ms = 0.0;
+    double min_ns_per_iteration = 0.0;
+    double max_ns_per_iteration = 0.0;
+    double mean_ns_per_iteration = 0.0;
+    double median_ns_per_iteration = 0.0;
+    double p95_ns_per_iteration = 0.0;
+    double stddev_ns_per_iteration = 0.0;
     double items_per_second = 0.0;
     double bytes_per_second = 0.0;
     std::uint64_t iterations = 0U;
@@ -84,6 +90,13 @@ struct BenchmarkCaseDefinition {
     BenchmarkFunction function = nullptr;
 };
 
+enum class BaselineMetricKind : std::uint8_t {
+    mean_ns_per_iteration = 0U,
+    mean_ms = 1U,
+    items_per_second = 2U,
+    bytes_per_second = 3U,
+};
+
 struct BenchmarkRunnerOptions {
     bool list_only = false;
     bool verbose = false;
@@ -91,10 +104,12 @@ struct BenchmarkRunnerOptions {
     std::vector<std::string> include_tags{};
     std::vector<std::string> exclude_tags{};
     std::uint64_t iterations = 0U; // 0 = auto calibrate
+    std::uint64_t min_calibrated_iterations = 8U;
     std::uint32_t warmup_runs = 2U;
     std::uint32_t measured_runs = 9U;
     std::uint32_t min_duration_ms = 25U;
     std::string baseline_json_path{};
+    BaselineMetricKind baseline_metric = BaselineMetricKind::mean_ns_per_iteration;
     double fail_on_regression_ratio = -1.0; // < 0 disables regression gate
     bool require_baseline_match = false;
     bool fail_on_empty_selection = false;
@@ -111,9 +126,12 @@ enum class BaselineComparisonStatus : std::uint8_t {
 
 struct BaselineComparison {
     BaselineComparisonStatus status = BaselineComparisonStatus::not_checked;
+    BaselineMetricKind metric_kind = BaselineMetricKind::mean_ns_per_iteration;
     bool has_baseline = false;
     double baseline_mean_ms = 0.0;
     double current_mean_ms = 0.0;
+    double baseline_metric_value = 0.0;
+    double current_metric_value = 0.0;
     double delta_ratio = 0.0; // (current - baseline) / baseline
 };
 

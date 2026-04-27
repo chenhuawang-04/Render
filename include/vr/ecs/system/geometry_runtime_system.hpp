@@ -18,6 +18,31 @@ namespace vr::ecs {
 template<typename T>
 using GeometryRuntimeMcVector = Center::Memory::mc_vector<T, Center::Memory::Tags::Container>;
 
+enum class GeometryRuntimeCacheStatus : std::uint8_t {
+    miss = 0U,
+    hit_reused = 1U,
+    hit_partial_update = 2U,
+};
+
+enum class GeometryRuntimeCacheMissReason : std::uint8_t {
+    none = 0U,
+    invalid_input = 1U,
+    cold_start = 2U,
+    components_pointer_changed = 3U,
+    transforms_pointer_changed = 4U,
+    component_count_changed = 5U,
+    geometry_signature_changed = 6U,
+    visibility_signature_changed = 7U,
+    transform_signature_changed = 8U,
+    build_config_changed = 9U,
+};
+
+[[nodiscard]] constexpr std::uint32_t NextRuntimeCacheEpoch(std::uint32_t current_epoch_) noexcept {
+    return (current_epoch_ == std::numeric_limits<std::uint32_t>::max())
+               ? 1U
+               : (current_epoch_ + 1U);
+}
+
 struct Geometry2DPathPrimitive final {
     float x0;
     float y0;
@@ -49,6 +74,14 @@ struct Geometry2DRuntimeBuildConfig final {
     bool build_ordered_indices = true;
 };
 
+struct Geometry2DRuntimeBuildHint final {
+    std::uint64_t external_build_signature = 0U;
+    std::uint8_t use_external_build_signature = 0U;
+    std::uint8_t reserved0 = 0U;
+    std::uint16_t reserved1 = 0U;
+    std::uint32_t reserved2 = 0U;
+};
+
 struct Geometry2DRuntimeBuildStats final {
     GeometryBatchBuildStats batch{};
     std::uint32_t emitted_primitive_count = 0U;
@@ -56,14 +89,21 @@ struct Geometry2DRuntimeBuildStats final {
     std::uint32_t approximated_quad_count = 0U;
     std::uint32_t approximated_cubic_count = 0U;
     std::uint32_t truncated_component_count = 0U;
+    std::uint32_t cache_epoch = 0U;
     std::uint64_t build_signature = 0U;
+    GeometryRuntimeCacheStatus cache_status = GeometryRuntimeCacheStatus::miss;
+    GeometryRuntimeCacheMissReason cache_miss_reason = GeometryRuntimeCacheMissReason::none;
     bool cache_reused = false;
+    bool cache_valid_before_build = false;
+    bool cache_key_matched = false;
+    bool signature_from_hint = false;
 };
 
 struct Geometry2DRuntimeCache final {
     const Geometry<Dim2>* components = nullptr;
     std::uint32_t component_count = 0U;
     std::uint64_t signature = 0U;
+    std::uint32_t epoch = 0U;
     Geometry2DRuntimeBuildConfig build_config{};
     Geometry2DRuntimeBuildStats last_stats{};
     bool valid = false;
@@ -138,25 +178,57 @@ struct Geometry3DRuntimeBuildConfig final {
     bool build_ordered_indices = true;
 };
 
+struct Geometry3DRuntimeBuildHint final {
+    std::uint64_t external_geometry_signature = 0U;
+    std::uint64_t external_transform_signature = 0U;
+    std::uint64_t external_visible_set_signature = 0U;
+    const std::uint32_t* transform_dirty_component_indices = nullptr;
+    const std::uint32_t* visible_component_indices = nullptr;
+    std::uint32_t transform_dirty_component_count = 0U;
+    std::uint32_t visible_component_count = 0U;
+    std::uint8_t use_external_geometry_signature = 0U;
+    std::uint8_t use_external_transform_signature = 0U;
+    std::uint8_t use_visible_component_indices = 0U;
+    std::uint8_t use_external_visible_set_signature = 0U;
+};
+
 struct Geometry3DRuntimeBuildStats final {
     GeometryBatchBuildStats batch{};
+    std::uint32_t candidate_component_count = 0U;
     std::uint32_t emitted_instance_count = 0U;
     std::uint32_t emitted_batch_count = 0U;
+    std::uint32_t transform_rewritten_instance_count = 0U;
     std::uint32_t depth_test_batch_count = 0U;
     std::uint32_t depth_write_batch_count = 0U;
     std::uint32_t shadow_cast_batch_count = 0U;
+    std::uint32_t cache_epoch = 0U;
     std::uint64_t geometry_signature = 0U;
     std::uint64_t transform_signature = 0U;
+    std::uint64_t visible_set_signature = 0U;
+    GeometryRuntimeCacheStatus cache_status = GeometryRuntimeCacheStatus::miss;
+    GeometryRuntimeCacheMissReason cache_miss_reason = GeometryRuntimeCacheMissReason::none;
     bool cache_reused = false;
     bool transform_only_update = false;
+    bool used_visible_component_indices = false;
+    bool cache_valid_before_build = false;
+    bool cache_key_matched = false;
+    bool geometry_signature_from_hint = false;
+    bool transform_signature_from_hint = false;
+    bool visible_set_signature_from_hint = false;
+    bool transform_update_from_dirty_hint = false;
 };
 
 struct Geometry3DRuntimeCache final {
     const Geometry<Dim3>* components = nullptr;
     const Transform<Dim3>* transforms = nullptr;
     std::uint32_t component_count = 0U;
+    std::uint32_t candidate_component_count = 0U;
     std::uint64_t geometry_signature = 0U;
     std::uint64_t transform_signature = 0U;
+    std::uint64_t visible_set_signature = 0U;
+    std::uint32_t epoch = 0U;
+    GeometryRuntimeMcVector<std::uint32_t> instance_world_revisions{};
+    GeometryRuntimeMcVector<std::uint32_t> component_to_instance_index{};
     Geometry3DRuntimeBuildConfig build_config{};
     Geometry3DRuntimeBuildStats last_stats{};
     bool valid = false;
@@ -203,25 +275,44 @@ public:
     [[nodiscard]] static Geometry2DRuntimeBuildStats Build(const GeometryType* components_,
                                                            std::uint32_t component_count_,
                                                            ScratchType& scratch_,
-                                                           const Geometry2DRuntimeBuildConfig& build_config_ = {}) {
+                                                           const Geometry2DRuntimeBuildConfig& build_config_ = {},
+                                                           const Geometry2DRuntimeBuildHint& build_hint_ = {}) {
         Geometry2DRuntimeBuildStats stats{};
+        stats.cache_valid_before_build = scratch_.cache.valid;
 
         if (components_ == nullptr || component_count_ == 0U) {
-            scratch_.cache.valid = false;
             scratch_.primitives.clear();
             scratch_.draw_batches.clear();
+            InvalidateCache(scratch_.cache);
+
+            stats.cache_status = GeometryRuntimeCacheStatus::miss;
+            stats.cache_miss_reason = GeometryRuntimeCacheMissReason::invalid_input;
+            stats.cache_epoch = scratch_.cache.epoch;
             return stats;
         }
 
-        const std::uint64_t signature = ComputeBuildSignature(components_, component_count_);
+        const bool use_external_signature = build_hint_.use_external_build_signature != 0U;
+        const std::uint64_t signature = use_external_signature
+            ? build_hint_.external_build_signature
+            : ComputeBuildSignature(components_, component_count_);
         stats.build_signature = signature;
-        if (scratch_.cache.valid &&
-            scratch_.cache.components == components_ &&
-            scratch_.cache.component_count == component_count_ &&
-            scratch_.cache.signature == signature &&
-            IsBuildConfigEqual(scratch_.cache.build_config, build_config_)) {
+        stats.signature_from_hint = use_external_signature;
+        const CacheProbeResult cache_probe = ProbeCache(scratch_.cache,
+                                                        components_,
+                                                        component_count_,
+                                                        signature,
+                                                        build_config_);
+        stats.cache_key_matched = cache_probe.key_matched;
+        if (cache_probe.key_matched) {
             stats = scratch_.cache.last_stats;
+            stats.build_signature = signature;
+            stats.cache_status = GeometryRuntimeCacheStatus::hit_reused;
+            stats.cache_miss_reason = GeometryRuntimeCacheMissReason::none;
             stats.cache_reused = true;
+            stats.cache_valid_before_build = true;
+            stats.cache_key_matched = true;
+            stats.cache_epoch = scratch_.cache.epoch;
+            stats.signature_from_hint = use_external_signature;
             return stats;
         }
 
@@ -233,13 +324,19 @@ public:
                                                     scratch_.batch_scratch,
                                                     build_config_.build_ordered_indices);
         if (stats.batch.visible_count == 0U) {
+            stats.cache_status = GeometryRuntimeCacheStatus::miss;
+            stats.cache_miss_reason = cache_probe.miss_reason;
             stats.cache_reused = false;
-            scratch_.cache.components = components_;
-            scratch_.cache.component_count = component_count_;
-            scratch_.cache.signature = signature;
-            scratch_.cache.build_config = build_config_;
-            scratch_.cache.last_stats = stats;
-            scratch_.cache.valid = true;
+            stats.cache_valid_before_build = scratch_.cache.valid;
+            stats.cache_key_matched = false;
+            stats.signature_from_hint = use_external_signature;
+
+            CommitMissCache(scratch_.cache,
+                            components_,
+                            component_count_,
+                            signature,
+                            build_config_,
+                            stats);
             return stats;
         }
 
@@ -285,14 +382,19 @@ public:
         stats.approximated_quad_count = quad_subdivision;
         stats.approximated_cubic_count = cubic_subdivision;
         stats.build_signature = signature;
+        stats.cache_status = GeometryRuntimeCacheStatus::miss;
+        stats.cache_miss_reason = cache_probe.miss_reason;
         stats.cache_reused = false;
+        stats.cache_valid_before_build = scratch_.cache.valid;
+        stats.cache_key_matched = false;
+        stats.signature_from_hint = use_external_signature;
 
-        scratch_.cache.components = components_;
-        scratch_.cache.component_count = component_count_;
-        scratch_.cache.signature = signature;
-        scratch_.cache.build_config = build_config_;
-        scratch_.cache.last_stats = stats;
-        scratch_.cache.valid = true;
+        CommitMissCache(scratch_.cache,
+                        components_,
+                        component_count_,
+                        signature,
+                        build_config_,
+                        stats);
         return stats;
     }
 
@@ -302,6 +404,35 @@ private:
         Float2 subpath_start{.x = 0.0F, .y = 0.0F};
         bool has_current = false;
     };
+
+    struct CacheProbeResult final {
+        bool key_matched = false;
+        GeometryRuntimeCacheMissReason miss_reason = GeometryRuntimeCacheMissReason::none;
+    };
+
+    static void InvalidateCache(Geometry2DRuntimeCache& cache_) noexcept {
+        cache_.components = nullptr;
+        cache_.component_count = 0U;
+        cache_.signature = 0U;
+        cache_.epoch = 0U;
+        cache_.valid = false;
+    }
+
+    static void CommitMissCache(Geometry2DRuntimeCache& cache_,
+                                const GeometryType* components_,
+                                std::uint32_t component_count_,
+                                std::uint64_t signature_,
+                                const Geometry2DRuntimeBuildConfig& build_config_,
+                                Geometry2DRuntimeBuildStats& stats_) {
+        cache_.components = components_;
+        cache_.component_count = component_count_;
+        cache_.signature = signature_;
+        cache_.build_config = build_config_;
+        cache_.epoch = NextRuntimeCacheEpoch(cache_.epoch);
+        stats_.cache_epoch = cache_.epoch;
+        cache_.last_stats = stats_;
+        cache_.valid = true;
+    }
 
     [[nodiscard]] static std::uint32_t PackRgba8(const Rgba8& color_) noexcept {
         return static_cast<std::uint32_t>(color_.r) |
@@ -337,6 +468,47 @@ private:
                lhs_.max_primitives_per_component == rhs_.max_primitives_per_component &&
                FloatBits(lhs_.zero_length_epsilon) == FloatBits(rhs_.zero_length_epsilon) &&
                lhs_.build_ordered_indices == rhs_.build_ordered_indices;
+    }
+
+    [[nodiscard]] static CacheProbeResult ProbeCache(const Geometry2DRuntimeCache& cache_,
+                                                     const GeometryType* components_,
+                                                     std::uint32_t component_count_,
+                                                     std::uint64_t signature_,
+                                                     const Geometry2DRuntimeBuildConfig& build_config_) noexcept {
+        if (!cache_.valid) {
+            return CacheProbeResult{
+                .key_matched = false,
+                .miss_reason = GeometryRuntimeCacheMissReason::cold_start
+            };
+        }
+        if (cache_.components != components_) {
+            return CacheProbeResult{
+                .key_matched = false,
+                .miss_reason = GeometryRuntimeCacheMissReason::components_pointer_changed
+            };
+        }
+        if (cache_.component_count != component_count_) {
+            return CacheProbeResult{
+                .key_matched = false,
+                .miss_reason = GeometryRuntimeCacheMissReason::component_count_changed
+            };
+        }
+        if (cache_.signature != signature_) {
+            return CacheProbeResult{
+                .key_matched = false,
+                .miss_reason = GeometryRuntimeCacheMissReason::geometry_signature_changed
+            };
+        }
+        if (!IsBuildConfigEqual(cache_.build_config, build_config_)) {
+            return CacheProbeResult{
+                .key_matched = false,
+                .miss_reason = GeometryRuntimeCacheMissReason::build_config_changed
+            };
+        }
+        return CacheProbeResult{
+            .key_matched = true,
+            .miss_reason = GeometryRuntimeCacheMissReason::none
+        };
     }
 
     [[nodiscard]] static std::uint64_t ComputeBuildSignature(const GeometryType* components_,
@@ -630,44 +802,122 @@ public:
                                                            const TransformType* transforms_,
                                                            std::uint32_t component_count_,
                                                            ScratchType& scratch_,
-                                                           const Geometry3DRuntimeBuildConfig& build_config_ = {}) {
+                                                           const Geometry3DRuntimeBuildConfig& build_config_ = {},
+                                                           const Geometry3DRuntimeBuildHint& build_hint_ = {}) {
         Geometry3DRuntimeBuildStats stats{};
+        stats.cache_valid_before_build = scratch_.cache.valid;
 
         if (components_ == nullptr || component_count_ == 0U) {
-            scratch_.cache.valid = false;
             scratch_.instances.clear();
             scratch_.draw_batches.clear();
+            InvalidateCache(scratch_.cache);
+
+            stats.cache_status = GeometryRuntimeCacheStatus::miss;
+            stats.cache_miss_reason = GeometryRuntimeCacheMissReason::invalid_input;
+            stats.cache_epoch = scratch_.cache.epoch;
             return stats;
         }
 
-        const std::uint64_t geometry_signature = ComputeGeometrySignature(components_, component_count_);
-        const std::uint64_t transform_signature = ComputeTransformSignature(components_,
-                                                                            transforms_,
-                                                                            component_count_);
+        const bool use_external_geometry_signature = build_hint_.use_external_geometry_signature != 0U;
+        const bool use_external_transform_signature = build_hint_.use_external_transform_signature != 0U;
+        const bool use_visible_component_indices = build_hint_.use_visible_component_indices != 0U;
+        const bool use_external_visible_set_signature =
+            build_hint_.use_external_visible_set_signature != 0U;
+        const std::uint32_t* candidate_component_indices = use_visible_component_indices
+            ? build_hint_.visible_component_indices
+            : nullptr;
+        const std::uint32_t candidate_component_count = use_visible_component_indices
+            ? build_hint_.visible_component_count
+            : component_count_;
+
+        const std::uint64_t visible_set_signature = use_external_visible_set_signature
+            ? build_hint_.external_visible_set_signature
+            : ComputeVisibleSetSignature(candidate_component_indices,
+                                         candidate_component_count,
+                                         use_visible_component_indices);
+        const std::uint64_t geometry_signature = use_external_geometry_signature
+            ? build_hint_.external_geometry_signature
+            : ComputeGeometrySignature(components_,
+                                       component_count_,
+                                       candidate_component_indices,
+                                       candidate_component_count,
+                                       use_visible_component_indices);
+        const std::uint64_t transform_signature = use_external_transform_signature
+            ? build_hint_.external_transform_signature
+            : ComputeTransformSignature(components_,
+                                        transforms_,
+                                        component_count_,
+                                        candidate_component_indices,
+                                        candidate_component_count,
+                                        use_visible_component_indices);
+        stats.candidate_component_count = candidate_component_count;
         stats.geometry_signature = geometry_signature;
         stats.transform_signature = transform_signature;
-        if (scratch_.cache.valid &&
-            scratch_.cache.components == components_ &&
-            scratch_.cache.transforms == transforms_ &&
-            scratch_.cache.component_count == component_count_ &&
-            scratch_.cache.geometry_signature == geometry_signature &&
-            IsBuildConfigEqual(scratch_.cache.build_config, build_config_)) {
+        stats.visible_set_signature = visible_set_signature;
+        stats.used_visible_component_indices = use_visible_component_indices;
+        stats.geometry_signature_from_hint = use_external_geometry_signature;
+        stats.transform_signature_from_hint = use_external_transform_signature;
+        stats.visible_set_signature_from_hint = use_external_visible_set_signature;
+        const CacheProbeResult cache_probe = ProbeCache(scratch_.cache,
+                                                        components_,
+                                                        transforms_,
+                                                        component_count_,
+                                                        geometry_signature,
+                                                        visible_set_signature,
+                                                        candidate_component_count,
+                                                        build_config_);
+        stats.cache_key_matched = cache_probe.key_matched;
+        if (cache_probe.key_matched) {
             if (scratch_.cache.transform_signature == transform_signature) {
                 stats = scratch_.cache.last_stats;
-                stats.cache_reused = true;
-                stats.transform_only_update = false;
                 stats.geometry_signature = geometry_signature;
                 stats.transform_signature = transform_signature;
+                stats.visible_set_signature = visible_set_signature;
+                stats.cache_status = GeometryRuntimeCacheStatus::hit_reused;
+                stats.cache_miss_reason = GeometryRuntimeCacheMissReason::none;
+                stats.cache_reused = true;
+                stats.transform_only_update = false;
+                stats.transform_rewritten_instance_count = 0U;
+                stats.used_visible_component_indices = use_visible_component_indices;
+                stats.candidate_component_count = candidate_component_count;
+                stats.cache_valid_before_build = true;
+                stats.cache_key_matched = true;
+                stats.cache_epoch = scratch_.cache.epoch;
+                stats.geometry_signature_from_hint = use_external_geometry_signature;
+                stats.transform_signature_from_hint = use_external_transform_signature;
+                stats.visible_set_signature_from_hint = use_external_visible_set_signature;
+                stats.transform_update_from_dirty_hint = false;
                 return stats;
             }
 
-            UpdateInstanceWorldMatrices(scratch_.instances, transforms_, component_count_);
-            scratch_.cache.transform_signature = transform_signature;
             stats = scratch_.cache.last_stats;
-            stats.cache_reused = true;
-            stats.transform_only_update = true;
+            bool used_dirty_hint = false;
+            stats.transform_rewritten_instance_count =
+                UpdateInstanceWorldMatrices(scratch_.instances,
+                                            scratch_.cache.instance_world_revisions,
+                                            scratch_.cache.component_to_instance_index,
+                                            transforms_,
+                                            component_count_,
+                                            build_hint_.transform_dirty_component_indices,
+                                            build_hint_.transform_dirty_component_count,
+                                            used_dirty_hint);
+            scratch_.cache.transform_signature = transform_signature;
             stats.geometry_signature = geometry_signature;
             stats.transform_signature = transform_signature;
+            stats.visible_set_signature = visible_set_signature;
+            stats.cache_status = GeometryRuntimeCacheStatus::hit_partial_update;
+            stats.cache_miss_reason = GeometryRuntimeCacheMissReason::none;
+            stats.cache_reused = true;
+            stats.transform_only_update = true;
+            stats.used_visible_component_indices = use_visible_component_indices;
+            stats.candidate_component_count = candidate_component_count;
+            stats.cache_valid_before_build = true;
+            stats.cache_key_matched = true;
+            stats.cache_epoch = scratch_.cache.epoch;
+            stats.geometry_signature_from_hint = use_external_geometry_signature;
+            stats.transform_signature_from_hint = use_external_transform_signature;
+            stats.visible_set_signature_from_hint = use_external_visible_set_signature;
+            stats.transform_update_from_dirty_hint = used_dirty_hint;
             scratch_.cache.last_stats = stats;
             return stats;
         }
@@ -675,29 +925,55 @@ public:
         scratch_.instances.clear();
         scratch_.draw_batches.clear();
 
-        stats.batch = BatchSystemType::BuildAndSort(components_,
-                                                    component_count_,
-                                                    scratch_.batch_scratch,
-                                                    build_config_.build_ordered_indices);
+        if (use_visible_component_indices) {
+            stats.batch = BatchSystemType::BuildAndSortFromCandidates(components_,
+                                                                       component_count_,
+                                                                       candidate_component_indices,
+                                                                       candidate_component_count,
+                                                                       scratch_.batch_scratch,
+                                                                       build_config_.build_ordered_indices);
+        } else {
+            stats.batch = BatchSystemType::BuildAndSort(components_,
+                                                        component_count_,
+                                                        scratch_.batch_scratch,
+                                                        build_config_.build_ordered_indices);
+        }
         if (stats.batch.visible_count == 0U) {
+            stats.cache_status = GeometryRuntimeCacheStatus::miss;
+            stats.cache_miss_reason = cache_probe.miss_reason;
             stats.cache_reused = false;
             stats.transform_only_update = false;
             stats.geometry_signature = geometry_signature;
             stats.transform_signature = transform_signature;
-            scratch_.cache.components = components_;
-            scratch_.cache.transforms = transforms_;
-            scratch_.cache.component_count = component_count_;
-            scratch_.cache.geometry_signature = geometry_signature;
-            scratch_.cache.transform_signature = transform_signature;
-            scratch_.cache.build_config = build_config_;
-            scratch_.cache.last_stats = stats;
-            scratch_.cache.valid = true;
+            stats.visible_set_signature = visible_set_signature;
+            stats.used_visible_component_indices = use_visible_component_indices;
+            stats.candidate_component_count = candidate_component_count;
+            stats.cache_valid_before_build = scratch_.cache.valid;
+            stats.cache_key_matched = false;
+            stats.geometry_signature_from_hint = use_external_geometry_signature;
+            stats.transform_signature_from_hint = use_external_transform_signature;
+            stats.visible_set_signature_from_hint = use_external_visible_set_signature;
+            stats.transform_update_from_dirty_hint = false;
+            InitializeComponentToInstanceMap(scratch_.cache.component_to_instance_index,
+                                             component_count_);
+            CommitMissCache(scratch_.cache,
+                            components_,
+                            transforms_,
+                            component_count_,
+                            geometry_signature,
+                            transform_signature,
+                            visible_set_signature,
+                            candidate_component_count,
+                            build_config_,
+                            stats);
             return stats;
         }
 
         const GeometryBatchItem* sorted_items = BatchSystemType::SortedItems(scratch_.batch_scratch);
         const std::uint32_t sorted_count = BatchSystemType::VisibleCount(scratch_.batch_scratch);
         scratch_.instances.resize(sorted_count);
+        InitializeComponentToInstanceMap(scratch_.cache.component_to_instance_index,
+                                         component_count_);
 
         for (std::uint32_t i = 0U; i < sorted_count; ++i) {
             const GeometryBatchItem& item = sorted_items[i];
@@ -734,6 +1010,9 @@ public:
             instance.user_data = component.runtime.route.user_data;
             instance.reserved2 = 0U;
             scratch_.instances[i] = instance;
+            if (item.component_index < scratch_.cache.component_to_instance_index.size()) {
+                scratch_.cache.component_to_instance_index[item.component_index] = i;
+            }
 
             AppendOrMergeBatch(component,
                                item.sort_key,
@@ -741,6 +1020,11 @@ public:
                                i,
                                scratch_);
         }
+
+        InitializeInstanceWorldRevisionCache(scratch_.cache.instance_world_revisions,
+                                            scratch_.instances,
+                                            transforms_,
+                                            component_count_);
 
         for (const Geometry3DDrawBatch& batch : scratch_.draw_batches) {
             if ((batch.params & 0x1U) != 0U) {
@@ -756,23 +1040,91 @@ public:
 
         stats.emitted_instance_count = static_cast<std::uint32_t>(scratch_.instances.size());
         stats.emitted_batch_count = static_cast<std::uint32_t>(scratch_.draw_batches.size());
+        stats.transform_rewritten_instance_count = stats.emitted_instance_count;
         stats.geometry_signature = geometry_signature;
         stats.transform_signature = transform_signature;
+        stats.visible_set_signature = visible_set_signature;
+        stats.cache_status = GeometryRuntimeCacheStatus::miss;
+        stats.cache_miss_reason = cache_probe.miss_reason;
         stats.cache_reused = false;
         stats.transform_only_update = false;
+        stats.used_visible_component_indices = use_visible_component_indices;
+        stats.candidate_component_count = candidate_component_count;
+        stats.cache_valid_before_build = scratch_.cache.valid;
+        stats.cache_key_matched = false;
+        stats.geometry_signature_from_hint = use_external_geometry_signature;
+        stats.transform_signature_from_hint = use_external_transform_signature;
+        stats.visible_set_signature_from_hint = use_external_visible_set_signature;
+        stats.transform_update_from_dirty_hint = false;
 
-        scratch_.cache.components = components_;
-        scratch_.cache.transforms = transforms_;
-        scratch_.cache.component_count = component_count_;
-        scratch_.cache.geometry_signature = geometry_signature;
-        scratch_.cache.transform_signature = transform_signature;
-        scratch_.cache.build_config = build_config_;
-        scratch_.cache.last_stats = stats;
-        scratch_.cache.valid = true;
+        CommitMissCache(scratch_.cache,
+                        components_,
+                        transforms_,
+                        component_count_,
+                        geometry_signature,
+                        transform_signature,
+                        visible_set_signature,
+                        candidate_component_count,
+                        build_config_,
+                        stats);
         return stats;
     }
 
 private:
+    struct CacheProbeResult final {
+        bool key_matched = false;
+        GeometryRuntimeCacheMissReason miss_reason = GeometryRuntimeCacheMissReason::none;
+    };
+
+    static constexpr std::uint32_t invalid_instance_index = std::numeric_limits<std::uint32_t>::max();
+
+    static void InitializeComponentToInstanceMap(
+        GeometryRuntimeMcVector<std::uint32_t>& component_to_instance_index_,
+        std::uint32_t component_count_) {
+        component_to_instance_index_.resize(static_cast<std::size_t>(component_count_));
+        std::fill(component_to_instance_index_.begin(),
+                  component_to_instance_index_.end(),
+                  invalid_instance_index);
+    }
+
+    static void InvalidateCache(Geometry3DRuntimeCache& cache_) {
+        cache_.components = nullptr;
+        cache_.transforms = nullptr;
+        cache_.component_count = 0U;
+        cache_.candidate_component_count = 0U;
+        cache_.geometry_signature = 0U;
+        cache_.transform_signature = 0U;
+        cache_.visible_set_signature = 0U;
+        cache_.epoch = 0U;
+        cache_.instance_world_revisions.clear();
+        cache_.component_to_instance_index.clear();
+        cache_.valid = false;
+    }
+
+    static void CommitMissCache(Geometry3DRuntimeCache& cache_,
+                                const GeometryType* components_,
+                                const TransformType* transforms_,
+                                std::uint32_t component_count_,
+                                std::uint64_t geometry_signature_,
+                                std::uint64_t transform_signature_,
+                                std::uint64_t visible_set_signature_,
+                                std::uint32_t candidate_component_count_,
+                                const Geometry3DRuntimeBuildConfig& build_config_,
+                                Geometry3DRuntimeBuildStats& stats_) {
+        cache_.components = components_;
+        cache_.transforms = transforms_;
+        cache_.component_count = component_count_;
+        cache_.candidate_component_count = candidate_component_count_;
+        cache_.geometry_signature = geometry_signature_;
+        cache_.transform_signature = transform_signature_;
+        cache_.visible_set_signature = visible_set_signature_;
+        cache_.build_config = build_config_;
+        cache_.epoch = NextRuntimeCacheEpoch(cache_.epoch);
+        stats_.cache_epoch = cache_.epoch;
+        cache_.last_stats = stats_;
+        cache_.valid = true;
+    }
+
     [[nodiscard]] static std::uint32_t PackRgba8(const Rgba8& color_) noexcept {
         return static_cast<std::uint32_t>(color_.r) |
                (static_cast<std::uint32_t>(color_.g) << 8U) |
@@ -808,53 +1160,181 @@ private:
         return lhs_.build_ordered_indices == rhs_.build_ordered_indices;
     }
 
-    [[nodiscard]] static std::uint64_t ComputeGeometrySignature(const GeometryType* components_,
-                                                                std::uint32_t component_count_) noexcept {
+    [[nodiscard]] static CacheProbeResult ProbeCache(const Geometry3DRuntimeCache& cache_,
+                                                     const GeometryType* components_,
+                                                     const TransformType* transforms_,
+                                                     std::uint32_t component_count_,
+                                                     std::uint64_t geometry_signature_,
+                                                     std::uint64_t visible_set_signature_,
+                                                     std::uint32_t candidate_component_count_,
+                                                     const Geometry3DRuntimeBuildConfig& build_config_) noexcept {
+        if (!cache_.valid) {
+            return CacheProbeResult{
+                .key_matched = false,
+                .miss_reason = GeometryRuntimeCacheMissReason::cold_start
+            };
+        }
+        if (cache_.components != components_) {
+            return CacheProbeResult{
+                .key_matched = false,
+                .miss_reason = GeometryRuntimeCacheMissReason::components_pointer_changed
+            };
+        }
+        if (cache_.transforms != transforms_) {
+            return CacheProbeResult{
+                .key_matched = false,
+                .miss_reason = GeometryRuntimeCacheMissReason::transforms_pointer_changed
+            };
+        }
+        if (cache_.component_count != component_count_) {
+            return CacheProbeResult{
+                .key_matched = false,
+                .miss_reason = GeometryRuntimeCacheMissReason::component_count_changed
+            };
+        }
+        if (cache_.geometry_signature != geometry_signature_) {
+            return CacheProbeResult{
+                .key_matched = false,
+                .miss_reason = GeometryRuntimeCacheMissReason::geometry_signature_changed
+            };
+        }
+        if (cache_.visible_set_signature != visible_set_signature_ ||
+            cache_.candidate_component_count != candidate_component_count_) {
+            return CacheProbeResult{
+                .key_matched = false,
+                .miss_reason = GeometryRuntimeCacheMissReason::visibility_signature_changed
+            };
+        }
+        if (!IsBuildConfigEqual(cache_.build_config, build_config_)) {
+            return CacheProbeResult{
+                .key_matched = false,
+                .miss_reason = GeometryRuntimeCacheMissReason::build_config_changed
+            };
+        }
+        return CacheProbeResult{
+            .key_matched = true,
+            .miss_reason = GeometryRuntimeCacheMissReason::none
+        };
+    }
+
+    [[nodiscard]] static std::uint64_t ComputeVisibleSetSignature(
+        const std::uint32_t* candidate_component_indices_,
+        std::uint32_t candidate_component_count_,
+        bool use_candidate_indices_) noexcept {
+        if (!use_candidate_indices_) {
+            return 0U;
+        }
+
+        std::uint64_t hash = 0x9a3f2bc8d4e5f607ULL;
+        HashCombine(hash, static_cast<std::uint64_t>(candidate_component_count_));
+        if (candidate_component_indices_ == nullptr) {
+            HashCombine(hash, 0xffffffffffffffffULL);
+            return hash;
+        }
+
+        for (std::uint32_t i = 0U; i < candidate_component_count_; ++i) {
+            HashCombine(hash, static_cast<std::uint64_t>(candidate_component_indices_[i]));
+        }
+        return hash;
+    }
+
+    static void HashGeometryComponent(std::uint64_t& hash_,
+                                      const GeometryType& component_) noexcept {
+        HashCombine(hash_, static_cast<std::uint64_t>(component_.runtime.route.visible));
+        if (component_.runtime.route.visible == 0U) {
+            return;
+        }
+
+        HashCombine(hash_, component_.runtime.route.sort_key);
+        HashCombine(hash_, static_cast<std::uint64_t>(component_.runtime.route.geometry_id));
+        HashCombine(hash_, static_cast<std::uint64_t>(component_.runtime.route.material_id));
+        HashCombine(hash_, static_cast<std::uint64_t>(component_.runtime.route.user_data));
+        HashCombine(hash_, static_cast<std::uint64_t>(component_.mesh.submesh_index));
+        HashCombine(hash_, static_cast<std::uint64_t>(component_.mesh.lod_index));
+        HashCombine(hash_, static_cast<std::uint64_t>(component_.mesh.flags));
+        HashCombine(hash_, static_cast<std::uint64_t>(component_.runtime.mesh_revision));
+        HashCombine(hash_, static_cast<std::uint64_t>(PackRgba8(component_.style.albedo_color)));
+        HashCombine(hash_, static_cast<std::uint64_t>(PackParams(component_)));
+        HashCombine(hash_, static_cast<std::uint64_t>(FloatBits(component_.style.metallic)));
+        HashCombine(hash_, static_cast<std::uint64_t>(FloatBits(component_.style.roughness)));
+        HashCombine(hash_, static_cast<std::uint64_t>(FloatBits(component_.style.normal_scale)));
+        HashCombine(hash_, static_cast<std::uint64_t>(FloatBits(component_.style.line_width)));
+        HashCombine(hash_, static_cast<std::uint64_t>(FloatBits(component_.runtime.bounds_min.x)));
+        HashCombine(hash_, static_cast<std::uint64_t>(FloatBits(component_.runtime.bounds_min.y)));
+        HashCombine(hash_, static_cast<std::uint64_t>(FloatBits(component_.runtime.bounds_min.z)));
+        HashCombine(hash_, static_cast<std::uint64_t>(FloatBits(component_.runtime.bounds_max.x)));
+        HashCombine(hash_, static_cast<std::uint64_t>(FloatBits(component_.runtime.bounds_max.y)));
+        HashCombine(hash_, static_cast<std::uint64_t>(FloatBits(component_.runtime.bounds_max.z)));
+    }
+
+    [[nodiscard]] static std::uint64_t ComputeGeometrySignature(
+        const GeometryType* components_,
+        std::uint32_t component_count_,
+        const std::uint32_t* candidate_component_indices_,
+        std::uint32_t candidate_component_count_,
+        bool use_candidate_indices_) noexcept {
         std::uint64_t hash = 0xcbf29ce484222325ULL;
-        for (std::uint32_t i = 0U; i < component_count_; ++i) {
-            const GeometryType& component = components_[i];
-            HashCombine(hash, static_cast<std::uint64_t>(component.runtime.route.visible));
-            if (component.runtime.route.visible == 0U) {
+        if (components_ == nullptr || component_count_ == 0U) {
+            return hash;
+        }
+
+        if (!use_candidate_indices_) {
+            for (std::uint32_t i = 0U; i < component_count_; ++i) {
+                HashGeometryComponent(hash, components_[i]);
+            }
+            return hash;
+        }
+
+        HashCombine(hash, static_cast<std::uint64_t>(candidate_component_count_));
+        if (candidate_component_indices_ == nullptr) {
+            return hash;
+        }
+
+        for (std::uint32_t i = 0U; i < candidate_component_count_; ++i) {
+            const std::uint32_t component_index = candidate_component_indices_[i];
+            if (component_index >= component_count_) {
                 continue;
             }
-
-            HashCombine(hash, component.runtime.route.sort_key);
-            HashCombine(hash, static_cast<std::uint64_t>(component.runtime.route.geometry_id));
-            HashCombine(hash, static_cast<std::uint64_t>(component.runtime.route.material_id));
-            HashCombine(hash, static_cast<std::uint64_t>(component.runtime.route.user_data));
-            HashCombine(hash, static_cast<std::uint64_t>(component.mesh.submesh_index));
-            HashCombine(hash, static_cast<std::uint64_t>(component.mesh.lod_index));
-            HashCombine(hash, static_cast<std::uint64_t>(component.mesh.flags));
-            HashCombine(hash, static_cast<std::uint64_t>(component.runtime.mesh_revision));
-            HashCombine(hash, static_cast<std::uint64_t>(PackRgba8(component.style.albedo_color)));
-            HashCombine(hash, static_cast<std::uint64_t>(PackParams(component)));
-            HashCombine(hash, static_cast<std::uint64_t>(FloatBits(component.style.metallic)));
-            HashCombine(hash, static_cast<std::uint64_t>(FloatBits(component.style.roughness)));
-            HashCombine(hash, static_cast<std::uint64_t>(FloatBits(component.style.normal_scale)));
-            HashCombine(hash, static_cast<std::uint64_t>(FloatBits(component.style.line_width)));
-            HashCombine(hash, static_cast<std::uint64_t>(FloatBits(component.runtime.bounds_min.x)));
-            HashCombine(hash, static_cast<std::uint64_t>(FloatBits(component.runtime.bounds_min.y)));
-            HashCombine(hash, static_cast<std::uint64_t>(FloatBits(component.runtime.bounds_min.z)));
-            HashCombine(hash, static_cast<std::uint64_t>(FloatBits(component.runtime.bounds_max.x)));
-            HashCombine(hash, static_cast<std::uint64_t>(FloatBits(component.runtime.bounds_max.y)));
-            HashCombine(hash, static_cast<std::uint64_t>(FloatBits(component.runtime.bounds_max.z)));
+            HashGeometryComponent(hash, components_[component_index]);
         }
         return hash;
     }
 
     [[nodiscard]] static std::uint64_t ComputeTransformSignature(const GeometryType* components_,
                                                                  const TransformType* transforms_,
-                                                                 std::uint32_t component_count_) noexcept {
+                                                                 std::uint32_t component_count_,
+                                                                 const std::uint32_t* candidate_component_indices_,
+                                                                 std::uint32_t candidate_component_count_,
+                                                                 bool use_candidate_indices_) noexcept {
         if (transforms_ == nullptr || components_ == nullptr) {
             return 0U;
         }
 
         std::uint64_t hash = 0xcbf29ce484222325ULL;
-        for (std::uint32_t i = 0U; i < component_count_; ++i) {
-            if (components_[i].runtime.route.visible == 0U) {
+        if (!use_candidate_indices_) {
+            for (std::uint32_t i = 0U; i < component_count_; ++i) {
+                if (components_[i].runtime.route.visible == 0U) {
+                    continue;
+                }
+                HashCombine(hash, static_cast<std::uint64_t>(transforms_[i].runtime.world_revision));
+            }
+            return hash;
+        }
+
+        HashCombine(hash, static_cast<std::uint64_t>(candidate_component_count_));
+        if (candidate_component_indices_ == nullptr) {
+            return hash;
+        }
+
+        for (std::uint32_t i = 0U; i < candidate_component_count_; ++i) {
+            const std::uint32_t component_index = candidate_component_indices_[i];
+            if (component_index >= component_count_) {
                 continue;
             }
-            HashCombine(hash, static_cast<std::uint64_t>(transforms_[i].runtime.world_revision));
+            if (components_[component_index].runtime.route.visible == 0U) {
+                continue;
+            }
+            HashCombine(hash, static_cast<std::uint64_t>(transforms_[component_index].runtime.world_revision));
         }
         return hash;
     }
@@ -879,18 +1359,101 @@ private:
         instance_.world_m33 = world_matrix_.m[15];
     }
 
-    static void UpdateInstanceWorldMatrices(GeometryRuntimeMcVector<Geometry3DGpuInstance>& instances_,
-                                            const TransformType* transforms_,
-                                            std::uint32_t component_count_) noexcept {
+    [[nodiscard]] static std::uint32_t ReadWorldRevision(const TransformType* transforms_,
+                                                         std::uint32_t component_count_,
+                                                         std::uint32_t component_index_) noexcept {
+        if (transforms_ == nullptr || component_index_ >= component_count_) {
+            return 0U;
+        }
+        return transforms_[component_index_].runtime.world_revision;
+    }
+
+    static void InitializeInstanceWorldRevisionCache(GeometryRuntimeMcVector<std::uint32_t>& revisions_,
+                                                     const GeometryRuntimeMcVector<Geometry3DGpuInstance>& instances_,
+                                                     const TransformType* transforms_,
+                                                     std::uint32_t component_count_) {
+        revisions_.resize(instances_.size());
+        for (std::size_t i = 0U; i < instances_.size(); ++i) {
+            revisions_[i] = ReadWorldRevision(transforms_,
+                                              component_count_,
+                                              instances_[i].component_index);
+        }
+    }
+
+    [[nodiscard]] static std::uint32_t UpdateInstanceWorldMatrices(
+        GeometryRuntimeMcVector<Geometry3DGpuInstance>& instances_,
+        GeometryRuntimeMcVector<std::uint32_t>& cached_revisions_,
+        const GeometryRuntimeMcVector<std::uint32_t>& component_to_instance_index_,
+        const TransformType* transforms_,
+        std::uint32_t component_count_,
+        const std::uint32_t* transform_dirty_component_indices_,
+        std::uint32_t transform_dirty_component_count_,
+        bool& used_dirty_hint_) {
+        used_dirty_hint_ = false;
+        if (cached_revisions_.size() != instances_.size()) {
+            InitializeInstanceWorldRevisionCache(cached_revisions_,
+                                                 instances_,
+                                                 transforms_,
+                                                 component_count_);
+        }
+
         const Matrix4x4 identity = spatial_math::IdentityMatrix4x4();
-        for (auto& instance : instances_) {
-            if (transforms_ == nullptr || instance.component_index >= component_count_) {
-                WriteWorldMatrixToInstance(instance, identity);
+        std::uint32_t rewritten_count = 0U;
+        if (transform_dirty_component_indices_ != nullptr &&
+            transform_dirty_component_count_ > 0U &&
+            component_to_instance_index_.size() == static_cast<std::size_t>(component_count_)) {
+            used_dirty_hint_ = true;
+            for (std::uint32_t i = 0U; i < transform_dirty_component_count_; ++i) {
+                const std::uint32_t component_index = transform_dirty_component_indices_[i];
+                if (component_index >= component_count_) {
+                    continue;
+                }
+
+                const std::uint32_t instance_index = component_to_instance_index_[component_index];
+                if (instance_index == invalid_instance_index ||
+                    instance_index >= instances_.size()) {
+                    continue;
+                }
+
+                Geometry3DGpuInstance& instance = instances_[instance_index];
+                const std::uint32_t current_revision = ReadWorldRevision(transforms_,
+                                                                         component_count_,
+                                                                         component_index);
+                if (cached_revisions_[instance_index] == current_revision) {
+                    continue;
+                }
+
+                if (transforms_ == nullptr || component_index >= component_count_) {
+                    WriteWorldMatrixToInstance(instance, identity);
+                } else {
+                    WriteWorldMatrixToInstance(instance,
+                                               transforms_[component_index].runtime.world_matrix);
+                }
+                cached_revisions_[instance_index] = current_revision;
+                ++rewritten_count;
+            }
+            return rewritten_count;
+        }
+
+        for (std::size_t index = 0U; index < instances_.size(); ++index) {
+            Geometry3DGpuInstance& instance = instances_[index];
+            const std::uint32_t current_revision = ReadWorldRevision(transforms_,
+                                                                     component_count_,
+                                                                     instance.component_index);
+            if (cached_revisions_[index] == current_revision) {
                 continue;
             }
-            WriteWorldMatrixToInstance(instance,
-                                       transforms_[instance.component_index].runtime.world_matrix);
+
+            if (transforms_ == nullptr || instance.component_index >= component_count_) {
+                WriteWorldMatrixToInstance(instance, identity);
+            } else {
+                WriteWorldMatrixToInstance(instance,
+                                           transforms_[instance.component_index].runtime.world_matrix);
+            }
+            cached_revisions_[index] = current_revision;
+            ++rewritten_count;
         }
+        return rewritten_count;
     }
 
     static void AppendOrMergeBatch(const GeometryType& component_,

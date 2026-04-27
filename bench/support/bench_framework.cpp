@@ -22,7 +22,20 @@ namespace vr::bench {
 
 namespace {
 
-using BaselineMeanMap = std::unordered_map<std::string, double>;
+struct BaselineSnapshot final {
+    bool has_iterations = false;
+    bool has_mean_ms = false;
+    bool has_mean_ns_per_iteration = false;
+    bool has_items_per_second = false;
+    bool has_bytes_per_second = false;
+    std::uint64_t iterations = 0U;
+    double mean_ms = 0.0;
+    double mean_ns_per_iteration = 0.0;
+    double items_per_second = 0.0;
+    double bytes_per_second = 0.0;
+};
+
+using BaselineSnapshotMap = std::unordered_map<std::string, BaselineSnapshot>;
 
 struct ParsedArguments {
     bool ok = true;
@@ -196,6 +209,49 @@ struct ParsedArguments {
     return true;
 }
 
+[[nodiscard]] std::string BaselineMetricKindString(BaselineMetricKind metric_kind_) {
+    switch (metric_kind_) {
+        case BaselineMetricKind::mean_ns_per_iteration:
+            return "mean_ns_per_iteration";
+        case BaselineMetricKind::mean_ms:
+            return "mean_ms";
+        case BaselineMetricKind::items_per_second:
+            return "items_per_second";
+        case BaselineMetricKind::bytes_per_second:
+            return "bytes_per_second";
+    }
+    return "unknown";
+}
+
+[[nodiscard]] std::optional<BaselineMetricKind> ParseBaselineMetricKind(std::string_view value_) {
+    const std::string lowered = ToLower(TrimCopy(value_));
+    if (lowered == "mean_ns_per_iteration" || lowered == "ns_per_iter" || lowered == "ns_per_iteration") {
+        return BaselineMetricKind::mean_ns_per_iteration;
+    }
+    if (lowered == "mean_ms" || lowered == "ms") {
+        return BaselineMetricKind::mean_ms;
+    }
+    if (lowered == "items_per_second" || lowered == "items/s" || lowered == "itemsps") {
+        return BaselineMetricKind::items_per_second;
+    }
+    if (lowered == "bytes_per_second" || lowered == "bytes/s" || lowered == "bytesps") {
+        return BaselineMetricKind::bytes_per_second;
+    }
+    return std::nullopt;
+}
+
+[[nodiscard]] bool IsLowerBetterMetric(BaselineMetricKind metric_kind_) noexcept {
+    switch (metric_kind_) {
+        case BaselineMetricKind::mean_ns_per_iteration:
+        case BaselineMetricKind::mean_ms:
+            return true;
+        case BaselineMetricKind::items_per_second:
+        case BaselineMetricKind::bytes_per_second:
+            return false;
+    }
+    return true;
+}
+
 [[nodiscard]] ParsedArguments ParseArguments(int argc_, char** argv_) {
     ParsedArguments parsed{};
 
@@ -270,6 +326,20 @@ struct ParsedArguments {
             parsed.options.iterations = parsed_value;
             continue;
         }
+        if (arg == "--min-iterations") {
+            const auto value = require_value(arg);
+            if (!value.has_value()) {
+                return parsed;
+            }
+            std::uint64_t parsed_value = 0U;
+            if (!ParseUnsigned64(value.value(), parsed_value) || parsed_value == 0U) {
+                parsed.ok = false;
+                parsed.error = "--min-iterations must be >= 1";
+                return parsed;
+            }
+            parsed.options.min_calibrated_iterations = parsed_value;
+            continue;
+        }
         if (arg == "--warmup") {
             const auto value = require_value(arg);
             if (!value.has_value()) {
@@ -320,6 +390,21 @@ struct ParsedArguments {
             parsed.options.baseline_json_path = std::string(value.value());
             continue;
         }
+        if (arg == "--baseline-metric") {
+            const auto value = require_value(arg);
+            if (!value.has_value()) {
+                return parsed;
+            }
+            const auto parsed_metric = ParseBaselineMetricKind(value.value());
+            if (!parsed_metric.has_value()) {
+                parsed.ok = false;
+                parsed.error =
+                    "--baseline-metric must be one of: mean_ns_per_iteration, mean_ms, items_per_second, bytes_per_second";
+                return parsed;
+            }
+            parsed.options.baseline_metric = parsed_metric.value();
+            continue;
+        }
         if (arg == "--fail-on-regression-percent") {
             const auto value = require_value(arg);
             if (!value.has_value()) {
@@ -367,11 +452,14 @@ void PrintHelp() {
         << "  --include-tag <tag>               Include only benchmarks with this tag (repeatable)\n"
         << "  --exclude-tag <tag>               Exclude benchmarks with this tag (repeatable)\n"
         << "  --iterations <n>                  Fixed iterations per run (0 = auto calibrate)\n"
+        << "  --min-iterations <n>              Lower bound for auto-calibrated iterations (default: 8)\n"
         << "  --warmup <n>                      Warmup run count (default: 2)\n"
         << "  --runs <n>                        Measured run count (default: 9)\n"
         << "  --min-duration-ms <n>             Target minimum runtime for auto calibration\n"
         << "  --baseline-json <path>            Baseline JSON report generated by vr_bench\n"
-        << "  --fail-on-regression-percent <n>  Mark benchmark as FAIL when mean_ms regresses above n%\n"
+        << "  --baseline-metric <name>          Regression metric (default: mean_ns_per_iteration)\n"
+        << "                                   Supported: mean_ns_per_iteration, mean_ms, items_per_second, bytes_per_second\n"
+        << "  --fail-on-regression-percent <n>  Mark benchmark as FAIL when selected baseline metric regresses above n%\n"
         << "  --require-baseline-match          Treat missing baseline entries as FAIL\n"
         << "  --fail-on-empty-selection         Return non-zero when selection is empty\n"
         << "  --report-json <path>              Write machine-readable JSON report\n"
@@ -421,6 +509,7 @@ void PrintHelp() {
     }
 
     constexpr std::uint64_t kMaxIterations = 1ULL << 34U;
+    const std::uint64_t min_auto_iterations = std::max<std::uint64_t>(1U, options_.min_calibrated_iterations);
     std::uint64_t iterations = 1U;
     const double target_duration_ms = static_cast<double>(options_.min_duration_ms);
 
@@ -428,7 +517,7 @@ void PrintHelp() {
         const SampleMeasurement sample = ExecuteSample(definition_, iterations);
         const double measured_ms = std::max(sample.duration_ms, 0.001);
         if (measured_ms >= target_duration_ms) {
-            return iterations;
+            return std::max(iterations, min_auto_iterations);
         }
 
         const double scale = std::max(target_duration_ms / measured_ms, 1.6);
@@ -442,7 +531,7 @@ void PrintHelp() {
         iterations = next_iterations;
     }
 
-    return iterations;
+    return std::max(iterations, min_auto_iterations);
 }
 
 [[nodiscard]] double ComputeMean(const std::vector<double>& values_) {
@@ -516,6 +605,17 @@ void PrintHelp() {
     metrics.median_ms = ComputeMedian(durations);
     metrics.p95_ms = ComputePercentile95(durations);
     metrics.stddev_ms = ComputeStddev(durations, metrics.mean_ms);
+
+    if (iterations_ > 0U) {
+        constexpr double kNsPerMs = 1'000'000.0;
+        const double iteration_count = static_cast<double>(iterations_);
+        metrics.min_ns_per_iteration = (metrics.min_ms * kNsPerMs) / iteration_count;
+        metrics.max_ns_per_iteration = (metrics.max_ms * kNsPerMs) / iteration_count;
+        metrics.mean_ns_per_iteration = (metrics.mean_ms * kNsPerMs) / iteration_count;
+        metrics.median_ns_per_iteration = (metrics.median_ms * kNsPerMs) / iteration_count;
+        metrics.p95_ns_per_iteration = (metrics.p95_ms * kNsPerMs) / iteration_count;
+        metrics.stddev_ns_per_iteration = (metrics.stddev_ms * kNsPerMs) / iteration_count;
+    }
 
     const double total_seconds = total_duration_ms / 1000.0;
     if (total_seconds > 0.0) {
@@ -608,7 +708,7 @@ void PrintHelp() {
                 case 'r': parsed.push_back('\r'); break;
                 case 't': parsed.push_back('\t'); break;
                 default:
-                    // baseline文件是本工具生成，不支持\uXXXX即可。
+                    // Baseline JSON is produced by this runner; keep unknown escapes as-is.
                     parsed.push_back(ch);
                     break;
             }
@@ -627,7 +727,156 @@ void PrintHelp() {
     return std::nullopt;
 }
 
-[[nodiscard]] BaselineMeanMap LoadBaselineMeanMap(const std::string& path_) {
+[[nodiscard]] std::optional<std::size_t> FindMatchingDelimiter(std::string_view content_,
+                                                               std::size_t open_index_,
+                                                               char open_delimiter_,
+                                                               char close_delimiter_) {
+    if (open_index_ >= content_.size() || content_[open_index_] != open_delimiter_) {
+        return std::nullopt;
+    }
+
+    std::uint32_t depth = 0U;
+    bool in_string = false;
+    bool escaped = false;
+    for (std::size_t i = open_index_; i < content_.size(); ++i) {
+        const char ch = content_[i];
+        if (in_string) {
+            if (escaped) {
+                escaped = false;
+                continue;
+            }
+            if (ch == '\\') {
+                escaped = true;
+                continue;
+            }
+            if (ch == '"') {
+                in_string = false;
+            }
+            continue;
+        }
+
+        if (ch == '"') {
+            in_string = true;
+            continue;
+        }
+        if (ch == open_delimiter_) {
+            ++depth;
+            continue;
+        }
+        if (ch == close_delimiter_) {
+            if (depth == 0U) {
+                return std::nullopt;
+            }
+            --depth;
+            if (depth == 0U) {
+                return i;
+            }
+        }
+    }
+    return std::nullopt;
+}
+
+[[nodiscard]] std::optional<double> ParseJsonNumberField(std::string_view object_text_,
+                                                         std::string_view field_name_) {
+    const std::string key = "\"" + std::string(field_name_) + "\"";
+    const std::size_t key_offset = object_text_.find(key);
+    if (key_offset == std::string::npos) {
+        return std::nullopt;
+    }
+    const std::size_t colon_offset = object_text_.find(':', key_offset + key.size());
+    if (colon_offset == std::string::npos) {
+        return std::nullopt;
+    }
+    return ParseJsonNumberNear(object_text_, colon_offset + 1U);
+}
+
+[[nodiscard]] bool TryParseJsonUnsigned64Field(std::string_view object_text_,
+                                               std::string_view field_name_,
+                                               std::uint64_t& out_value_) {
+    const std::optional<double> parsed_value =
+        ParseJsonNumberField(object_text_, field_name_);
+    if (!parsed_value.has_value()) {
+        return false;
+    }
+    if (!std::isfinite(parsed_value.value()) ||
+        parsed_value.value() < 0.0 ||
+        parsed_value.value() > static_cast<double>(std::numeric_limits<std::uint64_t>::max())) {
+        return false;
+    }
+    const double rounded = std::floor(parsed_value.value() + 0.5);
+    if (std::abs(parsed_value.value() - rounded) > 1e-6) {
+        return false;
+    }
+    out_value_ = static_cast<std::uint64_t>(rounded);
+    return true;
+}
+
+[[nodiscard]] std::optional<std::string_view> ExtractJsonObjectField(std::string_view object_text_,
+                                                                     std::string_view field_name_) {
+    const std::string key = "\"" + std::string(field_name_) + "\"";
+    const std::size_t key_offset = object_text_.find(key);
+    if (key_offset == std::string::npos) {
+        return std::nullopt;
+    }
+    const std::size_t colon_offset = object_text_.find(':', key_offset + key.size());
+    if (colon_offset == std::string::npos) {
+        return std::nullopt;
+    }
+    const std::size_t object_begin = object_text_.find('{', colon_offset + 1U);
+    if (object_begin == std::string::npos) {
+        return std::nullopt;
+    }
+    const std::optional<std::size_t> object_end =
+        FindMatchingDelimiter(object_text_, object_begin, '{', '}');
+    if (!object_end.has_value()) {
+        return std::nullopt;
+    }
+    return object_text_.substr(object_begin, object_end.value() - object_begin + 1U);
+}
+
+[[nodiscard]] BaselineSnapshot ParseBaselineSnapshot(std::string_view metrics_object_text_) {
+    BaselineSnapshot snapshot{};
+    if (TryParseJsonUnsigned64Field(metrics_object_text_, "iterations", snapshot.iterations)) {
+        snapshot.has_iterations = true;
+    }
+
+    const std::optional<double> mean_ms =
+        ParseJsonNumberField(metrics_object_text_, "mean_ms");
+    if (mean_ms.has_value() && std::isfinite(mean_ms.value())) {
+        snapshot.has_mean_ms = true;
+        snapshot.mean_ms = mean_ms.value();
+    }
+
+    const std::optional<double> mean_ns_per_iteration =
+        ParseJsonNumberField(metrics_object_text_, "mean_ns_per_iteration");
+    if (mean_ns_per_iteration.has_value() &&
+        std::isfinite(mean_ns_per_iteration.value())) {
+        snapshot.has_mean_ns_per_iteration = true;
+        snapshot.mean_ns_per_iteration = mean_ns_per_iteration.value();
+    } else if (snapshot.has_mean_ms && snapshot.has_iterations && snapshot.iterations > 0U) {
+        snapshot.has_mean_ns_per_iteration = true;
+        snapshot.mean_ns_per_iteration =
+            (snapshot.mean_ms * 1'000'000.0) /
+            static_cast<double>(snapshot.iterations);
+    }
+
+    const std::optional<double> items_per_second =
+        ParseJsonNumberField(metrics_object_text_, "items_per_second");
+    if (items_per_second.has_value() && std::isfinite(items_per_second.value())) {
+        snapshot.has_items_per_second = true;
+        snapshot.items_per_second = items_per_second.value();
+    }
+
+    const std::optional<double> bytes_per_second =
+        ParseJsonNumberField(metrics_object_text_, "bytes_per_second");
+    if (bytes_per_second.has_value() && std::isfinite(bytes_per_second.value())) {
+        snapshot.has_bytes_per_second = true;
+        snapshot.bytes_per_second = bytes_per_second.value();
+    }
+    return snapshot;
+}
+
+[[nodiscard]] BaselineSnapshotMap LoadBaselineSnapshotMap(const std::string& path_) {
     std::ifstream in(path_, std::ios::in | std::ios::binary);
     if (!in.is_open()) {
         throw std::runtime_error("Failed to open baseline file: " + path_);
@@ -643,44 +892,67 @@ void PrintHelp() {
     }
     in.close();
 
-    BaselineMeanMap baseline_means{};
-    std::size_t cursor = 0U;
-    while (true) {
-        const std::size_t name_key = content.find("\"name\"", cursor);
-        if (name_key == std::string::npos) {
-            break;
-        }
-        const std::size_t name_colon = content.find(':', name_key);
-        if (name_colon == std::string::npos) {
-            break;
-        }
-        const std::optional<std::string> name = ParseJsonStringNear(content, name_colon + 1U);
-        if (!name.has_value()) {
-            cursor = name_colon + 1U;
-            continue;
-        }
-
-        const std::size_t mean_key = content.find("\"mean_ms\"", name_colon);
-        if (mean_key == std::string::npos) {
-            cursor = name_colon + 1U;
-            continue;
-        }
-        const std::size_t mean_colon = content.find(':', mean_key);
-        if (mean_colon == std::string::npos) {
-            cursor = mean_key + 1U;
-            continue;
-        }
-        const std::optional<double> mean_ms = ParseJsonNumberNear(content, mean_colon + 1U);
-        if (!mean_ms.has_value()) {
-            cursor = mean_colon + 1U;
-            continue;
-        }
-
-        baseline_means[name.value()] = mean_ms.value();
-        cursor = mean_colon + 1U;
+    BaselineSnapshotMap baseline_snapshots{};
+    const std::size_t results_key = content.find("\"results\"");
+    if (results_key == std::string::npos) {
+        return baseline_snapshots;
     }
 
-    return baseline_means;
+    const std::size_t results_colon = content.find(':', results_key);
+    if (results_colon == std::string::npos) {
+        return baseline_snapshots;
+    }
+
+    const std::size_t results_array_begin = content.find('[', results_colon + 1U);
+    if (results_array_begin == std::string::npos) {
+        return baseline_snapshots;
+    }
+    const std::optional<std::size_t> results_array_end =
+        FindMatchingDelimiter(content, results_array_begin, '[', ']');
+    if (!results_array_end.has_value()) {
+        return baseline_snapshots;
+    }
+
+    std::size_t cursor = results_array_begin + 1U;
+    while (cursor < results_array_end.value()) {
+        const std::size_t result_object_begin = content.find('{', cursor);
+        if (result_object_begin == std::string::npos ||
+            result_object_begin >= results_array_end.value()) {
+            break;
+        }
+        const std::optional<std::size_t> result_object_end =
+            FindMatchingDelimiter(content, result_object_begin, '{', '}');
+        if (!result_object_end.has_value() ||
+            result_object_end.value() > results_array_end.value()) {
+            break;
+        }
+
+        const std::string_view result_object =
+            std::string_view(content).substr(result_object_begin,
+                                             result_object_end.value() - result_object_begin + 1U);
+
+        const std::string name_key = "\"name\"";
+        const std::size_t name_offset = result_object.find(name_key);
+        if (name_offset != std::string::npos) {
+            const std::size_t name_colon = result_object.find(':', name_offset + name_key.size());
+            if (name_colon != std::string::npos) {
+                const std::optional<std::string> name =
+                    ParseJsonStringNear(result_object, name_colon + 1U);
+                if (name.has_value()) {
+                    const std::optional<std::string_view> metrics_object =
+                        ExtractJsonObjectField(result_object, "metrics");
+                    if (metrics_object.has_value()) {
+                        baseline_snapshots[name.value()] =
+                            ParseBaselineSnapshot(metrics_object.value());
+                    }
+                }
+            }
+        }
+
+        cursor = result_object_end.value() + 1U;
+    }
+
+    return baseline_snapshots;
 }
 
 void AppendMessage(std::string& message_, std::string_view appended_) {
@@ -691,15 +963,17 @@ void AppendMessage(std::string& message_, std::string_view appended_) {
 }
 
 void CompareCaseWithBaseline(const BenchmarkRunnerOptions& options_,
-                             const BaselineMeanMap& baseline_means_,
+                             const BaselineSnapshotMap& baseline_snapshots_,
                              BenchmarkCaseResult& case_result_,
                              BenchmarkRunSummary& summary_) {
     if (case_result_.outcome != BenchmarkOutcome::completed) {
         return;
     }
 
-    auto iter = baseline_means_.find(case_result_.name);
-    if (iter == baseline_means_.end()) {
+    case_result_.baseline.metric_kind = options_.baseline_metric;
+
+    auto iter = baseline_snapshots_.find(case_result_.name);
+    if (iter == baseline_snapshots_.end()) {
         case_result_.baseline.status = BaselineComparisonStatus::missing_baseline;
         case_result_.baseline.has_baseline = false;
         ++summary_.baseline_missing_count;
@@ -710,22 +984,111 @@ void CompareCaseWithBaseline(const BenchmarkRunnerOptions& options_,
         return;
     }
 
-    const double baseline_mean_ms = iter->second;
+    const BaselineSnapshot& snapshot = iter->second;
+    const double baseline_mean_ms = snapshot.has_mean_ms ? snapshot.mean_ms : 0.0;
     case_result_.baseline.has_baseline = true;
     case_result_.baseline.baseline_mean_ms = baseline_mean_ms;
     case_result_.baseline.current_mean_ms = case_result_.metrics.mean_ms;
+    case_result_.baseline.current_metric_value = 0.0;
+    case_result_.baseline.baseline_metric_value = 0.0;
 
-    if (!(baseline_mean_ms > 0.0) || !std::isfinite(baseline_mean_ms)) {
+    const auto get_baseline_metric_value = [&](BaselineMetricKind metric_kind_) -> std::optional<double> {
+        switch (metric_kind_) {
+            case BaselineMetricKind::mean_ns_per_iteration:
+                if (snapshot.has_mean_ns_per_iteration) {
+                    return snapshot.mean_ns_per_iteration;
+                }
+                return std::nullopt;
+            case BaselineMetricKind::mean_ms:
+                if (snapshot.has_mean_ms) {
+                    return snapshot.mean_ms;
+                }
+                return std::nullopt;
+            case BaselineMetricKind::items_per_second:
+                if (snapshot.has_items_per_second) {
+                    return snapshot.items_per_second;
+                }
+                return std::nullopt;
+            case BaselineMetricKind::bytes_per_second:
+                if (snapshot.has_bytes_per_second) {
+                    return snapshot.bytes_per_second;
+                }
+                return std::nullopt;
+        }
+        return std::nullopt;
+    };
+
+    const auto get_current_metric_value = [&](BaselineMetricKind metric_kind_) -> std::optional<double> {
+        switch (metric_kind_) {
+            case BaselineMetricKind::mean_ns_per_iteration:
+                if (case_result_.metrics.mean_ns_per_iteration > 0.0) {
+                    return case_result_.metrics.mean_ns_per_iteration;
+                }
+                return std::nullopt;
+            case BaselineMetricKind::mean_ms:
+                if (case_result_.metrics.mean_ms > 0.0) {
+                    return case_result_.metrics.mean_ms;
+                }
+                return std::nullopt;
+            case BaselineMetricKind::items_per_second:
+                if (case_result_.metrics.items_per_second > 0.0) {
+                    return case_result_.metrics.items_per_second;
+                }
+                return std::nullopt;
+            case BaselineMetricKind::bytes_per_second:
+                if (case_result_.metrics.bytes_per_second > 0.0) {
+                    return case_result_.metrics.bytes_per_second;
+                }
+                return std::nullopt;
+        }
+        return std::nullopt;
+    };
+
+    const std::optional<double> baseline_metric_value =
+        get_baseline_metric_value(options_.baseline_metric);
+    const std::optional<double> current_metric_value =
+        get_current_metric_value(options_.baseline_metric);
+    if (!baseline_metric_value.has_value()) {
         case_result_.baseline.status = BaselineComparisonStatus::missing_baseline;
         ++summary_.baseline_missing_count;
         if (options_.require_baseline_match) {
             case_result_.outcome = BenchmarkOutcome::failed;
-            AppendMessage(case_result_.message, "baseline mean_ms is invalid");
+            AppendMessage(case_result_.message,
+                          "baseline metric is missing: " + BaselineMetricKindString(options_.baseline_metric));
         }
         return;
     }
 
-    const double delta_ratio = (case_result_.metrics.mean_ms - baseline_mean_ms) / baseline_mean_ms;
+    if (!std::isfinite(baseline_metric_value.value()) ||
+        !(baseline_metric_value.value() > 0.0)) {
+        case_result_.baseline.status = BaselineComparisonStatus::missing_baseline;
+        ++summary_.baseline_missing_count;
+        if (options_.require_baseline_match) {
+            case_result_.outcome = BenchmarkOutcome::failed;
+            AppendMessage(case_result_.message,
+                          "baseline metric is invalid: " + BaselineMetricKindString(options_.baseline_metric));
+        }
+        return;
+    }
+
+    if (!current_metric_value.has_value() ||
+        !std::isfinite(current_metric_value.value()) ||
+        !(current_metric_value.value() > 0.0)) {
+        case_result_.baseline.status = BaselineComparisonStatus::regressed;
+        ++summary_.regression_fail_count;
+        case_result_.outcome = BenchmarkOutcome::failed;
+        AppendMessage(case_result_.message,
+                      "current metric is invalid: " + BaselineMetricKindString(options_.baseline_metric));
+        return;
+    }
+
+    case_result_.baseline.baseline_metric_value = baseline_metric_value.value();
+    case_result_.baseline.current_metric_value = current_metric_value.value();
+    const double delta_ratio = IsLowerBetterMetric(options_.baseline_metric)
+                                   ? ((current_metric_value.value() - baseline_metric_value.value()) /
+                                      baseline_metric_value.value())
+                                   : ((baseline_metric_value.value() - current_metric_value.value()) /
+                                      baseline_metric_value.value());
     case_result_.baseline.delta_ratio = delta_ratio;
 
     if (delta_ratio < 0.0) {
@@ -739,8 +1102,11 @@ void CompareCaseWithBaseline(const BenchmarkRunnerOptions& options_,
         ++summary_.regression_fail_count;
 
         std::ostringstream oss;
-        oss << "regressed by " << std::fixed << std::setprecision(2)
-            << (delta_ratio * 100.0) << "%";
+        oss << BaselineMetricKindString(options_.baseline_metric)
+            << " regressed by " << std::fixed << std::setprecision(2)
+            << (delta_ratio * 100.0) << "%"
+            << " (baseline=" << case_result_.baseline.baseline_metric_value
+            << ", current=" << case_result_.baseline.current_metric_value << ")";
         AppendMessage(case_result_.message, oss.str());
         case_result_.outcome = BenchmarkOutcome::failed;
         return;
@@ -777,10 +1143,12 @@ void WriteJsonReport(const std::string& path_,
     out << "  \"options\": {\n";
     out << "    \"filter\": \"" << EscapeJson(options_.filter) << "\",\n";
     out << "    \"iterations\": " << options_.iterations << ",\n";
+    out << "    \"min_calibrated_iterations\": " << options_.min_calibrated_iterations << ",\n";
     out << "    \"warmup_runs\": " << options_.warmup_runs << ",\n";
     out << "    \"measured_runs\": " << options_.measured_runs << ",\n";
     out << "    \"min_duration_ms\": " << options_.min_duration_ms << ",\n";
     out << "    \"baseline_json\": \"" << EscapeJson(options_.baseline_json_path) << "\",\n";
+    out << "    \"baseline_metric\": \"" << BaselineMetricKindString(options_.baseline_metric) << "\",\n";
     out << "    \"fail_on_regression_ratio\": " << std::fixed << std::setprecision(6)
         << options_.fail_on_regression_ratio << ",\n";
     out << "    \"require_baseline_match\": " << (options_.require_baseline_match ? "true" : "false") << ",\n";
@@ -816,14 +1184,23 @@ void WriteJsonReport(const std::string& path_,
         out << "        \"median_ms\": " << std::fixed << std::setprecision(6) << result.metrics.median_ms << ",\n";
         out << "        \"p95_ms\": " << std::fixed << std::setprecision(6) << result.metrics.p95_ms << ",\n";
         out << "        \"stddev_ms\": " << std::fixed << std::setprecision(6) << result.metrics.stddev_ms << ",\n";
+        out << "        \"min_ns_per_iteration\": " << std::fixed << std::setprecision(6) << result.metrics.min_ns_per_iteration << ",\n";
+        out << "        \"max_ns_per_iteration\": " << std::fixed << std::setprecision(6) << result.metrics.max_ns_per_iteration << ",\n";
+        out << "        \"mean_ns_per_iteration\": " << std::fixed << std::setprecision(6) << result.metrics.mean_ns_per_iteration << ",\n";
+        out << "        \"median_ns_per_iteration\": " << std::fixed << std::setprecision(6) << result.metrics.median_ns_per_iteration << ",\n";
+        out << "        \"p95_ns_per_iteration\": " << std::fixed << std::setprecision(6) << result.metrics.p95_ns_per_iteration << ",\n";
+        out << "        \"stddev_ns_per_iteration\": " << std::fixed << std::setprecision(6) << result.metrics.stddev_ns_per_iteration << ",\n";
         out << "        \"items_per_second\": " << std::fixed << std::setprecision(3) << result.metrics.items_per_second << ",\n";
         out << "        \"bytes_per_second\": " << std::fixed << std::setprecision(3) << result.metrics.bytes_per_second << "\n";
         out << "      },\n";
         out << "      \"baseline\": {\n";
         out << "        \"status\": \"" << BaselineStatusString(result.baseline.status) << "\",\n";
+        out << "        \"metric_kind\": \"" << BaselineMetricKindString(result.baseline.metric_kind) << "\",\n";
         out << "        \"has_baseline\": " << (result.baseline.has_baseline ? "true" : "false") << ",\n";
         out << "        \"baseline_mean_ms\": " << std::fixed << std::setprecision(6) << result.baseline.baseline_mean_ms << ",\n";
         out << "        \"current_mean_ms\": " << std::fixed << std::setprecision(6) << result.baseline.current_mean_ms << ",\n";
+        out << "        \"baseline_metric_value\": " << std::fixed << std::setprecision(6) << result.baseline.baseline_metric_value << ",\n";
+        out << "        \"current_metric_value\": " << std::fixed << std::setprecision(6) << result.baseline.current_metric_value << ",\n";
         out << "        \"delta_ratio\": " << std::fixed << std::setprecision(6) << result.baseline.delta_ratio << "\n";
         out << "      },\n";
 
@@ -946,14 +1323,16 @@ int RunAllBenchmarksMain(int argc_, char** argv_) {
         return 0;
     }
 
-    BaselineMeanMap baseline_means{};
+    BaselineSnapshotMap baseline_snapshots{};
     bool baseline_loaded = false;
     if (!parsed.options.baseline_json_path.empty()) {
         try {
-            baseline_means = LoadBaselineMeanMap(parsed.options.baseline_json_path);
+            baseline_snapshots = LoadBaselineSnapshotMap(parsed.options.baseline_json_path);
             baseline_loaded = true;
             std::cout << "[vr_bench] baseline loaded: " << parsed.options.baseline_json_path
-                      << " entries=" << baseline_means.size() << '\n';
+                      << " entries=" << baseline_snapshots.size()
+                      << " metric=" << BaselineMetricKindString(parsed.options.baseline_metric)
+                      << '\n';
         } catch (const std::exception& exception_) {
             std::cerr << "[vr_bench] failed to read baseline JSON: " << exception_.what() << '\n';
             return 3;
@@ -1014,10 +1393,21 @@ int RunAllBenchmarksMain(int argc_, char** argv_) {
         case_result.outcome = BenchmarkOutcome::completed;
 
         try {
+            std::cout << "[RUN  ] " << definition.name << " calibrating..." << std::endl;
             const std::uint64_t iterations = CalibrateIterations(definition, parsed.options);
+            std::cout << "[RUN  ] " << definition.name
+                      << " iterations=" << iterations
+                      << " warmup=" << parsed.options.warmup_runs
+                      << " measured=" << parsed.options.measured_runs
+                      << std::endl;
             for (std::uint32_t warmup_index = 0U;
                  warmup_index < parsed.options.warmup_runs;
                  ++warmup_index) {
+                if (parsed.options.verbose) {
+                    std::cout << "    warmup " << (warmup_index + 1U)
+                              << "/" << parsed.options.warmup_runs
+                              << std::endl;
+                }
                 (void)ExecuteSample(definition, iterations);
             }
 
@@ -1025,6 +1415,11 @@ int RunAllBenchmarksMain(int argc_, char** argv_) {
             for (std::uint32_t run_index = 0U;
                  run_index < parsed.options.measured_runs;
                  ++run_index) {
+                if (parsed.options.verbose) {
+                    std::cout << "    sample " << (run_index + 1U)
+                              << "/" << parsed.options.measured_runs
+                              << std::endl;
+                }
                 case_result.samples.push_back(ExecuteSample(definition, iterations));
             }
 
@@ -1032,7 +1427,7 @@ int RunAllBenchmarksMain(int argc_, char** argv_) {
 
             if (baseline_loaded) {
                 CompareCaseWithBaseline(parsed.options,
-                                        baseline_means,
+                                        baseline_snapshots,
                                         case_result,
                                         summary);
             }
@@ -1066,6 +1461,10 @@ int RunAllBenchmarksMain(int argc_, char** argv_) {
                           << " median=" << result.metrics.median_ms << "ms"
                           << " p95=" << result.metrics.p95_ms << "ms"
                           << " stddev=" << result.metrics.stddev_ms << "ms";
+                if (result.metrics.mean_ns_per_iteration > 0.0) {
+                    std::cout << " ns/iter=" << std::fixed << std::setprecision(3)
+                              << result.metrics.mean_ns_per_iteration;
+                }
                 if (result.metrics.items_per_second > 0.0) {
                     std::cout << " items/s=" << std::fixed << std::setprecision(2) << result.metrics.items_per_second;
                 }
@@ -1078,8 +1477,11 @@ int RunAllBenchmarksMain(int argc_, char** argv_) {
                         std::cout << " baseline=missing";
                     } else {
                         const double percent = result.baseline.delta_ratio * 100.0;
-                        std::cout << " baseline_mean=" << std::fixed << std::setprecision(3)
-                                  << result.baseline.baseline_mean_ms << "ms"
+                        std::cout << " baseline_metric="
+                                  << BaselineMetricKindString(result.baseline.metric_kind)
+                                  << " baseline_value=" << std::fixed << std::setprecision(3)
+                                  << result.baseline.baseline_metric_value
+                                  << " current_value=" << result.baseline.current_metric_value
                                   << " delta=" << std::showpos << std::fixed << std::setprecision(2)
                                   << percent << "%" << std::noshowpos;
                         std::cout << " baseline_status=" << BaselineStatusString(result.baseline.status);
@@ -1116,6 +1518,7 @@ int RunAllBenchmarksMain(int argc_, char** argv_) {
                 if (result.baseline.status != BaselineComparisonStatus::not_checked &&
                     result.baseline.status != BaselineComparisonStatus::missing_baseline) {
                     std::cout << " | baseline_status=" << BaselineStatusString(result.baseline.status);
+                    std::cout << " metric=" << BaselineMetricKindString(result.baseline.metric_kind);
                     std::cout << " delta=" << std::showpos << std::fixed << std::setprecision(2)
                               << (result.baseline.delta_ratio * 100.0) << "%" << std::noshowpos;
                 }

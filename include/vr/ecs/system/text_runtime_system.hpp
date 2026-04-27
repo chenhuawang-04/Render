@@ -59,8 +59,18 @@ struct TextRuntimeBuildConfig {
     bool enable_kerning = true;
 };
 
+struct TextRuntimeBuildHint final {
+    const std::uint32_t* visible_component_indices = nullptr;
+    std::uint64_t external_visible_set_signature = 0U;
+    std::uint32_t visible_component_count = 0U;
+    std::uint8_t use_visible_component_indices = 0U;
+    std::uint8_t use_external_visible_set_signature = 0U;
+    std::uint16_t reserved0 = 0U;
+};
+
 struct TextRuntimeBuildStats {
     std::uint32_t total_component_count = 0U;
+    std::uint32_t candidate_component_count = 0U;
     std::uint32_t visible_component_count = 0U;
     std::uint32_t built_component_count = 0U;
     std::uint32_t skipped_component_count = 0U;
@@ -70,6 +80,9 @@ struct TextRuntimeBuildStats {
     std::uint32_t emitted_batch_count = 0U;
     std::uint32_t face_variant_cache_entries = 0U;
     std::uint32_t kerning_apply_count = 0U;
+    std::uint64_t visible_set_signature = 0U;
+    bool used_visible_component_indices = false;
+    bool visible_set_signature_from_hint = false;
 };
 
 template<DimensionTag DimensionT>
@@ -152,7 +165,8 @@ public:
                                                      text::GlyphAtlasHost& atlas_host_,
                                                      text::FreeTypeHost& freetype_host_,
                                                      ScratchType& scratch_,
-                                                     const TextRuntimeBuildConfig& build_config_ = {}) {
+                                                     const TextRuntimeBuildConfig& build_config_ = {},
+                                                     const TextRuntimeBuildHint& build_hint_ = {}) {
         TextRuntimeBuildStats stats{};
         stats.total_component_count = component_count_;
 
@@ -174,10 +188,35 @@ public:
             throw std::runtime_error("TextRuntimeSystem::Build requires initialized FreeTypeHost");
         }
 
-        const auto batch_stats = BatchSystemType::BuildAndSort(components_,
-                                                                component_count_,
-                                                                scratch_.batch_scratch,
-                                                                true);
+        const bool use_visible_component_indices = build_hint_.use_visible_component_indices != 0U;
+        const bool use_external_visible_set_signature =
+            build_hint_.use_external_visible_set_signature != 0U;
+        const std::uint32_t* candidate_component_indices = use_visible_component_indices
+            ? build_hint_.visible_component_indices
+            : nullptr;
+        const std::uint32_t candidate_component_count = use_visible_component_indices
+            ? build_hint_.visible_component_count
+            : component_count_;
+
+        const auto batch_stats = use_visible_component_indices
+            ? BatchSystemType::BuildAndSortFromCandidates(components_,
+                                                          component_count_,
+                                                          candidate_component_indices,
+                                                          candidate_component_count,
+                                                          scratch_.batch_scratch,
+                                                          true)
+            : BatchSystemType::BuildAndSort(components_,
+                                            component_count_,
+                                            scratch_.batch_scratch,
+                                            true);
+        stats.candidate_component_count = candidate_component_count;
+        stats.used_visible_component_indices = use_visible_component_indices;
+        stats.visible_set_signature = use_external_visible_set_signature
+            ? build_hint_.external_visible_set_signature
+            : ComputeVisibleSetSignature(candidate_component_indices,
+                                         candidate_component_count,
+                                         use_visible_component_indices);
+        stats.visible_set_signature_from_hint = use_external_visible_set_signature;
         stats.visible_component_count = batch_stats.visible_count;
         if (batch_stats.visible_count == 0U) {
             stats.face_variant_cache_entries = static_cast<std::uint32_t>(scratch_.face_variants.size());
@@ -286,6 +325,31 @@ public:
     }
 
 private:
+    static void HashCombine(std::uint64_t& hash_, std::uint64_t value_) noexcept {
+        hash_ ^= value_ + 0x9e3779b97f4a7c15ULL + (hash_ << 6U) + (hash_ >> 2U);
+    }
+
+    [[nodiscard]] static std::uint64_t ComputeVisibleSetSignature(
+        const std::uint32_t* candidate_component_indices_,
+        std::uint32_t candidate_component_count_,
+        bool use_candidate_indices_) noexcept {
+        if (!use_candidate_indices_) {
+            return 0U;
+        }
+
+        std::uint64_t hash = 0xa69d6f2c3e4b5871ULL;
+        HashCombine(hash, static_cast<std::uint64_t>(candidate_component_count_));
+        if (candidate_component_indices_ == nullptr) {
+            HashCombine(hash, 0xffffffffffffffffULL);
+            return hash;
+        }
+
+        for (std::uint32_t i = 0U; i < candidate_component_count_; ++i) {
+            HashCombine(hash, static_cast<std::uint64_t>(candidate_component_indices_[i]));
+        }
+        return hash;
+    }
+
     [[nodiscard]] static std::uint64_t HashGlyphResolveRequest(std::uint32_t face_id_value_,
                                                                 std::uint32_t codepoint_,
                                                                 std::int32_t load_flags_,

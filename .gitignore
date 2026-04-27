@@ -18,3 +18,7 @@ compile_commands.json
 # OS
 .DS_Store
 Thumbs.db
+
+# Bench transient outputs
+bench/baselines/*_gate_latest.json
+bench/baselines/_tmp_*.json

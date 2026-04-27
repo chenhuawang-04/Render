@@ -99,14 +99,35 @@ std::size_t TextRenderer3D::PipelineModeIndex(DepthPipelineMode mode_) noexcept 
 
 std::uint64_t TextRenderer3D::ComputeTransformRevisionSignature(
     const ecs::Transform<ecs::Dim3>* transforms_,
-    std::uint32_t component_count_) noexcept {
+    std::uint32_t component_count_,
+    const std::uint32_t* candidate_component_indices_,
+    std::uint32_t candidate_component_count_,
+    bool use_candidate_indices_) noexcept {
     if (transforms_ == nullptr || component_count_ == 0U) {
         return 0U;
     }
 
     std::uint64_t hash = 1469598103934665603ULL;
-    for (std::uint32_t i = 0U; i < component_count_; ++i) {
-        hash ^= static_cast<std::uint64_t>(transforms_[i].runtime.world_revision);
+    if (!use_candidate_indices_) {
+        for (std::uint32_t i = 0U; i < component_count_; ++i) {
+            hash ^= static_cast<std::uint64_t>(transforms_[i].runtime.world_revision);
+            hash *= 1099511628211ULL;
+        }
+        return hash;
+    }
+
+    hash ^= static_cast<std::uint64_t>(candidate_component_count_);
+    hash *= 1099511628211ULL;
+    if (candidate_component_indices_ == nullptr) {
+        return hash;
+    }
+
+    for (std::uint32_t i = 0U; i < candidate_component_count_; ++i) {
+        const std::uint32_t component_index = candidate_component_indices_[i];
+        if (component_index >= component_count_) {
+            continue;
+        }
+        hash ^= static_cast<std::uint64_t>(transforms_[component_index].runtime.world_revision);
         hash *= 1099511628211ULL;
     }
     return hash;
@@ -165,6 +186,8 @@ void TextRenderer3D::Initialize(const TextRenderer3DCreateInfo& create_info_) {
         ecs::TextRender3DSystem::Reserve(render_scratch,
                                          create_info_cache.reserve_component_count,
                                          create_info_cache.reserve_glyph_count);
+        ecs::CullingSystem<ecs::Dim3>::Reserve(culling_scratch,
+                                               create_info_cache.reserve_component_count);
     }
 
     descriptor_image_write_scratch.reserve(1U);
@@ -181,6 +204,8 @@ void TextRenderer3D::Initialize(const TextRenderer3DCreateInfo& create_info_) {
     cached_component_count = 0U;
     cached_transform_signature = 0U;
     cached_camera_world_revision = 0U;
+    bounds_components = nullptr;
+    culling_stats = {};
     runtime_geometry_revision = 1U;
     runtime_geometry_valid = false;
     instance_geometry_valid = false;
@@ -236,6 +261,9 @@ void TextRenderer3D::Shutdown(VulkanContext& context_) {
     render_scratch.runtime_scratch.run_glyphs.clear();
     render_scratch.runtime_scratch.face_variants.clear();
     render_scratch.runtime_scratch.glyph_resolve_cache.clear();
+    culling_scratch.visible_indices.clear();
+    culling_scratch.visibility_bits.clear();
+    culling_stats = {};
 
     descriptor_layout_id = {};
     pipeline_layout_id = {};
@@ -257,6 +285,7 @@ void TextRenderer3D::Shutdown(VulkanContext& context_) {
     component_count = 0U;
     camera_component = nullptr;
     camera_transform = nullptr;
+    bounds_components = nullptr;
 
     context = nullptr;
     upload_host = nullptr;
@@ -297,12 +326,17 @@ void TextRenderer3D::SetSceneData(ecs::Text<ecs::Dim3>* text_components_,
                                   ecs::Transform<ecs::Dim3>* text_transforms_,
                                   std::uint32_t component_count_,
                                   ecs::Camera<ecs::Dim3>* camera_component_,
-                                  ecs::Transform<ecs::Dim3>* camera_transform_) noexcept {
+                                  ecs::Transform<ecs::Dim3>* camera_transform_,
+                                  ecs::Bounds<ecs::Dim3>* bounds_components_) noexcept {
     text_components = text_components_;
     text_transforms = text_transforms_;
     component_count = component_count_;
     camera_component = camera_component_;
     camera_transform = camera_transform_;
+    bounds_components = bounds_components_;
+    if (component_count_ > 0U) {
+        ecs::CullingSystem<ecs::Dim3>::Reserve(culling_scratch, component_count_);
+    }
 }
 
 void TextRenderer3D::PrepareFrame(const render::RuntimePrepareContext& prepare_context_) {
@@ -337,6 +371,7 @@ void TextRenderer3D::PrepareFrame(const render::RuntimePrepareContext& prepare_c
 
     stats = {};
     stats.component_count = component_count;
+    culling_stats = {};
 
     if (text_components == nullptr ||
         text_transforms == nullptr ||
@@ -355,6 +390,8 @@ void TextRenderer3D::PrepareFrame(const render::RuntimePrepareContext& prepare_c
         cached_component_count = 0U;
         cached_transform_signature = 0U;
         cached_camera_world_revision = 0U;
+        culling_scratch.visible_indices.clear();
+        culling_scratch.visibility_bits.clear();
         runtime_geometry_valid = false;
         instance_geometry_valid = false;
         contains_billboard_instances = false;
@@ -366,11 +403,57 @@ void TextRenderer3D::PrepareFrame(const render::RuntimePrepareContext& prepare_c
     frame_data_cache = ecs::TextRender3DSystem::BuildFrameData(*camera_component, *camera_transform);
     active_camera_reverse_z = camera_component->style.reverse_z != 0U;
 
+    ecs::TextRuntimeBuildHint runtime_build_hint{};
+    const bool use_bounds_culling = bounds_components != nullptr && camera_component != nullptr;
+    if (use_bounds_culling) {
+        const ecs::CullingBuildOptions culling_options{
+            .enable_culling_mask_filter = true,
+            .enable_frustum_culling = true,
+            .enable_aabb_refine = true,
+            .write_visibility_bits = false
+        };
+        culling_stats = ecs::CullingSystem<ecs::Dim3>::BuildVisibleSet(bounds_components,
+                                                                        component_count,
+                                                                        camera_component,
+                                                                        culling_scratch,
+                                                                        culling_options);
+        runtime_build_hint.visible_component_indices = culling_scratch.visible_indices.data();
+        runtime_build_hint.visible_component_count = culling_stats.visible_count;
+        runtime_build_hint.use_visible_component_indices = 1U;
+        runtime_build_hint.external_visible_set_signature = culling_stats.visible_set_signature;
+        runtime_build_hint.use_external_visible_set_signature = 1U;
+
+        stats.used_bounds_culling = true;
+        stats.culling_input_count = culling_stats.input_count;
+        stats.culling_visible_count = culling_stats.visible_count;
+        stats.culling_culled_count = culling_stats.culled_by_mask_count +
+                                     culling_stats.culled_by_frustum_count +
+                                     culling_stats.culled_by_invalid_bounds_count;
+        stats.culling_mask_reject_count = culling_stats.culled_by_mask_count;
+        stats.culling_frustum_reject_count = culling_stats.culled_by_frustum_count;
+        stats.culling_invalid_bounds_count = culling_stats.culled_by_invalid_bounds_count;
+        stats.culling_plane_test_count = culling_stats.plane_test_count;
+    } else {
+        culling_scratch.visible_indices.clear();
+        culling_scratch.visibility_bits.clear();
+    }
+
+    const bool visible_mode_changed =
+        runtime_geometry_valid &&
+        (cached_runtime_stats.used_visible_component_indices != use_bounds_culling);
+    const bool visible_set_changed =
+        runtime_geometry_valid &&
+        use_bounds_culling &&
+        (cached_runtime_stats.visible_set_signature != runtime_build_hint.external_visible_set_signature ||
+         cached_runtime_stats.candidate_component_count != runtime_build_hint.visible_component_count);
+
     const bool runtime_rebuild_required =
         !runtime_geometry_valid ||
         cached_components_ptr != text_components ||
         cached_component_count != component_count ||
-        AnyTextComponentDirty(text_components, component_count);
+        AnyTextComponentDirty(text_components, component_count) ||
+        visible_mode_changed ||
+        visible_set_changed;
 
     if (runtime_rebuild_required) {
         cached_runtime_stats = ecs::TextRuntimeSystem<ecs::Dim3>::Build(text_components,
@@ -378,13 +461,25 @@ void TextRenderer3D::PrepareFrame(const render::RuntimePrepareContext& prepare_c
                                                                          *glyph_atlas_host,
                                                                          *freetype_host,
                                                                          render_scratch.runtime_scratch,
-                                                                         create_info_cache.runtime_build);
+                                                                         create_info_cache.runtime_build,
+                                                                         runtime_build_hint);
         runtime_geometry_valid = true;
         instance_geometry_valid = false;
     }
 
+    const bool use_transform_candidates = cached_runtime_stats.used_visible_component_indices;
+    const std::uint32_t* transform_candidate_indices = use_transform_candidates
+        ? ecs::TextBatchSystem<ecs::Dim3>::OrderedIndices(render_scratch.runtime_scratch.batch_scratch)
+        : nullptr;
+    const std::uint32_t transform_candidate_count = use_transform_candidates
+        ? ecs::TextBatchSystem<ecs::Dim3>::OrderedIndexCount(render_scratch.runtime_scratch.batch_scratch)
+        : component_count;
     const std::uint64_t transform_signature =
-        ComputeTransformRevisionSignature(text_transforms, component_count);
+        ComputeTransformRevisionSignature(text_transforms,
+                                          component_count,
+                                          transform_candidate_indices,
+                                          transform_candidate_count,
+                                          use_transform_candidates);
     const std::uint32_t camera_world_revision = camera_transform->runtime.world_revision;
 
     const bool instance_rebuild_required =
