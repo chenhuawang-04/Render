@@ -287,11 +287,19 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_end_to_end_smoke, "integrat
         vr::geometry::GeometryMaterialDesc material_11{};
         material_11.material_id = 11U;
         material_11.image_id = 101U;
+        material_11.uv_scale_u = 1.0F;
+        material_11.uv_scale_v = 1.0F;
         geometry_material_host.UpsertMaterial(material_11);
 
         vr::geometry::GeometryMaterialDesc material_22{};
         material_22.material_id = 22U;
         material_22.image_id = 202U;
+        material_22.uv_scale_u = 1.25F;
+        material_22.uv_scale_v = 1.25F;
+        material_22.uv_bias_u = -0.12F;
+        material_22.uv_bias_v = 0.08F;
+        material_22.flags = vr::geometry::geometry_material_flag_alpha_test;
+        material_22.alpha_cutoff = 0.2F;
         geometry_material_host.UpsertMaterial(material_22);
 
         vr::geometry::GeometryRenderer3DCreateInfo renderer_create_info{};
@@ -321,6 +329,7 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_end_to_end_smoke, "integrat
         std::uint32_t max_depth_test_batches = 0U;
         std::uint32_t max_depth_write_batches = 0U;
         std::uint32_t max_descriptor_updates = 0U;
+        std::uint32_t max_material_push_constant_updates = 0U;
         std::uint32_t max_material_sets = 0U;
 
         constexpr std::uint32_t max_ticks = 16U;
@@ -352,6 +361,8 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_end_to_end_smoke, "integrat
             max_depth_test_batches = std::max(max_depth_test_batches, renderer_stats.depth_test_batch_count);
             max_depth_write_batches = std::max(max_depth_write_batches, renderer_stats.depth_write_batch_count);
             max_descriptor_updates = std::max(max_descriptor_updates, renderer_stats.descriptor_set_update_count);
+            max_material_push_constant_updates = std::max(max_material_push_constant_updates,
+                                                          renderer_stats.material_push_constant_update_count);
             max_material_sets = std::max(max_material_sets, renderer_stats.material_set_count);
             SDL_Delay(1U);
         }
@@ -363,6 +374,7 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_end_to_end_smoke, "integrat
         VR_CHECK(max_depth_test_batches > 0U);
         VR_CHECK(max_depth_write_batches > 0U);
         VR_CHECK(max_descriptor_updates > 0U);
+        VR_CHECK(max_material_push_constant_updates > 0U);
         VR_CHECK(max_material_sets > 0U);
         VR_CHECK(geometry_resource_host.Stats().mesh_count > 0U);
         VR_CHECK(geometry_resource_host.Stats().reused_vertex_buffer_count > 0U);

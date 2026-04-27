@@ -14,6 +14,10 @@ struct GeometryMaterialHostCreateInfo {
     std::uint32_t reserve_material_count = 256U;
 };
 
+enum GeometryMaterialFlags : std::uint32_t {
+    geometry_material_flag_alpha_test = 1U << 0U,
+};
+
 struct GeometryMaterialDesc {
     std::uint32_t material_id = 0U;
     std::uint32_t image_id = 0U;
@@ -23,6 +27,7 @@ struct GeometryMaterialDesc {
     float uv_scale_v = 1.0F;
     float uv_bias_u = 0.0F;
     float uv_bias_v = 0.0F;
+    float alpha_cutoff = 0.0F;
 };
 
 struct GeometryMaterialHostStats {
@@ -69,4 +74,3 @@ private:
 };
 
 } // namespace vr::geometry
-

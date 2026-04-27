@@ -65,6 +65,7 @@ struct GeometryRenderer3DStats {
     std::uint32_t uploaded_instance_count = 0U;
     std::uint32_t descriptor_set_bind_count = 0U;
     std::uint32_t descriptor_set_update_count = 0U;
+    std::uint32_t material_push_constant_update_count = 0U;
     std::uint32_t material_set_count = 0U;
     std::uint32_t prewarmed_pipeline_count = 0U;
     std::uint32_t prepare_compiled_pipeline_count = 0U;
@@ -112,7 +113,7 @@ public:
     [[nodiscard]] const GeometryRenderer3DStats& Stats() const noexcept;
 
 private:
-    struct PushConstants final {
+    struct FramePushConstants final {
         ecs::Matrix4x4 view_projection;
         float directional_light_x;
         float directional_light_y;
@@ -120,7 +121,25 @@ private:
         float directional_light_intensity;
     };
 
-    static_assert(sizeof(PushConstants) == 80U);
+    struct MaterialPushConstants final {
+        float uv_scale_u;
+        float uv_scale_v;
+        float uv_bias_u;
+        float uv_bias_v;
+        std::uint32_t flags;
+        float alpha_cutoff;
+        float reserved0;
+        float reserved1;
+    };
+
+    struct PushConstants final {
+        FramePushConstants frame{};
+        MaterialPushConstants material{};
+    };
+
+    static_assert(sizeof(FramePushConstants) == 80U);
+    static_assert(sizeof(MaterialPushConstants) == 32U);
+    static_assert(sizeof(PushConstants) == 112U);
 
     enum class PipelineMode : std::uint8_t {
         no_depth = 0U,
@@ -150,6 +169,7 @@ private:
     struct MaterialSetEntry final {
         std::uint32_t material_id = 0U;
         VkDescriptorSet descriptor_set = VK_NULL_HANDLE;
+        MaterialPushConstants material_push_constants{};
     };
 
     [[nodiscard]] static bool IsDepthFormatSupported(VulkanContext& context_, VkFormat format_) noexcept;
@@ -190,8 +210,10 @@ private:
     void EnsureMaterialPipelineObjects(VulkanContext& context_,
                                        render::DescriptorHost& descriptor_host_);
     void EnsureFallbackMaterialResources(VulkanContext& context_);
+    [[nodiscard]] MaterialPushConstants BuildMaterialPushConstants(std::uint32_t material_id_) const noexcept;
     [[nodiscard]] VkDescriptorSet AcquireMaterialDescriptorSet(std::uint32_t frame_index_,
-                                                               std::uint32_t material_id_);
+                                                               std::uint32_t material_id_,
+                                                               MaterialPushConstants* out_material_push_constants_ = nullptr);
     void EnsureDepthResources(VulkanContext& context_,
                               std::uint32_t image_count_,
                               VkExtent2D extent_);

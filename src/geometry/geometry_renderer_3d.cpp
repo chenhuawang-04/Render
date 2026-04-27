@@ -496,16 +496,16 @@ void GeometryRenderer3D::Record(const render::FrameRecordContext& record_context
     scissor.extent = record_context_.extent;
     vkCmdSetScissor(record_context_.command_buffer, 0U, 1U, &scissor);
 
-    PushConstants push_constants{};
+    FramePushConstants frame_push_constants{};
     if (camera_component != nullptr) {
-        push_constants.view_projection = camera_component->runtime.view_projection_matrix;
+        frame_push_constants.view_projection = camera_component->runtime.view_projection_matrix;
     } else {
-        push_constants.view_projection = ecs::spatial_math::IdentityMatrix4x4();
+        frame_push_constants.view_projection = ecs::spatial_math::IdentityMatrix4x4();
     }
-    push_constants.directional_light_x = create_info_cache.directional_light_x;
-    push_constants.directional_light_y = create_info_cache.directional_light_y;
-    push_constants.directional_light_z = create_info_cache.directional_light_z;
-    push_constants.directional_light_intensity = std::max(0.0F, create_info_cache.directional_light_intensity);
+    frame_push_constants.directional_light_x = create_info_cache.directional_light_x;
+    frame_push_constants.directional_light_y = create_info_cache.directional_light_y;
+    frame_push_constants.directional_light_z = create_info_cache.directional_light_z;
+    frame_push_constants.directional_light_intensity = std::max(0.0F, create_info_cache.directional_light_intensity);
 
     const VkPipelineLayout pipeline_layout = pipeline_layout_id.IsValid()
         ? pipeline_host->GetPipelineLayout(pipeline_layout_id)
@@ -515,16 +515,18 @@ void GeometryRenderer3D::Record(const render::FrameRecordContext& record_context
                            pipeline_layout,
                            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                            0U,
-                           sizeof(PushConstants),
-                           &push_constants);
+                           sizeof(FramePushConstants),
+                           &frame_push_constants);
     }
 
     render::GraphicsPipelineId active_pipeline_id{};
     VkBuffer active_vertex_buffer = VK_NULL_HANDLE;
     VkBuffer active_index_buffer = VK_NULL_HANDLE;
     VkDescriptorSet active_descriptor_set = VK_NULL_HANDLE;
+    std::uint32_t active_material_id = std::numeric_limits<std::uint32_t>::max();
     std::uint32_t cached_material_id = std::numeric_limits<std::uint32_t>::max();
     VkDescriptorSet cached_material_descriptor_set = VK_NULL_HANDLE;
+    MaterialPushConstants cached_material_push_constants{};
     std::uint32_t cached_geometry_id = 0U;
     const GeometryResourceHost::MeshRecord* cached_mesh = nullptr;
 
@@ -580,15 +582,19 @@ void GeometryRenderer3D::Record(const render::FrameRecordContext& record_context
                 continue;
             }
 
+            MaterialPushConstants material_push_constants{};
             VkDescriptorSet descriptor_set = VK_NULL_HANDLE;
             if (batch.material_id == cached_material_id) {
                 descriptor_set = cached_material_descriptor_set;
+                material_push_constants = cached_material_push_constants;
             } else {
                 descriptor_set = AcquireMaterialDescriptorSet(active_frame_index,
-                                                              batch.material_id);
+                                                              batch.material_id,
+                                                              &material_push_constants);
                 if (descriptor_set != VK_NULL_HANDLE) {
                     cached_material_id = batch.material_id;
                     cached_material_descriptor_set = descriptor_set;
+                    cached_material_push_constants = material_push_constants;
                 }
             }
             if (descriptor_set == VK_NULL_HANDLE) {
@@ -614,6 +620,17 @@ void GeometryRenderer3D::Record(const render::FrameRecordContext& record_context
                                         nullptr);
                 active_descriptor_set = descriptor_set;
                 ++stats.descriptor_set_bind_count;
+            }
+
+            if (pipeline_layout != VK_NULL_HANDLE && active_material_id != batch.material_id) {
+                vkCmdPushConstants(record_context_.command_buffer,
+                                   pipeline_layout,
+                                   VK_SHADER_STAGE_FRAGMENT_BIT,
+                                   static_cast<std::uint32_t>(offsetof(PushConstants, material)),
+                                   sizeof(MaterialPushConstants),
+                                   &material_push_constants);
+                active_material_id = batch.material_id;
+                ++stats.material_push_constant_update_count;
             }
 
             if (active_vertex_buffer != mesh->vertex_buffer.buffer) {
@@ -1080,8 +1097,46 @@ void GeometryRenderer3D::EnsureFallbackMaterialResources(VulkanContext& context_
     }
 }
 
+GeometryRenderer3D::MaterialPushConstants GeometryRenderer3D::BuildMaterialPushConstants(
+    std::uint32_t material_id_) const noexcept {
+    MaterialPushConstants push_constants{};
+    push_constants.uv_scale_u = 1.0F;
+    push_constants.uv_scale_v = 1.0F;
+    push_constants.uv_bias_u = 0.0F;
+    push_constants.uv_bias_v = 0.0F;
+    push_constants.flags = 0U;
+    push_constants.alpha_cutoff = 0.0F;
+    push_constants.reserved0 = 0.0F;
+    push_constants.reserved1 = 0.0F;
+
+    if (geometry_material_host == nullptr || !geometry_material_host->IsInitialized()) {
+        return push_constants;
+    }
+
+    const GeometryMaterialHost::MaterialRecord* material_record =
+        geometry_material_host->FindMaterial(material_id_);
+    if (material_record == nullptr) {
+        return push_constants;
+    }
+
+    const auto sanitize_value = [](float value_, float fallback_) noexcept {
+        return std::isfinite(value_) ? value_ : fallback_;
+    };
+
+    push_constants.uv_scale_u = sanitize_value(material_record->desc.uv_scale_u, 1.0F);
+    push_constants.uv_scale_v = sanitize_value(material_record->desc.uv_scale_v, 1.0F);
+    push_constants.uv_bias_u = sanitize_value(material_record->desc.uv_bias_u, 0.0F);
+    push_constants.uv_bias_v = sanitize_value(material_record->desc.uv_bias_v, 0.0F);
+    push_constants.flags = material_record->desc.flags;
+    push_constants.alpha_cutoff = std::clamp(sanitize_value(material_record->desc.alpha_cutoff, 0.0F),
+                                             0.0F,
+                                             1.0F);
+    return push_constants;
+}
+
 VkDescriptorSet GeometryRenderer3D::AcquireMaterialDescriptorSet(std::uint32_t frame_index_,
-                                                                 std::uint32_t material_id_) {
+                                                                 std::uint32_t material_id_,
+                                                                 MaterialPushConstants* out_material_push_constants_) {
     if (context == nullptr || descriptor_host == nullptr || sampler_host == nullptr) {
         throw std::runtime_error("GeometryRenderer3D::AcquireMaterialDescriptorSet requires prepared runtime hosts");
     }
@@ -1095,6 +1150,9 @@ VkDescriptorSet GeometryRenderer3D::AcquireMaterialDescriptorSet(std::uint32_t f
     GeometryRenderer3DMcVector<MaterialSetEntry>& entries = frame_material_sets[frame_index_];
     const std::size_t lower_bound_index = LowerBoundMaterialSetIndex(entries, material_id_);
     if (lower_bound_index < entries.size() && entries[lower_bound_index].material_id == material_id_) {
+        if (out_material_push_constants_ != nullptr) {
+            *out_material_push_constants_ = entries[lower_bound_index].material_push_constants;
+        }
         return entries[lower_bound_index].descriptor_set;
     }
 
@@ -1133,6 +1191,7 @@ VkDescriptorSet GeometryRenderer3D::AcquireMaterialDescriptorSet(std::uint32_t f
         return VK_NULL_HANDLE;
     }
 
+    const MaterialPushConstants material_push_constants = BuildMaterialPushConstants(material_id_);
     const VkDescriptorSet descriptor_set = descriptor_host->AllocateSet(*context, frame_index_, descriptor_layout_id);
 
     descriptor_buffer_write_scratch.clear();
@@ -1160,8 +1219,12 @@ VkDescriptorSet GeometryRenderer3D::AcquireMaterialDescriptorSet(std::uint32_t f
     }
     entries[lower_bound_index] = MaterialSetEntry{
         .material_id = material_id_,
-        .descriptor_set = descriptor_set
+        .descriptor_set = descriptor_set,
+        .material_push_constants = material_push_constants
     };
+    if (out_material_push_constants_ != nullptr) {
+        *out_material_push_constants_ = material_push_constants;
+    }
     return descriptor_set;
 }
 

@@ -3,6 +3,10 @@
 layout(push_constant) uniform Geometry3DPushConstants {
     mat4 view_projection;
     vec4 light_direction_intensity;
+    vec4 material_uv_transform;
+    uint material_flags;
+    float alpha_cutoff;
+    vec2 material_reserved;
 } pc;
 
 layout(location = 0) in vec3 in_normal_world;
@@ -24,8 +28,14 @@ void main() {
     bool unlit = ((in_instance_params >> 7u) & 0x1u) != 0u;
     float shading = unlit ? 1.0 : (0.2 + n_dot_l * light_intensity);
 
-    vec4 sampled_albedo = texture(in_albedo_texture, in_uv);
+    vec2 uv = in_uv * pc.material_uv_transform.xy + pc.material_uv_transform.zw;
+    vec4 sampled_albedo = texture(in_albedo_texture, uv);
     vec4 base_albedo = vec4(in_albedo.rgb, in_albedo.a) * sampled_albedo;
+    bool alpha_test_enabled = (pc.material_flags & 0x1u) != 0u;
+    if (alpha_test_enabled && base_albedo.a < clamp(pc.alpha_cutoff, 0.0, 1.0)) {
+        discard;
+    }
+
     vec3 lit_color = base_albedo.rgb * shading;
     out_color = vec4(lit_color, base_albedo.a);
 }

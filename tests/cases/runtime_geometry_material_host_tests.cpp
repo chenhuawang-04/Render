@@ -26,6 +26,7 @@ VR_TEST_CASE(RuntimeGeometryMaterialHost_upsert_lookup_remove, "unit;runtime;geo
     material_b.uv_scale_u = 2.0F;
     material_b.uv_scale_v = 2.0F;
     material_b.uv_bias_u = 0.25F;
+    material_b.alpha_cutoff = 0.35F;
 
     vr::geometry::GeometryMaterialDesc material_c{};
     material_c.material_id = 20U;
@@ -47,17 +48,20 @@ VR_TEST_CASE(RuntimeGeometryMaterialHost_upsert_lookup_remove, "unit;runtime;geo
     VR_REQUIRE(record_a != nullptr);
 
     VR_CHECK(record_b->desc.image_id == 100U);
+    VR_CHECK(record_b->desc.alpha_cutoff == 0.35F);
     VR_CHECK(record_c->desc.image_id == 200U);
     VR_CHECK(record_a->desc.image_id == 300U);
     VR_CHECK(record_b->revision == 1U);
 
     material_b.image_id = 101U;
     material_b.uv_bias_v = 0.5F;
+    material_b.alpha_cutoff = 0.6F;
     host.UpsertMaterial(material_b);
 
     record_b = host.FindMaterial(10U);
     VR_REQUIRE(record_b != nullptr);
     VR_CHECK(record_b->desc.image_id == 101U);
+    VR_CHECK(record_b->desc.alpha_cutoff == 0.6F);
     VR_CHECK(record_b->revision == 2U);
 
     VR_CHECK(!host.RemoveMaterial(999U));

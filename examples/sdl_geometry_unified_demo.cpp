@@ -300,11 +300,19 @@ int main() {
         vr::geometry::GeometryMaterialDesc material_a{};
         material_a.material_id = 11U;
         material_a.image_id = 1001U;
+        material_a.uv_scale_u = 1.0F;
+        material_a.uv_scale_v = 1.0F;
         geometry_material_host.UpsertMaterial(material_a);
 
         vr::geometry::GeometryMaterialDesc material_b{};
         material_b.material_id = 22U;
         material_b.image_id = 1002U;
+        material_b.uv_scale_u = 1.35F;
+        material_b.uv_scale_v = 1.35F;
+        material_b.uv_bias_u = -0.15F;
+        material_b.uv_bias_v = 0.10F;
+        material_b.flags = vr::geometry::geometry_material_flag_alpha_test;
+        material_b.alpha_cutoff = 0.2F;
         geometry_material_host.UpsertMaterial(material_b);
 
         std::array<Geometry3D, 2U> geometry_3d_components{};
