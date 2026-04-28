@@ -1,6 +1,8 @@
 #pragma once
 
 #include "Center/Memory/Container/Vector/McVector.hpp"
+#include "vr/ecs/system/appearance_link_system.hpp"
+#include "vr/ecs/system/appearance_runtime_system.hpp"
 #include "vr/ecs/system/geometry_runtime_system.hpp"
 #include "vr/geometry/geometry_upload_host.hpp"
 #include "vr/render/pipeline_host.hpp"
@@ -34,6 +36,11 @@ struct GeometryRenderer2DCreateInfo {
 struct GeometryRenderer2DStats {
     std::uint32_t component_count = 0U;
     std::uint32_t visible_component_count = 0U;
+    std::uint32_t appearance_component_count = 0U;
+    std::uint32_t appearance_visible_count = 0U;
+    std::uint32_t appearance_updated_record_count = 0U;
+    std::uint32_t appearance_link_scanned_count = 0U;
+    std::uint32_t appearance_link_updated_count = 0U;
     std::uint32_t primitive_count = 0U;
     std::uint32_t draw_batch_count = 0U;
     std::uint32_t draw_call_count = 0U;
@@ -41,6 +48,7 @@ struct GeometryRenderer2DStats {
     std::uint32_t uploaded_primitive_count = 0U;
     std::uint64_t uploaded_bytes = 0U;
     bool cache_reused = false;
+    bool appearance_cache_reused = false;
 };
 
 class GeometryRenderer2D final {
@@ -60,6 +68,10 @@ public:
     void SetHost(GeometryUploadHost* upload_host_) noexcept;
     void SetSceneData(ecs::Geometry<ecs::Dim2>* geometry_components_,
                       std::uint32_t component_count_) noexcept;
+    void SetAppearanceData(ecs::Appearance<ecs::Dim2>* appearance_components_,
+                           std::uint32_t appearance_component_count_) noexcept;
+    void SetAppearanceDirtyHint(const std::uint32_t* dirty_component_indices_,
+                                std::uint32_t dirty_component_count_) noexcept;
 
     void PrepareFrame(const render::RuntimePrepareContext& prepare_context_);
     void Record(const render::FrameRecordContext& record_context_);
@@ -102,9 +114,14 @@ private:
 
     ecs::Geometry<ecs::Dim2>* geometry_components = nullptr;
     std::uint32_t component_count = 0U;
+    ecs::Appearance<ecs::Dim2>* appearance_components = nullptr;
+    std::uint32_t appearance_component_count = 0U;
 
     ecs::Geometry2DRuntimeScratch runtime_scratch{};
     ecs::Geometry2DRuntimeBuildStats runtime_stats{};
+    ecs::AppearanceRuntimeScratch<ecs::Dim2> appearance_runtime_scratch{};
+    ecs::AppearanceRuntimeBuildStats appearance_runtime_stats{};
+    ecs::AppearanceLinkStats appearance_link_stats{};
 
     GeometryUploadHost* geometry_upload_host = nullptr;
     VulkanContext* context = nullptr;
@@ -126,8 +143,9 @@ private:
 
     std::uint64_t last_submitted_value_seen = 0U;
     std::uint64_t completed_submit_value_seen = 0U;
+    const std::uint32_t* pending_appearance_dirty_component_indices = nullptr;
+    std::uint32_t pending_appearance_dirty_component_count = 0U;
     bool initialized = false;
 };
 
 } // namespace vr::geometry
-

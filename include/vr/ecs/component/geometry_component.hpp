@@ -1,5 +1,6 @@
 #pragma once
 
+#include "vr/ecs/component/appearance_component.hpp"
 #include "vr/ecs/component/spatial_types.hpp"
 #include "vr/ecs/component/text_component.hpp"
 #include "vr/ecs/concept/dimension.hpp"
@@ -78,6 +79,9 @@ struct GeometryRuntimeRoute final {
     std::uint32_t material_id;
     std::uint32_t batch_tag;
     std::uint32_t user_data;
+    AppearanceHandle appearance_handle;
+    std::uint32_t appearance_pipeline_bucket;
+    std::uint32_t appearance_resource_bucket;
     std::uint16_t depth_bin;
     std::uint8_t visible;
     GeometryRenderPassHint pass_hint;
@@ -177,4 +181,3 @@ static_assert(PurePodGeometryComponent<Geometry<Dim3>>);
 static_assert(sizeof(GeometryRuntimeRoute) <= 48U);
 
 } // namespace vr::ecs
-

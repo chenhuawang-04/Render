@@ -34,6 +34,7 @@ add_executable(${VR_BENCH_TARGET}
     cases/ecs_bounds_system_bench.cpp
     cases/ecs_culling_system_bench.cpp
     cases/ecs_surface_runtime_system_bench.cpp
+    cases/ecs_appearance_runtime_system_bench.cpp
     cases/ecs_surface_upload_plan_system_bench.cpp
     cases/ecs_text_runtime_system_bench.cpp
     cases/freetype_host_bench.cpp

@@ -195,6 +195,8 @@ void GeometryRenderer3D::Initialize(const GeometryRenderer3DCreateInfo& create_i
         resolved_materials.reserve(create_info_cache.reserve_material_set_count);
     }
     runtime_stats = {};
+    appearance_runtime_stats = {};
+    appearance_link_stats = {};
     culling_stats = {};
     instance_range = {};
     fallback_material_image = {};
@@ -204,6 +206,8 @@ void GeometryRenderer3D::Initialize(const GeometryRenderer3DCreateInfo& create_i
     completed_submit_value_seen = 0U;
     material_host_revision_seen = 0U;
     image_host_revision_seen = 0U;
+    pending_appearance_dirty_component_indices = nullptr;
+    pending_appearance_dirty_component_count = 0U;
     stats = {};
     initialized = true;
 }
@@ -251,6 +255,8 @@ void GeometryRenderer3D::Shutdown(VulkanContext& context_) {
     geometry_components = nullptr;
     transforms = nullptr;
     component_count = 0U;
+    appearance_components = nullptr;
+    appearance_component_count = 0U;
     camera_component = nullptr;
     camera_transform = nullptr;
     bounds_components = nullptr;
@@ -277,6 +283,13 @@ void GeometryRenderer3D::Shutdown(VulkanContext& context_) {
     runtime_scratch.batch_scratch.ordered_indices.clear();
     runtime_scratch.cache = {};
     runtime_stats = {};
+    appearance_runtime_scratch.gpu_records.clear();
+    appearance_runtime_scratch.upload_ranges.clear();
+    appearance_runtime_scratch.dirty_component_indices.clear();
+    appearance_runtime_scratch.handle_generations.clear();
+    appearance_runtime_scratch.cache = {};
+    appearance_runtime_stats = {};
+    appearance_link_stats = {};
     culling_scratch.visible_indices.clear();
     culling_scratch.visibility_stamps.clear();
     culling_stats = {};
@@ -290,6 +303,8 @@ void GeometryRenderer3D::Shutdown(VulkanContext& context_) {
     completed_submit_value_seen = 0U;
     material_host_revision_seen = 0U;
     image_host_revision_seen = 0U;
+    pending_appearance_dirty_component_indices = nullptr;
+    pending_appearance_dirty_component_count = 0U;
     initialized = false;
 }
 
@@ -325,6 +340,22 @@ void GeometryRenderer3D::SetSceneData(ecs::Geometry<ecs::Dim3>* geometry_compone
     if (component_count_ > 0U) {
         ecs::CullingSystem<ecs::Dim3>::Reserve(culling_scratch, component_count_);
     }
+}
+
+void GeometryRenderer3D::SetAppearanceData(ecs::Appearance<ecs::Dim3>* appearance_components_,
+                                           std::uint32_t appearance_component_count_) noexcept {
+    appearance_components = appearance_components_;
+    appearance_component_count = appearance_component_count_;
+    if (appearance_component_count_ > 0U) {
+        ecs::AppearanceRuntimeSystem<ecs::Dim3>::Reserve(appearance_runtime_scratch,
+                                                         appearance_component_count_);
+    }
+}
+
+void GeometryRenderer3D::SetAppearanceDirtyHint(const std::uint32_t* dirty_component_indices_,
+                                                std::uint32_t dirty_component_count_) noexcept {
+    pending_appearance_dirty_component_indices = dirty_component_indices_;
+    pending_appearance_dirty_component_count = dirty_component_count_;
 }
 
 void GeometryRenderer3D::PrepareFrame(const render::RuntimePrepareContext& prepare_context_) {
@@ -392,9 +423,36 @@ void GeometryRenderer3D::PrepareFrame(const render::RuntimePrepareContext& prepa
 
     stats = {};
     stats.component_count = component_count;
+    stats.appearance_component_count = appearance_component_count;
     stats.material_resolve_cache_entry_count = static_cast<std::uint32_t>(resolved_materials.size());
     instance_range = {};
     culling_stats = {};
+    appearance_runtime_stats = {};
+    appearance_link_stats = {};
+
+    if (appearance_components != nullptr && appearance_component_count > 0U) {
+        ecs::AppearanceRuntimeBuildHint appearance_build_hint{};
+        appearance_build_hint.dirty_component_indices = pending_appearance_dirty_component_indices;
+        appearance_build_hint.dirty_component_count = pending_appearance_dirty_component_count;
+        appearance_build_hint.use_dirty_component_indices =
+            (pending_appearance_dirty_component_indices != nullptr &&
+             pending_appearance_dirty_component_count > 0U)
+                ? 1U
+                : 0U;
+
+        appearance_runtime_stats = ecs::AppearanceRuntimeSystem<ecs::Dim3>::Build(
+            appearance_components,
+            appearance_component_count,
+            appearance_runtime_scratch,
+            ecs::AppearanceRuntimeSystem<ecs::Dim3>::DefaultPipelinePolicy(),
+            ecs::AppearanceRuntimeSystem<ecs::Dim3>::DefaultSortPolicy(),
+            ecs::AppearanceRuntimeSystem<ecs::Dim3>::DefaultBuildConfig(),
+            appearance_build_hint);
+
+        stats.appearance_visible_count = appearance_runtime_stats.visible_count;
+        stats.appearance_updated_record_count = appearance_runtime_stats.updated_record_count;
+        stats.appearance_cache_reused = appearance_runtime_stats.full_rebuild == 0U;
+    }
 
     if (geometry_components == nullptr || component_count == 0U) {
         runtime_scratch.instances.clear();
@@ -402,7 +460,19 @@ void GeometryRenderer3D::PrepareFrame(const render::RuntimePrepareContext& prepa
         runtime_stats = {};
         culling_scratch.visible_indices.clear();
         culling_scratch.visibility_stamps.clear();
+        pending_appearance_dirty_component_indices = nullptr;
+        pending_appearance_dirty_component_count = 0U;
         return;
+    }
+
+    if (appearance_components != nullptr && appearance_component_count > 0U) {
+        appearance_link_stats = ecs::AppearanceLinkSystem<ecs::Dim3>::ApplyToGeometryAligned(
+            geometry_components,
+            component_count,
+            appearance_components,
+            appearance_component_count);
+        stats.appearance_link_scanned_count = appearance_link_stats.scanned_count;
+        stats.appearance_link_updated_count = appearance_link_stats.updated_count;
     }
 
     ecs::Geometry3DRuntimeBuildHint build_hint{};
@@ -480,6 +550,9 @@ void GeometryRenderer3D::PrepareFrame(const render::RuntimePrepareContext& prepa
             CompileRequiredPipelinesForCurrentFrame(*context, *pipeline_host, swapchain_format, active_depth_format);
         }
     }
+
+    pending_appearance_dirty_component_indices = nullptr;
+    pending_appearance_dirty_component_count = 0U;
 }
 
 void GeometryRenderer3D::Record(const render::FrameRecordContext& record_context_) {

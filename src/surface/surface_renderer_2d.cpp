@@ -87,12 +87,16 @@ void SurfaceRenderer2D::Initialize(const SurfaceRenderer2DCreateInfo& create_inf
     fallback_texture_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
     image_initialized.clear();
+    appearance_runtime_stats = {};
+    appearance_link_stats = {};
     last_upload_result = {};
     stats = {};
 
     surface_components = nullptr;
     transforms = nullptr;
     component_count = 0U;
+    appearance_components = nullptr;
+    appearance_component_count = 0U;
     surface_upload_host = nullptr;
     surface_image_host = nullptr;
     context = nullptr;
@@ -109,6 +113,8 @@ void SurfaceRenderer2D::Initialize(const SurfaceRenderer2DCreateInfo& create_inf
     completed_submit_value_seen = 0U;
     pending_dirty_component_indices = nullptr;
     pending_dirty_component_count = 0U;
+    pending_appearance_dirty_component_indices = nullptr;
+    pending_appearance_dirty_component_count = 0U;
 
     initialized = true;
 }
@@ -128,6 +134,8 @@ void SurfaceRenderer2D::Shutdown(VulkanContext& context_) {
     surface_components = nullptr;
     transforms = nullptr;
     component_count = 0U;
+    appearance_components = nullptr;
+    appearance_component_count = 0U;
     surface_upload_host = nullptr;
     surface_image_host = nullptr;
 
@@ -159,6 +167,13 @@ void SurfaceRenderer2D::Shutdown(VulkanContext& context_) {
     runtime_scratch.batch_scratch.radix_scratch.clear();
     runtime_scratch.batch_scratch.ordered_indices.clear();
     runtime_scratch.cache = {};
+    appearance_runtime_scratch.gpu_records.clear();
+    appearance_runtime_scratch.upload_ranges.clear();
+    appearance_runtime_scratch.dirty_component_indices.clear();
+    appearance_runtime_scratch.handle_generations.clear();
+    appearance_runtime_scratch.cache = {};
+    appearance_runtime_stats = {};
+    appearance_link_stats = {};
 
     plan_scratch.instance_indices.clear();
     plan_scratch.ranges.clear();
@@ -174,6 +189,8 @@ void SurfaceRenderer2D::Shutdown(VulkanContext& context_) {
     completed_submit_value_seen = 0U;
     pending_dirty_component_indices = nullptr;
     pending_dirty_component_count = 0U;
+    pending_appearance_dirty_component_indices = nullptr;
+    pending_appearance_dirty_component_count = 0U;
     initialized = false;
 }
 
@@ -199,10 +216,26 @@ void SurfaceRenderer2D::SetSceneData(ecs::Surface<ecs::Dim2>* surface_components
     component_count = component_count_;
 }
 
+void SurfaceRenderer2D::SetAppearanceData(ecs::Appearance<ecs::Dim2>* appearance_components_,
+                                          std::uint32_t appearance_component_count_) noexcept {
+    appearance_components = appearance_components_;
+    appearance_component_count = appearance_component_count_;
+    if (appearance_component_count_ > 0U) {
+        ecs::AppearanceRuntimeSystem<ecs::Dim2>::Reserve(appearance_runtime_scratch,
+                                                         appearance_component_count_);
+    }
+}
+
 void SurfaceRenderer2D::SetTransformDirtyHint(const std::uint32_t* dirty_component_indices_,
                                               std::uint32_t dirty_component_count_) noexcept {
     pending_dirty_component_indices = dirty_component_indices_;
     pending_dirty_component_count = dirty_component_count_;
+}
+
+void SurfaceRenderer2D::SetAppearanceDirtyHint(const std::uint32_t* dirty_component_indices_,
+                                               std::uint32_t dirty_component_count_) noexcept {
+    pending_appearance_dirty_component_indices = dirty_component_indices_;
+    pending_appearance_dirty_component_count = dirty_component_count_;
 }
 
 void SurfaceRenderer2D::PrepareFrame(const render::RuntimePrepareContext& prepare_context_) {
@@ -245,14 +278,53 @@ void SurfaceRenderer2D::PrepareFrame(const render::RuntimePrepareContext& prepar
 
     stats = {};
     stats.component_count = component_count;
+    stats.appearance_component_count = appearance_component_count;
     last_upload_result = {};
+    appearance_runtime_stats = {};
+    appearance_link_stats = {};
+
+    if (appearance_components != nullptr && appearance_component_count > 0U) {
+        ecs::AppearanceRuntimeBuildHint appearance_build_hint{};
+        appearance_build_hint.dirty_component_indices = pending_appearance_dirty_component_indices;
+        appearance_build_hint.dirty_component_count = pending_appearance_dirty_component_count;
+        appearance_build_hint.use_dirty_component_indices =
+            (pending_appearance_dirty_component_indices != nullptr &&
+             pending_appearance_dirty_component_count > 0U)
+                ? 1U
+                : 0U;
+
+        appearance_runtime_stats = ecs::AppearanceRuntimeSystem<ecs::Dim2>::Build(
+            appearance_components,
+            appearance_component_count,
+            appearance_runtime_scratch,
+            ecs::AppearanceRuntimeSystem<ecs::Dim2>::DefaultPipelinePolicy(),
+            ecs::AppearanceRuntimeSystem<ecs::Dim2>::DefaultSortPolicy(),
+            ecs::AppearanceRuntimeSystem<ecs::Dim2>::DefaultBuildConfig(),
+            appearance_build_hint);
+
+        stats.appearance_visible_count = appearance_runtime_stats.visible_count;
+        stats.appearance_updated_record_count = appearance_runtime_stats.updated_record_count;
+        stats.appearance_cache_reused = appearance_runtime_stats.full_rebuild == 0U;
+    }
 
     if (surface_components == nullptr || component_count == 0U) {
         runtime_scratch.instances.clear();
         runtime_scratch.draw_batches.clear();
         pending_dirty_component_indices = nullptr;
         pending_dirty_component_count = 0U;
+        pending_appearance_dirty_component_indices = nullptr;
+        pending_appearance_dirty_component_count = 0U;
         return;
+    }
+
+    if (appearance_components != nullptr && appearance_component_count > 0U) {
+        appearance_link_stats = ecs::AppearanceLinkSystem<ecs::Dim2>::ApplyToSurfaceAligned(
+            surface_components,
+            component_count,
+            appearance_components,
+            appearance_component_count);
+        stats.appearance_link_scanned_count = appearance_link_stats.scanned_count;
+        stats.appearance_link_updated_count = appearance_link_stats.updated_count;
     }
 
     ecs::Surface2DRuntimeBuildHint runtime_build_hint{};
@@ -284,6 +356,8 @@ void SurfaceRenderer2D::PrepareFrame(const render::RuntimePrepareContext& prepar
 
     pending_dirty_component_indices = nullptr;
     pending_dirty_component_count = 0U;
+    pending_appearance_dirty_component_indices = nullptr;
+    pending_appearance_dirty_component_count = 0U;
 }
 
 void SurfaceRenderer2D::Record(const render::FrameRecordContext& record_context_) {

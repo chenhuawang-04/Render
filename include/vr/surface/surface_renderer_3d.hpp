@@ -3,6 +3,8 @@
 #include "Center/Memory/Container/Vector/McVector.hpp"
 #include "vr/ecs/component/bounds_component.hpp"
 #include "vr/ecs/component/camera_component.hpp"
+#include "vr/ecs/system/appearance_link_system.hpp"
+#include "vr/ecs/system/appearance_runtime_system.hpp"
 #include "vr/ecs/system/culling_system.hpp"
 #include "vr/ecs/component/transform_component.hpp"
 #include "vr/ecs/system/surface_runtime_system.hpp"
@@ -52,6 +54,11 @@ struct SurfaceRenderer3DCreateInfo final {
 struct SurfaceRenderer3DStats final {
     std::uint32_t component_count = 0U;
     std::uint32_t visible_component_count = 0U;
+    std::uint32_t appearance_component_count = 0U;
+    std::uint32_t appearance_visible_count = 0U;
+    std::uint32_t appearance_updated_record_count = 0U;
+    std::uint32_t appearance_link_scanned_count = 0U;
+    std::uint32_t appearance_link_updated_count = 0U;
     std::uint32_t instance_count = 0U;
     std::uint32_t draw_batch_count = 0U;
     std::uint32_t draw_call_count = 0U;
@@ -71,6 +78,7 @@ struct SurfaceRenderer3DStats final {
     std::uint32_t culling_plane_test_count = 0U;
     std::uint64_t uploaded_bytes = 0U;
     bool cache_reused = false;
+    bool appearance_cache_reused = false;
     bool transform_only_update = false;
     bool used_partial_upload = false;
     bool skipped_upload = true;
@@ -101,8 +109,12 @@ public:
                       ecs::Camera<ecs::Dim3>* camera_component_,
                       ecs::Transform<ecs::Dim3>* camera_transform_,
                       ecs::Bounds<ecs::Dim3>* bounds_components_ = nullptr) noexcept;
+    void SetAppearanceData(ecs::Appearance<ecs::Dim3>* appearance_components_,
+                           std::uint32_t appearance_component_count_) noexcept;
     void SetTransformDirtyHint(const std::uint32_t* dirty_component_indices_,
                                std::uint32_t dirty_component_count_) noexcept;
+    void SetAppearanceDirtyHint(const std::uint32_t* dirty_component_indices_,
+                                std::uint32_t dirty_component_count_) noexcept;
 
     void PrepareFrame(const render::RuntimePrepareContext& prepare_context_);
     void Record(const render::FrameRecordContext& record_context_);
@@ -208,12 +220,17 @@ private:
     ecs::Surface<ecs::Dim3>* surface_components = nullptr;
     ecs::Transform<ecs::Dim3>* transforms = nullptr;
     std::uint32_t component_count = 0U;
+    ecs::Appearance<ecs::Dim3>* appearance_components = nullptr;
+    std::uint32_t appearance_component_count = 0U;
     ecs::Camera<ecs::Dim3>* camera_component = nullptr;
     ecs::Transform<ecs::Dim3>* camera_transform = nullptr;
     ecs::Bounds<ecs::Dim3>* bounds_components = nullptr;
 
     ecs::Surface3DRuntimeScratch runtime_scratch{};
     ecs::SurfaceUploadPlanScratch<ecs::Dim3> plan_scratch{};
+    ecs::AppearanceRuntimeScratch<ecs::Dim3> appearance_runtime_scratch{};
+    ecs::AppearanceRuntimeBuildStats appearance_runtime_stats{};
+    ecs::AppearanceLinkStats appearance_link_stats{};
     ecs::CullingScratch<ecs::Dim3> culling_scratch{};
     ecs::CullingBuildStats culling_stats{};
     Surface3DRuntimeUploadResult last_upload_result{};
@@ -258,6 +275,8 @@ private:
 
     const std::uint32_t* pending_dirty_component_indices = nullptr;
     std::uint32_t pending_dirty_component_count = 0U;
+    const std::uint32_t* pending_appearance_dirty_component_indices = nullptr;
+    std::uint32_t pending_appearance_dirty_component_count = 0U;
     bool initialized = false;
 };
 

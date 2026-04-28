@@ -112,7 +112,7 @@ public:
                                                                   scratch_,
                                                                   false);
         if (stats.visible_count > 1U) {
-            RadixSortBySortKey(scratch_);
+            SortVisibleItemsBySortKey(scratch_);
         }
 
         if (build_ordered_indices_) {
@@ -136,7 +136,7 @@ public:
                                                                   scratch_,
                                                                   false);
         if (stats.visible_count > 1U) {
-            RadixSortBySortKey(scratch_);
+            SortVisibleItemsBySortKey(scratch_);
         }
 
         if (build_ordered_indices_) {
@@ -310,6 +310,56 @@ private:
         for (std::uint32_t i = 0U; i < count; ++i) {
             scratch_.ordered_indices[i] = scratch_.visible_items[i].component_index;
         }
+    }
+
+    static void SortVisibleItemsBySortKey(ScratchType& scratch_) {
+        const std::uint32_t count = static_cast<std::uint32_t>(scratch_.visible_items.size());
+        if (count <= 1U) {
+            return;
+        }
+        if (TryInsertionSortIfNearlySorted(scratch_)) {
+            return;
+        }
+        RadixSortBySortKey(scratch_);
+    }
+
+    [[nodiscard]] static bool TryInsertionSortIfNearlySorted(ScratchType& scratch_) {
+        constexpr std::uint32_t k_max_adjacent_descents = 8U;
+
+        const std::uint32_t count = static_cast<std::uint32_t>(scratch_.visible_items.size());
+        if (count <= 1U) {
+            return true;
+        }
+
+        GeometryBatchItem* items = scratch_.visible_items.data();
+        std::uint32_t descents = 0U;
+        for (std::uint32_t i = 1U; i < count; ++i) {
+            if (items[i - 1U].sort_key <= items[i].sort_key) {
+                continue;
+            }
+            ++descents;
+            if (descents > k_max_adjacent_descents) {
+                return false;
+            }
+        }
+        if (descents == 0U) {
+            return true;
+        }
+
+        for (std::uint32_t i = 1U; i < count; ++i) {
+            const GeometryBatchItem item = items[i];
+            if (items[i - 1U].sort_key <= item.sort_key) {
+                continue;
+            }
+
+            std::uint32_t j = i;
+            while (j > 0U && items[j - 1U].sort_key > item.sort_key) {
+                items[j] = items[j - 1U];
+                --j;
+            }
+            items[j] = item;
+        }
+        return true;
     }
 
     static void RadixSortBySortKey(ScratchType& scratch_) {

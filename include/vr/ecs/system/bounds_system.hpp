@@ -185,24 +185,15 @@ public:
 
     [[nodiscard]] static bool Update(BoundsType& component_,
                                      const TransformType& transform_) noexcept {
-        return Update(component_, &transform_);
+        return UpdateWithTransform(component_, transform_);
     }
 
     [[nodiscard]] static bool Update(BoundsType& component_,
                                      const TransformType* transform_) noexcept {
-        const std::uint32_t transform_world_revision = ReadTransformWorldRevision(transform_);
-        const bool needs_update =
-            HasDirtyFlags(component_, bounds_dirty_local_flag | bounds_dirty_runtime_flag) ||
-            component_.runtime.transform_world_revision != transform_world_revision;
-        if (!needs_update) {
-            return false;
+        if (transform_ == nullptr) {
+            return UpdateWithoutTransform(component_);
         }
-
-        RebuildWorldBounds(component_, transform_);
-        component_.runtime.transform_world_revision = transform_world_revision;
-        component_.runtime.world_revision = NextBoundsRevision(component_.runtime.world_revision);
-        ClearDirtyFlags(component_, bounds_dirty_local_flag | bounds_dirty_runtime_flag);
-        return true;
+        return UpdateWithTransform(component_, *transform_);
     }
 
     [[nodiscard]] static std::uint32_t UpdateAligned(BoundsType* components_,
@@ -213,9 +204,17 @@ public:
         }
 
         std::uint32_t updated_count = 0U;
+        if (transforms_ == nullptr) {
+            for (std::uint32_t i = 0U; i < component_count_; ++i) {
+                if (UpdateWithoutTransform(components_[i])) {
+                    ++updated_count;
+                }
+            }
+            return updated_count;
+        }
+
         for (std::uint32_t i = 0U; i < component_count_; ++i) {
-            const TransformType* transform = (transforms_ != nullptr) ? &transforms_[i] : nullptr;
-            if (Update(components_[i], transform)) {
+            if (UpdateWithTransform(components_[i], transforms_[i])) {
                 ++updated_count;
             }
         }
@@ -235,13 +234,34 @@ public:
         }
 
         std::uint32_t updated_count = 0U;
+        if (transforms_ != nullptr) {
+            if (dirty_component_count_ == 1U) {
+                const std::uint32_t component_index = dirty_component_indices_[0U];
+                if (component_index < component_count_ &&
+                    UpdateWithTransform(components_[component_index], transforms_[component_index])) {
+                    return 1U;
+                }
+                return 0U;
+            }
+
+            for (std::uint32_t i = 0U; i < dirty_component_count_; ++i) {
+                const std::uint32_t component_index = dirty_component_indices_[i];
+                if (component_index >= component_count_) {
+                    continue;
+                }
+                if (UpdateWithTransform(components_[component_index], transforms_[component_index])) {
+                    ++updated_count;
+                }
+            }
+            return updated_count;
+        }
+
         for (std::uint32_t i = 0U; i < dirty_component_count_; ++i) {
             const std::uint32_t component_index = dirty_component_indices_[i];
             if (component_index >= component_count_) {
                 continue;
             }
-            const TransformType* transform = (transforms_ != nullptr) ? &transforms_[component_index] : nullptr;
-            if (Update(components_[component_index], transform)) {
+            if (UpdateWithoutTransform(components_[component_index])) {
                 ++updated_count;
             }
         }
@@ -323,11 +343,34 @@ private:
         out_max_.z = std::max(in_min_.z, in_max_.z);
     }
 
-    [[nodiscard]] static std::uint32_t ReadTransformWorldRevision(const TransformType* transform_) noexcept {
-        if (transform_ == nullptr) {
-            return 0U;
+    [[nodiscard]] static bool UpdateWithTransform(BoundsType& component_,
+                                                  const TransformType& transform_) noexcept {
+        return UpdateForTransform(component_,
+                                  &transform_,
+                                  transform_.runtime.world_revision);
+    }
+
+    [[nodiscard]] static bool UpdateWithoutTransform(BoundsType& component_) noexcept {
+        return UpdateForTransform(component_, nullptr, 0U);
+    }
+
+    [[nodiscard]] static bool UpdateForTransform(BoundsType& component_,
+                                                 const TransformType* transform_,
+                                                 std::uint32_t transform_world_revision_) noexcept {
+        const std::uint32_t dirty_flags = component_.runtime.dirty_flags;
+        const bool has_bounds_dirty =
+            (dirty_flags & (bounds_dirty_local_flag | bounds_dirty_runtime_flag)) != 0U;
+        if (!has_bounds_dirty &&
+            component_.runtime.transform_world_revision == transform_world_revision_) {
+            return false;
         }
-        return transform_->runtime.world_revision;
+
+        RebuildWorldBounds(component_, transform_);
+        component_.runtime.transform_world_revision = transform_world_revision_;
+        component_.runtime.world_revision = NextBoundsRevision(component_.runtime.world_revision);
+        component_.runtime.dirty_flags = dirty_flags &
+            ~(bounds_dirty_local_flag | bounds_dirty_runtime_flag);
+        return true;
     }
 
     static void RebuildWorldBounds(BoundsType& component_,

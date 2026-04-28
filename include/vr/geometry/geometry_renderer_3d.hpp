@@ -3,6 +3,8 @@
 #include "Center/Memory/Container/Vector/McVector.hpp"
 #include "vr/ecs/component/bounds_component.hpp"
 #include "vr/ecs/component/camera_component.hpp"
+#include "vr/ecs/system/appearance_link_system.hpp"
+#include "vr/ecs/system/appearance_runtime_system.hpp"
 #include "vr/ecs/system/culling_system.hpp"
 #include "vr/ecs/system/geometry_runtime_system.hpp"
 #include "vr/geometry/geometry_image_host.hpp"
@@ -57,6 +59,11 @@ struct GeometryRenderer3DCreateInfo {
 struct GeometryRenderer3DStats {
     std::uint32_t component_count = 0U;
     std::uint32_t visible_component_count = 0U;
+    std::uint32_t appearance_component_count = 0U;
+    std::uint32_t appearance_visible_count = 0U;
+    std::uint32_t appearance_updated_record_count = 0U;
+    std::uint32_t appearance_link_scanned_count = 0U;
+    std::uint32_t appearance_link_updated_count = 0U;
     std::uint32_t instance_count = 0U;
     std::uint32_t draw_batch_count = 0U;
     std::uint32_t draw_call_count = 0U;
@@ -83,6 +90,7 @@ struct GeometryRenderer3DStats {
     std::uint32_t culling_plane_test_count = 0U;
     std::uint64_t uploaded_bytes = 0U;
     bool cache_reused = false;
+    bool appearance_cache_reused = false;
     bool transform_only_update = false;
     bool used_bounds_culling = false;
 };
@@ -111,6 +119,10 @@ public:
                       ecs::Camera<ecs::Dim3>* camera_component_,
                       ecs::Transform<ecs::Dim3>* camera_transform_,
                       ecs::Bounds<ecs::Dim3>* bounds_components_ = nullptr) noexcept;
+    void SetAppearanceData(ecs::Appearance<ecs::Dim3>* appearance_components_,
+                           std::uint32_t appearance_component_count_) noexcept;
+    void SetAppearanceDirtyHint(const std::uint32_t* dirty_component_indices_,
+                                std::uint32_t dirty_component_count_) noexcept;
 
     void PrepareFrame(const render::RuntimePrepareContext& prepare_context_);
     void Record(const render::FrameRecordContext& record_context_);
@@ -270,12 +282,17 @@ private:
     ecs::Geometry<ecs::Dim3>* geometry_components = nullptr;
     ecs::Transform<ecs::Dim3>* transforms = nullptr;
     std::uint32_t component_count = 0U;
+    ecs::Appearance<ecs::Dim3>* appearance_components = nullptr;
+    std::uint32_t appearance_component_count = 0U;
     ecs::Camera<ecs::Dim3>* camera_component = nullptr;
     ecs::Transform<ecs::Dim3>* camera_transform = nullptr;
     ecs::Bounds<ecs::Dim3>* bounds_components = nullptr;
 
     ecs::Geometry3DRuntimeScratch runtime_scratch{};
     ecs::Geometry3DRuntimeBuildStats runtime_stats{};
+    ecs::AppearanceRuntimeScratch<ecs::Dim3> appearance_runtime_scratch{};
+    ecs::AppearanceRuntimeBuildStats appearance_runtime_stats{};
+    ecs::AppearanceLinkStats appearance_link_stats{};
     ecs::CullingScratch<ecs::Dim3> culling_scratch{};
     ecs::CullingBuildStats culling_stats{};
 
@@ -324,6 +341,8 @@ private:
 
     std::uint64_t last_submitted_value_seen = 0U;
     std::uint64_t completed_submit_value_seen = 0U;
+    const std::uint32_t* pending_appearance_dirty_component_indices = nullptr;
+    std::uint32_t pending_appearance_dirty_component_count = 0U;
     std::uint32_t material_host_revision_seen = 0U;
     std::uint32_t image_host_revision_seen = 0U;
     bool initialized = false;

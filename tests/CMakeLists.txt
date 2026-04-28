@@ -23,6 +23,10 @@ add_executable(${VR_TEST_TARGET}
     cases/ecs_geometry_runtime_system_tests.cpp
     cases/ecs_text_component_tests.cpp
     cases/ecs_surface_component_tests.cpp
+    cases/ecs_appearance_component_tests.cpp
+    cases/ecs_appearance_system_tests.cpp
+    cases/ecs_appearance_runtime_system_tests.cpp
+    cases/ecs_appearance_link_system_tests.cpp
     cases/ecs_bounds_system_tests.cpp
     cases/ecs_culling_system_tests.cpp
     cases/ecs_surface_batch_runtime_system_tests.cpp

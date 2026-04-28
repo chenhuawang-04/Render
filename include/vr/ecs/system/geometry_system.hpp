@@ -99,6 +99,9 @@ public:
         component_.runtime.route.material_id = 0U;
         component_.runtime.route.batch_tag = 0U;
         component_.runtime.route.user_data = 0U;
+        component_.runtime.route.appearance_handle = invalid_appearance_handle;
+        component_.runtime.route.appearance_pipeline_bucket = 0U;
+        component_.runtime.route.appearance_resource_bucket = 0U;
         component_.runtime.route.depth_bin = 0U;
         component_.runtime.route.visible = 1U;
         component_.runtime.route.pass_hint = std::same_as<DimensionT, Dim2>
@@ -187,6 +190,56 @@ public:
     static void SetUserData(GeometryType& component_, std::uint32_t user_data_) noexcept {
         component_.runtime.route.user_data = user_data_;
         MarkDirty(component_, geometry_dirty_runtime_flag);
+    }
+
+    static void SetAppearanceHandle(GeometryType& component_,
+                                    AppearanceHandle appearance_handle_) noexcept {
+        if (component_.runtime.route.appearance_handle.index == appearance_handle_.index &&
+            component_.runtime.route.appearance_handle.generation == appearance_handle_.generation) {
+            return;
+        }
+        component_.runtime.route.appearance_handle = appearance_handle_;
+        MarkDirty(component_, geometry_dirty_runtime_flag);
+    }
+
+    static void ClearAppearanceHandle(GeometryType& component_) noexcept {
+        if (component_.runtime.route.appearance_handle.index == invalid_appearance_handle.index &&
+            component_.runtime.route.appearance_handle.generation == invalid_appearance_handle.generation &&
+            component_.runtime.route.appearance_pipeline_bucket == 0U &&
+            component_.runtime.route.appearance_resource_bucket == 0U) {
+            return;
+        }
+        component_.runtime.route.appearance_handle = invalid_appearance_handle;
+        component_.runtime.route.appearance_pipeline_bucket = 0U;
+        component_.runtime.route.appearance_resource_bucket = 0U;
+        MarkDirty(component_, geometry_dirty_runtime_flag);
+    }
+
+    [[nodiscard]] static bool SetAppearanceRuntimeLink(GeometryType& component_,
+                                                       AppearanceHandle appearance_handle_,
+                                                       std::uint64_t appearance_sort_key_,
+                                                       std::uint64_t appearance_pipeline_key_,
+                                                       std::uint64_t appearance_resource_key_) noexcept {
+        const std::uint32_t pipeline_bucket = static_cast<std::uint32_t>(appearance_pipeline_key_);
+        const std::uint32_t resource_bucket = static_cast<std::uint32_t>(appearance_resource_key_);
+        const bool changed =
+            component_.runtime.route.appearance_handle.index != appearance_handle_.index ||
+            component_.runtime.route.appearance_handle.generation != appearance_handle_.generation ||
+            component_.runtime.route.appearance_pipeline_bucket != pipeline_bucket ||
+            component_.runtime.route.appearance_resource_bucket != resource_bucket ||
+            component_.runtime.route.material_id != resource_bucket ||
+            component_.runtime.route.sort_key != appearance_sort_key_;
+        if (!changed) {
+            return false;
+        }
+
+        component_.runtime.route.appearance_handle = appearance_handle_;
+        component_.runtime.route.appearance_pipeline_bucket = pipeline_bucket;
+        component_.runtime.route.appearance_resource_bucket = resource_bucket;
+        component_.runtime.route.material_id = resource_bucket;
+        component_.runtime.route.sort_key = appearance_sort_key_;
+        MarkDirty(component_, geometry_dirty_runtime_flag);
+        return true;
     }
 
     static void SetDepthBin(GeometryType& component_, std::uint16_t depth_bin_) noexcept
