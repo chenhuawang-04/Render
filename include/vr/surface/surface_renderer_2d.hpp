@@ -2,9 +2,8 @@
 
 #include "Center/Memory/Container/Vector/McVector.hpp"
 #include "vr/ecs/component/transform_component.hpp"
-#include "vr/ecs/system/appearance_link_system.hpp"
-#include "vr/ecs/system/appearance_runtime_system.hpp"
 #include "vr/ecs/system/surface_runtime_system.hpp"
+#include "vr/render/appearance_prepare_stage.hpp"
 #include "vr/render/descriptor_host.hpp"
 #include "vr/render/pipeline_host.hpp"
 #include "vr/resource/sampler_host.hpp"

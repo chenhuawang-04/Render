@@ -346,10 +346,8 @@ void GeometryRenderer3D::SetAppearanceData(ecs::Appearance<ecs::Dim3>* appearanc
                                            std::uint32_t appearance_component_count_) noexcept {
     appearance_components = appearance_components_;
     appearance_component_count = appearance_component_count_;
-    if (appearance_component_count_ > 0U) {
-        ecs::AppearanceRuntimeSystem<ecs::Dim3>::Reserve(appearance_runtime_scratch,
-                                                         appearance_component_count_);
-    }
+    render::AppearancePrepareStage<ecs::Dim3>::Reserve(appearance_runtime_scratch,
+                                                       appearance_component_count_);
 }
 
 void GeometryRenderer3D::SetAppearanceDirtyHint(const std::uint32_t* dirty_component_indices_,
@@ -430,28 +428,23 @@ void GeometryRenderer3D::PrepareFrame(const render::RuntimePrepareContext& prepa
     appearance_runtime_stats = {};
     appearance_link_stats = {};
 
-    if (appearance_components != nullptr && appearance_component_count > 0U) {
-        ecs::AppearanceRuntimeBuildHint appearance_build_hint{};
-        appearance_build_hint.dirty_component_indices = pending_appearance_dirty_component_indices;
-        appearance_build_hint.dirty_component_count = pending_appearance_dirty_component_count;
-        appearance_build_hint.use_dirty_component_indices =
-            (pending_appearance_dirty_component_indices != nullptr &&
-             pending_appearance_dirty_component_count > 0U)
-                ? 1U
-                : 0U;
-
-        appearance_runtime_stats = ecs::AppearanceRuntimeSystem<ecs::Dim3>::Build(
+    const render::AppearancePrepareStageResult<ecs::Dim3> appearance_prepare_result =
+        render::AppearancePrepareStage<ecs::Dim3>::BuildAndLinkGeometry(
             appearance_components,
             appearance_component_count,
+            pending_appearance_dirty_component_indices,
+            pending_appearance_dirty_component_count,
             appearance_runtime_scratch,
-            ecs::AppearanceRuntimeSystem<ecs::Dim3>::DefaultPipelinePolicy(),
-            ecs::AppearanceRuntimeSystem<ecs::Dim3>::DefaultSortPolicy(),
-            ecs::AppearanceRuntimeSystem<ecs::Dim3>::DefaultBuildConfig(),
-            appearance_build_hint);
-
+            geometry_components,
+            component_count);
+    if (appearance_prepare_result.has_appearance_data) {
+        appearance_runtime_stats = appearance_prepare_result.runtime_stats;
+        appearance_link_stats = appearance_prepare_result.link_stats;
         stats.appearance_visible_count = appearance_runtime_stats.visible_count;
         stats.appearance_updated_record_count = appearance_runtime_stats.updated_record_count;
         stats.appearance_cache_reused = appearance_runtime_stats.full_rebuild == 0U;
+        stats.appearance_link_scanned_count = appearance_link_stats.scanned_count;
+        stats.appearance_link_updated_count = appearance_link_stats.updated_count;
     }
 
     if (geometry_components == nullptr || component_count == 0U) {
@@ -463,16 +456,6 @@ void GeometryRenderer3D::PrepareFrame(const render::RuntimePrepareContext& prepa
         pending_appearance_dirty_component_indices = nullptr;
         pending_appearance_dirty_component_count = 0U;
         return;
-    }
-
-    if (appearance_components != nullptr && appearance_component_count > 0U) {
-        appearance_link_stats = ecs::AppearanceLinkSystem<ecs::Dim3>::ApplyToGeometryAligned(
-            geometry_components,
-            component_count,
-            appearance_components,
-            appearance_component_count);
-        stats.appearance_link_scanned_count = appearance_link_stats.scanned_count;
-        stats.appearance_link_updated_count = appearance_link_stats.updated_count;
     }
 
     ecs::Geometry3DRuntimeBuildHint build_hint{};
