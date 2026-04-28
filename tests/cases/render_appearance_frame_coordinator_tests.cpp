@@ -260,4 +260,40 @@ VR_TEST_CASE(RenderAppearancePrepareBridge_dim3_dual_renderer_duplicate_dirty_hi
     VR_CHECK(surface_prepare.has_appearance_data);
 }
 
+VR_TEST_CASE(RenderAppearanceFrameCoordinator_dim3_dirty_normalization_dedup_and_range_filter,
+             "unit;core;render;appearance;coordinator") {
+    using Appearance3D = vr::ecs::Appearance<vr::ecs::Dim3>;
+    using AppearanceSystem3D = vr::ecs::AppearanceSystem<vr::ecs::Dim3>;
+    using Coordinator3D = vr::render::AppearanceFrameCoordinator<vr::ecs::Dim3>;
+
+    constexpr std::uint32_t component_count = 8U;
+    RenderAppearanceCoordinatorTestMcVector<Appearance3D> appearance_components{};
+    appearance_components.resize(component_count);
+    for (std::uint32_t i = 0U; i < component_count; ++i) {
+        AppearanceSystem3D::Initialize(appearance_components[i]);
+        AppearanceSystem3D::SetTextureBaseColorId(appearance_components[i], 700U + i);
+    }
+
+    Coordinator3D coordinator{};
+    coordinator.SetAppearanceData(appearance_components.data(), component_count);
+    coordinator.Reserve(component_count);
+    (void)coordinator.PrepareFrame(1U);
+
+    AppearanceSystem3D::SetRoughness(appearance_components[2U], 0.5F);
+    AppearanceSystem3D::SetMetallic(appearance_components[5U], 0.2F);
+    const std::uint32_t dirty_payload[] = {2U, 2U, 5U, 1024U, 5U};
+    coordinator.SetDirtyHint(dirty_payload,
+                             static_cast<std::uint32_t>(sizeof(dirty_payload) / sizeof(dirty_payload[0])));
+    const auto result = coordinator.PrepareFrame(2U);
+    VR_CHECK(result.build_invoked);
+    VR_CHECK(result.runtime_stats.used_dirty_indices == 1U);
+    VR_CHECK(result.runtime_stats.updated_record_count == 2U);
+
+    const auto& stats = coordinator.Stats();
+    VR_CHECK(stats.dirty_hint_input_count >= 5U);
+    VR_CHECK(stats.dirty_hint_unique_count >= 2U);
+    VR_CHECK(stats.dirty_hint_duplicate_drop_count >= 2U);
+    VR_CHECK(stats.dirty_hint_out_of_range_drop_count >= 1U);
+}
+
 } // namespace

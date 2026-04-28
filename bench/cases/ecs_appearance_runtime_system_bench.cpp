@@ -315,4 +315,49 @@ VR_BENCHMARK_CASE(EcsAppearanceFrameCoordinator_dim3_dual_renderer_shared_build_
     vr::bench::BenchmarkContext::ClobberMemory();
 }
 
+VR_BENCHMARK_CASE(EcsAppearanceFrameCoordinator_dim3_dirty_normalize_duplicate_payload_1k,
+                  "core;ecs;appearance;prepare;cpu;coordinator;dirty_normalize") {
+    using Appearance3D = vr::ecs::Appearance<vr::ecs::Dim3>;
+    using AppearanceSystem3D = vr::ecs::AppearanceSystem<vr::ecs::Dim3>;
+    using Coordinator3D = vr::render::AppearanceFrameCoordinator<vr::ecs::Dim3>;
+
+    constexpr std::uint32_t component_count = 1024U;
+    AppearanceBenchMcVector<Appearance3D> appearance_components{};
+    appearance_components.resize(component_count);
+    for (std::uint32_t i = 0U; i < component_count; ++i) {
+        AppearanceSystem3D::Initialize(appearance_components[i]);
+        AppearanceSystem3D::SetTextureBaseColorId(appearance_components[i], 100U + (i % 128U));
+        AppearanceSystem3D::SetTextureNormalId(appearance_components[i], 200U + (i % 128U));
+        AppearanceSystem3D::SetBindingLayoutId(appearance_components[i], 5U);
+        AppearanceSystem3D::SetSamplerStateId(appearance_components[i], 3U);
+    }
+
+    Coordinator3D coordinator{};
+    coordinator.SetAppearanceData(appearance_components.data(), component_count);
+    coordinator.Reserve(component_count);
+    (void)coordinator.PrepareFrame(0U);
+
+    const std::uint64_t iterations = bench_context_.Iterations();
+    for (std::uint64_t i = 0U; i < iterations; ++i) {
+        const std::uint32_t hot_index = static_cast<std::uint32_t>(i & (component_count - 1U));
+        const std::uint32_t next_index = (hot_index + 1U) & (component_count - 1U);
+        AppearanceSystem3D::SetRoughness(appearance_components[hot_index],
+                                         static_cast<float>((hot_index + static_cast<std::uint32_t>(i)) & 255U) / 255.0F);
+        AppearanceSystem3D::SetMetallic(appearance_components[next_index],
+                                        static_cast<float>((next_index + static_cast<std::uint32_t>(i * 3U)) & 255U) / 255.0F);
+
+        const std::uint32_t dirty_payload[] = {
+            hot_index, hot_index, next_index, next_index, hot_index, component_count + 17U
+        };
+        coordinator.SetDirtyHint(dirty_payload,
+                                 static_cast<std::uint32_t>(sizeof(dirty_payload) / sizeof(dirty_payload[0])));
+        (void)coordinator.PrepareFrame(static_cast<std::uint32_t>(i + 1U));
+    }
+
+    bench_context_.AddItems(iterations * component_count);
+    bench_context_.AddBytes(iterations * component_count * sizeof(vr::ecs::AppearanceGpuRecord<vr::ecs::Dim3>));
+    vr::bench::BenchmarkContext::DoNotOptimize(coordinator.Stats().dirty_hint_unique_count);
+    vr::bench::BenchmarkContext::ClobberMemory();
+}
+
 } // namespace

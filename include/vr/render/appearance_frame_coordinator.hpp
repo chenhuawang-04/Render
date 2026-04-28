@@ -21,6 +21,11 @@ struct AppearanceFrameCoordinatorStats final {
     std::uint32_t surface_link_call_count = 0U;
     std::uint64_t total_link_scanned_count = 0U;
     std::uint64_t total_link_updated_count = 0U;
+    std::uint64_t dirty_hint_input_count = 0U;
+    std::uint64_t dirty_hint_unique_count = 0U;
+    std::uint64_t dirty_hint_duplicate_drop_count = 0U;
+    std::uint64_t dirty_hint_out_of_range_drop_count = 0U;
+    std::uint64_t dirty_payload_duplicate_skip_count = 0U;
 };
 
 template<ecs::DimensionTag DimensionT>
@@ -64,12 +69,14 @@ public:
         if (dirty_component_indices_ == nullptr || dirty_component_count_ == 0U) {
             return;
         }
+        stats.dirty_hint_input_count += static_cast<std::uint64_t>(dirty_component_count_);
 
         const bool is_duplicate_dirty_payload =
             frame_cache_valid &&
             accumulated_dirty_component_indices.empty() &&
             IsSameAsLastAppliedDirtyPayload(dirty_component_indices_, dirty_component_count_);
         if (is_duplicate_dirty_payload) {
+            ++stats.dirty_payload_duplicate_skip_count;
             return;
         }
 
@@ -90,6 +97,14 @@ public:
             appearance_component_count_ > accumulated_dirty_component_indices.capacity()) {
             accumulated_dirty_component_indices.reserve(appearance_component_count_);
         }
+        if (appearance_component_count_ > 0U &&
+            appearance_component_count_ > normalized_dirty_component_indices.capacity()) {
+            normalized_dirty_component_indices.reserve(appearance_component_count_);
+        }
+        if (appearance_component_count_ > 0U &&
+            appearance_component_count_ > dirty_marker_stamps.size()) {
+            dirty_marker_stamps.resize(appearance_component_count_, 0U);
+        }
     }
 
     void ResetFrameCache() noexcept {
@@ -106,6 +121,9 @@ public:
         appearance_components = nullptr;
         appearance_component_count = 0U;
         accumulated_dirty_component_indices.clear();
+        normalized_dirty_component_indices.clear();
+        dirty_marker_stamps.clear();
+        dirty_marker_epoch = 1U;
         last_applied_dirty_component_indices.clear();
         runtime_scratch = {};
         stats = {};
@@ -137,10 +155,7 @@ public:
 
         const std::uint32_t* dirty_indices = nullptr;
         std::uint32_t dirty_count = 0U;
-        if (!accumulated_dirty_component_indices.empty()) {
-            dirty_indices = accumulated_dirty_component_indices.data();
-            dirty_count = static_cast<std::uint32_t>(accumulated_dirty_component_indices.size());
-        }
+        NormalizeDirtyHintPayload(dirty_indices, dirty_count);
 
         PrepareStageResultType result = PrepareStageType::BuildRuntimeOnly(
             appearance_components,
@@ -247,11 +262,81 @@ private:
         return true;
     }
 
+    void NormalizeDirtyHintPayload(const std::uint32_t*& out_dirty_indices_,
+                                   std::uint32_t& out_dirty_count_) {
+        out_dirty_indices_ = nullptr;
+        out_dirty_count_ = 0U;
+        if (accumulated_dirty_component_indices.empty()) {
+            return;
+        }
+        if (accumulated_dirty_component_indices.size() == 1U) {
+            const std::uint32_t single_component_index = accumulated_dirty_component_indices[0U];
+            if (single_component_index < appearance_component_count) {
+                out_dirty_indices_ = accumulated_dirty_component_indices.data();
+                out_dirty_count_ = 1U;
+                ++stats.dirty_hint_unique_count;
+            } else {
+                ++stats.dirty_hint_out_of_range_drop_count;
+            }
+            return;
+        }
+
+        normalized_dirty_component_indices.clear();
+        normalized_dirty_component_indices.reserve(accumulated_dirty_component_indices.size());
+        EnsureDirtyMarkerCapacity();
+        const std::uint32_t marker_epoch = NextDirtyMarkerEpoch();
+
+        for (const std::uint32_t component_index : accumulated_dirty_component_indices) {
+            if (component_index >= appearance_component_count) {
+                ++stats.dirty_hint_out_of_range_drop_count;
+                continue;
+            }
+            if (dirty_marker_stamps[component_index] == marker_epoch) {
+                ++stats.dirty_hint_duplicate_drop_count;
+                continue;
+            }
+            dirty_marker_stamps[component_index] = marker_epoch;
+            normalized_dirty_component_indices.push_back(component_index);
+        }
+
+        stats.dirty_hint_unique_count += static_cast<std::uint64_t>(normalized_dirty_component_indices.size());
+        if (normalized_dirty_component_indices.empty()) {
+            return;
+        }
+        out_dirty_indices_ = normalized_dirty_component_indices.data();
+        out_dirty_count_ = static_cast<std::uint32_t>(normalized_dirty_component_indices.size());
+    }
+
+    void EnsureDirtyMarkerCapacity() {
+        if (appearance_component_count == 0U) {
+            return;
+        }
+        if (dirty_marker_stamps.size() >= appearance_component_count) {
+            return;
+        }
+        dirty_marker_stamps.resize(appearance_component_count, 0U);
+    }
+
+    [[nodiscard]] std::uint32_t NextDirtyMarkerEpoch() {
+        if (dirty_marker_epoch == 0U || dirty_marker_epoch == (std::numeric_limits<std::uint32_t>::max)()) {
+            for (std::size_t i = 0U; i < dirty_marker_stamps.size(); ++i) {
+                dirty_marker_stamps[i] = 0U;
+            }
+            dirty_marker_epoch = 1U;
+        }
+        const std::uint32_t marker_epoch = dirty_marker_epoch;
+        ++dirty_marker_epoch;
+        return marker_epoch;
+    }
+
 private:
     AppearanceType* appearance_components = nullptr;
     std::uint32_t appearance_component_count = 0U;
     AppearanceFrameCoordinatorMcVector<std::uint32_t> accumulated_dirty_component_indices{};
+    AppearanceFrameCoordinatorMcVector<std::uint32_t> normalized_dirty_component_indices{};
+    AppearanceFrameCoordinatorMcVector<std::uint32_t> dirty_marker_stamps{};
     AppearanceFrameCoordinatorMcVector<std::uint32_t> last_applied_dirty_component_indices{};
+    std::uint32_t dirty_marker_epoch = 1U;
 
     RuntimeScratchType runtime_scratch{};
     PrepareStageResultType frame_prepare_result{};
