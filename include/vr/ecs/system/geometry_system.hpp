@@ -3,6 +3,7 @@
 #include "vr/ecs/component/geometry_component.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <concepts>
 #include <cstdint>
 #include <iterator>
@@ -15,6 +16,10 @@ class GeometrySystem final {
 public:
     using GeometryType = Geometry<DimensionT>;
     using RuntimeType = typename GeometryType::RuntimeType;
+
+    [[nodiscard]] static std::uint64_t AppearanceHandleMutationSerial() noexcept {
+        return appearance_handle_mutation_serial.load(std::memory_order_relaxed);
+    }
 
     // 64-bit sort key layout (MSB -> LSB):
     // [pass:2][material:16][geometry:16][minor:16][batch:14]
@@ -199,6 +204,7 @@ public:
             return;
         }
         component_.runtime.route.appearance_handle = appearance_handle_;
+        BumpAppearanceHandleMutationSerial();
         MarkDirty(component_, geometry_dirty_runtime_flag);
     }
 
@@ -212,6 +218,7 @@ public:
         component_.runtime.route.appearance_handle = invalid_appearance_handle;
         component_.runtime.route.appearance_pipeline_bucket = 0U;
         component_.runtime.route.appearance_resource_bucket = 0U;
+        BumpAppearanceHandleMutationSerial();
         MarkDirty(component_, geometry_dirty_runtime_flag);
     }
 
@@ -233,11 +240,17 @@ public:
             return false;
         }
 
+        const bool handle_changed =
+            component_.runtime.route.appearance_handle.index != appearance_handle_.index ||
+            component_.runtime.route.appearance_handle.generation != appearance_handle_.generation;
         component_.runtime.route.appearance_handle = appearance_handle_;
         component_.runtime.route.appearance_pipeline_bucket = pipeline_bucket;
         component_.runtime.route.appearance_resource_bucket = resource_bucket;
         component_.runtime.route.material_id = resource_bucket;
         component_.runtime.route.sort_key = appearance_sort_key_;
+        if (handle_changed) {
+            BumpAppearanceHandleMutationSerial();
+        }
         MarkDirty(component_, geometry_dirty_runtime_flag);
         return true;
     }
@@ -349,6 +362,13 @@ public:
             return component_.runtime.route.visible != 0U && component_.runtime.route.geometry_id != 0U;
         }
     }
+
+private:
+    static void BumpAppearanceHandleMutationSerial() noexcept {
+        (void)appearance_handle_mutation_serial.fetch_add(1U, std::memory_order_relaxed);
+    }
+
+    inline static std::atomic<std::uint64_t> appearance_handle_mutation_serial{1U};
 };
 
 } // namespace vr::ecs

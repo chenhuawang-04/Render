@@ -116,5 +116,44 @@ VR_TEST_CASE(EcsGeometryMeshSystem_route_style_and_bounds, "unit;core;ecs;geomet
     VR_CHECK(GeometrySystem3D::IsVisibleForBatch(geometry));
 }
 
-} // namespace
+VR_TEST_CASE(EcsGeometrySystem_appearance_handle_mutation_serial_monotonic,
+             "unit;core;ecs;geometry") {
+    using Geometry3D = vr::ecs::Geometry<vr::ecs::Dim3>;
+    using GeometrySystem3D = vr::ecs::GeometrySystem<vr::ecs::Dim3>;
 
+    Geometry3D geometry{};
+    GeometrySystem3D::Initialize(geometry);
+
+    const std::uint64_t serial_before = GeometrySystem3D::AppearanceHandleMutationSerial();
+    const vr::ecs::AppearanceHandle handle_a{.index = 3U, .generation = 1U};
+    GeometrySystem3D::SetAppearanceHandle(geometry, handle_a);
+    const std::uint64_t serial_after_set = GeometrySystem3D::AppearanceHandleMutationSerial();
+    VR_CHECK(serial_after_set > serial_before);
+
+    GeometrySystem3D::SetAppearanceHandle(geometry, handle_a);
+    const std::uint64_t serial_after_same_set = GeometrySystem3D::AppearanceHandleMutationSerial();
+    VR_CHECK(serial_after_same_set == serial_after_set);
+
+    const bool runtime_changed = GeometrySystem3D::SetAppearanceRuntimeLink(geometry,
+                                                                             handle_a,
+                                                                             1234ULL,
+                                                                             11ULL,
+                                                                             22ULL);
+    VR_CHECK(runtime_changed);
+    const std::uint64_t serial_after_runtime_link_same_handle =
+        GeometrySystem3D::AppearanceHandleMutationSerial();
+    VR_CHECK(serial_after_runtime_link_same_handle == serial_after_same_set);
+
+    const vr::ecs::AppearanceHandle handle_b{.index = 5U, .generation = 1U};
+    const bool runtime_handle_switched = GeometrySystem3D::SetAppearanceRuntimeLink(geometry,
+                                                                                     handle_b,
+                                                                                     2345ULL,
+                                                                                     12ULL,
+                                                                                     33ULL);
+    VR_CHECK(runtime_handle_switched);
+    const std::uint64_t serial_after_runtime_link_changed_handle =
+        GeometrySystem3D::AppearanceHandleMutationSerial();
+    VR_CHECK(serial_after_runtime_link_changed_handle > serial_after_runtime_link_same_handle);
+}
+
+} // namespace

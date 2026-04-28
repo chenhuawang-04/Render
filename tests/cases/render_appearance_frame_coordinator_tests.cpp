@@ -48,6 +48,39 @@ VR_TEST_CASE(RenderAppearanceFrameCoordinator_dim3_prepare_once_reuse_in_same_fr
     VR_CHECK(stats.frame_reuse_hit_count == 1U);
 }
 
+VR_TEST_CASE(RenderAppearanceFrameCoordinator_dim3_prepare_reuse_across_frames_without_dirty,
+             "unit;core;render;appearance;coordinator") {
+    using Appearance3D = vr::ecs::Appearance<vr::ecs::Dim3>;
+    using AppearanceSystem3D = vr::ecs::AppearanceSystem<vr::ecs::Dim3>;
+    using Coordinator3D = vr::render::AppearanceFrameCoordinator<vr::ecs::Dim3>;
+
+    constexpr std::uint32_t component_count = 32U;
+    RenderAppearanceCoordinatorTestMcVector<Appearance3D> appearance_components{};
+    appearance_components.resize(component_count);
+    for (std::uint32_t i = 0U; i < component_count; ++i) {
+        AppearanceSystem3D::Initialize(appearance_components[i]);
+        AppearanceSystem3D::SetTextureBaseColorId(appearance_components[i], 5000U + i);
+        AppearanceSystem3D::SetTextureNormalId(appearance_components[i], 6000U + i);
+        AppearanceSystem3D::SetBindingLayoutId(appearance_components[i], 6U);
+    }
+
+    Coordinator3D coordinator{};
+    coordinator.SetAppearanceData(appearance_components.data(), component_count);
+    coordinator.Reserve(component_count);
+
+    const auto first_prepare = coordinator.PrepareFrame(70U);
+    VR_CHECK(first_prepare.has_appearance_data);
+    VR_CHECK(first_prepare.build_invoked);
+
+    const auto second_prepare_next_frame = coordinator.PrepareFrame(71U);
+    VR_CHECK(second_prepare_next_frame.has_appearance_data);
+    VR_CHECK(!second_prepare_next_frame.build_invoked);
+
+    const auto& stats = coordinator.Stats();
+    VR_CHECK(stats.runtime_build_call_count == 1U);
+    VR_CHECK(stats.frame_reuse_hit_count >= 1U);
+}
+
 VR_TEST_CASE(RenderAppearanceFrameCoordinator_dim3_link_geometry_and_surface,
              "unit;core;render;appearance;coordinator") {
     using Appearance3D = vr::ecs::Appearance<vr::ecs::Dim3>;
@@ -115,6 +148,137 @@ VR_TEST_CASE(RenderAppearanceFrameCoordinator_dim3_link_geometry_and_surface,
     VR_CHECK(coord_stats.geometry_link_call_count == 1U);
     VR_CHECK(coord_stats.surface_link_call_count == 1U);
     VR_CHECK(coord_stats.total_link_scanned_count >= static_cast<std::uint64_t>(component_count * 2U));
+}
+
+VR_TEST_CASE(RenderAppearanceFrameCoordinator_dim3_incremental_link_skips_when_no_change,
+             "unit;core;render;appearance;coordinator") {
+    using Appearance3D = vr::ecs::Appearance<vr::ecs::Dim3>;
+    using AppearanceSystem3D = vr::ecs::AppearanceSystem<vr::ecs::Dim3>;
+    using Geometry3D = vr::ecs::Geometry<vr::ecs::Dim3>;
+    using GeometrySystem3D = vr::ecs::GeometrySystem<vr::ecs::Dim3>;
+    using Coordinator3D = vr::render::AppearanceFrameCoordinator<vr::ecs::Dim3>;
+
+    constexpr std::uint32_t component_count = 16U;
+    RenderAppearanceCoordinatorTestMcVector<Appearance3D> appearance_components{};
+    RenderAppearanceCoordinatorTestMcVector<Geometry3D> geometry_components{};
+    appearance_components.resize(component_count);
+    geometry_components.resize(component_count);
+
+    for (std::uint32_t i = 0U; i < component_count; ++i) {
+        AppearanceSystem3D::Initialize(appearance_components[i]);
+        AppearanceSystem3D::SetTextureBaseColorId(appearance_components[i], 900U + i);
+        GeometrySystem3D::Initialize(geometry_components[i]);
+    }
+
+    Coordinator3D coordinator{};
+    coordinator.SetAppearanceData(appearance_components.data(), component_count);
+    coordinator.Reserve(component_count);
+
+    (void)coordinator.PrepareFrame(20U);
+    for (std::uint32_t i = 0U; i < component_count; ++i) {
+        GeometrySystem3D::SetAppearanceHandle(geometry_components[i],
+                                              appearance_components[i].runtime.gpu_record_handle);
+    }
+    const auto first_link = coordinator.LinkGeometry(geometry_components.data(), component_count, 20U);
+    VR_CHECK(first_link.updated_count == component_count);
+
+    (void)coordinator.PrepareFrame(21U);
+    const auto second_link = coordinator.LinkGeometry(geometry_components.data(), component_count, 21U);
+    VR_CHECK(second_link.scanned_count == 0U);
+    VR_CHECK(second_link.updated_count == 0U);
+}
+
+VR_TEST_CASE(RenderAppearanceFrameCoordinator_dim3_incremental_link_updates_only_dirty_appearance_users,
+             "unit;core;render;appearance;coordinator") {
+    using Appearance3D = vr::ecs::Appearance<vr::ecs::Dim3>;
+    using AppearanceSystem3D = vr::ecs::AppearanceSystem<vr::ecs::Dim3>;
+    using Geometry3D = vr::ecs::Geometry<vr::ecs::Dim3>;
+    using GeometrySystem3D = vr::ecs::GeometrySystem<vr::ecs::Dim3>;
+    using Coordinator3D = vr::render::AppearanceFrameCoordinator<vr::ecs::Dim3>;
+
+    constexpr std::uint32_t component_count = 12U;
+    RenderAppearanceCoordinatorTestMcVector<Appearance3D> appearance_components{};
+    RenderAppearanceCoordinatorTestMcVector<Geometry3D> geometry_components{};
+    appearance_components.resize(component_count);
+    geometry_components.resize(component_count);
+
+    for (std::uint32_t i = 0U; i < component_count; ++i) {
+        AppearanceSystem3D::Initialize(appearance_components[i]);
+        AppearanceSystem3D::SetTextureBaseColorId(appearance_components[i], 100U + i);
+        GeometrySystem3D::Initialize(geometry_components[i]);
+    }
+
+    Coordinator3D coordinator{};
+    coordinator.SetAppearanceData(appearance_components.data(), component_count);
+    coordinator.Reserve(component_count);
+    (void)coordinator.PrepareFrame(31U);
+
+    for (std::uint32_t i = 0U; i < component_count; ++i) {
+        const std::uint32_t mapped_index = i % 3U;
+        GeometrySystem3D::SetAppearanceHandle(geometry_components[i],
+                                              appearance_components[mapped_index].runtime.gpu_record_handle);
+    }
+    (void)coordinator.LinkGeometry(geometry_components.data(), component_count, 31U);
+
+    AppearanceSystem3D::SetLayer(appearance_components[1U], 27);
+    const std::uint32_t dirty_index = 1U;
+    coordinator.SetDirtyHint(&dirty_index, 1U);
+    (void)coordinator.PrepareFrame(32U);
+
+    const auto dirty_link = coordinator.LinkGeometry(geometry_components.data(), component_count, 32U);
+    VR_CHECK(dirty_link.updated_count == 4U);
+    VR_CHECK(dirty_link.scanned_count == 4U);
+}
+
+VR_TEST_CASE(RenderAppearanceFrameCoordinator_dim3_incremental_link_detects_geometry_handle_mutation,
+             "unit;core;render;appearance;coordinator") {
+    using Appearance3D = vr::ecs::Appearance<vr::ecs::Dim3>;
+    using AppearanceSystem3D = vr::ecs::AppearanceSystem<vr::ecs::Dim3>;
+    using Geometry3D = vr::ecs::Geometry<vr::ecs::Dim3>;
+    using GeometrySystem3D = vr::ecs::GeometrySystem<vr::ecs::Dim3>;
+    using Coordinator3D = vr::render::AppearanceFrameCoordinator<vr::ecs::Dim3>;
+
+    constexpr std::uint32_t appearance_count = 8U;
+    constexpr std::uint32_t geometry_count = 16U;
+    RenderAppearanceCoordinatorTestMcVector<Appearance3D> appearance_components{};
+    RenderAppearanceCoordinatorTestMcVector<Geometry3D> geometry_components{};
+    appearance_components.resize(appearance_count);
+    geometry_components.resize(geometry_count);
+
+    for (std::uint32_t i = 0U; i < appearance_count; ++i) {
+        AppearanceSystem3D::Initialize(appearance_components[i]);
+        AppearanceSystem3D::SetTextureBaseColorId(appearance_components[i], 1200U + i);
+        AppearanceSystem3D::SetTextureNormalId(appearance_components[i], 2400U + i);
+        AppearanceSystem3D::SetBindingLayoutId(appearance_components[i], 3U + (i & 1U));
+        AppearanceSystem3D::SetSamplerStateId(appearance_components[i], 2U + (i & 1U));
+        AppearanceSystem3D::SetLayer(appearance_components[i], static_cast<std::int16_t>(i));
+    }
+    for (std::uint32_t i = 0U; i < geometry_count; ++i) {
+        GeometrySystem3D::Initialize(geometry_components[i]);
+    }
+
+    Coordinator3D coordinator{};
+    coordinator.SetAppearanceData(appearance_components.data(), appearance_count);
+    coordinator.Reserve(appearance_count);
+    (void)coordinator.PrepareFrame(41U);
+
+    for (std::uint32_t i = 0U; i < geometry_count; ++i) {
+        const std::uint32_t appearance_index = i % appearance_count;
+        GeometrySystem3D::SetAppearanceHandle(geometry_components[i],
+                                              appearance_components[appearance_index].runtime.gpu_record_handle);
+    }
+    (void)coordinator.LinkGeometry(geometry_components.data(), geometry_count, 41U);
+
+    const auto previous_handle = geometry_components[0U].runtime.route.appearance_handle;
+    const auto changed_handle = appearance_components[6U].runtime.gpu_record_handle;
+    VR_CHECK(previous_handle.index != changed_handle.index);
+    GeometrySystem3D::SetAppearanceHandle(geometry_components[0U], changed_handle);
+
+    (void)coordinator.PrepareFrame(42U);
+    const auto relink_stats = coordinator.LinkGeometry(geometry_components.data(), geometry_count, 42U);
+    VR_CHECK(relink_stats.scanned_count == 1U);
+    VR_CHECK(relink_stats.resolved_count == 1U);
+    VR_CHECK(relink_stats.updated_count == 1U);
 }
 
 VR_TEST_CASE(RenderAppearanceFrameCoordinator_dim3_accumulate_dirty_hints_before_prepare,

@@ -315,6 +315,114 @@ VR_BENCHMARK_CASE(EcsAppearanceFrameCoordinator_dim3_dual_renderer_shared_build_
     vr::bench::BenchmarkContext::ClobberMemory();
 }
 
+VR_BENCHMARK_CASE(EcsAppearanceFrameCoordinator_dim3_link_incremental_sparse_1k,
+                  "core;ecs;appearance;link;cpu;coordinator;incremental") {
+    using Appearance3D = vr::ecs::Appearance<vr::ecs::Dim3>;
+    using AppearanceSystem3D = vr::ecs::AppearanceSystem<vr::ecs::Dim3>;
+    using Geometry3D = vr::ecs::Geometry<vr::ecs::Dim3>;
+    using GeometrySystem3D = vr::ecs::GeometrySystem<vr::ecs::Dim3>;
+    using Coordinator3D = vr::render::AppearanceFrameCoordinator<vr::ecs::Dim3>;
+
+    constexpr std::uint32_t appearance_count = 256U;
+    constexpr std::uint32_t geometry_count = 1024U;
+    AppearanceBenchMcVector<Appearance3D> appearance_components{};
+    appearance_components.resize(appearance_count);
+    AppearanceBenchMcVector<Geometry3D> geometry_components{};
+    geometry_components.resize(geometry_count);
+
+    for (std::uint32_t i = 0U; i < appearance_count; ++i) {
+        AppearanceSystem3D::Initialize(appearance_components[i]);
+        AppearanceSystem3D::SetTextureBaseColorId(appearance_components[i], 100U + i);
+        AppearanceSystem3D::SetTextureNormalId(appearance_components[i], 400U + i);
+        AppearanceSystem3D::SetBindingLayoutId(appearance_components[i], 5U);
+        AppearanceSystem3D::SetSamplerStateId(appearance_components[i], 3U);
+    }
+
+    for (std::uint32_t i = 0U; i < geometry_count; ++i) {
+        GeometrySystem3D::Initialize(geometry_components[i]);
+        GeometrySystem3D::SetGeometryId(geometry_components[i], 2000U + i);
+        const std::uint32_t appearance_index = i % appearance_count;
+        GeometrySystem3D::SetAppearanceHandle(geometry_components[i],
+                                              appearance_components[appearance_index].runtime.gpu_record_handle);
+    }
+
+    Coordinator3D coordinator{};
+    coordinator.SetAppearanceData(appearance_components.data(), appearance_count);
+    coordinator.Reserve(appearance_count);
+    (void)coordinator.PrepareFrame(0U);
+    (void)coordinator.LinkGeometry(geometry_components.data(), geometry_count, 0U);
+
+    const std::uint64_t iterations = bench_context_.Iterations();
+    for (std::uint64_t i = 0U; i < iterations; ++i) {
+        const std::uint32_t dirty_appearance_index = static_cast<std::uint32_t>(i & (appearance_count - 1U));
+        const std::int16_t layer = static_cast<std::int16_t>((i & 63U) - 32U);
+        AppearanceSystem3D::SetLayer(appearance_components[dirty_appearance_index], layer);
+        coordinator.SetDirtyHint(&dirty_appearance_index, 1U);
+
+        const std::uint32_t frame_index = static_cast<std::uint32_t>(i + 1U);
+        (void)coordinator.PrepareFrame(frame_index);
+        const vr::ecs::AppearanceLinkStats link_stats =
+            coordinator.LinkGeometry(geometry_components.data(), geometry_count, frame_index);
+        vr::bench::BenchmarkContext::DoNotOptimize(link_stats.updated_count);
+    }
+
+    bench_context_.AddItems(iterations * geometry_count);
+    bench_context_.AddBytes(iterations * geometry_count * sizeof(vr::ecs::GeometryRuntimeRoute));
+    vr::bench::BenchmarkContext::DoNotOptimize(coordinator.Stats().geometry_link_incremental_call_count);
+    vr::bench::BenchmarkContext::DoNotOptimize(coordinator.Stats().geometry_link_candidate_scan_count);
+    vr::bench::BenchmarkContext::ClobberMemory();
+}
+
+VR_BENCHMARK_CASE(EcsAppearanceFrameCoordinator_dim3_link_incremental_idle_1k,
+                  "core;ecs;appearance;link;cpu;coordinator;incremental;idle") {
+    using Appearance3D = vr::ecs::Appearance<vr::ecs::Dim3>;
+    using AppearanceSystem3D = vr::ecs::AppearanceSystem<vr::ecs::Dim3>;
+    using Geometry3D = vr::ecs::Geometry<vr::ecs::Dim3>;
+    using GeometrySystem3D = vr::ecs::GeometrySystem<vr::ecs::Dim3>;
+    using Coordinator3D = vr::render::AppearanceFrameCoordinator<vr::ecs::Dim3>;
+
+    constexpr std::uint32_t component_count = 1024U;
+    AppearanceBenchMcVector<Appearance3D> appearance_components{};
+    AppearanceBenchMcVector<Geometry3D> geometry_components{};
+    appearance_components.resize(component_count);
+    geometry_components.resize(component_count);
+
+    for (std::uint32_t i = 0U; i < component_count; ++i) {
+        AppearanceSystem3D::Initialize(appearance_components[i]);
+        AppearanceSystem3D::SetTextureBaseColorId(appearance_components[i], 100U + i);
+        AppearanceSystem3D::SetTextureNormalId(appearance_components[i], 1100U + i);
+        AppearanceSystem3D::SetBindingLayoutId(appearance_components[i], 6U);
+        AppearanceSystem3D::SetSamplerStateId(appearance_components[i], 3U);
+
+        GeometrySystem3D::Initialize(geometry_components[i]);
+        GeometrySystem3D::SetGeometryId(geometry_components[i], 8000U + i);
+        GeometrySystem3D::SetAppearanceHandle(geometry_components[i],
+                                              appearance_components[i].runtime.gpu_record_handle);
+    }
+
+    Coordinator3D coordinator{};
+    coordinator.SetAppearanceData(appearance_components.data(), component_count);
+    coordinator.Reserve(component_count);
+    (void)coordinator.PrepareFrame(0U);
+    (void)coordinator.LinkGeometry(geometry_components.data(), component_count, 0U);
+
+    const std::uint64_t iterations = bench_context_.Iterations();
+    for (std::uint64_t i = 0U; i < iterations; ++i) {
+        const std::uint32_t frame_index = static_cast<std::uint32_t>(i + 1U);
+        (void)coordinator.PrepareFrame(frame_index);
+        const vr::ecs::AppearanceLinkStats link_stats =
+            coordinator.LinkGeometry(geometry_components.data(), component_count, frame_index);
+        vr::bench::BenchmarkContext::DoNotOptimize(link_stats.scanned_count);
+        vr::bench::BenchmarkContext::DoNotOptimize(link_stats.updated_count);
+    }
+
+    bench_context_.AddItems(iterations * component_count);
+    bench_context_.AddBytes(iterations * component_count * sizeof(vr::ecs::GeometryRuntimeRoute));
+    vr::bench::BenchmarkContext::DoNotOptimize(coordinator.Stats().geometry_link_incremental_call_count);
+    vr::bench::BenchmarkContext::DoNotOptimize(coordinator.Stats().geometry_link_candidate_scan_count);
+    vr::bench::BenchmarkContext::ClobberMemory();
+}
+
 VR_BENCHMARK_CASE(EcsAppearanceFrameCoordinator_dim3_dirty_normalize_duplicate_payload_1k,
                   "core;ecs;appearance;prepare;cpu;coordinator;dirty_normalize") {
     using Appearance3D = vr::ecs::Appearance<vr::ecs::Dim3>;

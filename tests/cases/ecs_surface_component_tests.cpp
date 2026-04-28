@@ -124,5 +124,44 @@ VR_TEST_CASE(EcsSurfaceSystem_default_visibility_requires_valid_source, "unit;co
     VR_CHECK(!SurfaceSystem3D::IsVisibleForBatch(surface_3d));
 }
 
-} // namespace
+VR_TEST_CASE(EcsSurfaceSystem_appearance_handle_mutation_serial_monotonic,
+             "unit;core;ecs;surface") {
+    using Surface3D = vr::ecs::Surface<vr::ecs::Dim3>;
+    using SurfaceSystem3D = vr::ecs::SurfaceSystem<vr::ecs::Dim3>;
 
+    Surface3D surface{};
+    SurfaceSystem3D::Initialize(surface);
+
+    const std::uint64_t serial_before = SurfaceSystem3D::AppearanceHandleMutationSerial();
+    const vr::ecs::AppearanceHandle handle_a{.index = 7U, .generation = 1U};
+    SurfaceSystem3D::SetAppearanceHandle(surface, handle_a);
+    const std::uint64_t serial_after_set = SurfaceSystem3D::AppearanceHandleMutationSerial();
+    VR_CHECK(serial_after_set > serial_before);
+
+    SurfaceSystem3D::SetAppearanceHandle(surface, handle_a);
+    const std::uint64_t serial_after_same_set = SurfaceSystem3D::AppearanceHandleMutationSerial();
+    VR_CHECK(serial_after_same_set == serial_after_set);
+
+    const bool runtime_changed = SurfaceSystem3D::SetAppearanceRuntimeLink(surface,
+                                                                            handle_a,
+                                                                            100ULL,
+                                                                            2ULL,
+                                                                            3ULL);
+    VR_CHECK(runtime_changed);
+    const std::uint64_t serial_after_runtime_link_same_handle =
+        SurfaceSystem3D::AppearanceHandleMutationSerial();
+    VR_CHECK(serial_after_runtime_link_same_handle == serial_after_same_set);
+
+    const vr::ecs::AppearanceHandle handle_b{.index = 9U, .generation = 1U};
+    const bool runtime_handle_switched = SurfaceSystem3D::SetAppearanceRuntimeLink(surface,
+                                                                                    handle_b,
+                                                                                    200ULL,
+                                                                                    4ULL,
+                                                                                    5ULL);
+    VR_CHECK(runtime_handle_switched);
+    const std::uint64_t serial_after_runtime_link_changed_handle =
+        SurfaceSystem3D::AppearanceHandleMutationSerial();
+    VR_CHECK(serial_after_runtime_link_changed_handle > serial_after_runtime_link_same_handle);
+}
+
+} // namespace

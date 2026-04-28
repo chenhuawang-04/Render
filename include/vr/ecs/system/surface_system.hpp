@@ -3,6 +3,7 @@
 #include "vr/ecs/component/surface_component.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <concepts>
 #include <cstdint>
 #include <limits>
@@ -14,6 +15,10 @@ class SurfaceSystem final {
 public:
     using SurfaceType = Surface<DimensionT>;
     using RuntimeType = typename SurfaceType::RuntimeType;
+
+    [[nodiscard]] static std::uint64_t AppearanceHandleMutationSerial() noexcept {
+        return appearance_handle_mutation_serial.load(std::memory_order_relaxed);
+    }
 
     // 64-bit sort key layout (MSB -> LSB):
     // [pass:2][material:16][surface:16][minor:16][batch:14]
@@ -215,6 +220,7 @@ public:
             return;
         }
         component_.runtime.route.appearance_handle = appearance_handle_;
+        BumpAppearanceHandleMutationSerial();
         MarkDirty(component_, surface_dirty_runtime_flag);
     }
 
@@ -228,6 +234,7 @@ public:
         component_.runtime.route.appearance_handle = invalid_appearance_handle;
         component_.runtime.route.appearance_pipeline_bucket = 0U;
         component_.runtime.route.appearance_resource_bucket = 0U;
+        BumpAppearanceHandleMutationSerial();
         MarkDirty(component_, surface_dirty_runtime_flag);
     }
 
@@ -249,11 +256,17 @@ public:
             return false;
         }
 
+        const bool handle_changed =
+            component_.runtime.route.appearance_handle.index != appearance_handle_.index ||
+            component_.runtime.route.appearance_handle.generation != appearance_handle_.generation;
         component_.runtime.route.appearance_handle = appearance_handle_;
         component_.runtime.route.appearance_pipeline_bucket = pipeline_bucket;
         component_.runtime.route.appearance_resource_bucket = resource_bucket;
         component_.runtime.route.material_id = resource_bucket;
         component_.runtime.route.sort_key = appearance_sort_key_;
+        if (handle_changed) {
+            BumpAppearanceHandleMutationSerial();
+        }
         MarkDirty(component_, surface_dirty_runtime_flag);
         return true;
     }
@@ -653,6 +666,10 @@ public:
     }
 
 private:
+    static void BumpAppearanceHandleMutationSerial() noexcept {
+        (void)appearance_handle_mutation_serial.fetch_add(1U, std::memory_order_relaxed);
+    }
+
     [[nodiscard]] static bool IsSameColor(const Rgba8& lhs_,
                                           const Rgba8& rhs_) noexcept {
         return lhs_.r == rhs_.r &&
@@ -660,6 +677,8 @@ private:
                lhs_.b == rhs_.b &&
                lhs_.a == rhs_.a;
     }
+
+    inline static std::atomic<std::uint64_t> appearance_handle_mutation_serial{1U};
 };
 
 } // namespace vr::ecs
