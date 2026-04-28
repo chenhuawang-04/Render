@@ -22,12 +22,14 @@ add_executable(${VR_TEST_TARGET}
     cases/ecs_geometry_batch_system_tests.cpp
     cases/ecs_geometry_runtime_system_tests.cpp
     cases/ecs_text_component_tests.cpp
+    cases/ecs_light_component_tests.cpp
     cases/ecs_surface_component_tests.cpp
     cases/ecs_appearance_component_tests.cpp
     cases/ecs_appearance_system_tests.cpp
     cases/ecs_appearance_runtime_system_tests.cpp
     cases/ecs_appearance_link_system_tests.cpp
     cases/render_appearance_frame_coordinator_tests.cpp
+    cases/render_light_frame_coordinator_tests.cpp
     cases/ecs_bounds_system_tests.cpp
     cases/ecs_culling_system_tests.cpp
     cases/ecs_surface_batch_runtime_system_tests.cpp
@@ -35,6 +37,8 @@ add_executable(${VR_TEST_TARGET}
     cases/ecs_transform_camera_system_tests.cpp
     cases/ecs_text_render_3d_system_tests.cpp
     cases/ecs_text_runtime_system_tests.cpp
+    cases/ecs_light_runtime_system_tests.cpp
+    cases/ecs_light_culling_system_tests.cpp
     cases/freetype_host_tests.cpp
     cases/glyph_atlas_host_tests.cpp
     cases/runtime_configuration_tests.cpp

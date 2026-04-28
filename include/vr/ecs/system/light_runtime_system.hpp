@@ -22,37 +22,37 @@ struct LightUploadRange final {
 };
 
 struct LightRuntimeBuildConfig final {
-    bool force_full_rebuild = false;
-    bool rebuild_keys_even_if_clean = false;
-    std::uint32_t merge_gap = 0U;
+    bool force_full_rebuild;
+    bool rebuild_keys_even_if_clean;
+    std::uint32_t merge_gap;
 };
 
 struct LightRuntimeBuildHint final {
-    const std::uint32_t* dirty_component_indices = nullptr;
-    std::uint32_t dirty_component_count = 0U;
-    std::uint8_t use_dirty_component_indices = 0U;
+    const std::uint32_t* dirty_component_indices;
+    std::uint32_t dirty_component_count;
+    std::uint8_t use_dirty_component_indices;
 
-    const std::uint32_t* transform_dirty_component_indices = nullptr;
-    std::uint32_t transform_dirty_component_count = 0U;
-    std::uint8_t use_transform_dirty_component_indices = 0U;
+    const std::uint32_t* transform_dirty_component_indices;
+    std::uint32_t transform_dirty_component_count;
+    std::uint8_t use_transform_dirty_component_indices;
 };
 
 struct LightRuntimeBuildStats final {
-    std::uint32_t component_count = 0U;
-    std::uint32_t scanned_dirty_count = 0U;
-    std::uint32_t scanned_transform_dirty_count = 0U;
-    std::uint32_t updated_record_count = 0U;
-    std::uint32_t updated_style_or_binding_count = 0U;
-    std::uint32_t updated_transform_only_count = 0U;
-    std::uint32_t upload_range_count = 0U;
-    std::uint32_t out_of_range_dirty_count = 0U;
-    std::uint64_t style_signature = 0U;
-    std::uint64_t binding_signature = 0U;
-    std::uint64_t transform_signature = 0U;
-    std::uint32_t cache_epoch = 0U;
-    bool cache_reused = false;
-    bool full_rebuild = false;
-    bool transform_only_update = false;
+    std::uint32_t component_count;
+    std::uint32_t scanned_dirty_count;
+    std::uint32_t scanned_transform_dirty_count;
+    std::uint32_t updated_record_count;
+    std::uint32_t updated_style_or_binding_count;
+    std::uint32_t updated_transform_only_count;
+    std::uint32_t upload_range_count;
+    std::uint32_t out_of_range_dirty_count;
+    std::uint64_t style_signature;
+    std::uint64_t binding_signature;
+    std::uint64_t transform_signature;
+    std::uint32_t cache_epoch;
+    bool cache_reused;
+    bool full_rebuild;
+    bool transform_only_update;
 };
 
 struct LightDerivedGeom2D final {
@@ -100,15 +100,15 @@ using LightDerivedGeom = typename LightDerivedGeomTraits<DimensionT>::GeomType;
 
 template<DimensionTag DimensionT>
 struct LightRuntimeCache final {
-    const Light<DimensionT>* components = nullptr;
-    const Transform<DimensionT>* transforms = nullptr;
-    std::uint32_t component_count = 0U;
-    std::uint64_t style_signature = 0U;
-    std::uint64_t binding_signature = 0U;
-    std::uint64_t transform_signature = 0U;
-    LightRuntimeBuildConfig build_config{};
-    std::uint32_t epoch = 0U;
-    bool valid = false;
+    const Light<DimensionT>* components;
+    const Transform<DimensionT>* transforms;
+    std::uint32_t component_count;
+    std::uint64_t style_signature;
+    std::uint64_t binding_signature;
+    std::uint64_t transform_signature;
+    LightRuntimeBuildConfig build_config;
+    std::uint32_t epoch;
+    bool valid;
 };
 
 template<DimensionTag DimensionT>
@@ -248,6 +248,10 @@ public:
         if (force_full_rebuild) {
             stats.full_rebuild = true;
             BuildFull(components_, transforms_, component_count_, scratch_, stats);
+            BuildUploadRanges(scratch_.updated_component_indices,
+                              build_config_.merge_gap,
+                              scratch_.upload_ranges);
+            stats.upload_range_count = static_cast<std::uint32_t>(scratch_.upload_ranges.size());
             CommitCache(components_, transforms_, component_count_, build_config_, stats, scratch_);
             return stats;
         }
@@ -279,7 +283,7 @@ public:
                                 scratch_.gpu_records[component_index]);
                 UpdateRuntimeKeysAndHandle(components_[component_index], component_index, scratch_);
                 SystemType::MarkUploaded(components_[component_index]);
-                AppendUniqueIndex(scratch_, component_index, scratch_.updated_component_indices);
+                scratch_.updated_component_indices.push_back(component_index);
                 ++stats.updated_record_count;
                 ++stats.updated_style_or_binding_count;
             }
@@ -304,7 +308,7 @@ public:
                                 scratch_.gpu_records[component_index]);
                 UpdateRuntimeKeysAndHandle(components_[component_index], component_index, scratch_);
                 SystemType::MarkUploaded(components_[component_index]);
-                AppendUniqueIndex(scratch_, component_index, scratch_.updated_component_indices);
+                scratch_.updated_component_indices.push_back(component_index);
                 ++stats.updated_record_count;
                 ++stats.updated_transform_only_count;
                 transform_only_update = true;
@@ -447,7 +451,7 @@ private:
                             scratch_.gpu_records[component_index]);
             UpdateRuntimeKeysAndHandle(components_[component_index], component_index, scratch_);
             SystemType::MarkUploaded(components_[component_index]);
-            AppendUniqueIndex(scratch_, component_index, scratch_.updated_component_indices);
+            scratch_.updated_component_indices.push_back(component_index);
             ++stats_.updated_record_count;
         }
         stats_.updated_style_or_binding_count = stats_.updated_record_count;
@@ -500,7 +504,15 @@ private:
                 ++stats_.out_of_range_dirty_count;
                 continue;
             }
-            AppendUniqueIndex(scratch_, index, scratch_.transform_dirty_component_indices);
+            scratch_.transform_dirty_component_indices.push_back(index);
+        }
+        if (!scratch_.transform_dirty_component_indices.empty()) {
+            std::sort(scratch_.transform_dirty_component_indices.begin(),
+                      scratch_.transform_dirty_component_indices.end());
+            const auto new_end = std::unique(scratch_.transform_dirty_component_indices.begin(),
+                                             scratch_.transform_dirty_component_indices.end());
+            scratch_.transform_dirty_component_indices.resize(
+                static_cast<std::size_t>(new_end - scratch_.transform_dirty_component_indices.begin()));
         }
         stats_.scanned_transform_dirty_count = build_hint_.transform_dirty_component_count;
     }
@@ -813,4 +825,3 @@ private:
 };
 
 } // namespace vr::ecs
-
