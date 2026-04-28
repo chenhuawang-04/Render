@@ -13,6 +13,7 @@ struct AppearancePrepareStageResult final {
     ecs::AppearanceRuntimeBuildStats runtime_stats{};
     ecs::AppearanceLinkStats link_stats{};
     bool has_appearance_data = false;
+    bool build_invoked = false;
 };
 
 template<ecs::DimensionTag DimensionT>
@@ -49,18 +50,18 @@ public:
         }
 
         result.has_appearance_data = true;
-        result.runtime_stats = BuildRuntime(appearance_components_,
-                                            appearance_component_count_,
-                                            dirty_component_indices_,
-                                            dirty_component_count_,
-                                            appearance_runtime_scratch_);
+        result.runtime_stats = BuildRuntimeInternal(appearance_components_,
+                                                    appearance_component_count_,
+                                                    dirty_component_indices_,
+                                                    dirty_component_count_,
+                                                    appearance_runtime_scratch_);
+        result.build_invoked = true;
 
         if (geometry_components_ != nullptr && geometry_component_count_ > 0U) {
-            result.link_stats = AppearanceLinkSystemType::ApplyToGeometryAligned(
-                geometry_components_,
-                geometry_component_count_,
-                appearance_components_,
-                appearance_component_count_);
+            result.link_stats = LinkGeometry(geometry_components_,
+                                             geometry_component_count_,
+                                             appearance_components_,
+                                             appearance_component_count_);
         }
         return result;
     }
@@ -79,24 +80,74 @@ public:
         }
 
         result.has_appearance_data = true;
-        result.runtime_stats = BuildRuntime(appearance_components_,
-                                            appearance_component_count_,
-                                            dirty_component_indices_,
-                                            dirty_component_count_,
-                                            appearance_runtime_scratch_);
+        result.runtime_stats = BuildRuntimeInternal(appearance_components_,
+                                                    appearance_component_count_,
+                                                    dirty_component_indices_,
+                                                    dirty_component_count_,
+                                                    appearance_runtime_scratch_);
+        result.build_invoked = true;
 
         if (surface_components_ != nullptr && surface_component_count_ > 0U) {
-            result.link_stats = AppearanceLinkSystemType::ApplyToSurfaceAligned(
-                surface_components_,
-                surface_component_count_,
-                appearance_components_,
-                appearance_component_count_);
+            result.link_stats = LinkSurface(surface_components_,
+                                            surface_component_count_,
+                                            appearance_components_,
+                                            appearance_component_count_);
         }
         return result;
     }
 
+    [[nodiscard]] static AppearancePrepareStageResult<DimensionT> BuildRuntimeOnly(
+        AppearanceType* appearance_components_,
+        std::uint32_t appearance_component_count_,
+        const std::uint32_t* dirty_component_indices_,
+        std::uint32_t dirty_component_count_,
+        AppearanceRuntimeScratchType& appearance_runtime_scratch_) {
+        AppearancePrepareStageResult<DimensionT> result{};
+        if (appearance_components_ == nullptr || appearance_component_count_ == 0U) {
+            return result;
+        }
+        result.has_appearance_data = true;
+        result.build_invoked = true;
+        result.runtime_stats = BuildRuntimeInternal(appearance_components_,
+                                                    appearance_component_count_,
+                                                    dirty_component_indices_,
+                                                    dirty_component_count_,
+                                                    appearance_runtime_scratch_);
+        return result;
+    }
+
+    [[nodiscard]] static ecs::AppearanceLinkStats LinkGeometry(
+        GeometryType* geometry_components_,
+        std::uint32_t geometry_component_count_,
+        const AppearanceType* appearance_components_,
+        std::uint32_t appearance_component_count_) noexcept {
+        if (geometry_components_ == nullptr || geometry_component_count_ == 0U ||
+            appearance_components_ == nullptr || appearance_component_count_ == 0U) {
+            return ecs::AppearanceLinkStats{};
+        }
+        return AppearanceLinkSystemType::ApplyToGeometryAligned(geometry_components_,
+                                                                 geometry_component_count_,
+                                                                 appearance_components_,
+                                                                 appearance_component_count_);
+    }
+
+    [[nodiscard]] static ecs::AppearanceLinkStats LinkSurface(
+        SurfaceType* surface_components_,
+        std::uint32_t surface_component_count_,
+        const AppearanceType* appearance_components_,
+        std::uint32_t appearance_component_count_) noexcept {
+        if (surface_components_ == nullptr || surface_component_count_ == 0U ||
+            appearance_components_ == nullptr || appearance_component_count_ == 0U) {
+            return ecs::AppearanceLinkStats{};
+        }
+        return AppearanceLinkSystemType::ApplyToSurfaceAligned(surface_components_,
+                                                                surface_component_count_,
+                                                                appearance_components_,
+                                                                appearance_component_count_);
+    }
+
 private:
-    [[nodiscard]] static ecs::AppearanceRuntimeBuildStats BuildRuntime(
+    [[nodiscard]] static ecs::AppearanceRuntimeBuildStats BuildRuntimeInternal(
         AppearanceType* appearance_components_,
         std::uint32_t appearance_component_count_,
         const std::uint32_t* dirty_component_indices_,
@@ -122,4 +173,3 @@ private:
 };
 
 } // namespace vr::render
-

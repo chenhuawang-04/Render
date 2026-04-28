@@ -6,7 +6,7 @@
 #include "vr/ecs/system/culling_system.hpp"
 #include "vr/ecs/component/transform_component.hpp"
 #include "vr/ecs/system/surface_runtime_system.hpp"
-#include "vr/render/appearance_prepare_stage.hpp"
+#include "vr/render/appearance_prepare_bridge.hpp"
 #include "vr/render/descriptor_host.hpp"
 #include "vr/render/pipeline_host.hpp"
 #include "vr/resource/image_host.hpp"
@@ -114,6 +114,7 @@ public:
                                std::uint32_t dirty_component_count_) noexcept;
     void SetAppearanceDirtyHint(const std::uint32_t* dirty_component_indices_,
                                 std::uint32_t dirty_component_count_) noexcept;
+    void SetAppearanceCoordinator(render::AppearanceFrameCoordinator<ecs::Dim3>* appearance_frame_coordinator_) noexcept;
 
     void PrepareFrame(const render::RuntimePrepareContext& prepare_context_);
     void Record(const render::FrameRecordContext& record_context_);
@@ -219,7 +220,6 @@ private:
     ecs::Surface<ecs::Dim3>* surface_components = nullptr;
     ecs::Transform<ecs::Dim3>* transforms = nullptr;
     std::uint32_t component_count = 0U;
-    ecs::Appearance<ecs::Dim3>* appearance_components = nullptr;
     std::uint32_t appearance_component_count = 0U;
     ecs::Camera<ecs::Dim3>* camera_component = nullptr;
     ecs::Transform<ecs::Dim3>* camera_transform = nullptr;
@@ -227,7 +227,7 @@ private:
 
     ecs::Surface3DRuntimeScratch runtime_scratch{};
     ecs::SurfaceUploadPlanScratch<ecs::Dim3> plan_scratch{};
-    ecs::AppearanceRuntimeScratch<ecs::Dim3> appearance_runtime_scratch{};
+    render::AppearancePrepareBridge<ecs::Dim3> appearance_prepare_bridge{};
     ecs::AppearanceRuntimeBuildStats appearance_runtime_stats{};
     ecs::AppearanceLinkStats appearance_link_stats{};
     ecs::CullingScratch<ecs::Dim3> culling_scratch{};
@@ -274,8 +274,6 @@ private:
 
     const std::uint32_t* pending_dirty_component_indices = nullptr;
     std::uint32_t pending_dirty_component_count = 0U;
-    const std::uint32_t* pending_appearance_dirty_component_indices = nullptr;
-    std::uint32_t pending_appearance_dirty_component_count = 0U;
     bool initialized = false;
 };
 

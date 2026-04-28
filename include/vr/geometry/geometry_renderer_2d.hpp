@@ -3,7 +3,7 @@
 #include "Center/Memory/Container/Vector/McVector.hpp"
 #include "vr/ecs/system/geometry_runtime_system.hpp"
 #include "vr/geometry/geometry_upload_host.hpp"
-#include "vr/render/appearance_prepare_stage.hpp"
+#include "vr/render/appearance_prepare_bridge.hpp"
 #include "vr/render/pipeline_host.hpp"
 
 #include <cstdint>
@@ -71,6 +71,7 @@ public:
                            std::uint32_t appearance_component_count_) noexcept;
     void SetAppearanceDirtyHint(const std::uint32_t* dirty_component_indices_,
                                 std::uint32_t dirty_component_count_) noexcept;
+    void SetAppearanceCoordinator(render::AppearanceFrameCoordinator<ecs::Dim2>* appearance_frame_coordinator_) noexcept;
 
     void PrepareFrame(const render::RuntimePrepareContext& prepare_context_);
     void Record(const render::FrameRecordContext& record_context_);
@@ -113,12 +114,11 @@ private:
 
     ecs::Geometry<ecs::Dim2>* geometry_components = nullptr;
     std::uint32_t component_count = 0U;
-    ecs::Appearance<ecs::Dim2>* appearance_components = nullptr;
     std::uint32_t appearance_component_count = 0U;
 
     ecs::Geometry2DRuntimeScratch runtime_scratch{};
     ecs::Geometry2DRuntimeBuildStats runtime_stats{};
-    ecs::AppearanceRuntimeScratch<ecs::Dim2> appearance_runtime_scratch{};
+    render::AppearancePrepareBridge<ecs::Dim2> appearance_prepare_bridge{};
     ecs::AppearanceRuntimeBuildStats appearance_runtime_stats{};
     ecs::AppearanceLinkStats appearance_link_stats{};
 
@@ -142,8 +142,6 @@ private:
 
     std::uint64_t last_submitted_value_seen = 0U;
     std::uint64_t completed_submit_value_seen = 0U;
-    const std::uint32_t* pending_appearance_dirty_component_indices = nullptr;
-    std::uint32_t pending_appearance_dirty_component_count = 0U;
     bool initialized = false;
 };
 

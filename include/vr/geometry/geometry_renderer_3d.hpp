@@ -9,7 +9,7 @@
 #include "vr/geometry/geometry_material_host.hpp"
 #include "vr/geometry/geometry_resource_host.hpp"
 #include "vr/geometry/geometry_upload_host.hpp"
-#include "vr/render/appearance_prepare_stage.hpp"
+#include "vr/render/appearance_prepare_bridge.hpp"
 #include "vr/render/descriptor_host.hpp"
 #include "vr/render/pipeline_host.hpp"
 #include "vr/resource/sampler_host.hpp"
@@ -122,6 +122,7 @@ public:
                            std::uint32_t appearance_component_count_) noexcept;
     void SetAppearanceDirtyHint(const std::uint32_t* dirty_component_indices_,
                                 std::uint32_t dirty_component_count_) noexcept;
+    void SetAppearanceCoordinator(render::AppearanceFrameCoordinator<ecs::Dim3>* appearance_frame_coordinator_) noexcept;
 
     void PrepareFrame(const render::RuntimePrepareContext& prepare_context_);
     void Record(const render::FrameRecordContext& record_context_);
@@ -281,7 +282,6 @@ private:
     ecs::Geometry<ecs::Dim3>* geometry_components = nullptr;
     ecs::Transform<ecs::Dim3>* transforms = nullptr;
     std::uint32_t component_count = 0U;
-    ecs::Appearance<ecs::Dim3>* appearance_components = nullptr;
     std::uint32_t appearance_component_count = 0U;
     ecs::Camera<ecs::Dim3>* camera_component = nullptr;
     ecs::Transform<ecs::Dim3>* camera_transform = nullptr;
@@ -289,7 +289,7 @@ private:
 
     ecs::Geometry3DRuntimeScratch runtime_scratch{};
     ecs::Geometry3DRuntimeBuildStats runtime_stats{};
-    ecs::AppearanceRuntimeScratch<ecs::Dim3> appearance_runtime_scratch{};
+    render::AppearancePrepareBridge<ecs::Dim3> appearance_prepare_bridge{};
     ecs::AppearanceRuntimeBuildStats appearance_runtime_stats{};
     ecs::AppearanceLinkStats appearance_link_stats{};
     ecs::CullingScratch<ecs::Dim3> culling_scratch{};
@@ -340,8 +340,6 @@ private:
 
     std::uint64_t last_submitted_value_seen = 0U;
     std::uint64_t completed_submit_value_seen = 0U;
-    const std::uint32_t* pending_appearance_dirty_component_indices = nullptr;
-    std::uint32_t pending_appearance_dirty_component_count = 0U;
     std::uint32_t material_host_revision_seen = 0U;
     std::uint32_t image_host_revision_seen = 0U;
     bool initialized = false;

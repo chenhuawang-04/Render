@@ -149,11 +149,11 @@ void SurfaceRenderer3D::Initialize(const SurfaceRenderer3DCreateInfo& create_inf
     image_initialized.clear();
     appearance_runtime_stats = {};
     appearance_link_stats = {};
+    appearance_prepare_bridge.Reset();
 
     surface_components = nullptr;
     transforms = nullptr;
     component_count = 0U;
-    appearance_components = nullptr;
     appearance_component_count = 0U;
     camera_component = nullptr;
     camera_transform = nullptr;
@@ -177,8 +177,6 @@ void SurfaceRenderer3D::Initialize(const SurfaceRenderer3DCreateInfo& create_inf
     completed_submit_value_seen = 0U;
     pending_dirty_component_indices = nullptr;
     pending_dirty_component_count = 0U;
-    pending_appearance_dirty_component_indices = nullptr;
-    pending_appearance_dirty_component_count = 0U;
 
     initialized = true;
 }
@@ -200,7 +198,6 @@ void SurfaceRenderer3D::Shutdown(VulkanContext& context_) {
     surface_components = nullptr;
     transforms = nullptr;
     component_count = 0U;
-    appearance_components = nullptr;
     appearance_component_count = 0U;
     camera_component = nullptr;
     camera_transform = nullptr;
@@ -233,11 +230,7 @@ void SurfaceRenderer3D::Shutdown(VulkanContext& context_) {
     runtime_scratch.batch_scratch.radix_scratch.clear();
     runtime_scratch.batch_scratch.ordered_indices.clear();
     runtime_scratch.cache = {};
-    appearance_runtime_scratch.gpu_records.clear();
-    appearance_runtime_scratch.upload_ranges.clear();
-    appearance_runtime_scratch.dirty_component_indices.clear();
-    appearance_runtime_scratch.handle_generations.clear();
-    appearance_runtime_scratch.cache = {};
+    appearance_prepare_bridge.Reset();
     appearance_runtime_stats = {};
     appearance_link_stats = {};
     culling_scratch.visible_indices.clear();
@@ -263,8 +256,6 @@ void SurfaceRenderer3D::Shutdown(VulkanContext& context_) {
     completed_submit_value_seen = 0U;
     pending_dirty_component_indices = nullptr;
     pending_dirty_component_count = 0U;
-    pending_appearance_dirty_component_indices = nullptr;
-    pending_appearance_dirty_component_count = 0U;
     initialized = false;
 }
 
@@ -301,10 +292,10 @@ void SurfaceRenderer3D::SetSceneData(ecs::Surface<ecs::Dim3>* surface_components
 
 void SurfaceRenderer3D::SetAppearanceData(ecs::Appearance<ecs::Dim3>* appearance_components_,
                                           std::uint32_t appearance_component_count_) noexcept {
-    appearance_components = appearance_components_;
     appearance_component_count = appearance_component_count_;
-    render::AppearancePrepareStage<ecs::Dim3>::Reserve(appearance_runtime_scratch,
-                                                       appearance_component_count_);
+    appearance_prepare_bridge.SetAppearanceData(appearance_components_,
+                                                appearance_component_count_);
+    appearance_prepare_bridge.Reserve(appearance_component_count_);
 }
 
 void SurfaceRenderer3D::SetTransformDirtyHint(const std::uint32_t* dirty_component_indices_,
@@ -315,8 +306,14 @@ void SurfaceRenderer3D::SetTransformDirtyHint(const std::uint32_t* dirty_compone
 
 void SurfaceRenderer3D::SetAppearanceDirtyHint(const std::uint32_t* dirty_component_indices_,
                                                std::uint32_t dirty_component_count_) noexcept {
-    pending_appearance_dirty_component_indices = dirty_component_indices_;
-    pending_appearance_dirty_component_count = dirty_component_count_;
+    appearance_prepare_bridge.SetDirtyHint(dirty_component_indices_,
+                                           dirty_component_count_);
+}
+
+void SurfaceRenderer3D::SetAppearanceCoordinator(
+    render::AppearanceFrameCoordinator<ecs::Dim3>* appearance_frame_coordinator_) noexcept {
+    appearance_prepare_bridge.SetCoordinator(appearance_frame_coordinator_);
+    appearance_prepare_bridge.Reserve(appearance_component_count);
 }
 
 void SurfaceRenderer3D::PrepareFrame(const render::RuntimePrepareContext& prepare_context_) {
@@ -364,22 +361,16 @@ void SurfaceRenderer3D::PrepareFrame(const render::RuntimePrepareContext& prepar
     culling_stats = {};
     appearance_runtime_stats = {};
     appearance_link_stats = {};
-
-    const render::AppearancePrepareStageResult<ecs::Dim3> appearance_prepare_result =
-        render::AppearancePrepareStage<ecs::Dim3>::BuildAndLinkSurface(
-            appearance_components,
-            appearance_component_count,
-            pending_appearance_dirty_component_indices,
-            pending_appearance_dirty_component_count,
-            appearance_runtime_scratch,
-            surface_components,
-            component_count);
+    const auto appearance_prepare_result = appearance_prepare_bridge.PrepareSurface(
+        surface_components,
+        component_count,
+        active_frame_index);
     if (appearance_prepare_result.has_appearance_data) {
         appearance_runtime_stats = appearance_prepare_result.runtime_stats;
         appearance_link_stats = appearance_prepare_result.link_stats;
         stats.appearance_visible_count = appearance_runtime_stats.visible_count;
         stats.appearance_updated_record_count = appearance_runtime_stats.updated_record_count;
-        stats.appearance_cache_reused = appearance_runtime_stats.full_rebuild == 0U;
+        stats.appearance_cache_reused = appearance_prepare_result.cache_reused;
         stats.appearance_link_scanned_count = appearance_link_stats.scanned_count;
         stats.appearance_link_updated_count = appearance_link_stats.updated_count;
     }
@@ -391,8 +382,6 @@ void SurfaceRenderer3D::PrepareFrame(const render::RuntimePrepareContext& prepar
         culling_scratch.visibility_stamps.clear();
         pending_dirty_component_indices = nullptr;
         pending_dirty_component_count = 0U;
-        pending_appearance_dirty_component_indices = nullptr;
-        pending_appearance_dirty_component_count = 0U;
         return;
     }
 
@@ -459,8 +448,6 @@ void SurfaceRenderer3D::PrepareFrame(const render::RuntimePrepareContext& prepar
 
     pending_dirty_component_indices = nullptr;
     pending_dirty_component_count = 0U;
-    pending_appearance_dirty_component_indices = nullptr;
-    pending_appearance_dirty_component_count = 0U;
 }
 
 void SurfaceRenderer3D::Record(const render::FrameRecordContext& record_context_) {

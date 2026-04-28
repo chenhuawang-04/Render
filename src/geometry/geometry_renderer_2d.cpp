@@ -33,11 +33,10 @@ void GeometryRenderer2D::Initialize(const GeometryRenderer2DCreateInfo& create_i
     runtime_stats = {};
     appearance_runtime_stats = {};
     appearance_link_stats = {};
+    appearance_prepare_bridge.Reset();
     stats = {};
     last_submitted_value_seen = 0U;
     completed_submit_value_seen = 0U;
-    pending_appearance_dirty_component_indices = nullptr;
-    pending_appearance_dirty_component_count = 0U;
     initialized = true;
 }
 
@@ -50,7 +49,6 @@ void GeometryRenderer2D::Shutdown(VulkanContext& context_) {
 
     geometry_components = nullptr;
     component_count = 0U;
-    appearance_components = nullptr;
     appearance_component_count = 0U;
     geometry_upload_host = nullptr;
 
@@ -73,11 +71,7 @@ void GeometryRenderer2D::Shutdown(VulkanContext& context_) {
     runtime_scratch.batch_scratch.ordered_indices.clear();
     runtime_scratch.cache = {};
     runtime_stats = {};
-    appearance_runtime_scratch.gpu_records.clear();
-    appearance_runtime_scratch.upload_ranges.clear();
-    appearance_runtime_scratch.dirty_component_indices.clear();
-    appearance_runtime_scratch.handle_generations.clear();
-    appearance_runtime_scratch.cache = {};
+    appearance_prepare_bridge.Reset();
     appearance_runtime_stats = {};
     appearance_link_stats = {};
     stats = {};
@@ -87,8 +81,6 @@ void GeometryRenderer2D::Shutdown(VulkanContext& context_) {
     swapchain_format = VK_FORMAT_UNDEFINED;
     last_submitted_value_seen = 0U;
     completed_submit_value_seen = 0U;
-    pending_appearance_dirty_component_indices = nullptr;
-    pending_appearance_dirty_component_count = 0U;
     initialized = false;
 }
 
@@ -104,16 +96,22 @@ void GeometryRenderer2D::SetSceneData(ecs::Geometry<ecs::Dim2>* geometry_compone
 
 void GeometryRenderer2D::SetAppearanceData(ecs::Appearance<ecs::Dim2>* appearance_components_,
                                            std::uint32_t appearance_component_count_) noexcept {
-    appearance_components = appearance_components_;
     appearance_component_count = appearance_component_count_;
-    render::AppearancePrepareStage<ecs::Dim2>::Reserve(appearance_runtime_scratch,
-                                                       appearance_component_count_);
+    appearance_prepare_bridge.SetAppearanceData(appearance_components_,
+                                                appearance_component_count_);
+    appearance_prepare_bridge.Reserve(appearance_component_count_);
 }
 
 void GeometryRenderer2D::SetAppearanceDirtyHint(const std::uint32_t* dirty_component_indices_,
                                                 std::uint32_t dirty_component_count_) noexcept {
-    pending_appearance_dirty_component_indices = dirty_component_indices_;
-    pending_appearance_dirty_component_count = dirty_component_count_;
+    appearance_prepare_bridge.SetDirtyHint(dirty_component_indices_,
+                                           dirty_component_count_);
+}
+
+void GeometryRenderer2D::SetAppearanceCoordinator(
+    render::AppearanceFrameCoordinator<ecs::Dim2>* appearance_frame_coordinator_) noexcept {
+    appearance_prepare_bridge.SetCoordinator(appearance_frame_coordinator_);
+    appearance_prepare_bridge.Reserve(appearance_component_count);
 }
 
 void GeometryRenderer2D::PrepareFrame(const render::RuntimePrepareContext& prepare_context_) {
@@ -145,22 +143,16 @@ void GeometryRenderer2D::PrepareFrame(const render::RuntimePrepareContext& prepa
     runtime_stats = {};
     appearance_runtime_stats = {};
     appearance_link_stats = {};
-
-    const render::AppearancePrepareStageResult<ecs::Dim2> appearance_prepare_result =
-        render::AppearancePrepareStage<ecs::Dim2>::BuildAndLinkGeometry(
-            appearance_components,
-            appearance_component_count,
-            pending_appearance_dirty_component_indices,
-            pending_appearance_dirty_component_count,
-            appearance_runtime_scratch,
-            geometry_components,
-            component_count);
+    const auto appearance_prepare_result = appearance_prepare_bridge.PrepareGeometry(
+        geometry_components,
+        component_count,
+        active_frame_index);
     if (appearance_prepare_result.has_appearance_data) {
         appearance_runtime_stats = appearance_prepare_result.runtime_stats;
         appearance_link_stats = appearance_prepare_result.link_stats;
         stats.appearance_visible_count = appearance_runtime_stats.visible_count;
         stats.appearance_updated_record_count = appearance_runtime_stats.updated_record_count;
-        stats.appearance_cache_reused = appearance_runtime_stats.full_rebuild == 0U;
+        stats.appearance_cache_reused = appearance_prepare_result.cache_reused;
         stats.appearance_link_scanned_count = appearance_link_stats.scanned_count;
         stats.appearance_link_updated_count = appearance_link_stats.updated_count;
     }
@@ -168,8 +160,6 @@ void GeometryRenderer2D::PrepareFrame(const render::RuntimePrepareContext& prepa
     if (geometry_components == nullptr || component_count == 0U) {
         runtime_scratch.primitives.clear();
         runtime_scratch.draw_batches.clear();
-        pending_appearance_dirty_component_indices = nullptr;
-        pending_appearance_dirty_component_count = 0U;
         return;
     }
 
@@ -183,8 +173,6 @@ void GeometryRenderer2D::PrepareFrame(const render::RuntimePrepareContext& prepa
     stats.cache_reused = runtime_stats.cache_reused;
 
     if (runtime_scratch.primitives.empty()) {
-        pending_appearance_dirty_component_indices = nullptr;
-        pending_appearance_dirty_component_count = 0U;
         return;
     }
 
@@ -198,9 +186,6 @@ void GeometryRenderer2D::PrepareFrame(const render::RuntimePrepareContext& prepa
         stats.uploaded_primitive_count = primitive_range.element_count;
         stats.uploaded_bytes = primitive_range.size_bytes;
     }
-
-    pending_appearance_dirty_component_indices = nullptr;
-    pending_appearance_dirty_component_count = 0U;
 }
 
 void GeometryRenderer2D::Record(const render::FrameRecordContext& record_context_) {

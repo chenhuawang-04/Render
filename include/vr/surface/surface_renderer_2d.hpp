@@ -3,7 +3,7 @@
 #include "Center/Memory/Container/Vector/McVector.hpp"
 #include "vr/ecs/component/transform_component.hpp"
 #include "vr/ecs/system/surface_runtime_system.hpp"
-#include "vr/render/appearance_prepare_stage.hpp"
+#include "vr/render/appearance_prepare_bridge.hpp"
 #include "vr/render/descriptor_host.hpp"
 #include "vr/render/pipeline_host.hpp"
 #include "vr/resource/sampler_host.hpp"
@@ -94,6 +94,7 @@ public:
                                std::uint32_t dirty_component_count_) noexcept;
     void SetAppearanceDirtyHint(const std::uint32_t* dirty_component_indices_,
                                 std::uint32_t dirty_component_count_) noexcept;
+    void SetAppearanceCoordinator(render::AppearanceFrameCoordinator<ecs::Dim2>* appearance_frame_coordinator_) noexcept;
 
     void PrepareFrame(const render::RuntimePrepareContext& prepare_context_);
     void Record(const render::FrameRecordContext& record_context_);
@@ -168,12 +169,11 @@ private:
     ecs::Surface<ecs::Dim2>* surface_components = nullptr;
     ecs::Transform<ecs::Dim2>* transforms = nullptr;
     std::uint32_t component_count = 0U;
-    ecs::Appearance<ecs::Dim2>* appearance_components = nullptr;
     std::uint32_t appearance_component_count = 0U;
 
     ecs::Surface2DRuntimeScratch runtime_scratch{};
     ecs::SurfaceUploadPlanScratch<ecs::Dim2> plan_scratch{};
-    ecs::AppearanceRuntimeScratch<ecs::Dim2> appearance_runtime_scratch{};
+    render::AppearancePrepareBridge<ecs::Dim2> appearance_prepare_bridge{};
     ecs::AppearanceRuntimeBuildStats appearance_runtime_stats{};
     ecs::AppearanceLinkStats appearance_link_stats{};
     Surface2DRuntimeUploadResult last_upload_result{};
@@ -213,8 +213,6 @@ private:
 
     const std::uint32_t* pending_dirty_component_indices = nullptr;
     std::uint32_t pending_dirty_component_count = 0U;
-    const std::uint32_t* pending_appearance_dirty_component_indices = nullptr;
-    std::uint32_t pending_appearance_dirty_component_count = 0U;
     bool initialized = false;
 };
 
