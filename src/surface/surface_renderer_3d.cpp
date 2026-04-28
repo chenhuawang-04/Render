@@ -226,7 +226,7 @@ void SurfaceRenderer3D::Shutdown(VulkanContext& context_) {
     runtime_scratch.batch_scratch.ordered_indices.clear();
     runtime_scratch.cache = {};
     culling_scratch.visible_indices.clear();
-    culling_scratch.visibility_bits.clear();
+    culling_scratch.visibility_stamps.clear();
     culling_stats = {};
     plan_scratch.instance_indices.clear();
     plan_scratch.ranges.clear();
@@ -335,7 +335,7 @@ void SurfaceRenderer3D::PrepareFrame(const render::RuntimePrepareContext& prepar
         runtime_scratch.instances.clear();
         runtime_scratch.draw_batches.clear();
         culling_scratch.visible_indices.clear();
-        culling_scratch.visibility_bits.clear();
+        culling_scratch.visibility_stamps.clear();
         pending_dirty_component_indices = nullptr;
         pending_dirty_component_count = 0U;
         return;
@@ -374,7 +374,7 @@ void SurfaceRenderer3D::PrepareFrame(const render::RuntimePrepareContext& prepar
         stats.culling_plane_test_count = culling_stats.plane_test_count;
     } else {
         culling_scratch.visible_indices.clear();
-        culling_scratch.visibility_bits.clear();
+        culling_scratch.visibility_stamps.clear();
     }
 
     last_upload_result = surface_upload_host->PrepareRuntimeAndUpload3D(

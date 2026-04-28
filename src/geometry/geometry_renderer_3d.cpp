@@ -278,7 +278,7 @@ void GeometryRenderer3D::Shutdown(VulkanContext& context_) {
     runtime_scratch.cache = {};
     runtime_stats = {};
     culling_scratch.visible_indices.clear();
-    culling_scratch.visibility_bits.clear();
+    culling_scratch.visibility_stamps.clear();
     culling_stats = {};
     stats = {};
 
@@ -401,7 +401,7 @@ void GeometryRenderer3D::PrepareFrame(const render::RuntimePrepareContext& prepa
         runtime_scratch.draw_batches.clear();
         runtime_stats = {};
         culling_scratch.visible_indices.clear();
-        culling_scratch.visibility_bits.clear();
+        culling_scratch.visibility_stamps.clear();
         return;
     }
 

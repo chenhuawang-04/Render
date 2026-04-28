@@ -274,25 +274,27 @@ public:
     }
 
     static bool SetText(TextType& component_, std::string_view text_) noexcept {
-        if (!EnsureCapacityInitialized(component_)) {
+        if (!EnsureInlineCapacityOrRecover(component_)) {
             return false;
         }
 
-        if (text_.size() > component_.text.capacity_bytes) {
+        const std::size_t new_size_size_t = text_.size();
+        const std::uint32_t capacity_bytes = component_.text.capacity_bytes;
+        if (new_size_size_t > static_cast<std::size_t>(capacity_bytes)) {
             return false;
         }
 
-        const std::uint32_t new_size = static_cast<std::uint32_t>(text_.size());
-        const bool same_size = (new_size == component_.text.size_bytes);
-        if (same_size && new_size > 0U) {
-            const int cmp_result = std::memcmp(component_.text.utf8,
-                                               text_.data(),
-                                               static_cast<std::size_t>(new_size));
-            if (cmp_result == 0) {
+        const std::uint32_t new_size = static_cast<std::uint32_t>(new_size_size_t);
+        const std::uint32_t current_size = component_.text.size_bytes;
+        if (new_size == current_size) {
+            if (new_size == 0U) {
                 return true;
             }
-        } else if (same_size && new_size == 0U) {
-            return true;
+            if (BytesEqual(component_.text.utf8,
+                           text_.data(),
+                           new_size)) {
+                return true;
+            }
         }
 
         if (new_size > 0U) {
@@ -300,7 +302,7 @@ public:
                         text_.data(),
                         static_cast<std::size_t>(new_size));
         }
-        if (new_size < component_.text.capacity_bytes) {
+        if (new_size < capacity_bytes) {
             component_.text.utf8[new_size] = '\0';
         }
         component_.text.size_bytes = new_size;
@@ -313,25 +315,30 @@ public:
         if (text_.empty()) {
             return true;
         }
-        if (!EnsureCapacityInitialized(component_)) {
+        if (!EnsureInlineCapacityOrRecover(component_)) {
             return false;
         }
 
-        if (text_.size() > component_.text.capacity_bytes) {
+        const std::size_t append_size_size_t = text_.size();
+        const std::uint32_t capacity_bytes = component_.text.capacity_bytes;
+        const std::uint32_t current_size = component_.text.size_bytes;
+        if (current_size > capacity_bytes) {
             return false;
         }
-        const std::uint32_t append_size = static_cast<std::uint32_t>(text_.size());
-        if (component_.text.size_bytes > component_.text.capacity_bytes - append_size) {
+        const std::size_t remaining_size = static_cast<std::size_t>(capacity_bytes - current_size);
+        if (append_size_size_t > remaining_size) {
             return false;
         }
 
-        const std::uint32_t dst_offset = component_.text.size_bytes;
+        const std::uint32_t append_size = static_cast<std::uint32_t>(append_size_size_t);
+        const std::uint32_t dst_offset = current_size;
         std::memcpy(component_.text.utf8 + dst_offset,
                     text_.data(),
                     static_cast<std::size_t>(append_size));
-        component_.text.size_bytes += append_size;
-        if (component_.text.size_bytes < component_.text.capacity_bytes) {
-            component_.text.utf8[component_.text.size_bytes] = '\0';
+        const std::uint32_t merged_size = current_size + append_size;
+        component_.text.size_bytes = merged_size;
+        if (merged_size < capacity_bytes) {
+            component_.text.utf8[merged_size] = '\0';
         }
         ++component_.text.revision;
         MarkDirty(component_, text_dirty_flag | runtime_dirty_flag);
@@ -339,7 +346,7 @@ public:
     }
 
     static void ClearText(TextType& component_) noexcept {
-        if (!EnsureCapacityInitialized(component_)) {
+        if (!EnsureInlineCapacityOrRecover(component_)) {
             return;
         }
         if (component_.text.size_bytes == 0U) {
@@ -466,6 +473,26 @@ public:
     }
 
 private:
+    [[nodiscard]] static bool EnsureInlineCapacityOrRecover(TextType& component_) noexcept {
+        if (component_.text.capacity_bytes == inline_capacity_bytes) {
+            return true;
+        }
+        return EnsureCapacityInitialized(component_);
+    }
+
+    [[nodiscard]] static bool BytesEqual(const char* lhs_,
+                                         const char* rhs_,
+                                         std::uint32_t size_bytes_) noexcept {
+        if (size_bytes_ <= sizeof(std::uint64_t)) {
+            std::uint64_t lhs_bits = 0U;
+            std::uint64_t rhs_bits = 0U;
+            std::memcpy(&lhs_bits, lhs_, static_cast<std::size_t>(size_bytes_));
+            std::memcpy(&rhs_bits, rhs_, static_cast<std::size_t>(size_bytes_));
+            return lhs_bits == rhs_bits;
+        }
+        return std::memcmp(lhs_, rhs_, static_cast<std::size_t>(size_bytes_)) == 0;
+    }
+
     [[nodiscard]] static bool EnsureCapacityInitialized(TextType& component_) noexcept {
         if (component_.text.capacity_bytes == inline_capacity_bytes) {
             return true;

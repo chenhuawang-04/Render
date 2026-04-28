@@ -262,7 +262,7 @@ void TextRenderer3D::Shutdown(VulkanContext& context_) {
     render_scratch.runtime_scratch.face_variants.clear();
     render_scratch.runtime_scratch.glyph_resolve_cache.clear();
     culling_scratch.visible_indices.clear();
-    culling_scratch.visibility_bits.clear();
+    culling_scratch.visibility_stamps.clear();
     culling_stats = {};
 
     descriptor_layout_id = {};
@@ -391,7 +391,7 @@ void TextRenderer3D::PrepareFrame(const render::RuntimePrepareContext& prepare_c
         cached_transform_signature = 0U;
         cached_camera_world_revision = 0U;
         culling_scratch.visible_indices.clear();
-        culling_scratch.visibility_bits.clear();
+        culling_scratch.visibility_stamps.clear();
         runtime_geometry_valid = false;
         instance_geometry_valid = false;
         contains_billboard_instances = false;
@@ -435,7 +435,7 @@ void TextRenderer3D::PrepareFrame(const render::RuntimePrepareContext& prepare_c
         stats.culling_plane_test_count = culling_stats.plane_test_count;
     } else {
         culling_scratch.visible_indices.clear();
-        culling_scratch.visibility_bits.clear();
+        culling_scratch.visibility_stamps.clear();
     }
 
     const bool visible_mode_changed =

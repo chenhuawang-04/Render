@@ -646,8 +646,11 @@ private:
         return bits;
     }
 
+    static constexpr std::uint64_t k_hash_prime = 1099511628211ULL;
+
     static void HashCombine(std::uint64_t& hash_, std::uint64_t value_) noexcept {
-        hash_ ^= value_ + 0x9e3779b97f4a7c15ULL + (hash_ << 6U) + (hash_ >> 2U);
+        hash_ ^= value_;
+        hash_ *= k_hash_prime;
     }
 
     [[nodiscard]] static bool IsBuildConfigEqual(const Surface2DRuntimeBuildConfig& lhs_,
@@ -881,10 +884,15 @@ private:
                                                      const TransformType* transforms_,
                                                      std::uint32_t component_count_) {
         revisions_.resize(instances_.size());
+        if (transforms_ == nullptr) {
+            std::fill(revisions_.begin(), revisions_.end(), 0U);
+            return;
+        }
         for (std::size_t i = 0U; i < instances_.size(); ++i) {
-            revisions_[i] = ReadWorldRevision(transforms_,
-                                              component_count_,
-                                              instances_[i].component_index);
+            const std::uint32_t component_index = instances_[i].component_index;
+            revisions_[i] = (component_index < component_count_)
+                ? transforms_[component_index].runtime.world_revision
+                : 0U;
         }
     }
 
@@ -906,11 +914,39 @@ private:
         }
 
         const Affine2x3 identity = spatial_math::IdentityAffine2x3();
+        const bool has_transforms = transforms_ != nullptr;
         std::uint32_t rewritten_count = 0U;
         if (transform_dirty_component_indices_ != nullptr &&
             transform_dirty_component_count_ > 0U &&
             component_to_instance_index_.size() == static_cast<std::size_t>(component_count_)) {
             used_dirty_hint_ = true;
+            if (transform_dirty_component_count_ == 1U) {
+                const std::uint32_t component_index = transform_dirty_component_indices_[0U];
+                if (component_index >= component_count_) {
+                    return 0U;
+                }
+                const std::uint32_t instance_index = component_to_instance_index_[component_index];
+                if (instance_index == invalid_instance_index || instance_index >= instances_.size()) {
+                    return 0U;
+                }
+
+                const std::uint32_t current_revision = has_transforms
+                    ? transforms_[component_index].runtime.world_revision
+                    : 0U;
+                if (cached_revisions_[instance_index] == current_revision) {
+                    return 0U;
+                }
+
+                Surface2DGpuInstance& instance = instances_[instance_index];
+                if (has_transforms) {
+                    WriteWorldToInstance(instance,
+                                         transforms_[component_index].runtime.world_matrix);
+                } else {
+                    WriteWorldToInstance(instance, identity);
+                }
+                cached_revisions_[instance_index] = current_revision;
+                return 1U;
+            }
             for (std::uint32_t i = 0U; i < transform_dirty_component_count_; ++i) {
                 const std::uint32_t component_index = transform_dirty_component_indices_[i];
                 if (component_index >= component_count_) {
@@ -923,18 +959,18 @@ private:
                 }
 
                 Surface2DGpuInstance& instance = instances_[instance_index];
-                const std::uint32_t current_revision = ReadWorldRevision(transforms_,
-                                                                         component_count_,
-                                                                         component_index);
+                const std::uint32_t current_revision = has_transforms
+                    ? transforms_[component_index].runtime.world_revision
+                    : 0U;
                 if (cached_revisions_[instance_index] == current_revision) {
                     continue;
                 }
 
-                if (transforms_ == nullptr || component_index >= component_count_) {
-                    WriteWorldToInstance(instance, identity);
-                } else {
+                if (has_transforms) {
                     WriteWorldToInstance(instance,
                                          transforms_[component_index].runtime.world_matrix);
+                } else {
+                    WriteWorldToInstance(instance, identity);
                 }
                 cached_revisions_[instance_index] = current_revision;
                 ++rewritten_count;
@@ -942,22 +978,36 @@ private:
             return rewritten_count;
         }
 
+        if (has_transforms) {
+            for (std::size_t index = 0U; index < instances_.size(); ++index) {
+                Surface2DGpuInstance& instance = instances_[index];
+                const std::uint32_t component_index = instance.component_index;
+                const bool valid_component_index = component_index < component_count_;
+                const std::uint32_t current_revision = valid_component_index
+                    ? transforms_[component_index].runtime.world_revision
+                    : 0U;
+                if (cached_revisions_[index] == current_revision) {
+                    continue;
+                }
+
+                if (valid_component_index) {
+                    WriteWorldToInstance(instance,
+                                         transforms_[component_index].runtime.world_matrix);
+                } else {
+                    WriteWorldToInstance(instance, identity);
+                }
+                cached_revisions_[index] = current_revision;
+                ++rewritten_count;
+            }
+            return rewritten_count;
+        }
+
         for (std::size_t index = 0U; index < instances_.size(); ++index) {
-            Surface2DGpuInstance& instance = instances_[index];
-            const std::uint32_t current_revision = ReadWorldRevision(transforms_,
-                                                                     component_count_,
-                                                                     instance.component_index);
-            if (cached_revisions_[index] == current_revision) {
+            if (cached_revisions_[index] == 0U) {
                 continue;
             }
-
-            if (transforms_ == nullptr || instance.component_index >= component_count_) {
-                WriteWorldToInstance(instance, identity);
-            } else {
-                WriteWorldToInstance(instance,
-                                     transforms_[instance.component_index].runtime.world_matrix);
-            }
-            cached_revisions_[index] = current_revision;
+            WriteWorldToInstance(instances_[index], identity);
+            cached_revisions_[index] = 0U;
             ++rewritten_count;
         }
         return rewritten_count;
@@ -1365,8 +1415,11 @@ private:
         return bits;
     }
 
+    static constexpr std::uint64_t k_hash_prime = 1099511628211ULL;
+
     static void HashCombine(std::uint64_t& hash_, std::uint64_t value_) noexcept {
-        hash_ ^= value_ + 0x9e3779b97f4a7c15ULL + (hash_ << 6U) + (hash_ >> 2U);
+        hash_ ^= value_;
+        hash_ *= k_hash_prime;
     }
 
     [[nodiscard]] static bool IsBuildConfigEqual(const Surface3DRuntimeBuildConfig& lhs_,
@@ -1608,10 +1661,15 @@ private:
                                                      const TransformType* transforms_,
                                                      std::uint32_t component_count_) {
         revisions_.resize(instances_.size());
+        if (transforms_ == nullptr) {
+            std::fill(revisions_.begin(), revisions_.end(), 0U);
+            return;
+        }
         for (std::size_t i = 0U; i < instances_.size(); ++i) {
-            revisions_[i] = ReadWorldRevision(transforms_,
-                                              component_count_,
-                                              instances_[i].component_index);
+            const std::uint32_t component_index = instances_[i].component_index;
+            revisions_[i] = (component_index < component_count_)
+                ? transforms_[component_index].runtime.world_revision
+                : 0U;
         }
     }
 
@@ -1633,11 +1691,39 @@ private:
         }
 
         const Matrix4x4 identity = spatial_math::IdentityMatrix4x4();
+        const bool has_transforms = transforms_ != nullptr;
         std::uint32_t rewritten_count = 0U;
         if (transform_dirty_component_indices_ != nullptr &&
             transform_dirty_component_count_ > 0U &&
             component_to_instance_index_.size() == static_cast<std::size_t>(component_count_)) {
             used_dirty_hint_ = true;
+            if (transform_dirty_component_count_ == 1U) {
+                const std::uint32_t component_index = transform_dirty_component_indices_[0U];
+                if (component_index >= component_count_) {
+                    return 0U;
+                }
+                const std::uint32_t instance_index = component_to_instance_index_[component_index];
+                if (instance_index == invalid_instance_index || instance_index >= instances_.size()) {
+                    return 0U;
+                }
+
+                const std::uint32_t current_revision = has_transforms
+                    ? transforms_[component_index].runtime.world_revision
+                    : 0U;
+                if (cached_revisions_[instance_index] == current_revision) {
+                    return 0U;
+                }
+
+                Surface3DGpuInstance& instance = instances_[instance_index];
+                if (has_transforms) {
+                    WriteWorldToInstance(instance,
+                                         transforms_[component_index].runtime.world_matrix);
+                } else {
+                    WriteWorldToInstance(instance, identity);
+                }
+                cached_revisions_[instance_index] = current_revision;
+                return 1U;
+            }
             for (std::uint32_t i = 0U; i < transform_dirty_component_count_; ++i) {
                 const std::uint32_t component_index = transform_dirty_component_indices_[i];
                 if (component_index >= component_count_) {
@@ -1650,18 +1736,18 @@ private:
                 }
 
                 Surface3DGpuInstance& instance = instances_[instance_index];
-                const std::uint32_t current_revision = ReadWorldRevision(transforms_,
-                                                                         component_count_,
-                                                                         component_index);
+                const std::uint32_t current_revision = has_transforms
+                    ? transforms_[component_index].runtime.world_revision
+                    : 0U;
                 if (cached_revisions_[instance_index] == current_revision) {
                     continue;
                 }
 
-                if (transforms_ == nullptr || component_index >= component_count_) {
-                    WriteWorldToInstance(instance, identity);
-                } else {
+                if (has_transforms) {
                     WriteWorldToInstance(instance,
                                          transforms_[component_index].runtime.world_matrix);
+                } else {
+                    WriteWorldToInstance(instance, identity);
                 }
                 cached_revisions_[instance_index] = current_revision;
                 ++rewritten_count;
@@ -1669,22 +1755,36 @@ private:
             return rewritten_count;
         }
 
+        if (has_transforms) {
+            for (std::size_t index = 0U; index < instances_.size(); ++index) {
+                Surface3DGpuInstance& instance = instances_[index];
+                const std::uint32_t component_index = instance.component_index;
+                const bool valid_component_index = component_index < component_count_;
+                const std::uint32_t current_revision = valid_component_index
+                    ? transforms_[component_index].runtime.world_revision
+                    : 0U;
+                if (cached_revisions_[index] == current_revision) {
+                    continue;
+                }
+
+                if (valid_component_index) {
+                    WriteWorldToInstance(instance,
+                                         transforms_[component_index].runtime.world_matrix);
+                } else {
+                    WriteWorldToInstance(instance, identity);
+                }
+                cached_revisions_[index] = current_revision;
+                ++rewritten_count;
+            }
+            return rewritten_count;
+        }
+
         for (std::size_t index = 0U; index < instances_.size(); ++index) {
-            Surface3DGpuInstance& instance = instances_[index];
-            const std::uint32_t current_revision = ReadWorldRevision(transforms_,
-                                                                     component_count_,
-                                                                     instance.component_index);
-            if (cached_revisions_[index] == current_revision) {
+            if (cached_revisions_[index] == 0U) {
                 continue;
             }
-
-            if (transforms_ == nullptr || instance.component_index >= component_count_) {
-                WriteWorldToInstance(instance, identity);
-            } else {
-                WriteWorldToInstance(instance,
-                                     transforms_[instance.component_index].runtime.world_matrix);
-            }
-            cached_revisions_[index] = current_revision;
+            WriteWorldToInstance(instances_[index], identity);
+            cached_revisions_[index] = 0U;
             ++rewritten_count;
         }
         return rewritten_count;

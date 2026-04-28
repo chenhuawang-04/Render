@@ -346,6 +346,10 @@ public:
         if (transforms_ == nullptr || component_count_ == 0U) {
             return;
         }
+        if (CanUseFlatHierarchyFastPath(transforms_, component_count_)) {
+            UpdateFlatHierarchy(transforms_, component_count_);
+            return;
+        }
 
         scratch_.Reserve(component_count_);
         scratch_.stack.clear();
@@ -380,6 +384,43 @@ public:
     }
 
 private:
+    [[nodiscard]] static bool CanUseFlatHierarchyFastPath(const TransformType* transforms_,
+                                                          std::uint32_t component_count_) noexcept {
+        for (std::uint32_t i = 0U; i < component_count_; ++i) {
+            const auto& hierarchy = transforms_[i].runtime.hierarchy;
+            if (hierarchy.parent_index != invalid_index ||
+                hierarchy.first_child_index != invalid_index ||
+                hierarchy.next_sibling_index != invalid_index) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    static void UpdateFlatHierarchy(TransformType* transforms_,
+                                    std::uint32_t component_count_) {
+        for (std::uint32_t i = 0U; i < component_count_; ++i) {
+            TransformType& node = transforms_[i];
+            if (HasDirtyFlags(node, transform_dirty_local_flag)) {
+                RebuildLocalMatrix(node);
+            }
+
+            bool needs_world_update = HasDirtyFlags(node,
+                                                    transform_dirty_world_flag | transform_dirty_hierarchy_flag);
+            if (!needs_world_update) {
+                needs_world_update = node.runtime.cached_parent_world_revision != 0U;
+            }
+            if (!needs_world_update) {
+                continue;
+            }
+
+            node.runtime.world_matrix = node.runtime.local_matrix;
+            node.runtime.cached_parent_world_revision = 0U;
+            ++node.runtime.world_revision;
+            node.runtime.dirty_flags &= ~(transform_dirty_world_flag | transform_dirty_hierarchy_flag);
+        }
+    }
+
     [[nodiscard]] static bool WouldCreateCycle(const TransformType* transforms_,
                                                std::uint32_t component_count_,
                                                std::uint32_t child_index_,

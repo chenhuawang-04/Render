@@ -325,8 +325,11 @@ public:
     }
 
 private:
+    static constexpr std::uint64_t k_hash_prime = 1099511628211ULL;
+
     static void HashCombine(std::uint64_t& hash_, std::uint64_t value_) noexcept {
-        hash_ ^= value_ + 0x9e3779b97f4a7c15ULL + (hash_ << 6U) + (hash_ >> 2U);
+        hash_ ^= value_;
+        hash_ *= k_hash_prime;
     }
 
     [[nodiscard]] static std::uint64_t ComputeVisibleSetSignature(
