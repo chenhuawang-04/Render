@@ -692,8 +692,6 @@ int main(int argc_, char** argv_) {
         ShadowSystem2D::SetLightComponentIndex(shadow_components[1U], 1U);
         ShadowSystem2D::SetTransformComponentIndex(shadow_components[1U], 1U);
         ShadowSystem2D::SetOccluderHeight(shadow_components[1U], 54.0F);
-        ShadowSystem2D::SetProjectionKind(shadow_components[1U], vr::ecs::ShadowProjectionKind::spot);
-        ShadowSystem2D::SetBias(shadow_components[1U], 0.0045F, 0.0012F);
         // NOTE:
         // 2D spot-shadow path is still under active refinement. Keep it disabled in the
         // default showcase to avoid temporal striping artifacts while preserving stable output.

@@ -186,15 +186,7 @@ float evaluate_shadow_factor(LightRecord2D light_record_, vec3 world_position_) 
     bool cast_shadow = (flags & 0x1u) != 0u;
     uint shadow_view_begin = light_record_.shadow_view_begin;
     uint shadow_view_count = unpack_shadow_view_count(light_record_.shadow_meta);
-    uint shadow_projection_kind = (light_record_.shadow_meta >> 16u) & 0xFFu;
     if (!cast_shadow || shadow_view_begin == k_invalid_shadow_view_begin || shadow_view_count == 0u) {
-        return 1.0;
-    }
-
-    // 2D spotlight shadows require a spotlight-frustum shadow view.
-    // If metadata mismatches (e.g., directional shadow bound to spot light),
-    // skip shadowing to avoid screen-space strip artifacts.
-    if (light_record_.light_type == k_light_kind_spot && shadow_projection_kind != 1u) {
         return 1.0;
     }
 
