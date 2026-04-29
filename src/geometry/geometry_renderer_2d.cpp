@@ -134,7 +134,10 @@ void GeometryRenderer2D::PrepareFrame(const render::RuntimePrepareContext& prepa
     last_submitted_value_seen = std::max(last_submitted_value_seen, prepare_context_.last_submitted_value);
     completed_submit_value_seen = std::max(completed_submit_value_seen, prepare_context_.completed_submit_value);
 
-    geometry_upload_host->BeginFrame(*context, active_frame_index);
+    geometry_upload_host->BeginFrame(*context,
+                                     active_frame_index,
+                                     last_submitted_value_seen,
+                                     completed_submit_value_seen);
 
     stats = {};
     stats.component_count = component_count;

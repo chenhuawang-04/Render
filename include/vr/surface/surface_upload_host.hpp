@@ -3,6 +3,7 @@
 #include "Center/Memory/Container/Vector/McVector.hpp"
 #include "vr/ecs/system/surface_upload_plan_system.hpp"
 #include "vr/ecs/system/surface_runtime_system.hpp"
+#include "vr/render/retire_bus.hpp"
 #include "vr/render/upload_host.hpp"
 #include "vr/resource/buffer_host.hpp"
 #include "vr/surface/surface_types.hpp"
@@ -96,7 +97,9 @@ public:
     void Shutdown(VulkanContext& context_);
 
     void BeginFrame(VulkanContext& context_,
-                    std::uint32_t frame_index_);
+                    std::uint32_t frame_index_,
+                    std::uint64_t last_submitted_value_ = 0U,
+                    std::uint64_t completed_submit_value_ = 0U);
 
     [[nodiscard]] SurfaceUploadRange Upload2DInstances(VulkanContext& context_,
                                                        render::UploadHost& upload_host_,
@@ -194,6 +197,12 @@ private:
     [[nodiscard]] static VkDeviceSize NextPow2(VkDeviceSize value_) noexcept;
     static void DestroyStreamBuffer(VulkanContext& context_,
                                     StreamBuffer& stream_);
+    void RetireStreamBuffer(StreamBuffer& stream_,
+                            std::uint64_t retire_value_);
+    void CollectRetiredBuffers(VulkanContext& context_,
+                               std::uint64_t completed_submit_value_);
+    void DestroyRetiredBuffers(VulkanContext& context_) noexcept;
+    [[nodiscard]] std::uint64_t ComputeRetireValue() const noexcept;
 
     void EnsureStreamCapacity(VulkanContext& context_,
                               StreamBuffer& stream_,
@@ -245,9 +254,12 @@ private:
     resource::GpuMemoryHost* gpu_memory_host = nullptr;
     SurfaceUploadHostCreateInfo create_info_cache{};
     SurfaceUploadMcVector<FrameState> frames{};
+    render::RetireBus<resource::BufferResource> retired_buffers{};
     SurfaceUploadMcVector<SurfaceUploadPatch> patch_scratch{};
     SurfaceUploadMcVector<BytePatchRange> merged_patch_scratch{};
     SurfaceUploadHostStats stats{};
+    std::uint64_t last_submitted_value_seen = 0U;
+    std::uint64_t completed_submit_value_seen = 0U;
     bool initialized = false;
 };
 

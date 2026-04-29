@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Center/Memory/Container/Vector/McVector.hpp"
+#include "vr/render/retire_bus.hpp"
 #include "vr/render/upload_host.hpp"
 #include "vr/resource/image_host.hpp"
 #include "vr/resource/sampler_host.hpp"
@@ -56,7 +57,9 @@ public:
     void UploadDirtyPages(VulkanContext& context_,
                           render::UploadHost& upload_host_,
                           std::uint32_t frame_index_,
-                          GlyphAtlasHost& atlas_host_);
+                          GlyphAtlasHost& atlas_host_,
+                          std::uint64_t last_submitted_value_ = 0U,
+                          std::uint64_t completed_submit_value_ = 0U);
 
     [[nodiscard]] VkImageView PageImageView(std::uint32_t page_index_) const;
     [[nodiscard]] VkImage PageImage(std::uint32_t page_index_) const;
@@ -77,6 +80,12 @@ private:
 
     [[nodiscard]] bool ShouldUseGeneralLayout(const VulkanContext& context_) const noexcept;
     void EnsurePageResources(VulkanContext& context_, const GlyphAtlasHost& atlas_host_);
+    void RetirePageResource(PageResource& page_resource_,
+                            std::uint64_t retire_value_);
+    void CollectRetiredPageResources(VulkanContext& context_,
+                                     std::uint64_t completed_submit_value_);
+    void DestroyRetiredPageResources(VulkanContext& context_) noexcept;
+    [[nodiscard]] std::uint64_t ComputeRetireValue() const noexcept;
     void DestroyPageResources(VulkanContext& context_) noexcept;
     void TransitionImageLayoutIfNeeded(render::UploadHost& upload_host_,
                                        std::uint32_t frame_index_,
@@ -90,10 +99,13 @@ private:
 
     GlyphUploadHostCreateInfo create_info_cache{};
     GlyphUploadMcVector<PageResource> pages{};
+    render::RetireBus<resource::ImageResource> retired_pages{};
     GlyphUploadMcVector<std::uint8_t> rect_upload_scratch{};
 
     resource::SamplerId sampler_id{};
     GlyphUploadHostStats stats{};
+    std::uint64_t last_submitted_value_seen = 0U;
+    std::uint64_t completed_submit_value_seen = 0U;
     bool initialized = false;
 };
 

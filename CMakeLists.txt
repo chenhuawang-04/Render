@@ -9,6 +9,9 @@ set(VR_TOP_LEVEL OFF)
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     set(VR_TOP_LEVEL ON)
 endif()
+option(VR_ENABLE_DESCRIPTOR_VALIDATION
+    "Compile descriptor lifecycle validation layer (OFF means zero runtime overhead)"
+    OFF)
 
 find_package(Vulkan REQUIRED)
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
@@ -250,6 +253,10 @@ target_include_directories(vulkan_init
         ${MEMORYCENTER_MIMALLOC_INCLUDE_DIR}
         ${VECTOR_ROOT}/include
         ${FAST_MATH_ROOT}/include
+)
+target_compile_definitions(vulkan_init
+    PUBLIC
+        VR_ENABLE_DESCRIPTOR_VALIDATION=$<IF:$<BOOL:${VR_ENABLE_DESCRIPTOR_VALIDATION}>,1,0>
 )
 
 target_link_libraries(vulkan_init

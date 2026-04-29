@@ -476,7 +476,10 @@ void GeometryRenderer3D::PrepareFrame(const render::RuntimePrepareContext& prepa
 
     CollectRetiredDepthResources(*context, completed_submit_value_seen);
     geometry_resource_host->BeginFrame(*context, completed_submit_value_seen);
-    geometry_upload_host->BeginFrame(*context, active_frame_index);
+    geometry_upload_host->BeginFrame(*context,
+                                     active_frame_index,
+                                     last_submitted_value_seen,
+                                     completed_submit_value_seen);
     if (geometry_image_host != nullptr && geometry_image_host->IsInitialized()) {
         geometry_image_host->BeginFrame(*context, completed_submit_value_seen);
     }
@@ -506,7 +509,10 @@ void GeometryRenderer3D::PrepareFrame(const render::RuntimePrepareContext& prepa
         upload_create_info.frames_in_flight = descriptor_host->FramesInFlight();
         light_shadow_upload_host.Initialize(*context, *gpu_memory_host, upload_create_info);
     }
-    light_shadow_upload_host.BeginFrame(*context, active_frame_index);
+    light_shadow_upload_host.BeginFrame(*context,
+                                        active_frame_index,
+                                        last_submitted_value_seen,
+                                        completed_submit_value_seen);
     EnsureLightingResourcesForFrame(*context);
     PrepareLightingDescriptorSetForFrame(active_frame_index);
 

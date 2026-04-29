@@ -4,7 +4,9 @@
 
 #include <algorithm>
 #include <cstring>
+#include <limits>
 #include <stdexcept>
+#include <utility>
 
 namespace vr::text {
 
@@ -36,6 +38,7 @@ void GlyphUploadHost::Initialize(VulkanContext& context_,
 
     if (create_info_cache.reserve_page_count > 0U) {
         pages.reserve(create_info_cache.reserve_page_count);
+        retired_pages.Reserve(create_info_cache.reserve_page_count);
     }
 
     resource::SamplerDesc sampler_desc{};
@@ -51,6 +54,8 @@ void GlyphUploadHost::Initialize(VulkanContext& context_,
     sampler_id = sampler_host_.RegisterSampler(context_, sampler_desc);
 
     stats = {};
+    last_submitted_value_seen = 0U;
+    completed_submit_value_seen = 0U;
     initialized = true;
 }
 
@@ -60,7 +65,9 @@ void GlyphUploadHost::Shutdown(VulkanContext& context_) {
     }
 
     DestroyPageResources(context_);
+    DestroyRetiredPageResources(context_);
     pages.clear();
+    retired_pages.Clear();
     rect_upload_scratch.clear();
 
     gpu_memory_host = nullptr;
@@ -68,13 +75,17 @@ void GlyphUploadHost::Shutdown(VulkanContext& context_) {
     sampler_id = {};
     create_info_cache = {};
     stats = {};
+    last_submitted_value_seen = 0U;
+    completed_submit_value_seen = 0U;
     initialized = false;
 }
 
 void GlyphUploadHost::UploadDirtyPages(VulkanContext& context_,
                                        render::UploadHost& upload_host_,
                                        std::uint32_t frame_index_,
-                                       GlyphAtlasHost& atlas_host_) {
+                                       GlyphAtlasHost& atlas_host_,
+                                       std::uint64_t last_submitted_value_,
+                                       std::uint64_t completed_submit_value_) {
     if (!initialized || gpu_memory_host == nullptr || sampler_host == nullptr) {
         throw std::runtime_error("GlyphUploadHost::UploadDirtyPages called before Initialize");
     }
@@ -84,6 +95,9 @@ void GlyphUploadHost::UploadDirtyPages(VulkanContext& context_,
     if (!atlas_host_.IsInitialized()) {
         throw std::runtime_error("GlyphUploadHost::UploadDirtyPages requires initialized GlyphAtlasHost");
     }
+    last_submitted_value_seen = std::max(last_submitted_value_seen, last_submitted_value_);
+    completed_submit_value_seen = std::max(completed_submit_value_seen, completed_submit_value_);
+    CollectRetiredPageResources(context_, completed_submit_value_seen);
 
     EnsurePageResources(context_, atlas_host_);
 
@@ -268,7 +282,7 @@ void GlyphUploadHost::EnsurePageResources(VulkanContext& context_,
     const std::uint32_t page_count = atlas_host_.PageCount();
 
     while (pages.size() > page_count) {
-        resource::ImageHost::DestroyImage(context_, pages.back().image);
+        RetirePageResource(pages.back(), ComputeRetireValue());
         pages.pop_back();
     }
 
@@ -318,12 +332,53 @@ void GlyphUploadHost::EnsurePageResources(VulkanContext& context_,
             existing.generation != page_view.generation;
 
         if (dimension_mismatch || generation_changed) {
-            resource::ImageHost::DestroyImage(context_, existing.image);
+            RetirePageResource(existing, ComputeRetireValue());
             existing = create_page_resource();
         }
     }
 
     stats.page_count = static_cast<std::uint32_t>(pages.size());
+}
+
+void GlyphUploadHost::RetirePageResource(PageResource& page_resource_,
+                                         std::uint64_t retire_value_) {
+    if (page_resource_.image.image == VK_NULL_HANDLE) {
+        page_resource_.current_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+        page_resource_.generation = 0U;
+        return;
+    }
+    retired_pages.Retire(std::move(page_resource_.image), retire_value_);
+    page_resource_.image = {};
+    page_resource_.current_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+    page_resource_.generation = 0U;
+}
+
+void GlyphUploadHost::CollectRetiredPageResources(VulkanContext& context_,
+                                                  std::uint64_t completed_submit_value_) {
+    if (retired_pages.Empty()) {
+        return;
+    }
+    if (context_.Device() == VK_NULL_HANDLE) {
+        return;
+    }
+    (void)retired_pages.Collect(completed_submit_value_,
+                                [&](resource::ImageResource& image_) {
+                                    resource::ImageHost::DestroyImage(context_, image_);
+                                });
+}
+
+void GlyphUploadHost::DestroyRetiredPageResources(VulkanContext& context_) noexcept {
+    (void)retired_pages.Flush([&](resource::ImageResource& image_) {
+        resource::ImageHost::DestroyImage(context_, image_);
+    });
+}
+
+std::uint64_t GlyphUploadHost::ComputeRetireValue() const noexcept {
+    const std::uint64_t max_seen = std::max(last_submitted_value_seen, completed_submit_value_seen);
+    if (max_seen == std::numeric_limits<std::uint64_t>::max()) {
+        return max_seen;
+    }
+    return max_seen + 1U;
 }
 
 void GlyphUploadHost::DestroyPageResources(VulkanContext& context_) noexcept {

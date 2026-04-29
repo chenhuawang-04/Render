@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <limits>
 #include <stdexcept>
+#include <utility>
 
 namespace vr::surface {
 
@@ -20,14 +21,14 @@ void SurfaceImageHost::Initialize(VulkanContext& context_,
     gpu_memory_host = &gpu_memory_host_;
     create_info_cache = create_info_;
     images.clear();
-    retired_images.clear();
+    retired_images.Clear();
     stats = {};
 
     if (create_info_cache.reserve_image_count > 0U) {
         images.reserve(create_info_cache.reserve_image_count);
     }
     if (create_info_cache.reserve_retired_image_count > 0U) {
-        retired_images.reserve(create_info_cache.reserve_retired_image_count);
+        retired_images.Reserve(create_info_cache.reserve_retired_image_count);
     }
 
     initialized = true;
@@ -63,7 +64,7 @@ void SurfaceImageHost::BeginFrame(VulkanContext& context_,
 
     CollectRetiredImages(context_, completed_submit_value_);
     stats.image_count = static_cast<std::uint32_t>(images.size());
-    stats.retired_image_count = static_cast<std::uint32_t>(retired_images.size());
+    stats.retired_image_count = retired_images.PendingCount();
 }
 
 void SurfaceImageHost::UploadImage(VulkanContext& context_,
@@ -202,7 +203,7 @@ void SurfaceImageHost::UploadImage(VulkanContext& context_,
     ++record.revision;
     stats.uploaded_bytes += upload_size_bytes;
     stats.image_count = static_cast<std::uint32_t>(images.size());
-    stats.retired_image_count = static_cast<std::uint32_t>(retired_images.size());
+    stats.retired_image_count = retired_images.PendingCount();
     ++stats.revision;
 }
 
@@ -230,7 +231,7 @@ bool SurfaceImageHost::RemoveImage(VulkanContext& context_,
 
     ++stats.removed_image_count;
     stats.image_count = static_cast<std::uint32_t>(images.size());
-    stats.retired_image_count = static_cast<std::uint32_t>(retired_images.size());
+    stats.retired_image_count = retired_images.PendingCount();
     ++stats.revision;
     return true;
 }
@@ -281,10 +282,7 @@ void SurfaceImageHost::RetireImage(ImageRecord& record_,
         return;
     }
 
-    RetiredImage retired{};
-    retired.resource = record_.resource;
-    retired.retire_value = retire_value_;
-    retired_images.push_back(retired);
+    retired_images.Retire(std::move(record_.resource), retire_value_);
 
     record_.resource = {};
     record_.current_layout = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -292,33 +290,22 @@ void SurfaceImageHost::RetireImage(ImageRecord& record_,
 
 void SurfaceImageHost::CollectRetiredImages(VulkanContext& context_,
                                             std::uint64_t completed_submit_value_) {
-    if (retired_images.empty()) {
+    if (retired_images.Empty()) {
         return;
     }
     if (context_.Device() == VK_NULL_HANDLE) {
         return;
     }
-
-    std::size_t write_index = 0U;
-    for (std::size_t read_index = 0U; read_index < retired_images.size(); ++read_index) {
-        RetiredImage& retired = retired_images[read_index];
-        if (retired.retire_value <= completed_submit_value_) {
-            resource::ImageHost::DestroyImage(context_, retired.resource);
-            continue;
-        }
-        if (write_index != read_index) {
-            retired_images[write_index] = retired;
-        }
-        ++write_index;
-    }
-    retired_images.resize(write_index);
+    (void)retired_images.Collect(completed_submit_value_,
+                                 [&](resource::ImageResource& resource_) {
+                                     resource::ImageHost::DestroyImage(context_, resource_);
+                                 });
 }
 
 void SurfaceImageHost::DestroyRetiredImages(VulkanContext& context_) noexcept {
-    for (auto& retired : retired_images) {
-        resource::ImageHost::DestroyImage(context_, retired.resource);
-    }
-    retired_images.clear();
+    (void)retired_images.Flush([&](resource::ImageResource& resource_) {
+        resource::ImageHost::DestroyImage(context_, resource_);
+    });
 }
 
 resource::ImageResource SurfaceImageHost::CreateImageResource(
@@ -378,4 +365,3 @@ void SurfaceImageHost::RecordImageBarrier(render::UploadHost& upload_host_,
 }
 
 } // namespace vr::surface
-

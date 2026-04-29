@@ -339,7 +339,10 @@ void SurfaceRenderer2D::PrepareFrame(const render::RuntimePrepareContext& prepar
     completed_submit_value_seen = std::max(completed_submit_value_seen,
                                            prepare_context_.completed_submit_value);
 
-    surface_upload_host->BeginFrame(*context, active_frame_index);
+    surface_upload_host->BeginFrame(*context,
+                                    active_frame_index,
+                                    last_submitted_value_seen,
+                                    completed_submit_value_seen);
     if (surface_image_host != nullptr && surface_image_host->IsInitialized()) {
         surface_image_host->BeginFrame(*context, completed_submit_value_seen);
     }
@@ -424,7 +427,10 @@ void SurfaceRenderer2D::PrepareFrame(const render::RuntimePrepareContext& prepar
         upload_create_info.frames_in_flight = descriptor_host->FramesInFlight();
         light_shadow_upload_host.Initialize(*context, *gpu_memory_host, upload_create_info);
     }
-    light_shadow_upload_host.BeginFrame(*context, active_frame_index);
+    light_shadow_upload_host.BeginFrame(*context,
+                                        active_frame_index,
+                                        last_submitted_value_seen,
+                                        completed_submit_value_seen);
     EnsureLightingResourcesForFrame(*context);
     PrepareLightingDescriptorSetForFrame(active_frame_index);
 

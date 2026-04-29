@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Center/Memory/Container/Vector/McVector.hpp"
+#include "vr/render/retire_bus.hpp"
 #include "vr/render/upload_host.hpp"
 #include "vr/resource/image_host.hpp"
 #include "vr/vulkan_context.hpp"
@@ -96,11 +97,6 @@ public:
     [[nodiscard]] const GeometryImageHostStats& Stats() const noexcept;
 
 private:
-    struct RetiredImage final {
-        resource::ImageResource resource{};
-        std::uint64_t retire_value = 0U;
-    };
-
     [[nodiscard]] std::size_t LowerBoundImageIndex(std::uint32_t image_id_) const noexcept;
     void RetireImage(ImageRecord& record_,
                      std::uint64_t retire_value_);
@@ -126,7 +122,7 @@ private:
     resource::GpuMemoryHost* gpu_memory_host = nullptr;
     GeometryImageHostCreateInfo create_info_cache{};
     GeometryImageMcVector<ImageRecord> images{};
-    GeometryImageMcVector<RetiredImage> retired_images{};
+    render::RetireBus<resource::ImageResource> retired_images{};
     GeometryImageHostStats stats{};
     bool initialized = false;
 };

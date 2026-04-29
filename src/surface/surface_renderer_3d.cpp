@@ -343,7 +343,10 @@ void SurfaceRenderer3D::PrepareFrame(const render::RuntimePrepareContext& prepar
     completed_submit_value_seen = std::max(completed_submit_value_seen,
                                            prepare_context_.completed_submit_value);
 
-    surface_upload_host->BeginFrame(*context, active_frame_index);
+    surface_upload_host->BeginFrame(*context,
+                                    active_frame_index,
+                                    last_submitted_value_seen,
+                                    completed_submit_value_seen);
     if (surface_image_host != nullptr && surface_image_host->IsInitialized()) {
         surface_image_host->BeginFrame(*context, completed_submit_value_seen);
     }

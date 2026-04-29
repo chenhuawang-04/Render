@@ -354,7 +354,9 @@ public:
             glyph_upload_host.UploadDirtyPages(platform_host.Context(),
                                                upload_host,
                                                frame_index,
-                                               glyph_atlas_host);
+                                               glyph_atlas_host,
+                                               render_loop.Sync().LastSubmittedValue(),
+                                               render_loop.Sync().CompletedSubmitValue());
         }
 
         FrameSubmitWait extra_wait{};

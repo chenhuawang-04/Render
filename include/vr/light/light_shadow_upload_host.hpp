@@ -4,6 +4,7 @@
 #include "vr/ecs/system/light_culling_system.hpp"
 #include "vr/ecs/system/light_gpu_layout.hpp"
 #include "vr/ecs/system/shadow_gpu_layout.hpp"
+#include "vr/render/retire_bus.hpp"
 #include "vr/render/upload_host.hpp"
 #include "vr/resource/buffer_host.hpp"
 #include "vr/vulkan_context.hpp"
@@ -72,7 +73,9 @@ public:
     void Shutdown(VulkanContext& context_);
 
     void BeginFrame(VulkanContext& context_,
-                    std::uint32_t frame_index_);
+                    std::uint32_t frame_index_,
+                    std::uint64_t last_submitted_value_ = 0U,
+                    std::uint64_t completed_submit_value_ = 0U);
 
     [[nodiscard]] LightShadowBufferRange UploadLightRecords(VulkanContext& context_,
                                                             render::UploadHost& upload_host_,
@@ -167,6 +170,12 @@ private:
     [[nodiscard]] static VkDeviceSize NextPow2(VkDeviceSize value_) noexcept;
     static void DestroyStreamBuffer(VulkanContext& context_,
                                     StreamBuffer& stream_);
+    void RetireStreamBuffer(StreamBuffer& stream_,
+                            std::uint64_t retire_value_);
+    void CollectRetiredBuffers(VulkanContext& context_,
+                               std::uint64_t completed_submit_value_);
+    void DestroyRetiredBuffers(VulkanContext& context_) noexcept;
+    [[nodiscard]] std::uint64_t ComputeRetireValue() const noexcept;
     void EnsureStreamCapacity(VulkanContext& context_,
                               StreamBuffer& stream_,
                               VkDeviceSize required_bytes_,
@@ -209,7 +218,10 @@ private:
     resource::GpuMemoryHost* gpu_memory_host = nullptr;
     LightShadowUploadHostCreateInfo create_info_cache{};
     LightShadowUploadMcVector<FrameState> frames{};
+    render::RetireBus<resource::BufferResource> retired_buffers{};
     LightShadowUploadHostStats stats{};
+    std::uint64_t last_submitted_value_seen = 0U;
+    std::uint64_t completed_submit_value_seen = 0U;
     bool initialized = false;
 };
 

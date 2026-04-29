@@ -170,6 +170,9 @@ void DescriptorHost::Initialize(VulkanContext& context_,
         }
     }
 
+#if VR_ENABLE_DESCRIPTOR_VALIDATION
+    ValidationOnInitialize();
+#endif
     initialized = true;
 }
 
@@ -219,6 +222,9 @@ void DescriptorHost::Shutdown(VulkanContext& context_) {
     update_scratch.buffer_infos.clear();
     update_scratch.image_infos.clear();
     update_scratch.texel_views.clear();
+#if VR_ENABLE_DESCRIPTOR_VALIDATION
+    ValidationOnShutdown();
+#endif
     create_info_cache = {};
     initialized = false;
 }
@@ -235,6 +241,9 @@ void DescriptorHost::BeginFrame(VulkanContext& context_, uint32_t frame_index_) 
         page.allocated_sets = 0U;
     }
     arena.active_pool_index = 0U;
+#if VR_ENABLE_DESCRIPTOR_VALIDATION
+    ValidationOnBeginFrame(frame_index_);
+#endif
 }
 
 DescriptorSetLayoutId DescriptorHost::RegisterLayout(VulkanContext& context_,
@@ -350,6 +359,9 @@ VkDescriptorSet DescriptorHost::AllocateSet(VulkanContext& context_,
         const VkResult result = vkAllocateDescriptorSets(context_.Device(), &alloc_info, &set);
         if (result == VK_SUCCESS) {
             arena.pools[arena.active_pool_index].allocated_sets += 1U;
+#if VR_ENABLE_DESCRIPTOR_VALIDATION
+            ValidationTrackSet(frame_index_, set);
+#endif
             return set;
         }
 
@@ -432,6 +444,9 @@ void DescriptorHost::AllocateSets(VulkanContext& context_,
                                                          out_sets_ + allocated);
         if (result == VK_SUCCESS) {
             page.allocated_sets += alloc_count;
+#if VR_ENABLE_DESCRIPTOR_VALIDATION
+            ValidationTrackSetArray(frame_index_, out_sets_ + allocated, alloc_count);
+#endif
             allocated += alloc_count;
             continue;
         }
@@ -475,6 +490,11 @@ void DescriptorHost::UpdateSet(VkDevice device_,
     if (set_ == VK_NULL_HANDLE) {
         throw std::runtime_error("DescriptorHost::UpdateSet requires valid VkDescriptorSet");
     }
+#if VR_ENABLE_DESCRIPTOR_VALIDATION
+    if (create_info_cache.enable_validation) {
+        ValidationRequireSetAlive(set_);
+    }
+#endif
 
     UpdateScratch& scratch = update_scratch;
     scratch.writes.clear();
@@ -596,6 +616,39 @@ uint32_t DescriptorHost::TotalPoolCount() const noexcept {
 uint32_t DescriptorHost::FramePoolCount(uint32_t frame_index_) const {
     return static_cast<uint32_t>(ArenaAt(frame_index_).pools.size());
 }
+
+bool DescriptorHost::ValidationEnabled() const noexcept {
+#if VR_ENABLE_DESCRIPTOR_VALIDATION
+    return create_info_cache.enable_validation;
+#else
+    return false;
+#endif
+}
+
+DescriptorValidationStats DescriptorHost::ValidationStats() const noexcept {
+#if VR_ENABLE_DESCRIPTOR_VALIDATION
+    DescriptorValidationStats stats = validation_stats;
+    stats.tracked_set_count = static_cast<std::uint64_t>(descriptor_set_validation_nodes.size());
+    return stats;
+#else
+    return {};
+#endif
+}
+
+#if VR_ENABLE_DESCRIPTOR_VALIDATION
+bool DescriptorHost::IsDescriptorSetAlive(VkDescriptorSet set_) const noexcept {
+    if (!create_info_cache.enable_validation || set_ == VK_NULL_HANDLE) {
+        return false;
+    }
+    const uint64_t descriptor_set_bits = DescriptorSetHandleBits(set_);
+    const uint32_t lower_bound = LowerBoundDescriptorSetBits(descriptor_set_validation_nodes,
+                                                              descriptor_set_bits);
+    if (lower_bound >= descriptor_set_validation_nodes.size()) {
+        return false;
+    }
+    return descriptor_set_validation_nodes[lower_bound].descriptor_set_bits == descriptor_set_bits;
+}
+#endif
 
 void DescriptorHost::ThrowVk(const char* stage_, VkResult result_) {
     std::ostringstream oss;
@@ -826,5 +879,145 @@ VkDescriptorPool DescriptorHost::AcquirePoolForFrame(VulkanContext& context_,
     arena_.active_pool_index = static_cast<uint32_t>(arena_.pools.size() - 1U);
     return new_pool;
 }
+
+#if VR_ENABLE_DESCRIPTOR_VALIDATION
+uint64_t DescriptorHost::DescriptorSetHandleBits(VkDescriptorSet set_) noexcept {
+    return HandleBits(set_);
+}
+
+uint32_t DescriptorHost::LowerBoundDescriptorSetBits(
+    const DescriptorMcVector<DescriptorSetValidationNode>& nodes_,
+    uint64_t descriptor_set_bits_) noexcept {
+    uint32_t first = 0U;
+    uint32_t count = static_cast<uint32_t>(nodes_.size());
+    while (count > 0U) {
+        const uint32_t step = count / 2U;
+        const uint32_t it = first + step;
+        if (nodes_[it].descriptor_set_bits < descriptor_set_bits_) {
+            first = it + 1U;
+            count -= step + 1U;
+        } else {
+            count = step;
+        }
+    }
+    return first;
+}
+
+void DescriptorHost::ValidationOnInitialize() {
+    descriptor_set_validation_nodes.clear();
+    frame_validation_generations.clear();
+    frame_validation_generations.resize(create_info_cache.frames_in_flight);
+    for (auto& generation : frame_validation_generations) {
+        generation = 1U;
+    }
+    validation_stats = {};
+}
+
+void DescriptorHost::ValidationOnShutdown() {
+    descriptor_set_validation_nodes.clear();
+    frame_validation_generations.clear();
+    validation_stats = {};
+}
+
+void DescriptorHost::ValidationOnBeginFrame(uint32_t frame_index_) {
+    if (!create_info_cache.enable_validation) {
+        return;
+    }
+    if (frame_index_ >= frame_validation_generations.size()) {
+        throw std::out_of_range("DescriptorHost::ValidationOnBeginFrame frame_index out of range");
+    }
+
+    uint64_t& generation = frame_validation_generations[frame_index_];
+    if (generation == std::numeric_limits<uint64_t>::max()) {
+        generation = 1U;
+    } else {
+        ++generation;
+    }
+
+    std::uint64_t invalidated_count = 0U;
+    uint32_t write_index = 0U;
+    for (uint32_t read_index = 0U; read_index < descriptor_set_validation_nodes.size(); ++read_index) {
+        const DescriptorSetValidationNode node = descriptor_set_validation_nodes[read_index];
+        if (node.frame_index == frame_index_) {
+            ++invalidated_count;
+            continue;
+        }
+        if (write_index != read_index) {
+            descriptor_set_validation_nodes[write_index] = node;
+        }
+        ++write_index;
+    }
+    descriptor_set_validation_nodes.resize(write_index);
+    validation_stats.begin_frame_invalidation_count += invalidated_count;
+    validation_stats.tracked_set_count = static_cast<std::uint64_t>(descriptor_set_validation_nodes.size());
+}
+
+void DescriptorHost::ValidationTrackSet(uint32_t frame_index_,
+                                        VkDescriptorSet set_) {
+    if (!create_info_cache.enable_validation || set_ == VK_NULL_HANDLE) {
+        return;
+    }
+    if (frame_index_ >= frame_validation_generations.size()) {
+        throw std::out_of_range("DescriptorHost::ValidationTrackSet frame_index out of range");
+    }
+
+    const uint64_t descriptor_set_bits = DescriptorSetHandleBits(set_);
+    const uint32_t insert_index = LowerBoundDescriptorSetBits(descriptor_set_validation_nodes,
+                                                               descriptor_set_bits);
+
+    if (insert_index < descriptor_set_validation_nodes.size() &&
+        descriptor_set_validation_nodes[insert_index].descriptor_set_bits == descriptor_set_bits) {
+        auto& node = descriptor_set_validation_nodes[insert_index];
+        node.frame_index = frame_index_;
+        node.frame_generation = frame_validation_generations[frame_index_];
+        return;
+    }
+
+    DescriptorSetValidationNode node{};
+    node.descriptor_set_bits = descriptor_set_bits;
+    node.frame_index = frame_index_;
+    node.frame_generation = frame_validation_generations[frame_index_];
+
+    descriptor_set_validation_nodes.push_back(node);
+    for (uint32_t move_index = static_cast<uint32_t>(descriptor_set_validation_nodes.size() - 1U);
+         move_index > insert_index;
+         --move_index) {
+        descriptor_set_validation_nodes[move_index] = descriptor_set_validation_nodes[move_index - 1U];
+    }
+    descriptor_set_validation_nodes[insert_index] = node;
+    validation_stats.tracked_set_count = static_cast<std::uint64_t>(descriptor_set_validation_nodes.size());
+}
+
+void DescriptorHost::ValidationTrackSetArray(uint32_t frame_index_,
+                                             const VkDescriptorSet* sets_,
+                                             uint32_t set_count_) {
+    if (!create_info_cache.enable_validation || sets_ == nullptr || set_count_ == 0U) {
+        return;
+    }
+    for (uint32_t i = 0U; i < set_count_; ++i) {
+        ValidationTrackSet(frame_index_, sets_[i]);
+    }
+}
+
+void DescriptorHost::ValidationRequireSetAlive(VkDescriptorSet set_) {
+    ++validation_stats.check_count;
+    if (set_ == VK_NULL_HANDLE) {
+        ++validation_stats.failure_count;
+        throw std::runtime_error("DescriptorHost::ValidationRequireSetAlive received null descriptor set");
+    }
+    const uint64_t descriptor_set_bits = DescriptorSetHandleBits(set_);
+    const uint32_t lower_bound = LowerBoundDescriptorSetBits(descriptor_set_validation_nodes,
+                                                              descriptor_set_bits);
+    if (lower_bound >= descriptor_set_validation_nodes.size() ||
+        descriptor_set_validation_nodes[lower_bound].descriptor_set_bits != descriptor_set_bits) {
+        ++validation_stats.failure_count;
+        std::ostringstream oss;
+        oss << "DescriptorHost validation: descriptor set is stale or unknown (0x"
+            << std::hex << descriptor_set_bits << std::dec << "). "
+            << "Likely caused by per-frame descriptor pool reset and stale cache reuse.";
+        throw std::runtime_error(oss.str());
+    }
+}
+#endif
 
 } // namespace vr::render

@@ -20,7 +20,7 @@ void ShadowAtlasHost::Initialize(VulkanContext& context_,
         atlases.reserve(create_info_cache.reserve_atlas_count);
     }
     if (create_info_cache.reserve_retired_count > 0U) {
-        retired_atlases.reserve(create_info_cache.reserve_retired_count);
+        retired_atlases.Reserve(create_info_cache.reserve_retired_count);
     }
 
     stats = {};
@@ -207,12 +207,11 @@ void ShadowAtlasHost::RetireAtlas(AtlasRecord& record_,
         return;
     }
 
-    RetiredAtlas retired{};
+    RetiredAtlasPayload retired{};
     retired.resource = record_.resource;
     retired.array_view = record_.array_view;
     retired.layer_views = std::move(record_.layer_views);
-    retired.retire_value = retire_value_;
-    retired_atlases.push_back(std::move(retired));
+    retired_atlases.Retire(std::move(retired), retire_value_);
     ++stats.retired_atlas_count;
     ++stats.revision;
 
@@ -221,35 +220,26 @@ void ShadowAtlasHost::RetireAtlas(AtlasRecord& record_,
 
 void ShadowAtlasHost::CollectRetiredAtlases(VulkanContext& context_,
                                             std::uint64_t completed_submit_value_) {
-    if (retired_atlases.empty()) {
+    if (retired_atlases.Empty()) {
         return;
     }
-
-    std::size_t write_index = 0U;
-    for (std::size_t read_index = 0U; read_index < retired_atlases.size(); ++read_index) {
-        RetiredAtlas& retired = retired_atlases[read_index];
-        if (retired.retire_value <= completed_submit_value_) {
-            DestroyAtlasViews(context_, retired.layer_views);
-            resource::ImageHost::DestroyView(context_, retired.array_view);
-            resource::ImageHost::DestroyImage(context_, retired.resource);
-            ++stats.destroyed_atlas_count;
-            continue;
-        }
-        if (write_index != read_index) {
-            retired_atlases[write_index] = std::move(retired);
-        }
-        ++write_index;
-    }
-    retired_atlases.resize(write_index);
+    const std::uint32_t destroyed_count = retired_atlases.Collect(
+        completed_submit_value_,
+        [&](RetiredAtlasPayload& retired_) {
+            DestroyAtlasViews(context_, retired_.layer_views);
+            resource::ImageHost::DestroyView(context_, retired_.array_view);
+            resource::ImageHost::DestroyImage(context_, retired_.resource);
+        });
+    stats.destroyed_atlas_count += destroyed_count;
 }
 
 void ShadowAtlasHost::DestroyRetiredAtlases(VulkanContext& context_) noexcept {
-    for (auto& retired : retired_atlases) {
-        DestroyAtlasViews(context_, retired.layer_views);
-        resource::ImageHost::DestroyView(context_, retired.array_view);
-        resource::ImageHost::DestroyImage(context_, retired.resource);
-    }
-    retired_atlases.clear();
+    const std::uint32_t destroyed_count = retired_atlases.Flush([&](RetiredAtlasPayload& retired_) {
+        DestroyAtlasViews(context_, retired_.layer_views);
+        resource::ImageHost::DestroyView(context_, retired_.array_view);
+        resource::ImageHost::DestroyImage(context_, retired_.resource);
+    });
+    stats.destroyed_atlas_count += destroyed_count;
 }
 
 ShadowAtlasHost::AtlasRecord ShadowAtlasHost::CreateAtlasRecord(

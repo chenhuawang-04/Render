@@ -26,7 +26,10 @@ void GeometryUploadHost::Initialize(VulkanContext& context_,
 
     frames.clear();
     frames.resize(create_info_cache.frames_in_flight);
+    retired_buffers.Clear();
     stats = {};
+    last_submitted_value_seen = 0U;
+    completed_submit_value_seen = 0U;
     initialized = true;
 }
 
@@ -35,23 +38,35 @@ void GeometryUploadHost::Shutdown(VulkanContext& context_) {
         return;
     }
 
+    if (context_.Device() != VK_NULL_HANDLE) {
+        (void)vkDeviceWaitIdle(context_.Device());
+    }
+
     for (auto& frame : frames) {
         DestroyStreamBuffer(context_, frame.primitives_2d);
         DestroyStreamBuffer(context_, frame.instances_3d);
     }
     frames.clear();
+    DestroyRetiredBuffers(context_);
 
     gpu_memory_host = nullptr;
     create_info_cache = {};
+    last_submitted_value_seen = 0U;
+    completed_submit_value_seen = 0U;
     stats = {};
     initialized = false;
 }
 
 void GeometryUploadHost::BeginFrame(VulkanContext& context_,
-                                    std::uint32_t frame_index_) {
+                                    std::uint32_t frame_index_,
+                                    std::uint64_t last_submitted_value_,
+                                    std::uint64_t completed_submit_value_) {
     if (!initialized) {
         throw std::runtime_error("GeometryUploadHost::BeginFrame called before Initialize");
     }
+    last_submitted_value_seen = std::max(last_submitted_value_seen, last_submitted_value_);
+    completed_submit_value_seen = std::max(completed_submit_value_seen, completed_submit_value_);
+    CollectRetiredBuffers(context_, completed_submit_value_seen);
 
     FrameState& frame = FrameAt(frame_index_);
     if (frame.primitives_2d.buffer.buffer != VK_NULL_HANDLE &&
@@ -144,6 +159,54 @@ void GeometryUploadHost::DestroyStreamBuffer(VulkanContext& context_,
     stream_.uploaded_revision = 0U;
 }
 
+void GeometryUploadHost::RetireStreamBuffer(StreamBuffer& stream_,
+                                            std::uint64_t retire_value_) {
+    if (stream_.buffer.buffer == VK_NULL_HANDLE) {
+        stream_.capacity_bytes = 0U;
+        stream_.uploaded_size_bytes = 0U;
+        stream_.element_count = 0U;
+        stream_.uploaded_revision = 0U;
+        return;
+    }
+
+    retired_buffers.Retire(std::move(stream_.buffer), retire_value_);
+
+    stream_.buffer = {};
+    stream_.capacity_bytes = 0U;
+    stream_.uploaded_size_bytes = 0U;
+    stream_.element_count = 0U;
+    stream_.uploaded_revision = 0U;
+}
+
+void GeometryUploadHost::CollectRetiredBuffers(VulkanContext& context_,
+                                               std::uint64_t completed_submit_value_) {
+    if (retired_buffers.Empty()) {
+        return;
+    }
+
+    if (context_.Device() == VK_NULL_HANDLE) {
+        return;
+    }
+    (void)retired_buffers.Collect(completed_submit_value_,
+                                  [&](resource::BufferResource& buffer_) {
+                                      resource::BufferHost::DestroyBuffer(context_, buffer_);
+                                  });
+}
+
+void GeometryUploadHost::DestroyRetiredBuffers(VulkanContext& context_) noexcept {
+    (void)retired_buffers.Flush([&](resource::BufferResource& buffer_) {
+        resource::BufferHost::DestroyBuffer(context_, buffer_);
+    });
+}
+
+std::uint64_t GeometryUploadHost::ComputeRetireValue() const noexcept {
+    const std::uint64_t max_seen = std::max(last_submitted_value_seen, completed_submit_value_seen);
+    if (max_seen == std::numeric_limits<std::uint64_t>::max()) {
+        return max_seen;
+    }
+    return max_seen + 1U;
+}
+
 void GeometryUploadHost::EnsureStreamCapacity(VulkanContext& context_,
                                               StreamBuffer& stream_,
                                               VkDeviceSize required_bytes_,
@@ -163,7 +226,7 @@ void GeometryUploadHost::EnsureStreamCapacity(VulkanContext& context_,
     }
 
     const VkDeviceSize target_capacity = NextPow2(std::max(required_bytes_, minimum_capacity_bytes_));
-    DestroyStreamBuffer(context_, stream_);
+    RetireStreamBuffer(stream_, ComputeRetireValue());
 
     resource::BufferCreateInfo buffer_create_info{};
     buffer_create_info.size = target_capacity;
@@ -263,4 +326,3 @@ const GeometryUploadHost::FrameState& GeometryUploadHost::FrameAt(std::uint32_t 
 }
 
 } // namespace vr::geometry
-

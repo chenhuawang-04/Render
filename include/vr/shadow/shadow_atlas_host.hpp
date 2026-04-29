@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Center/Memory/Container/Vector/McVector.hpp"
+#include "vr/render/retire_bus.hpp"
 #include "vr/resource/image_host.hpp"
 #include "vr/vulkan_context.hpp"
 
@@ -86,11 +87,10 @@ public:
     [[nodiscard]] VkFormat DepthFormat() const noexcept;
 
 private:
-    struct RetiredAtlas final {
+    struct RetiredAtlasPayload final {
         resource::ImageResource resource{};
         VkImageView array_view = VK_NULL_HANDLE;
         ShadowAtlasMcVector<VkImageView> layer_views{};
-        std::uint64_t retire_value = 0U;
     };
 
     [[nodiscard]] std::size_t LowerBoundAtlasIndex(std::uint32_t namespace_id_) const noexcept;
@@ -110,7 +110,7 @@ private:
     resource::GpuMemoryHost* gpu_memory_host = nullptr;
     ShadowAtlasHostCreateInfo create_info_cache{};
     ShadowAtlasMcVector<AtlasRecord> atlases{};
-    ShadowAtlasMcVector<RetiredAtlas> retired_atlases{};
+    render::RetireBus<RetiredAtlasPayload> retired_atlases{};
     ShadowAtlasHostStats stats{};
     bool initialized = false;
 };
