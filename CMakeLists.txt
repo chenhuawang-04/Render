@@ -78,6 +78,7 @@ set(VR_GENERATED_INCLUDE_DIR "${CMAKE_BINARY_DIR}/generated")
 set(VR_GENERATED_TEXT_SHADER_DIR "${VR_GENERATED_INCLUDE_DIR}/vr/text/generated")
 set(VR_GENERATED_GEOMETRY_SHADER_DIR "${VR_GENERATED_INCLUDE_DIR}/vr/geometry/generated")
 set(VR_GENERATED_SURFACE_SHADER_DIR "${VR_GENERATED_INCLUDE_DIR}/vr/surface/generated")
+set(VR_GENERATED_SHADOW_SHADER_DIR "${VR_GENERATED_INCLUDE_DIR}/vr/shadow/generated")
 set(VR_SHADER_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/shaders")
 
 function(vr_compile_shader_to_header input_file stage symbol_name output_header output_namespace)
@@ -91,6 +92,7 @@ function(vr_compile_shader_to_header input_file stage symbol_name output_header 
         COMMAND ${CMAKE_COMMAND} -E make_directory "${VR_GENERATED_TEXT_SHADER_DIR}"
         COMMAND ${CMAKE_COMMAND} -E make_directory "${VR_GENERATED_GEOMETRY_SHADER_DIR}"
         COMMAND ${CMAKE_COMMAND} -E make_directory "${VR_GENERATED_SURFACE_SHADER_DIR}"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${VR_GENERATED_SHADOW_SHADER_DIR}"
         COMMAND "${GLSLANG_VALIDATOR_EXECUTABLE}" -V --target-env vulkan1.3 -S "${stage}" -e main -o "${_spv_file}" "${_input_abs}"
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/spv_to_header.py"
                 --input "${_spv_file}"
@@ -115,6 +117,8 @@ set(VR_SURFACE_2D_VERT_HEADER "${VR_GENERATED_SURFACE_SHADER_DIR}/surface_2d_ver
 set(VR_SURFACE_2D_FRAG_HEADER "${VR_GENERATED_SURFACE_SHADER_DIR}/surface_2d_frag_spv.hpp")
 set(VR_SURFACE_3D_VERT_HEADER "${VR_GENERATED_SURFACE_SHADER_DIR}/surface_3d_vert_spv.hpp")
 set(VR_SURFACE_3D_FRAG_HEADER "${VR_GENERATED_SURFACE_SHADER_DIR}/surface_3d_frag_spv.hpp")
+set(VR_SHADOW_2D_VERT_HEADER "${VR_GENERATED_SHADOW_SHADER_DIR}/shadow_depth_2d_vert_spv.hpp")
+set(VR_SHADOW_3D_VERT_HEADER "${VR_GENERATED_SHADOW_SHADER_DIR}/shadow_depth_3d_vert_spv.hpp")
 
 vr_compile_shader_to_header("${VR_SHADER_SOURCE_DIR}/text_2d.vert"
                             "vert"
@@ -176,6 +180,16 @@ vr_compile_shader_to_header("${VR_SHADER_SOURCE_DIR}/surface_3d.frag"
                             "k_surface_3d_frag_spv"
                             "${VR_SURFACE_3D_FRAG_HEADER}"
                             "vr::surface::generated")
+vr_compile_shader_to_header("${VR_SHADER_SOURCE_DIR}/shadow_depth_3d.vert"
+                            "vert"
+                            "k_shadow_depth_3d_vert_spv"
+                            "${VR_SHADOW_3D_VERT_HEADER}"
+                            "vr::shadow::generated")
+vr_compile_shader_to_header("${VR_SHADER_SOURCE_DIR}/shadow_depth_2d.vert"
+                            "vert"
+                            "k_shadow_depth_2d_vert_spv"
+                            "${VR_SHADOW_2D_VERT_HEADER}"
+                            "vr::shadow::generated")
 
 add_custom_target(vr_generated_shaders
     DEPENDS
@@ -191,6 +205,8 @@ add_custom_target(vr_generated_shaders
         "${VR_SURFACE_2D_FRAG_HEADER}"
         "${VR_SURFACE_3D_VERT_HEADER}"
         "${VR_SURFACE_3D_FRAG_HEADER}"
+        "${VR_SHADOW_2D_VERT_HEADER}"
+        "${VR_SHADOW_3D_VERT_HEADER}"
 )
 
 add_library(vulkan_init STATIC
@@ -214,6 +230,10 @@ add_library(vulkan_init STATIC
     src/surface/surface_upload_host.cpp
     src/surface/surface_renderer_2d.cpp
     src/surface/surface_renderer_3d.cpp
+    src/light/light_shadow_upload_host.cpp
+    src/shadow/shadow_atlas_host.cpp
+    src/shadow/shadow_renderer_2d.cpp
+    src/shadow/shadow_renderer_3d.cpp
     src/resource/buffer_host.cpp
     src/resource/image_host.cpp
     src/resource/gpu_memory_host.cpp
@@ -296,6 +316,15 @@ add_executable(sdl_surface_unified_demo
 )
 
 target_link_libraries(sdl_surface_unified_demo
+    PRIVATE
+        vulkan_platform_sdl
+)
+
+add_executable(sdl_surface_light_shadow_2d_demo
+    examples/sdl_surface_light_shadow_2d_demo.cpp
+)
+
+target_link_libraries(sdl_surface_light_shadow_2d_demo
     PRIVATE
         vulkan_platform_sdl
 )

@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(wc:*)",
+      "Bash(find include/vr/modules -name \"*.cppm\" -exec wc -l {} +)"
+    ]
+  }
+}

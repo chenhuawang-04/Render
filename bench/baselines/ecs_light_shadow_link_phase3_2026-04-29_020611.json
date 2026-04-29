@@ -1,0 +1,330 @@
+{
+  "options": {
+    "filter": "RenderLightShadowLinkCoordinator3D",
+    "iterations": 1024,
+    "min_calibrated_iterations": 8,
+    "warmup_runs": 3,
+    "measured_runs": 11,
+    "min_duration_ms": 20,
+    "baseline_json": "",
+    "baseline_metric": "mean_ns_per_iteration",
+    "fail_on_regression_ratio": -1.000000,
+    "require_baseline_match": false,
+    "fail_on_empty_selection": false
+  },
+  "summary": {
+    "selected_count": 3,
+    "executed_count": 3,
+    "completed_count": 3,
+    "failed_count": 0,
+    "skipped_count": 0,
+    "regression_fail_count": 0,
+    "baseline_missing_count": 0,
+    "total_duration_ms": 1354.652
+  },
+  "results": [
+    {
+      "name": "RenderLightShadowLinkCoordinator3D_build_4k_lights_2k_shadows",
+      "outcome": "completed",
+      "message": "",
+      "metrics": {
+        "iterations": 1024,
+        "min_ms": 89.681000,
+        "max_ms": 97.794300,
+        "mean_ms": 93.633282,
+        "median_ms": 93.061900,
+        "p95_ms": 97.794300,
+        "stddev_ms": 2.975103,
+        "min_ns_per_iteration": 87579.101562,
+        "max_ns_per_iteration": 95502.246094,
+        "mean_ns_per_iteration": 91438.751776,
+        "median_ns_per_iteration": 90880.761719,
+        "p95_ns_per_iteration": 95502.246094,
+        "stddev_ns_per_iteration": 2905.374011,
+        "items_per_second": 44795012.185,
+        "bytes_per_second": 4300321169.794
+      },
+      "baseline": {
+        "status": "not_checked",
+        "metric_kind": "mean_ns_per_iteration",
+        "has_baseline": false,
+        "baseline_mean_ms": 0.000000,
+        "current_mean_ms": 0.000000,
+        "baseline_metric_value": 0.000000,
+        "current_metric_value": 0.000000,
+        "delta_ratio": 0.000000
+      },
+      "tags": ["core", "cpu", "light", "link", "render", "shadow"],
+      "samples": [
+        {
+          "duration_ms": 97.604600,
+          "iterations": 1024,
+          "items_processed": 4194304,
+          "bytes_processed": 402653184
+        },
+        {
+          "duration_ms": 96.515900,
+          "iterations": 1024,
+          "items_processed": 4194304,
+          "bytes_processed": 402653184
+        },
+        {
+          "duration_ms": 90.339200,
+          "iterations": 1024,
+          "items_processed": 4194304,
+          "bytes_processed": 402653184
+        },
+        {
+          "duration_ms": 93.756100,
+          "iterations": 1024,
+          "items_processed": 4194304,
+          "bytes_processed": 402653184
+        },
+        {
+          "duration_ms": 91.538800,
+          "iterations": 1024,
+          "items_processed": 4194304,
+          "bytes_processed": 402653184
+        },
+        {
+          "duration_ms": 97.794300,
+          "iterations": 1024,
+          "items_processed": 4194304,
+          "bytes_processed": 402653184
+        },
+        {
+          "duration_ms": 89.681000,
+          "iterations": 1024,
+          "items_processed": 4194304,
+          "bytes_processed": 402653184
+        },
+        {
+          "duration_ms": 97.224200,
+          "iterations": 1024,
+          "items_processed": 4194304,
+          "bytes_processed": 402653184
+        },
+        {
+          "duration_ms": 93.061900,
+          "iterations": 1024,
+          "items_processed": 4194304,
+          "bytes_processed": 402653184
+        },
+        {
+          "duration_ms": 91.595800,
+          "iterations": 1024,
+          "items_processed": 4194304,
+          "bytes_processed": 402653184
+        },
+        {
+          "duration_ms": 90.854300,
+          "iterations": 1024,
+          "items_processed": 4194304,
+          "bytes_processed": 402653184
+        }
+      ]
+    },
+    {
+      "name": "RenderLightShadowLinkCoordinator3D_incremental_patch_sparse_4k_lights_2k_shadows",
+      "outcome": "completed",
+      "message": "",
+      "metrics": {
+        "iterations": 1024,
+        "min_ms": 0.210100,
+        "max_ms": 0.277200,
+        "mean_ms": 0.223482,
+        "median_ms": 0.217400,
+        "p95_ms": 0.277200,
+        "stddev_ms": 0.018747,
+        "min_ns_per_iteration": 205.175781,
+        "max_ns_per_iteration": 270.703125,
+        "mean_ns_per_iteration": 218.243963,
+        "median_ns_per_iteration": 212.304688,
+        "p95_ns_per_iteration": 270.703125,
+        "stddev_ns_per_iteration": 18.307443,
+        "items_per_second": 4582028.231,
+        "bytes_per_second": 439874710.166
+      },
+      "baseline": {
+        "status": "not_checked",
+        "metric_kind": "mean_ns_per_iteration",
+        "has_baseline": false,
+        "baseline_mean_ms": 0.000000,
+        "current_mean_ms": 0.000000,
+        "baseline_metric_value": 0.000000,
+        "current_metric_value": 0.000000,
+        "delta_ratio": 0.000000
+      },
+      "tags": ["core", "cpu", "incremental", "light", "link", "render", "shadow"],
+      "samples": [
+        {
+          "duration_ms": 0.218000,
+          "iterations": 1024,
+          "items_processed": 1024,
+          "bytes_processed": 98304
+        },
+        {
+          "duration_ms": 0.210100,
+          "iterations": 1024,
+          "items_processed": 1024,
+          "bytes_processed": 98304
+        },
+        {
+          "duration_ms": 0.215500,
+          "iterations": 1024,
+          "items_processed": 1024,
+          "bytes_processed": 98304
+        },
+        {
+          "duration_ms": 0.217400,
+          "iterations": 1024,
+          "items_processed": 1024,
+          "bytes_processed": 98304
+        },
+        {
+          "duration_ms": 0.231700,
+          "iterations": 1024,
+          "items_processed": 1024,
+          "bytes_processed": 98304
+        },
+        {
+          "duration_ms": 0.212700,
+          "iterations": 1024,
+          "items_processed": 1024,
+          "bytes_processed": 98304
+        },
+        {
+          "duration_ms": 0.217900,
+          "iterations": 1024,
+          "items_processed": 1024,
+          "bytes_processed": 98304
+        },
+        {
+          "duration_ms": 0.235600,
+          "iterations": 1024,
+          "items_processed": 1024,
+          "bytes_processed": 98304
+        },
+        {
+          "duration_ms": 0.212100,
+          "iterations": 1024,
+          "items_processed": 1024,
+          "bytes_processed": 98304
+        },
+        {
+          "duration_ms": 0.210100,
+          "iterations": 1024,
+          "items_processed": 1024,
+          "bytes_processed": 98304
+        },
+        {
+          "duration_ms": 0.277200,
+          "iterations": 1024,
+          "items_processed": 1024,
+          "bytes_processed": 98304
+        }
+      ]
+    },
+    {
+      "name": "RenderLightShadowLinkCoordinator3D_reuse_hot_path_4k_lights_2k_shadows",
+      "outcome": "completed",
+      "message": "",
+      "metrics": {
+        "iterations": 1024,
+        "min_ms": 0.185100,
+        "max_ms": 0.288700,
+        "mean_ms": 0.222036,
+        "median_ms": 0.211600,
+        "p95_ms": 0.288700,
+        "stddev_ms": 0.029458,
+        "min_ns_per_iteration": 180.761719,
+        "max_ns_per_iteration": 281.933594,
+        "mean_ns_per_iteration": 216.832386,
+        "median_ns_per_iteration": 206.640625,
+        "p95_ns_per_iteration": 281.933594,
+        "stddev_ns_per_iteration": 28.767449,
+        "items_per_second": 18890167048.804,
+        "bytes_per_second": 36894857.517
+      },
+      "baseline": {
+        "status": "not_checked",
+        "metric_kind": "mean_ns_per_iteration",
+        "has_baseline": false,
+        "baseline_mean_ms": 0.000000,
+        "current_mean_ms": 0.000000,
+        "baseline_metric_value": 0.000000,
+        "current_metric_value": 0.000000,
+        "delta_ratio": 0.000000
+      },
+      "tags": ["core", "cpu", "light", "link", "render", "reuse", "shadow"],
+      "samples": [
+        {
+          "duration_ms": 0.199600,
+          "iterations": 1024,
+          "items_processed": 4194304,
+          "bytes_processed": 8192
+        },
+        {
+          "duration_ms": 0.243500,
+          "iterations": 1024,
+          "items_processed": 4194304,
+          "bytes_processed": 8192
+        },
+        {
+          "duration_ms": 0.235700,
+          "iterations": 1024,
+          "items_processed": 4194304,
+          "bytes_processed": 8192
+        },
+        {
+          "duration_ms": 0.197900,
+          "iterations": 1024,
+          "items_processed": 4194304,
+          "bytes_processed": 8192
+        },
+        {
+          "duration_ms": 0.202500,
+          "iterations": 1024,
+          "items_processed": 4194304,
+          "bytes_processed": 8192
+        },
+        {
+          "duration_ms": 0.185100,
+          "iterations": 1024,
+          "items_processed": 4194304,
+          "bytes_processed": 8192
+        },
+        {
+          "duration_ms": 0.216400,
+          "iterations": 1024,
+          "items_processed": 4194304,
+          "bytes_processed": 8192
+        },
+        {
+          "duration_ms": 0.204900,
+          "iterations": 1024,
+          "items_processed": 4194304,
+          "bytes_processed": 8192
+        },
+        {
+          "duration_ms": 0.211600,
+          "iterations": 1024,
+          "items_processed": 4194304,
+          "bytes_processed": 8192
+        },
+        {
+          "duration_ms": 0.256500,
+          "iterations": 1024,
+          "items_processed": 4194304,
+          "bytes_processed": 8192
+        },
+        {
+          "duration_ms": 0.288700,
+          "iterations": 1024,
+          "items_processed": 4194304,
+          "bytes_processed": 8192
+        }
+      ]
+    }
+  ]
+}

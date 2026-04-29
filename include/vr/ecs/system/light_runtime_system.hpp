@@ -357,6 +357,14 @@ public:
         return static_cast<std::uint32_t>(scratch_.upload_ranges.size());
     }
 
+    [[nodiscard]] static const std::uint32_t* UpdatedComponentIndices(const ScratchType& scratch_) noexcept {
+        return scratch_.updated_component_indices.data();
+    }
+
+    [[nodiscard]] static std::uint32_t UpdatedComponentIndexCount(const ScratchType& scratch_) noexcept {
+        return static_cast<std::uint32_t>(scratch_.updated_component_indices.size());
+    }
+
 private:
     static constexpr std::uint64_t hash_offset_basis = 14695981039346656037ULL;
     static constexpr std::uint64_t hash_prime = 1099511628211ULL;
@@ -741,6 +749,10 @@ private:
             out_record_.light_type = static_cast<std::uint32_t>(component_.style.kind);
             out_record_.channel_mask = component_.visibility.light_channel_mask;
             out_record_.flags = ComposeFlags(component_);
+            out_record_.shadow_view_begin = (std::numeric_limits<std::uint32_t>::max)();
+            out_record_.shadow_meta = 0U;
+            out_record_.shadow_namespace_id = 0U;
+            out_record_.reserved0 = 0U;
         } else {
             out_record_.position_x = geom_.position_x;
             out_record_.position_y = geom_.position_y;

@@ -1,0 +1,205 @@
+{
+  "options": {
+    "filter": "EcsAppearanceFrameCoordinator_dim3_link_incremental*",
+    "iterations": 512,
+    "min_calibrated_iterations": 8,
+    "warmup_runs": 2,
+    "measured_runs": 9,
+    "min_duration_ms": 25,
+    "baseline_json": "",
+    "baseline_metric": "mean_ns_per_iteration",
+    "fail_on_regression_ratio": -1.000000,
+    "require_baseline_match": false,
+    "fail_on_empty_selection": false
+  },
+  "summary": {
+    "selected_count": 2,
+    "executed_count": 2,
+    "completed_count": 2,
+    "failed_count": 0,
+    "skipped_count": 0,
+    "regression_fail_count": 0,
+    "baseline_missing_count": 0,
+    "total_duration_ms": 71.149
+  },
+  "results": [
+    {
+      "name": "EcsAppearanceFrameCoordinator_dim3_link_incremental_idle_1k",
+      "outcome": "completed",
+      "message": "",
+      "metrics": {
+        "iterations": 512,
+        "min_ms": 3.345700,
+        "max_ms": 4.312000,
+        "mean_ms": 3.782767,
+        "median_ms": 3.729900,
+        "p95_ms": 4.312000,
+        "stddev_ms": 0.292706,
+        "min_ns_per_iteration": 6534.570312,
+        "max_ns_per_iteration": 8421.875000,
+        "mean_ns_per_iteration": 7388.216146,
+        "median_ns_per_iteration": 7284.960938,
+        "p95_ns_per_iteration": 8421.875000,
+        "stddev_ns_per_iteration": 571.692110,
+        "items_per_second": 138599085.326,
+        "bytes_per_second": 6652756095.627
+      },
+      "baseline": {
+        "status": "not_checked",
+        "metric_kind": "mean_ns_per_iteration",
+        "has_baseline": false,
+        "baseline_mean_ms": 0.000000,
+        "current_mean_ms": 0.000000,
+        "baseline_metric_value": 0.000000,
+        "current_metric_value": 0.000000,
+        "delta_ratio": 0.000000
+      },
+      "tags": ["appearance", "coordinator", "core", "cpu", "ecs", "idle", "incremental", "link"],
+      "samples": [
+        {
+          "duration_ms": 3.518400,
+          "iterations": 512,
+          "items_processed": 524288,
+          "bytes_processed": 25165824
+        },
+        {
+          "duration_ms": 3.729900,
+          "iterations": 512,
+          "items_processed": 524288,
+          "bytes_processed": 25165824
+        },
+        {
+          "duration_ms": 3.874900,
+          "iterations": 512,
+          "items_processed": 524288,
+          "bytes_processed": 25165824
+        },
+        {
+          "duration_ms": 3.528700,
+          "iterations": 512,
+          "items_processed": 524288,
+          "bytes_processed": 25165824
+        },
+        {
+          "duration_ms": 3.897200,
+          "iterations": 512,
+          "items_processed": 524288,
+          "bytes_processed": 25165824
+        },
+        {
+          "duration_ms": 4.312000,
+          "iterations": 512,
+          "items_processed": 524288,
+          "bytes_processed": 25165824
+        },
+        {
+          "duration_ms": 4.147100,
+          "iterations": 512,
+          "items_processed": 524288,
+          "bytes_processed": 25165824
+        },
+        {
+          "duration_ms": 3.691000,
+          "iterations": 512,
+          "items_processed": 524288,
+          "bytes_processed": 25165824
+        },
+        {
+          "duration_ms": 3.345700,
+          "iterations": 512,
+          "items_processed": 524288,
+          "bytes_processed": 25165824
+        }
+      ]
+    },
+    {
+      "name": "EcsAppearanceFrameCoordinator_dim3_link_incremental_sparse_1k",
+      "outcome": "completed",
+      "message": "",
+      "metrics": {
+        "iterations": 512,
+        "min_ms": 0.833800,
+        "max_ms": 0.849500,
+        "mean_ms": 0.840978,
+        "median_ms": 0.840300,
+        "p95_ms": 0.849500,
+        "stddev_ms": 0.004868,
+        "min_ns_per_iteration": 1628.515625,
+        "max_ns_per_iteration": 1659.179688,
+        "mean_ns_per_iteration": 1642.534722,
+        "median_ns_per_iteration": 1641.210938,
+        "p95_ns_per_iteration": 1659.179688,
+        "stddev_ns_per_iteration": 9.508230,
+        "items_per_second": 623426699.080,
+        "bytes_per_second": 29924481555.861
+      },
+      "baseline": {
+        "status": "not_checked",
+        "metric_kind": "mean_ns_per_iteration",
+        "has_baseline": false,
+        "baseline_mean_ms": 0.000000,
+        "current_mean_ms": 0.000000,
+        "baseline_metric_value": 0.000000,
+        "current_metric_value": 0.000000,
+        "delta_ratio": 0.000000
+      },
+      "tags": ["appearance", "coordinator", "core", "cpu", "ecs", "incremental", "link"],
+      "samples": [
+        {
+          "duration_ms": 0.838600,
+          "iterations": 512,
+          "items_processed": 524288,
+          "bytes_processed": 25165824
+        },
+        {
+          "duration_ms": 0.848900,
+          "iterations": 512,
+          "items_processed": 524288,
+          "bytes_processed": 25165824
+        },
+        {
+          "duration_ms": 0.840300,
+          "iterations": 512,
+          "items_processed": 524288,
+          "bytes_processed": 25165824
+        },
+        {
+          "duration_ms": 0.840400,
+          "iterations": 512,
+          "items_processed": 524288,
+          "bytes_processed": 25165824
+        },
+        {
+          "duration_ms": 0.839700,
+          "iterations": 512,
+          "items_processed": 524288,
+          "bytes_processed": 25165824
+        },
+        {
+          "duration_ms": 0.836700,
+          "iterations": 512,
+          "items_processed": 524288,
+          "bytes_processed": 25165824
+        },
+        {
+          "duration_ms": 0.840900,
+          "iterations": 512,
+          "items_processed": 524288,
+          "bytes_processed": 25165824
+        },
+        {
+          "duration_ms": 0.849500,
+          "iterations": 512,
+          "items_processed": 524288,
+          "bytes_processed": 25165824
+        },
+        {
+          "duration_ms": 0.833800,
+          "iterations": 512,
+          "items_processed": 524288,
+          "bytes_processed": 25165824
+        }
+      ]
+    }
+  ]
+}

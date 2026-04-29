@@ -1,0 +1,258 @@
+{
+  "options": {
+    "filter": "EcsSurfaceUploadPlan",
+    "iterations": 0,
+    "min_calibrated_iterations": 8,
+    "warmup_runs": 1,
+    "measured_runs": 7,
+    "min_duration_ms": 20,
+    "baseline_json": "",
+    "baseline_metric": "mean_ns_per_iteration",
+    "fail_on_regression_ratio": -1.000000,
+    "require_baseline_match": false,
+    "fail_on_empty_selection": false
+  },
+  "summary": {
+    "selected_count": 3,
+    "executed_count": 3,
+    "completed_count": 3,
+    "failed_count": 0,
+    "skipped_count": 0,
+    "regression_fail_count": 0,
+    "baseline_missing_count": 0,
+    "total_duration_ms": 592.071
+  },
+  "results": [
+    {
+      "name": "EcsSurfaceUploadPlan_dim3_dense_4k",
+      "outcome": "completed",
+      "message": "",
+      "metrics": {
+        "iterations": 8,
+        "min_ms": 3.061100,
+        "max_ms": 3.296100,
+        "mean_ms": 3.140071,
+        "median_ms": 3.114700,
+        "p95_ms": 3.296100,
+        "stddev_ms": 0.072561,
+        "min_ns_per_iteration": 382637.500000,
+        "max_ns_per_iteration": 412012.500000,
+        "mean_ns_per_iteration": 392508.928571,
+        "median_ns_per_iteration": 389337.500000,
+        "p95_ns_per_iteration": 412012.500000,
+        "stddev_ns_per_iteration": 9070.071257,
+        "items_per_second": 7826573.554,
+        "bytes_per_second": 939188826.460
+      },
+      "baseline": {
+        "status": "not_checked",
+        "metric_kind": "mean_ns_per_iteration",
+        "has_baseline": false,
+        "baseline_mean_ms": 0.000000,
+        "current_mean_ms": 0.000000,
+        "baseline_metric_value": 0.000000,
+        "current_metric_value": 0.000000,
+        "delta_ratio": 0.000000
+      },
+      "tags": ["ecs", "perf", "surface", "surface-upload-plan"],
+      "samples": [
+        {
+          "duration_ms": 3.114700,
+          "iterations": 8,
+          "items_processed": 24576,
+          "bytes_processed": 2949120
+        },
+        {
+          "duration_ms": 3.103300,
+          "iterations": 8,
+          "items_processed": 24576,
+          "bytes_processed": 2949120
+        },
+        {
+          "duration_ms": 3.091900,
+          "iterations": 8,
+          "items_processed": 24576,
+          "bytes_processed": 2949120
+        },
+        {
+          "duration_ms": 3.061100,
+          "iterations": 8,
+          "items_processed": 24576,
+          "bytes_processed": 2949120
+        },
+        {
+          "duration_ms": 3.183200,
+          "iterations": 8,
+          "items_processed": 24576,
+          "bytes_processed": 2949120
+        },
+        {
+          "duration_ms": 3.296100,
+          "iterations": 8,
+          "items_processed": 24576,
+          "bytes_processed": 2949120
+        },
+        {
+          "duration_ms": 3.130200,
+          "iterations": 8,
+          "items_processed": 24576,
+          "bytes_processed": 2949120
+        }
+      ]
+    },
+    {
+      "name": "EcsSurfaceUploadPlan_dim3_sparse_4k",
+      "outcome": "completed",
+      "message": "",
+      "metrics": {
+        "iterations": 3624,
+        "min_ms": 25.459300,
+        "max_ms": 30.704900,
+        "mean_ms": 27.720143,
+        "median_ms": 27.016600,
+        "p95_ms": 30.704900,
+        "stddev_ms": 1.616347,
+        "min_ns_per_iteration": 7025.193157,
+        "max_ns_per_iteration": 8472.654525,
+        "mean_ns_per_iteration": 7649.046042,
+        "median_ns_per_iteration": 7454.911700,
+        "p95_ns_per_iteration": 8472.654525,
+        "stddev_ns_per_iteration": 446.011901,
+        "items_per_second": 8367056.447,
+        "bytes_per_second": 1004046773.620
+      },
+      "baseline": {
+        "status": "not_checked",
+        "metric_kind": "mean_ns_per_iteration",
+        "has_baseline": false,
+        "baseline_mean_ms": 0.000000,
+        "current_mean_ms": 0.000000,
+        "baseline_metric_value": 0.000000,
+        "current_metric_value": 0.000000,
+        "delta_ratio": 0.000000
+      },
+      "tags": ["ecs", "perf", "surface", "surface-upload-plan"],
+      "samples": [
+        {
+          "duration_ms": 26.722300,
+          "iterations": 3624,
+          "items_processed": 231936,
+          "bytes_processed": 27832320
+        },
+        {
+          "duration_ms": 27.016600,
+          "iterations": 3624,
+          "items_processed": 231936,
+          "bytes_processed": 27832320
+        },
+        {
+          "duration_ms": 26.906300,
+          "iterations": 3624,
+          "items_processed": 231936,
+          "bytes_processed": 27832320
+        },
+        {
+          "duration_ms": 28.110600,
+          "iterations": 3624,
+          "items_processed": 231936,
+          "bytes_processed": 27832320
+        },
+        {
+          "duration_ms": 29.121000,
+          "iterations": 3624,
+          "items_processed": 231936,
+          "bytes_processed": 27832320
+        },
+        {
+          "duration_ms": 25.459300,
+          "iterations": 3624,
+          "items_processed": 231936,
+          "bytes_processed": 27832320
+        },
+        {
+          "duration_ms": 30.704900,
+          "iterations": 3624,
+          "items_processed": 231936,
+          "bytes_processed": 27832320
+        }
+      ]
+    },
+    {
+      "name": "EcsSurfaceUploadPlan_dim3_sparse_4k_gap_merge_1",
+      "outcome": "completed",
+      "message": "",
+      "metrics": {
+        "iterations": 509,
+        "min_ms": 18.272700,
+        "max_ms": 21.036300,
+        "mean_ms": 19.653686,
+        "median_ms": 19.653100,
+        "p95_ms": 21.036300,
+        "stddev_ms": 0.824990,
+        "min_ns_per_iteration": 35899.214145,
+        "max_ns_per_iteration": 41328.683694,
+        "mean_ns_per_iteration": 38612.349144,
+        "median_ns_per_iteration": 38611.198428,
+        "p95_ns_per_iteration": 41328.683694,
+        "stddev_ns_per_iteration": 1620.804618,
+        "items_per_second": 6630003.242,
+        "bytes_per_second": 795600389.022
+      },
+      "baseline": {
+        "status": "not_checked",
+        "metric_kind": "mean_ns_per_iteration",
+        "has_baseline": false,
+        "baseline_mean_ms": 0.000000,
+        "current_mean_ms": 0.000000,
+        "baseline_metric_value": 0.000000,
+        "current_metric_value": 0.000000,
+        "delta_ratio": 0.000000
+      },
+      "tags": ["ecs", "perf", "surface", "surface-upload-plan"],
+      "samples": [
+        {
+          "duration_ms": 19.210400,
+          "iterations": 509,
+          "items_processed": 130304,
+          "bytes_processed": 15636480
+        },
+        {
+          "duration_ms": 19.960500,
+          "iterations": 509,
+          "items_processed": 130304,
+          "bytes_processed": 15636480
+        },
+        {
+          "duration_ms": 19.153200,
+          "iterations": 509,
+          "items_processed": 130304,
+          "bytes_processed": 15636480
+        },
+        {
+          "duration_ms": 20.289600,
+          "iterations": 509,
+          "items_processed": 130304,
+          "bytes_processed": 15636480
+        },
+        {
+          "duration_ms": 18.272700,
+          "iterations": 509,
+          "items_processed": 130304,
+          "bytes_processed": 15636480
+        },
+        {
+          "duration_ms": 19.653100,
+          "iterations": 509,
+          "items_processed": 130304,
+          "bytes_processed": 15636480
+        },
+        {
+          "duration_ms": 21.036300,
+          "iterations": 509,
+          "items_processed": 130304,
+          "bytes_processed": 15636480
+        }
+      ]
+    }
+  ]
+}

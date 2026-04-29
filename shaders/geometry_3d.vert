@@ -22,11 +22,13 @@ layout(location = 1) out vec4 out_albedo;
 layout(location = 2) out vec4 out_material_params;
 layout(location = 3) flat out uint out_instance_params;
 layout(location = 4) out vec2 out_uv;
+layout(location = 5) out vec3 out_world_position;
 
 void main() {
     mat4 world = mat4(in_world_row0, in_world_row1, in_world_row2, in_world_row3);
     vec4 world_position = world * vec4(in_position, 1.0);
     gl_Position = pc.view_projection * world_position;
+    out_world_position = world_position.xyz;
 
     mat3 world3x3 = mat3(world);
     vec3 normal_world = world3x3 * in_normal;

@@ -1,0 +1,352 @@
+{
+  "options": {
+    "filter": "",
+    "iterations": 0,
+    "min_calibrated_iterations": 8,
+    "warmup_runs": 1,
+    "measured_runs": 5,
+    "min_duration_ms": 25,
+    "baseline_json": "",
+    "baseline_metric": "mean_ns_per_iteration",
+    "fail_on_regression_ratio": -1.000000,
+    "require_baseline_match": false,
+    "fail_on_empty_selection": false
+  },
+  "summary": {
+    "selected_count": 5,
+    "executed_count": 5,
+    "completed_count": 5,
+    "failed_count": 0,
+    "skipped_count": 0,
+    "regression_fail_count": 0,
+    "baseline_missing_count": 0,
+    "total_duration_ms": 830.793
+  },
+  "results": [
+    {
+      "name": "EcsSurfaceRuntimeSystem_dim3_build_1k_full_rebuild",
+      "outcome": "completed",
+      "message": "",
+      "metrics": {
+        "iterations": 8,
+        "min_ms": 2.572400,
+        "max_ms": 2.958400,
+        "mean_ms": 2.676260,
+        "median_ms": 2.576600,
+        "p95_ms": 2.958400,
+        "stddev_ms": 0.149223,
+        "min_ns_per_iteration": 321550.000000,
+        "max_ns_per_iteration": 369800.000000,
+        "mean_ns_per_iteration": 334532.500000,
+        "median_ns_per_iteration": 322075.000000,
+        "p95_ns_per_iteration": 369800.000000,
+        "stddev_ns_per_iteration": 18652.911301,
+        "items_per_second": 3060988.095,
+        "bytes_per_second": 367318571.439
+      },
+      "baseline": {
+        "status": "not_checked",
+        "metric_kind": "mean_ns_per_iteration",
+        "has_baseline": false,
+        "baseline_mean_ms": 0.000000,
+        "current_mean_ms": 0.000000,
+        "baseline_metric_value": 0.000000,
+        "current_metric_value": 0.000000,
+        "delta_ratio": 0.000000
+      },
+      "tags": ["core", "cpu", "ecs", "runtime", "surface"],
+      "samples": [
+        {
+          "duration_ms": 2.958400,
+          "iterations": 8,
+          "items_processed": 8192,
+          "bytes_processed": 983040
+        },
+        {
+          "duration_ms": 2.699900,
+          "iterations": 8,
+          "items_processed": 8192,
+          "bytes_processed": 983040
+        },
+        {
+          "duration_ms": 2.574000,
+          "iterations": 8,
+          "items_processed": 8192,
+          "bytes_processed": 983040
+        },
+        {
+          "duration_ms": 2.572400,
+          "iterations": 8,
+          "items_processed": 8192,
+          "bytes_processed": 983040
+        },
+        {
+          "duration_ms": 2.576600,
+          "iterations": 8,
+          "items_processed": 8192,
+          "bytes_processed": 983040
+        }
+      ]
+    },
+    {
+      "name": "EcsSurfaceRuntimeSystem_dim3_build_1k_transform_only_dirty_hint",
+      "outcome": "completed",
+      "message": "",
+      "metrics": {
+        "iterations": 864,
+        "min_ms": 24.161400,
+        "max_ms": 30.473600,
+        "mean_ms": 25.961880,
+        "median_ms": 24.942400,
+        "p95_ms": 30.473600,
+        "stddev_ms": 2.350096,
+        "min_ns_per_iteration": 27964.583333,
+        "max_ns_per_iteration": 35270.370370,
+        "mean_ns_per_iteration": 30048.472222,
+        "median_ns_per_iteration": 28868.518519,
+        "p95_ns_per_iteration": 35270.370370,
+        "stddev_ns_per_iteration": 2720.018295,
+        "items_per_second": 34078271.681,
+        "bytes_per_second": 4089392601.768
+      },
+      "baseline": {
+        "status": "not_checked",
+        "metric_kind": "mean_ns_per_iteration",
+        "has_baseline": false,
+        "baseline_mean_ms": 0.000000,
+        "current_mean_ms": 0.000000,
+        "baseline_metric_value": 0.000000,
+        "current_metric_value": 0.000000,
+        "delta_ratio": 0.000000
+      },
+      "tags": ["core", "cpu", "ecs", "runtime", "surface"],
+      "samples": [
+        {
+          "duration_ms": 24.942400,
+          "iterations": 864,
+          "items_processed": 884736,
+          "bytes_processed": 106168320
+        },
+        {
+          "duration_ms": 24.236500,
+          "iterations": 864,
+          "items_processed": 884736,
+          "bytes_processed": 106168320
+        },
+        {
+          "duration_ms": 24.161400,
+          "iterations": 864,
+          "items_processed": 884736,
+          "bytes_processed": 106168320
+        },
+        {
+          "duration_ms": 25.995500,
+          "iterations": 864,
+          "items_processed": 884736,
+          "bytes_processed": 106168320
+        },
+        {
+          "duration_ms": 30.473600,
+          "iterations": 864,
+          "items_processed": 884736,
+          "bytes_processed": 106168320
+        }
+      ]
+    },
+    {
+      "name": "EcsSurfaceUploadPlan_dim3_dense_4k",
+      "outcome": "completed",
+      "message": "",
+      "metrics": {
+        "iterations": 8,
+        "min_ms": 2.861200,
+        "max_ms": 2.971100,
+        "mean_ms": 2.926500,
+        "median_ms": 2.941700,
+        "p95_ms": 2.971100,
+        "stddev_ms": 0.042760,
+        "min_ns_per_iteration": 357650.000000,
+        "max_ns_per_iteration": 371387.500000,
+        "mean_ns_per_iteration": 365812.500000,
+        "median_ns_per_iteration": 367712.500000,
+        "p95_ns_per_iteration": 371387.500000,
+        "stddev_ns_per_iteration": 5344.991815,
+        "items_per_second": 8397744.746,
+        "bytes_per_second": 1007729369.554
+      },
+      "baseline": {
+        "status": "not_checked",
+        "metric_kind": "mean_ns_per_iteration",
+        "has_baseline": false,
+        "baseline_mean_ms": 0.000000,
+        "current_mean_ms": 0.000000,
+        "baseline_metric_value": 0.000000,
+        "current_metric_value": 0.000000,
+        "delta_ratio": 0.000000
+      },
+      "tags": ["ecs", "perf", "surface", "surface-upload-plan"],
+      "samples": [
+        {
+          "duration_ms": 2.861200,
+          "iterations": 8,
+          "items_processed": 24576,
+          "bytes_processed": 2949120
+        },
+        {
+          "duration_ms": 2.892900,
+          "iterations": 8,
+          "items_processed": 24576,
+          "bytes_processed": 2949120
+        },
+        {
+          "duration_ms": 2.941700,
+          "iterations": 8,
+          "items_processed": 24576,
+          "bytes_processed": 2949120
+        },
+        {
+          "duration_ms": 2.965600,
+          "iterations": 8,
+          "items_processed": 24576,
+          "bytes_processed": 2949120
+        },
+        {
+          "duration_ms": 2.971100,
+          "iterations": 8,
+          "items_processed": 24576,
+          "bytes_processed": 2949120
+        }
+      ]
+    },
+    {
+      "name": "EcsSurfaceUploadPlan_dim3_sparse_4k",
+      "outcome": "completed",
+      "message": "",
+      "metrics": {
+        "iterations": 3970,
+        "min_ms": 27.698000,
+        "max_ms": 30.074700,
+        "mean_ms": 28.684820,
+        "median_ms": 27.811800,
+        "p95_ms": 30.074700,
+        "stddev_ms": 1.129814,
+        "min_ns_per_iteration": 6976.826196,
+        "max_ns_per_iteration": 7575.491184,
+        "mean_ns_per_iteration": 7225.395466,
+        "median_ns_per_iteration": 7005.491184,
+        "p95_ns_per_iteration": 7575.491184,
+        "stddev_ns_per_iteration": 284.587804,
+        "items_per_second": 8857646.658,
+        "bytes_per_second": 1062917598.925
+      },
+      "baseline": {
+        "status": "not_checked",
+        "metric_kind": "mean_ns_per_iteration",
+        "has_baseline": false,
+        "baseline_mean_ms": 0.000000,
+        "current_mean_ms": 0.000000,
+        "baseline_metric_value": 0.000000,
+        "current_metric_value": 0.000000,
+        "delta_ratio": 0.000000
+      },
+      "tags": ["ecs", "perf", "surface", "surface-upload-plan"],
+      "samples": [
+        {
+          "duration_ms": 30.074700,
+          "iterations": 3970,
+          "items_processed": 254080,
+          "bytes_processed": 30489600
+        },
+        {
+          "duration_ms": 27.778700,
+          "iterations": 3970,
+          "items_processed": 254080,
+          "bytes_processed": 30489600
+        },
+        {
+          "duration_ms": 27.811800,
+          "iterations": 3970,
+          "items_processed": 254080,
+          "bytes_processed": 30489600
+        },
+        {
+          "duration_ms": 27.698000,
+          "iterations": 3970,
+          "items_processed": 254080,
+          "bytes_processed": 30489600
+        },
+        {
+          "duration_ms": 30.060900,
+          "iterations": 3970,
+          "items_processed": 254080,
+          "bytes_processed": 30489600
+        }
+      ]
+    },
+    {
+      "name": "EcsSurfaceUploadPlan_dim3_sparse_4k_gap_merge_1",
+      "outcome": "completed",
+      "message": "",
+      "metrics": {
+        "iterations": 964,
+        "min_ms": 33.842300,
+        "max_ms": 41.507100,
+        "mean_ms": 36.661420,
+        "median_ms": 35.308500,
+        "p95_ms": 41.507100,
+        "stddev_ms": 3.025272,
+        "min_ns_per_iteration": 35106.120332,
+        "max_ns_per_iteration": 43057.157676,
+        "mean_ns_per_iteration": 38030.518672,
+        "median_ns_per_iteration": 36627.074689,
+        "p95_ns_per_iteration": 43057.157676,
+        "stddev_ns_per_iteration": 3138.248939,
+        "items_per_second": 6731435.935,
+        "bytes_per_second": 807772312.147
+      },
+      "baseline": {
+        "status": "not_checked",
+        "metric_kind": "mean_ns_per_iteration",
+        "has_baseline": false,
+        "baseline_mean_ms": 0.000000,
+        "current_mean_ms": 0.000000,
+        "baseline_metric_value": 0.000000,
+        "current_metric_value": 0.000000,
+        "delta_ratio": 0.000000
+      },
+      "tags": ["ecs", "perf", "surface", "surface-upload-plan"],
+      "samples": [
+        {
+          "duration_ms": 33.847100,
+          "iterations": 964,
+          "items_processed": 246784,
+          "bytes_processed": 29614080
+        },
+        {
+          "duration_ms": 38.802100,
+          "iterations": 964,
+          "items_processed": 246784,
+          "bytes_processed": 29614080
+        },
+        {
+          "duration_ms": 35.308500,
+          "iterations": 964,
+          "items_processed": 246784,
+          "bytes_processed": 29614080
+        },
+        {
+          "duration_ms": 41.507100,
+          "iterations": 964,
+          "items_processed": 246784,
+          "bytes_processed": 29614080
+        },
+        {
+          "duration_ms": 33.842300,
+          "iterations": 964,
+          "items_processed": 246784,
+          "bytes_processed": 29614080
+        }
+      ]
+    }
+  ]
+}

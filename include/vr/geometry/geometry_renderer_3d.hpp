@@ -5,15 +5,22 @@
 #include "vr/ecs/component/camera_component.hpp"
 #include "vr/ecs/system/culling_system.hpp"
 #include "vr/ecs/system/geometry_runtime_system.hpp"
+#include "vr/ecs/system/light_culling_system.hpp"
 #include "vr/geometry/geometry_image_host.hpp"
 #include "vr/geometry/geometry_material_host.hpp"
 #include "vr/geometry/geometry_resource_host.hpp"
 #include "vr/geometry/geometry_upload_host.hpp"
+#include "vr/light/light_shadow_upload_host.hpp"
 #include "vr/render/appearance_prepare_bridge.hpp"
 #include "vr/render/descriptor_host.hpp"
+#include "vr/render/light_frame_coordinator.hpp"
+#include "vr/render/light_shadow_link_coordinator.hpp"
 #include "vr/render/pipeline_host.hpp"
+#include "vr/render/shadow_atlas_binding_coordinator.hpp"
+#include "vr/render/shadow_frame_coordinator.hpp"
 #include "vr/resource/sampler_host.hpp"
 #include "vr/resource/image_host.hpp"
+#include "vr/shadow/shadow_atlas_host.hpp"
 
 #include <array>
 #include <cstdint>
@@ -53,6 +60,10 @@ struct GeometryRenderer3DCreateInfo {
     bool prewarm_depth_read_variant = true;
     bool prewarm_double_sided_variant = true;
     bool prewarm_line_and_point_variants = false;
+    bool enable_light_shadow = true;
+    std::uint32_t max_fragment_lights = 64U;
+    ecs::LightCullingBuildConfig<ecs::Dim3> light_culling_config =
+        ecs::LightCullingSystem<ecs::Dim3>::DefaultBuildConfig();
 };
 
 struct GeometryRenderer3DStats {
@@ -87,6 +98,21 @@ struct GeometryRenderer3DStats {
     std::uint32_t culling_frustum_reject_count = 0U;
     std::uint32_t culling_invalid_bounds_count = 0U;
     std::uint32_t culling_plane_test_count = 0U;
+    std::uint32_t light_count = 0U;
+    std::uint32_t visible_light_count = 0U;
+    std::uint32_t shadow_view_count = 0U;
+    std::uint32_t light_upload_range_count = 0U;
+    std::uint32_t shadow_view_upload_range_count = 0U;
+    std::uint32_t light_cluster_count = 0U;
+    std::uint32_t light_cluster_index_count = 0U;
+    std::uint32_t light_buffer_upload_count = 0U;
+    std::uint32_t light_descriptor_set_bind_count = 0U;
+    std::uint32_t light_descriptor_set_reuse_hit_count = 0U;
+    std::uint32_t light_shadow_atlas_binding_cache_hit_count = 0U;
+    std::uint32_t light_shadow_linked_count = 0U;
+    std::uint32_t light_shadow_link_cache_hit_count = 0U;
+    std::uint32_t light_shadow_namespace_drop_count = 0U;
+    std::uint32_t light_shadow_unmapped_count = 0U;
     std::uint64_t uploaded_bytes = 0U;
     bool cache_reused = false;
     bool appearance_cache_reused = false;
@@ -123,6 +149,11 @@ public:
     void SetAppearanceDirtyHint(const std::uint32_t* dirty_component_indices_,
                                 std::uint32_t dirty_component_count_) noexcept;
     void SetAppearanceCoordinator(render::AppearanceFrameCoordinator<ecs::Dim3>* appearance_frame_coordinator_) noexcept;
+    void SetLightFrameCoordinator(render::LightFrameCoordinator<ecs::Dim3>* light_frame_coordinator_) noexcept;
+    void SetLightShadowLinkCoordinator(render::LightShadowLinkCoordinator3D* light_shadow_link_coordinator_) noexcept;
+    void SetShadowAtlasBindingCoordinator(render::ShadowAtlasBindingCoordinator* shadow_atlas_binding_coordinator_) noexcept;
+    void SetShadowFrameCoordinator(render::ShadowFrameCoordinator<ecs::Dim3>* shadow_frame_coordinator_) noexcept;
+    void SetShadowAtlasHost(shadow::ShadowAtlasHost* shadow_atlas_host_) noexcept;
 
     void PrepareFrame(const render::RuntimePrepareContext& prepare_context_);
     void Record(const render::FrameRecordContext& record_context_);
@@ -145,6 +176,10 @@ private:
         float directional_light_y;
         float directional_light_z;
         float directional_light_intensity;
+        float camera_position_x;
+        float camera_position_y;
+        float camera_position_z;
+        float padding0;
     };
 
     struct MaterialPushConstants final {
@@ -163,9 +198,51 @@ private:
         MaterialPushConstants material{};
     };
 
-    static_assert(sizeof(FramePushConstants) == 80U);
+    static_assert(sizeof(FramePushConstants) == 96U);
     static_assert(sizeof(MaterialPushConstants) == 32U);
-    static_assert(sizeof(PushConstants) == 112U);
+    static_assert(sizeof(PushConstants) == 128U);
+
+    struct alignas(16) LightingParamsGpu final {
+        float camera_position_x;
+        float camera_position_y;
+        float camera_position_z;
+        float light_count;
+
+        float camera_forward_x;
+        float camera_forward_y;
+        float camera_forward_z;
+        float max_fragment_lights;
+
+        std::uint32_t cluster_count_x;
+        std::uint32_t cluster_count_y;
+        std::uint32_t cluster_count_z;
+        std::uint32_t reverse_z;
+
+        float near_plane;
+        float far_plane;
+        float z_slice_scale;
+        float z_slice_bias;
+
+        float framebuffer_width;
+        float framebuffer_height;
+        float shadow_view_count;
+        float reserved0;
+    };
+
+    struct FrameLightingResources final {
+        light::LightShadowBufferRange light_records{};
+        light::LightShadowBufferRange cluster_headers{};
+        light::LightShadowBufferRange cluster_indices{};
+        light::LightShadowBufferRange shadow_views{};
+        light::LightShadowBufferRange lighting_uniform{};
+        VkDescriptorSet descriptor_set = VK_NULL_HANDLE;
+        std::uint32_t shadow_namespace_id = 0U;
+        std::uint64_t upload_signature = 0U;
+        std::uint64_t descriptor_payload_signature = 0U;
+        std::uint64_t descriptor_buffer_signature = 0U;
+        std::uint64_t descriptor_image_signature = 0U;
+        std::uint64_t descriptor_set_signature = 0U;
+    };
 
     enum class PipelineMode : std::uint8_t {
         no_depth = 0U,
@@ -249,6 +326,11 @@ private:
                                                  VkFormat depth_format_);
     void EnsureMaterialPipelineObjects(VulkanContext& context_,
                                        render::DescriptorHost& descriptor_host_);
+    void EnsureLightingDescriptorObjects(VulkanContext& context_,
+                                         render::DescriptorHost& descriptor_host_);
+    void EnsureLightingResourcesForFrame(VulkanContext& context_);
+    void PrepareLightingDescriptorSetForFrame(std::uint32_t frame_index_);
+    [[nodiscard]] LightingParamsGpu BuildLightingParamsGpu(VkExtent2D extent_) const noexcept;
     void EnsureFallbackMaterialResources(VulkanContext& context_);
     [[nodiscard]] static MaterialPushConstants BuildMaterialPushConstants(
         const GeometryMaterialDesc* material_desc_) noexcept;
@@ -308,6 +390,7 @@ private:
     resource::SamplerHost* sampler_host = nullptr;
 
     render::DescriptorSetLayoutId descriptor_layout_id{};
+    render::DescriptorSetLayoutId lighting_descriptor_layout_id{};
     render::PipelineLayoutId pipeline_layout_id{};
     render::ShaderModuleId shader_vertex_id{};
     render::ShaderModuleId shader_fragment_id{};
@@ -324,6 +407,7 @@ private:
     GeometryRenderer3DMcVector<RetiredDepthImage> retired_depth_images{};
     GeometryRenderer3DMcVector<std::uint8_t> image_initialized{};
     GeometryRenderer3DMcVector<GeometryRenderer3DMcVector<MaterialSetEntry>> frame_material_sets{};
+    GeometryRenderer3DMcVector<FrameLightingResources> frame_lighting_resources{};
     GeometryRenderer3DMcVector<ResolvedMaterialEntry> resolved_materials{};
     render::DescriptorMcVector<render::DescriptorImageWrite> descriptor_image_write_scratch{};
     render::DescriptorMcVector<render::DescriptorBufferWrite> descriptor_buffer_write_scratch{};
@@ -332,6 +416,8 @@ private:
     resource::ImageResource fallback_material_image{};
     resource::SamplerId fallback_material_sampler_id{};
     VkImageLayout fallback_material_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+    VkImageView fallback_shadow_array_view = VK_NULL_HANDLE;
+    resource::SamplerId shadow_sampler_id{};
 
     std::uint32_t active_frame_index = 0U;
     VkExtent2D swapchain_extent{};
@@ -342,6 +428,14 @@ private:
     std::uint64_t completed_submit_value_seen = 0U;
     std::uint32_t material_host_revision_seen = 0U;
     std::uint32_t image_host_revision_seen = 0U;
+    render::LightFrameCoordinator<ecs::Dim3>* light_frame_coordinator = nullptr;
+    render::LightShadowLinkCoordinator3D* light_shadow_link_coordinator = nullptr;
+    render::LightShadowLinkCoordinator3D local_light_shadow_link_coordinator{};
+    render::ShadowAtlasBindingCoordinator* shadow_atlas_binding_coordinator = nullptr;
+    render::ShadowAtlasBindingCoordinator local_shadow_atlas_binding_coordinator{};
+    render::ShadowFrameCoordinator<ecs::Dim3>* shadow_frame_coordinator = nullptr;
+    shadow::ShadowAtlasHost* shadow_atlas_host = nullptr;
+    light::LightShadowUploadHost light_shadow_upload_host{};
     bool initialized = false;
 };
 

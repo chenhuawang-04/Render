@@ -12,6 +12,7 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <cstring>
 #include <cstdint>
 #include <limits>
 #include <stdexcept>
@@ -168,6 +169,7 @@ void GeometryRenderer3D::Initialize(const GeometryRenderer3DCreateInfo& create_i
     create_info_cache.clear_depth_value = std::clamp(create_info_cache.clear_depth_value, 0.0F, 1.0F);
 
     descriptor_layout_id = {};
+    lighting_descriptor_layout_id = {};
     pipeline_layout_id = {};
     shader_vertex_id = {};
     shader_fragment_id = {};
@@ -186,6 +188,7 @@ void GeometryRenderer3D::Initialize(const GeometryRenderer3DCreateInfo& create_i
     retired_depth_images.clear();
     image_initialized.clear();
     frame_material_sets.clear();
+    frame_lighting_resources.clear();
     resolved_materials.clear();
     descriptor_image_write_scratch.clear();
     descriptor_buffer_write_scratch.clear();
@@ -202,12 +205,21 @@ void GeometryRenderer3D::Initialize(const GeometryRenderer3DCreateInfo& create_i
     fallback_material_image = {};
     fallback_material_sampler_id = {};
     fallback_material_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+    fallback_shadow_array_view = VK_NULL_HANDLE;
+    shadow_sampler_id = {};
     last_submitted_value_seen = 0U;
     completed_submit_value_seen = 0U;
     material_host_revision_seen = 0U;
     image_host_revision_seen = 0U;
+    light_frame_coordinator = nullptr;
+    shadow_frame_coordinator = nullptr;
+    shadow_atlas_host = nullptr;
     appearance_prepare_bridge.Reset();
     stats = {};
+    local_light_shadow_link_coordinator.Reset();
+    light_shadow_link_coordinator = nullptr;
+    local_shadow_atlas_binding_coordinator.Reset();
+    shadow_atlas_binding_coordinator = nullptr;
     initialized = true;
 }
 
@@ -222,21 +234,32 @@ void GeometryRenderer3D::Shutdown(VulkanContext& context_) {
 
     DestroyDepthResources(context_);
     DestroyRetiredDepthResources(context_);
+    if (light_shadow_upload_host.IsInitialized()) {
+        light_shadow_upload_host.Shutdown(context_);
+    }
     image_initialized.clear();
     for (auto& frame_sets : frame_material_sets) {
         frame_sets.clear();
     }
     frame_material_sets.clear();
+    frame_lighting_resources.clear();
     resolved_materials.clear();
 
+    if (fallback_shadow_array_view != VK_NULL_HANDLE) {
+        resource::ImageHost::DestroyView(context_, fallback_shadow_array_view);
+        fallback_shadow_array_view = VK_NULL_HANDLE;
+    }
     if (fallback_material_image.image != VK_NULL_HANDLE) {
         resource::ImageHost::DestroyImage(context_, fallback_material_image);
     }
     fallback_material_image = {};
     fallback_material_sampler_id = {};
     fallback_material_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+    fallback_shadow_array_view = VK_NULL_HANDLE;
+    shadow_sampler_id = {};
 
     descriptor_layout_id = {};
+    lighting_descriptor_layout_id = {};
     pipeline_layout_id = {};
     shader_vertex_id = {};
     shader_fragment_id = {};
@@ -262,6 +285,13 @@ void GeometryRenderer3D::Shutdown(VulkanContext& context_) {
     geometry_upload_host = nullptr;
     geometry_material_host = nullptr;
     geometry_image_host = nullptr;
+    light_frame_coordinator = nullptr;
+    shadow_frame_coordinator = nullptr;
+    shadow_atlas_host = nullptr;
+    local_light_shadow_link_coordinator.Reset();
+    light_shadow_link_coordinator = nullptr;
+    local_shadow_atlas_binding_coordinator.Reset();
+    shadow_atlas_binding_coordinator = nullptr;
 
     context = nullptr;
     upload_host = nullptr;
@@ -297,6 +327,10 @@ void GeometryRenderer3D::Shutdown(VulkanContext& context_) {
     completed_submit_value_seen = 0U;
     material_host_revision_seen = 0U;
     image_host_revision_seen = 0U;
+    local_light_shadow_link_coordinator.Reset();
+    light_shadow_link_coordinator = nullptr;
+    local_shadow_atlas_binding_coordinator.Reset();
+    shadow_atlas_binding_coordinator = nullptr;
     initialized = false;
 }
 
@@ -354,6 +388,50 @@ void GeometryRenderer3D::SetAppearanceCoordinator(
     appearance_prepare_bridge.Reserve(appearance_component_count);
 }
 
+void GeometryRenderer3D::SetLightFrameCoordinator(
+    render::LightFrameCoordinator<ecs::Dim3>* light_frame_coordinator_) noexcept {
+    light_frame_coordinator = light_frame_coordinator_;
+}
+
+void GeometryRenderer3D::SetLightShadowLinkCoordinator(
+    render::LightShadowLinkCoordinator3D* light_shadow_link_coordinator_) noexcept {
+    light_shadow_link_coordinator = light_shadow_link_coordinator_;
+}
+
+void GeometryRenderer3D::SetShadowAtlasBindingCoordinator(
+    render::ShadowAtlasBindingCoordinator* shadow_atlas_binding_coordinator_) noexcept {
+    if (shadow_atlas_binding_coordinator != shadow_atlas_binding_coordinator_) {
+        for (auto& frame_resources : frame_lighting_resources) {
+            frame_resources.descriptor_buffer_signature = 0U;
+            frame_resources.descriptor_image_signature = 0U;
+            frame_resources.descriptor_set_signature = 0U;
+        }
+        if (shadow_atlas_binding_coordinator_ == nullptr) {
+            local_shadow_atlas_binding_coordinator.Reset();
+        }
+    }
+    shadow_atlas_binding_coordinator = shadow_atlas_binding_coordinator_;
+}
+
+void GeometryRenderer3D::SetShadowFrameCoordinator(
+    render::ShadowFrameCoordinator<ecs::Dim3>* shadow_frame_coordinator_) noexcept {
+    shadow_frame_coordinator = shadow_frame_coordinator_;
+}
+
+void GeometryRenderer3D::SetShadowAtlasHost(shadow::ShadowAtlasHost* shadow_atlas_host_) noexcept {
+    if (shadow_atlas_host != shadow_atlas_host_) {
+        for (auto& frame_resources : frame_lighting_resources) {
+            frame_resources.descriptor_buffer_signature = 0U;
+            frame_resources.descriptor_image_signature = 0U;
+            frame_resources.descriptor_set_signature = 0U;
+        }
+        if (shadow_atlas_binding_coordinator == nullptr) {
+            local_shadow_atlas_binding_coordinator.Reset();
+        }
+    }
+    shadow_atlas_host = shadow_atlas_host_;
+}
+
 void GeometryRenderer3D::PrepareFrame(const render::RuntimePrepareContext& prepare_context_) {
     if (!initialized) {
         throw std::runtime_error("GeometryRenderer3D::PrepareFrame called before Initialize");
@@ -380,6 +458,19 @@ void GeometryRenderer3D::PrepareFrame(const render::RuntimePrepareContext& prepa
     gpu_memory_host = prepare_context_.gpu_memory_host;
     sampler_host = prepare_context_.sampler_host;
     active_frame_index = prepare_context_.frame_index;
+    if (active_frame_index >= frame_lighting_resources.size()) {
+        frame_lighting_resources.resize(active_frame_index + 1U);
+    }
+    {
+        FrameLightingResources& frame_resources = frame_lighting_resources[active_frame_index];
+        // DescriptorHost::BeginFrame 对当前 frame 的 descriptor pool 执行 reset，
+        // reset 后历史 VkDescriptorSet 句柄不再有效。这里必须清空缓存句柄，
+        // 防止后续 Record 阶段绑定已失效 descriptor set。
+        frame_resources.descriptor_set = VK_NULL_HANDLE;
+        frame_resources.descriptor_buffer_signature = 0U;
+        frame_resources.descriptor_image_signature = 0U;
+        frame_resources.descriptor_set_signature = 0U;
+    }
     last_submitted_value_seen = std::max(last_submitted_value_seen, prepare_context_.last_submitted_value);
     completed_submit_value_seen = std::max(completed_submit_value_seen, prepare_context_.completed_submit_value);
 
@@ -405,8 +496,19 @@ void GeometryRenderer3D::PrepareFrame(const render::RuntimePrepareContext& prepa
         image_host_revision_seen = image_revision_now;
     }
 
+    stats = {};
     EnsureFallbackMaterialResources(*context);
     EnsureMaterialPipelineObjects(*context, *descriptor_host);
+    EnsureLightingDescriptorObjects(*context, *descriptor_host);
+
+    if (!light_shadow_upload_host.IsInitialized()) {
+        light::LightShadowUploadHostCreateInfo upload_create_info{};
+        upload_create_info.frames_in_flight = descriptor_host->FramesInFlight();
+        light_shadow_upload_host.Initialize(*context, *gpu_memory_host, upload_create_info);
+    }
+    light_shadow_upload_host.BeginFrame(*context, active_frame_index);
+    EnsureLightingResourcesForFrame(*context);
+    PrepareLightingDescriptorSetForFrame(active_frame_index);
 
     if (active_frame_index >= frame_material_sets.size()) {
         frame_material_sets.resize(active_frame_index + 1U);
@@ -417,7 +519,6 @@ void GeometryRenderer3D::PrepareFrame(const render::RuntimePrepareContext& prepa
         frame_material_sets[active_frame_index].reserve(create_info_cache.reserve_material_set_count);
     }
 
-    stats = {};
     stats.component_count = component_count;
     stats.appearance_component_count = appearance_component_count;
     stats.material_resolve_cache_entry_count = static_cast<std::uint32_t>(resolved_materials.size());
@@ -662,13 +763,29 @@ void GeometryRenderer3D::Record(const render::FrameRecordContext& record_context
     render::GraphicsPipelineId active_pipeline_id{};
     VkBuffer active_vertex_buffer = VK_NULL_HANDLE;
     VkBuffer active_index_buffer = VK_NULL_HANDLE;
-    VkDescriptorSet active_descriptor_set = VK_NULL_HANDLE;
+    VkDescriptorSet active_material_descriptor_set = VK_NULL_HANDLE;
     std::uint32_t active_material_id = std::numeric_limits<std::uint32_t>::max();
     std::uint32_t cached_material_id = std::numeric_limits<std::uint32_t>::max();
     VkDescriptorSet cached_material_descriptor_set = VK_NULL_HANDLE;
     MaterialPushConstants cached_material_push_constants{};
     std::uint32_t cached_geometry_id = 0U;
     const GeometryResourceHost::MeshRecord* cached_mesh = nullptr;
+    const VkDescriptorSet frame_lighting_descriptor_set =
+        (active_frame_index < frame_lighting_resources.size())
+            ? frame_lighting_resources[active_frame_index].descriptor_set
+            : VK_NULL_HANDLE;
+
+    if (pipeline_layout != VK_NULL_HANDLE && frame_lighting_descriptor_set != VK_NULL_HANDLE) {
+        vkCmdBindDescriptorSets(record_context_.command_buffer,
+                                VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                pipeline_layout,
+                                1U,
+                                1U,
+                                &frame_lighting_descriptor_set,
+                                0U,
+                                nullptr);
+        ++stats.light_descriptor_set_bind_count;
+    }
 
     if (instance_range.buffer != VK_NULL_HANDLE && !runtime_scratch.draw_batches.empty()) {
         const VkBuffer instance_vertex_buffer = instance_range.buffer;
@@ -749,7 +866,7 @@ void GeometryRenderer3D::Record(const render::FrameRecordContext& record_context
                 active_pipeline_id = pipeline_id;
             }
 
-            if (active_descriptor_set != descriptor_set) {
+            if (active_material_descriptor_set != descriptor_set) {
                 vkCmdBindDescriptorSets(record_context_.command_buffer,
                                         VK_PIPELINE_BIND_POINT_GRAPHICS,
                                         pipeline_layout,
@@ -758,7 +875,7 @@ void GeometryRenderer3D::Record(const render::FrameRecordContext& record_context
                                         &descriptor_set,
                                         0U,
                                         nullptr);
-                active_descriptor_set = descriptor_set;
+                active_material_descriptor_set = descriptor_set;
                 ++stats.descriptor_set_bind_count;
             }
 
@@ -870,6 +987,594 @@ void GeometryRenderer3D::EnsureMaterialPipelineObjects(VulkanContext& context_,
     }
 }
 
+void GeometryRenderer3D::EnsureLightingDescriptorObjects(VulkanContext& context_,
+                                                         render::DescriptorHost& descriptor_host_) {
+    if (!lighting_descriptor_layout_id.IsValid()) {
+        render::DescriptorSetLayoutDesc layout_desc{};
+        VkDescriptorSetLayoutBinding binding{};
+        binding.descriptorCount = 1U;
+        binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        binding.pImmutableSamplers = nullptr;
+
+        binding.binding = 0U;
+        binding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        layout_desc.bindings.push_back(binding);
+
+        binding.binding = 1U;
+        binding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        layout_desc.bindings.push_back(binding);
+
+        binding.binding = 2U;
+        binding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        layout_desc.bindings.push_back(binding);
+
+        binding.binding = 3U;
+        binding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        layout_desc.bindings.push_back(binding);
+
+        binding.binding = 4U;
+        binding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        layout_desc.bindings.push_back(binding);
+
+        binding.binding = 5U;
+        binding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        layout_desc.bindings.push_back(binding);
+
+        lighting_descriptor_layout_id = descriptor_host_.RegisterLayout(context_, layout_desc);
+    }
+
+    if (sampler_host != nullptr && !shadow_sampler_id.IsValid()) {
+        resource::SamplerDesc sampler_desc{};
+        sampler_desc.mag_filter = VK_FILTER_LINEAR;
+        sampler_desc.min_filter = VK_FILTER_LINEAR;
+        sampler_desc.mipmap_mode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+        sampler_desc.address_mode_u = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        sampler_desc.address_mode_v = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        sampler_desc.address_mode_w = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        sampler_desc.compare_enable = false;
+        sampler_desc.max_lod = 0.0F;
+        shadow_sampler_id = sampler_host->RegisterSampler(context_, sampler_desc);
+    }
+}
+
+GeometryRenderer3D::LightingParamsGpu GeometryRenderer3D::BuildLightingParamsGpu(VkExtent2D extent_) const noexcept {
+    LightingParamsGpu params{};
+    params.light_count = 0.0F;
+    params.max_fragment_lights = static_cast<float>(std::max<std::uint32_t>(1U, create_info_cache.max_fragment_lights));
+    params.cluster_count_x = std::max<std::uint32_t>(1U, create_info_cache.light_culling_config.cluster_count_x);
+    params.cluster_count_y = std::max<std::uint32_t>(1U, create_info_cache.light_culling_config.cluster_count_y);
+    params.cluster_count_z = std::max<std::uint32_t>(1U, create_info_cache.light_culling_config.cluster_count_z);
+    params.reverse_z = create_info_cache.light_culling_config.reverse_z != 0U ? 1U : 0U;
+    params.near_plane = std::max(1e-4F, create_info_cache.light_culling_config.near_plane);
+    params.far_plane = std::max(params.near_plane + 1e-3F, create_info_cache.light_culling_config.far_plane);
+    params.z_slice_scale = std::max(1e-4F, create_info_cache.light_culling_config.z_slice_scale);
+    params.z_slice_bias = std::max(1e-4F, create_info_cache.light_culling_config.z_slice_bias);
+    params.framebuffer_width = static_cast<float>(std::max<std::uint32_t>(extent_.width, 1U));
+    params.framebuffer_height = static_cast<float>(std::max<std::uint32_t>(extent_.height, 1U));
+    params.shadow_view_count = 0.0F;
+    params.reserved0 = 0.0F;
+
+    if (camera_transform != nullptr) {
+        params.camera_position_x = camera_transform->runtime.world_matrix.m[12];
+        params.camera_position_y = camera_transform->runtime.world_matrix.m[13];
+        params.camera_position_z = camera_transform->runtime.world_matrix.m[14];
+    } else {
+        params.camera_position_x = 0.0F;
+        params.camera_position_y = 0.0F;
+        params.camera_position_z = 0.0F;
+    }
+
+    if (camera_component != nullptr) {
+        const auto& view = camera_component->runtime.view_matrix;
+        params.camera_forward_x = -view.m[8];
+        params.camera_forward_y = -view.m[9];
+        params.camera_forward_z = -view.m[10];
+        const float near_plane = std::max(1e-4F, camera_component->style.near_plane);
+        const float far_plane = std::max(near_plane + 1e-3F, camera_component->style.far_plane);
+        params.near_plane = near_plane;
+        params.far_plane = far_plane;
+        params.reverse_z = camera_component->style.reverse_z != 0U ? 1U : params.reverse_z;
+    } else {
+        params.camera_forward_x = 0.0F;
+        params.camera_forward_y = 0.0F;
+        params.camera_forward_z = -1.0F;
+    }
+
+    return params;
+}
+
+void GeometryRenderer3D::EnsureLightingResourcesForFrame(
+    VulkanContext& context_) {
+    if (upload_host == nullptr ||
+        !light_shadow_upload_host.IsInitialized() ||
+        active_frame_index >= frame_lighting_resources.size()) {
+        return;
+    }
+
+    auto hash_combine = [](std::uint64_t& hash_, std::uint64_t value_) noexcept {
+        hash_ ^= value_;
+        hash_ *= 1099511628211ULL;
+    };
+    auto hash_from_float = [&](std::uint64_t& hash_, float value_) noexcept {
+        std::uint32_t bits = 0U;
+        std::memcpy(&bits, &value_, sizeof(bits));
+        hash_combine(hash_, static_cast<std::uint64_t>(bits));
+    };
+    auto hash_from_handle = [&](std::uint64_t& hash_, std::uintptr_t handle_value_) noexcept {
+        hash_combine(hash_, static_cast<std::uint64_t>(handle_value_));
+    };
+
+    const bool lighting_enabled = create_info_cache.enable_light_shadow;
+
+    render::LightPrepareStageResult<ecs::Dim3> light_result{};
+    render::ShadowPrepareStageResult<ecs::Dim3> shadow_result{};
+
+    if (lighting_enabled && light_frame_coordinator != nullptr) {
+        light_result = light_frame_coordinator->PrepareFrame(active_frame_index,
+                                                             {},
+                                                             create_info_cache.light_culling_config);
+    }
+    if (lighting_enabled && shadow_frame_coordinator != nullptr) {
+        shadow_result = shadow_frame_coordinator->PrepareFrame(active_frame_index);
+    }
+
+    const ecs::LightGpuRecord3D* light_records_ptr = nullptr;
+    std::uint32_t light_record_count = 0U;
+    const ecs::LightClusterHeader* cluster_headers_ptr = nullptr;
+    std::uint32_t cluster_header_count = 0U;
+    const std::uint32_t* cluster_indices_ptr = nullptr;
+    std::uint32_t cluster_index_count = 0U;
+    const ecs::LightUploadRange* light_upload_ranges_ptr = nullptr;
+    std::uint32_t light_upload_range_count = 0U;
+    const std::uint32_t* light_updated_component_indices_ptr = nullptr;
+    std::uint32_t light_updated_component_count = 0U;
+    const ecs::ShadowGpuRecord3D* shadow_records_ptr = nullptr;
+    std::uint32_t shadow_record_count = 0U;
+    const ecs::Shadow<ecs::Dim3>* shadow_components_ptr = nullptr;
+    std::uint32_t shadow_component_count = 0U;
+    const ecs::ShadowViewGpuRecord* shadow_view_records_ptr = nullptr;
+    std::uint32_t shadow_view_count = 0U;
+    const ecs::ShadowUploadRange* shadow_view_upload_ranges_ptr = nullptr;
+    std::uint32_t shadow_view_upload_range_count = 0U;
+    std::uint32_t shadow_namespace_id = 0U;
+
+    if (lighting_enabled && light_frame_coordinator != nullptr) {
+        const auto& runtime_scratch_ref = light_frame_coordinator->RuntimeScratch();
+        const auto& culling_scratch_ref = light_frame_coordinator->CullingScratch();
+        light_records_ptr = ecs::LightRuntimeSystem<ecs::Dim3>::GpuRecords(runtime_scratch_ref);
+        light_record_count = ecs::LightRuntimeSystem<ecs::Dim3>::GpuRecordCount(runtime_scratch_ref);
+        cluster_headers_ptr = ecs::LightCullingSystem<ecs::Dim3>::ClusterHeaders(culling_scratch_ref);
+        cluster_header_count = ecs::LightCullingSystem<ecs::Dim3>::ClusterHeaderCount(culling_scratch_ref);
+        cluster_indices_ptr = ecs::LightCullingSystem<ecs::Dim3>::ClusterLightIndices(culling_scratch_ref);
+        cluster_index_count = ecs::LightCullingSystem<ecs::Dim3>::ClusterLightIndexCount(culling_scratch_ref);
+        light_upload_ranges_ptr = ecs::LightRuntimeSystem<ecs::Dim3>::UploadRanges(runtime_scratch_ref);
+        light_upload_range_count = ecs::LightRuntimeSystem<ecs::Dim3>::UploadRangeCount(runtime_scratch_ref);
+        light_updated_component_indices_ptr = ecs::LightRuntimeSystem<ecs::Dim3>::UpdatedComponentIndices(runtime_scratch_ref);
+        light_updated_component_count = ecs::LightRuntimeSystem<ecs::Dim3>::UpdatedComponentIndexCount(runtime_scratch_ref);
+    }
+    if (lighting_enabled && shadow_frame_coordinator != nullptr) {
+        const auto& shadow_runtime_scratch_ref = shadow_frame_coordinator->RuntimeScratch();
+        shadow_records_ptr = ecs::ShadowRuntimeSystem<ecs::Dim3>::GpuRecords(shadow_runtime_scratch_ref);
+        shadow_record_count = ecs::ShadowRuntimeSystem<ecs::Dim3>::GpuRecordCount(shadow_runtime_scratch_ref);
+        shadow_view_records_ptr = ecs::ShadowRuntimeSystem<ecs::Dim3>::ViewRecords(shadow_runtime_scratch_ref);
+        shadow_view_count = ecs::ShadowRuntimeSystem<ecs::Dim3>::ViewRecordCount(shadow_runtime_scratch_ref);
+        shadow_view_upload_ranges_ptr = ecs::ShadowRuntimeSystem<ecs::Dim3>::ViewUploadRanges(shadow_runtime_scratch_ref);
+        shadow_view_upload_range_count = ecs::ShadowRuntimeSystem<ecs::Dim3>::ViewUploadRangeCount(shadow_runtime_scratch_ref);
+        shadow_components_ptr = shadow_frame_coordinator->ShadowComponents();
+        shadow_component_count = shadow_frame_coordinator->ShadowCount();
+        if (shadow_view_count > 0U && shadow_view_records_ptr != nullptr) {
+            shadow_namespace_id = shadow_view_records_ptr[0U].atlas_namespace_id;
+        }
+    }
+
+    render::LightShadowLinkStageResult3D link_result{};
+    if (lighting_enabled && light_records_ptr != nullptr && light_record_count > 0U) {
+        std::uint64_t link_light_signature = 14695981039346656037ULL;
+        hash_combine(link_light_signature, light_result.runtime_stats.style_signature);
+        hash_combine(link_light_signature, light_result.runtime_stats.binding_signature);
+        hash_combine(link_light_signature, light_result.runtime_stats.transform_signature);
+        hash_combine(link_light_signature, static_cast<std::uint64_t>(light_record_count));
+
+        std::uint64_t link_shadow_signature = 14695981039346656037ULL;
+        hash_combine(link_shadow_signature, shadow_result.runtime_stats.style_signature);
+        hash_combine(link_shadow_signature, shadow_result.runtime_stats.binding_signature);
+        hash_combine(link_shadow_signature, shadow_result.runtime_stats.transform_signature);
+        hash_combine(link_shadow_signature, shadow_result.runtime_stats.camera_signature);
+        hash_combine(link_shadow_signature, static_cast<std::uint64_t>(shadow_component_count));
+        hash_combine(link_shadow_signature, static_cast<std::uint64_t>(shadow_record_count));
+        hash_combine(link_shadow_signature, static_cast<std::uint64_t>(shadow_view_count));
+        hash_combine(link_shadow_signature, static_cast<std::uint64_t>(shadow_namespace_id));
+
+        std::uint64_t link_signature = 14695981039346656037ULL;
+        hash_combine(link_signature, link_light_signature);
+        hash_combine(link_signature, link_shadow_signature);
+        render::LightShadowLinkCoordinator3D* link_coordinator = light_shadow_link_coordinator;
+        if (link_coordinator == nullptr) {
+            link_coordinator = &local_light_shadow_link_coordinator;
+        }
+        link_coordinator->Reserve(light_record_count);
+        render::LightShadowLinkCoordinator3DPrepareInfo link_prepare_info{};
+        link_prepare_info.signature = link_signature;
+        link_prepare_info.light_signature = link_light_signature;
+        link_prepare_info.shadow_signature = link_shadow_signature;
+        link_prepare_info.light_records = light_records_ptr;
+        link_prepare_info.light_record_count = light_record_count;
+        link_prepare_info.shadow_components = shadow_components_ptr;
+        link_prepare_info.shadow_component_count = shadow_component_count;
+        link_prepare_info.shadow_records = shadow_records_ptr;
+        link_prepare_info.shadow_record_count = shadow_record_count;
+        link_prepare_info.shadow_namespace_hint = shadow_namespace_id;
+        link_prepare_info.light_updated_component_indices = light_updated_component_indices_ptr;
+        link_prepare_info.light_updated_component_count = light_updated_component_count;
+        link_prepare_info.allow_incremental_light_patch = 1U;
+        const render::LightShadowLinkCoordinator3DResult link_prepare_result =
+            link_coordinator->Prepare(link_prepare_info);
+        link_result = link_prepare_result.link_result;
+        shadow_namespace_id = link_result.shadow_namespace_id;
+        if (link_prepare_result.cache_reused) {
+            ++stats.light_shadow_link_cache_hit_count;
+        }
+    } else if (light_shadow_link_coordinator == nullptr) {
+        local_light_shadow_link_coordinator.Reset();
+    }
+
+    const ecs::LightGpuRecord3D dummy_light_record{};
+    const ecs::LightClusterHeader dummy_cluster_header{.offset = 0U, .count = 0U, .flags = 0U};
+    const std::uint32_t dummy_cluster_index = 0U;
+    const ecs::ShadowViewGpuRecord dummy_shadow_view{};
+
+    const bool has_linked_light_records =
+        lighting_enabled &&
+        link_result.linked_light_records != nullptr &&
+        link_result.linked_light_record_count > 0U;
+    const ecs::LightGpuRecord3D* upload_light_records =
+        has_linked_light_records
+            ? link_result.linked_light_records
+            : &dummy_light_record;
+    const std::uint32_t upload_light_record_count =
+        has_linked_light_records ? link_result.linked_light_record_count : 1U;
+
+    const ecs::LightClusterHeader* upload_cluster_headers =
+        (lighting_enabled && cluster_headers_ptr != nullptr && cluster_header_count > 0U)
+            ? cluster_headers_ptr
+            : &dummy_cluster_header;
+    const std::uint32_t upload_cluster_header_count =
+        (lighting_enabled && cluster_headers_ptr != nullptr && cluster_header_count > 0U)
+            ? cluster_header_count
+            : 1U;
+
+    const std::uint32_t* upload_cluster_indices =
+        (lighting_enabled && cluster_indices_ptr != nullptr && cluster_index_count > 0U)
+            ? cluster_indices_ptr
+            : &dummy_cluster_index;
+    const std::uint32_t upload_cluster_index_count =
+        (lighting_enabled && cluster_indices_ptr != nullptr && cluster_index_count > 0U)
+            ? cluster_index_count
+            : 1U;
+
+    const ecs::ShadowViewGpuRecord* upload_shadow_views =
+        (lighting_enabled && shadow_view_records_ptr != nullptr && shadow_view_count > 0U)
+            ? shadow_view_records_ptr
+            : &dummy_shadow_view;
+    const std::uint32_t upload_shadow_view_count =
+        (lighting_enabled && shadow_view_records_ptr != nullptr && shadow_view_count > 0U)
+            ? shadow_view_count
+            : 1U;
+
+    const std::uint32_t resolved_light_count = lighting_enabled ? light_record_count : 0U;
+    const std::uint32_t resolved_shadow_view_count = lighting_enabled ? shadow_view_count : 0U;
+    const std::uint32_t resolved_light_upload_range_count = lighting_enabled ? light_upload_range_count : 0U;
+    const std::uint32_t resolved_shadow_view_upload_range_count =
+        lighting_enabled ? shadow_view_upload_range_count : 0U;
+    const std::uint32_t resolved_visible_light_count =
+        lighting_enabled ? light_result.culling_stats.accepted_light_count : 0U;
+    const std::uint32_t resolved_cluster_count =
+        lighting_enabled ? light_result.culling_stats.cluster_count : 0U;
+    const std::uint32_t resolved_cluster_index_count =
+        lighting_enabled ? light_result.culling_stats.emitted_index_count : 0U;
+    const std::uint32_t linked_light_count = lighting_enabled ? link_result.linked_light_count : 0U;
+    const std::uint32_t namespace_drop_count = lighting_enabled ? link_result.namespace_drop_count : 0U;
+    const std::uint32_t unmapped_light_count = lighting_enabled ? link_result.unmapped_light_count : 0U;
+
+    std::uint64_t light_revision = 14695981039346656037ULL;
+    hash_combine(light_revision, static_cast<std::uint64_t>(lighting_enabled ? 1U : 0U));
+    hash_combine(light_revision, light_result.runtime_stats.style_signature);
+    hash_combine(light_revision, light_result.runtime_stats.binding_signature);
+    hash_combine(light_revision, light_result.runtime_stats.transform_signature);
+    hash_combine(light_revision, shadow_result.runtime_stats.style_signature);
+    hash_combine(light_revision, shadow_result.runtime_stats.binding_signature);
+    hash_combine(light_revision, shadow_result.runtime_stats.transform_signature);
+    hash_combine(light_revision, static_cast<std::uint64_t>(shadow_namespace_id));
+    hash_combine(light_revision, static_cast<std::uint64_t>(linked_light_count));
+    hash_combine(light_revision, static_cast<std::uint64_t>(namespace_drop_count));
+    hash_combine(light_revision, static_cast<std::uint64_t>(upload_light_record_count));
+
+    std::uint64_t cluster_revision = 14695981039346656037ULL;
+    hash_combine(cluster_revision, static_cast<std::uint64_t>(lighting_enabled ? 1U : 0U));
+    hash_combine(cluster_revision, light_result.culling_stats.visible_light_signature);
+    hash_combine(cluster_revision, light_result.culling_stats.culling_config_signature);
+    hash_combine(cluster_revision, static_cast<std::uint64_t>(upload_cluster_header_count));
+    hash_combine(cluster_revision, static_cast<std::uint64_t>(upload_cluster_index_count));
+
+    std::uint64_t shadow_view_revision = 14695981039346656037ULL;
+    hash_combine(shadow_view_revision, static_cast<std::uint64_t>(lighting_enabled ? 1U : 0U));
+    hash_combine(shadow_view_revision, shadow_result.runtime_stats.style_signature);
+    hash_combine(shadow_view_revision, shadow_result.runtime_stats.binding_signature);
+    hash_combine(shadow_view_revision, shadow_result.runtime_stats.transform_signature);
+    hash_combine(shadow_view_revision, shadow_result.runtime_stats.camera_signature);
+    hash_combine(shadow_view_revision, static_cast<std::uint64_t>(upload_shadow_view_count));
+
+    LightingParamsGpu lighting_params = BuildLightingParamsGpu(
+        swapchain_extent.width > 0U && swapchain_extent.height > 0U
+            ? swapchain_extent
+            : VkExtent2D{.width = 1U, .height = 1U});
+    lighting_params.light_count = static_cast<float>(resolved_light_count);
+    lighting_params.shadow_view_count = static_cast<float>(resolved_shadow_view_count);
+
+    std::uint64_t uniform_revision = 14695981039346656037ULL;
+    hash_combine(uniform_revision, static_cast<std::uint64_t>(lighting_enabled ? 1U : 0U));
+    hash_from_float(uniform_revision, lighting_params.camera_position_x);
+    hash_from_float(uniform_revision, lighting_params.camera_position_y);
+    hash_from_float(uniform_revision, lighting_params.camera_position_z);
+    hash_from_float(uniform_revision, lighting_params.camera_forward_x);
+    hash_from_float(uniform_revision, lighting_params.camera_forward_y);
+    hash_from_float(uniform_revision, lighting_params.camera_forward_z);
+    hash_from_float(uniform_revision, lighting_params.light_count);
+    hash_from_float(uniform_revision, lighting_params.shadow_view_count);
+    hash_combine(uniform_revision, static_cast<std::uint64_t>(lighting_params.cluster_count_x));
+    hash_combine(uniform_revision, static_cast<std::uint64_t>(lighting_params.cluster_count_y));
+    hash_combine(uniform_revision, static_cast<std::uint64_t>(lighting_params.cluster_count_z));
+    hash_combine(uniform_revision, static_cast<std::uint64_t>(lighting_params.reverse_z));
+
+    FrameLightingResources& frame_resources = frame_lighting_resources[active_frame_index];
+    frame_resources.light_records = light_shadow_upload_host.UploadLightRecordsRanges(
+        context_,
+        *upload_host,
+        active_frame_index,
+        upload_light_records,
+        upload_light_record_count,
+        light_upload_ranges_ptr,
+        light_upload_range_count,
+        light_revision);
+    frame_resources.cluster_headers = light_shadow_upload_host.UploadClusterHeaders(
+        context_,
+        *upload_host,
+        active_frame_index,
+        upload_cluster_headers,
+        upload_cluster_header_count,
+        cluster_revision);
+    frame_resources.cluster_indices = light_shadow_upload_host.UploadClusterIndices(
+        context_,
+        *upload_host,
+        active_frame_index,
+        upload_cluster_indices,
+        upload_cluster_index_count,
+        cluster_revision ^ 0x9E3779B97F4A7C15ULL);
+    frame_resources.shadow_views = light_shadow_upload_host.UploadShadowViewsRanges(
+        context_,
+        *upload_host,
+        active_frame_index,
+        upload_shadow_views,
+        upload_shadow_view_count,
+        shadow_view_upload_ranges_ptr,
+        shadow_view_upload_range_count,
+        shadow_view_revision);
+    frame_resources.lighting_uniform = light_shadow_upload_host.UploadLightingUniform(
+        context_,
+        *upload_host,
+        active_frame_index,
+        &lighting_params,
+        sizeof(LightingParamsGpu),
+        uniform_revision);
+    frame_resources.shadow_namespace_id = lighting_enabled ? shadow_namespace_id : 0U;
+    frame_resources.upload_signature = uniform_revision ^ cluster_revision ^ shadow_view_revision;
+
+    stats.light_count = resolved_light_count;
+    stats.visible_light_count = resolved_visible_light_count;
+    stats.shadow_view_count = resolved_shadow_view_count;
+    stats.light_upload_range_count = resolved_light_upload_range_count;
+    stats.shadow_view_upload_range_count = resolved_shadow_view_upload_range_count;
+    stats.light_cluster_count = resolved_cluster_count;
+    stats.light_cluster_index_count = resolved_cluster_index_count;
+    stats.light_shadow_linked_count = linked_light_count;
+    stats.light_shadow_namespace_drop_count = namespace_drop_count;
+    stats.light_shadow_unmapped_count = unmapped_light_count;
+    stats.light_buffer_upload_count =
+        static_cast<std::uint32_t>(frame_resources.light_records.uploaded) +
+        static_cast<std::uint32_t>(frame_resources.cluster_headers.uploaded) +
+        static_cast<std::uint32_t>(frame_resources.cluster_indices.uploaded) +
+        static_cast<std::uint32_t>(frame_resources.shadow_views.uploaded) +
+        static_cast<std::uint32_t>(frame_resources.lighting_uniform.uploaded);
+    if (frame_resources.light_records.uploaded) {
+        stats.uploaded_bytes += frame_resources.light_records.size_bytes;
+    }
+    if (frame_resources.cluster_headers.uploaded) {
+        stats.uploaded_bytes += frame_resources.cluster_headers.size_bytes;
+    }
+    if (frame_resources.cluster_indices.uploaded) {
+        stats.uploaded_bytes += frame_resources.cluster_indices.size_bytes;
+    }
+    if (frame_resources.shadow_views.uploaded) {
+        stats.uploaded_bytes += frame_resources.shadow_views.size_bytes;
+    }
+    if (frame_resources.lighting_uniform.uploaded) {
+        stats.uploaded_bytes += frame_resources.lighting_uniform.size_bytes;
+    }
+
+    std::uint64_t descriptor_signature = 14695981039346656037ULL;
+    hash_from_handle(descriptor_signature,
+                     reinterpret_cast<std::uintptr_t>(frame_resources.light_records.buffer));
+    hash_from_handle(descriptor_signature,
+                     reinterpret_cast<std::uintptr_t>(frame_resources.cluster_headers.buffer));
+    hash_from_handle(descriptor_signature,
+                     reinterpret_cast<std::uintptr_t>(frame_resources.cluster_indices.buffer));
+    hash_from_handle(descriptor_signature,
+                     reinterpret_cast<std::uintptr_t>(frame_resources.shadow_views.buffer));
+    hash_from_handle(descriptor_signature,
+                     reinterpret_cast<std::uintptr_t>(frame_resources.lighting_uniform.buffer));
+    hash_combine(descriptor_signature, static_cast<std::uint64_t>(frame_resources.light_records.offset));
+    hash_combine(descriptor_signature, static_cast<std::uint64_t>(frame_resources.cluster_headers.offset));
+    hash_combine(descriptor_signature, static_cast<std::uint64_t>(frame_resources.cluster_indices.offset));
+    hash_combine(descriptor_signature, static_cast<std::uint64_t>(frame_resources.shadow_views.offset));
+    hash_combine(descriptor_signature, static_cast<std::uint64_t>(frame_resources.lighting_uniform.offset));
+    hash_combine(descriptor_signature, static_cast<std::uint64_t>(frame_resources.light_records.size_bytes));
+    hash_combine(descriptor_signature, static_cast<std::uint64_t>(frame_resources.cluster_headers.size_bytes));
+    hash_combine(descriptor_signature, static_cast<std::uint64_t>(frame_resources.cluster_indices.size_bytes));
+    hash_combine(descriptor_signature, static_cast<std::uint64_t>(frame_resources.shadow_views.size_bytes));
+    hash_combine(descriptor_signature, static_cast<std::uint64_t>(frame_resources.lighting_uniform.size_bytes));
+    frame_resources.descriptor_payload_signature = descriptor_signature;
+}
+
+void GeometryRenderer3D::PrepareLightingDescriptorSetForFrame(std::uint32_t frame_index_) {
+    if (descriptor_host == nullptr ||
+        sampler_host == nullptr ||
+        frame_index_ >= frame_lighting_resources.size()) {
+        return;
+    }
+    if (!lighting_descriptor_layout_id.IsValid()) {
+        return;
+    }
+
+    FrameLightingResources& frame_resources = frame_lighting_resources[frame_index_];
+    if (frame_resources.light_records.buffer == VK_NULL_HANDLE ||
+        frame_resources.cluster_headers.buffer == VK_NULL_HANDLE ||
+        frame_resources.cluster_indices.buffer == VK_NULL_HANDLE ||
+        frame_resources.shadow_views.buffer == VK_NULL_HANDLE ||
+        frame_resources.lighting_uniform.buffer == VK_NULL_HANDLE) {
+        return;
+    }
+    if (frame_resources.descriptor_set == VK_NULL_HANDLE) {
+        frame_resources.descriptor_set = descriptor_host->AllocateSet(*context,
+                                                                      frame_index_,
+                                                                      lighting_descriptor_layout_id);
+        frame_resources.descriptor_buffer_signature = 0U;
+        frame_resources.descriptor_image_signature = 0U;
+        frame_resources.descriptor_set_signature = 0U;
+    }
+    if (frame_resources.descriptor_set == VK_NULL_HANDLE) {
+        return;
+    }
+
+    const VkSampler configured_shadow_sampler = shadow_sampler_id.IsValid()
+        ? sampler_host->GetSampler(shadow_sampler_id)
+        : VK_NULL_HANDLE;
+    const VkSampler fallback_shadow_sampler = fallback_material_sampler_id.IsValid()
+        ? sampler_host->GetSampler(fallback_material_sampler_id)
+        : VK_NULL_HANDLE;
+
+    render::ShadowAtlasBindingCoordinator* atlas_binding_coordinator = shadow_atlas_binding_coordinator;
+    if (atlas_binding_coordinator == nullptr) {
+        atlas_binding_coordinator = &local_shadow_atlas_binding_coordinator;
+    }
+
+    render::ShadowAtlasBindingResolveInput resolve_input{};
+    resolve_input.atlas_host = shadow_atlas_host;
+    resolve_input.namespace_id = frame_resources.shadow_namespace_id;
+    resolve_input.fallback_namespace_id = 1U;
+    resolve_input.allow_namespace_fallback = 1U;
+    resolve_input.primary_sampler = configured_shadow_sampler;
+    resolve_input.fallback_view = fallback_shadow_array_view;
+    resolve_input.fallback_sampler = fallback_shadow_sampler;
+    resolve_input.fallback_layout = fallback_material_layout;
+
+    const render::ShadowAtlasBindingResolveResult binding_result =
+        atlas_binding_coordinator->Resolve(resolve_input);
+    if (binding_result.cache_reused) {
+        ++stats.light_shadow_atlas_binding_cache_hit_count;
+    }
+    if (!binding_result.valid ||
+        binding_result.image_view == VK_NULL_HANDLE ||
+        binding_result.sampler == VK_NULL_HANDLE) {
+        return;
+    }
+
+    auto hash_combine = [](std::uint64_t& hash_, std::uint64_t value_) noexcept {
+        hash_ ^= value_;
+        hash_ *= 1099511628211ULL;
+    };
+    const std::uint64_t buffer_signature = frame_resources.descriptor_payload_signature;
+    const std::uint64_t image_signature = binding_result.binding_signature;
+    const bool need_buffer_update = frame_resources.descriptor_buffer_signature != buffer_signature;
+    const bool need_image_update = frame_resources.descriptor_image_signature != image_signature;
+    if (!need_buffer_update && !need_image_update) {
+        ++stats.light_descriptor_set_reuse_hit_count;
+        return;
+    }
+
+    descriptor_buffer_write_scratch.clear();
+    descriptor_image_write_scratch.clear();
+    descriptor_texel_write_scratch.clear();
+    descriptor_buffer_write_scratch.reserve(need_buffer_update ? 5U : 0U);
+    descriptor_image_write_scratch.reserve(need_image_update ? 1U : 0U);
+
+    if (need_buffer_update) {
+        descriptor_buffer_write_scratch.push_back({
+            .binding = 0U,
+            .array_element = 0U,
+            .descriptor_type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+            .buffer = frame_resources.light_records.buffer,
+            .offset = frame_resources.light_records.offset,
+            .range = frame_resources.light_records.size_bytes
+        });
+        descriptor_buffer_write_scratch.push_back({
+            .binding = 1U,
+            .array_element = 0U,
+            .descriptor_type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+            .buffer = frame_resources.cluster_headers.buffer,
+            .offset = frame_resources.cluster_headers.offset,
+            .range = frame_resources.cluster_headers.size_bytes
+        });
+        descriptor_buffer_write_scratch.push_back({
+            .binding = 2U,
+            .array_element = 0U,
+            .descriptor_type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+            .buffer = frame_resources.cluster_indices.buffer,
+            .offset = frame_resources.cluster_indices.offset,
+            .range = frame_resources.cluster_indices.size_bytes
+        });
+        descriptor_buffer_write_scratch.push_back({
+            .binding = 3U,
+            .array_element = 0U,
+            .descriptor_type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+            .buffer = frame_resources.shadow_views.buffer,
+            .offset = frame_resources.shadow_views.offset,
+            .range = frame_resources.shadow_views.size_bytes
+        });
+        descriptor_buffer_write_scratch.push_back({
+            .binding = 5U,
+            .array_element = 0U,
+            .descriptor_type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+            .buffer = frame_resources.lighting_uniform.buffer,
+            .offset = frame_resources.lighting_uniform.offset,
+            .range = frame_resources.lighting_uniform.size_bytes
+        });
+    }
+
+    if (need_image_update) {
+        descriptor_image_write_scratch.push_back({
+            .binding = 4U,
+            .array_element = 0U,
+            .descriptor_type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+            .sampler = binding_result.sampler,
+            .image_view = binding_result.image_view,
+            .image_layout = binding_result.image_layout
+        });
+    }
+
+    descriptor_host->UpdateSet(*context,
+                               frame_resources.descriptor_set,
+                               descriptor_buffer_write_scratch,
+                               descriptor_image_write_scratch,
+                               descriptor_texel_write_scratch);
+    frame_resources.descriptor_buffer_signature = buffer_signature;
+    frame_resources.descriptor_image_signature = image_signature;
+    std::uint64_t descriptor_signature = 14695981039346656037ULL;
+    hash_combine(descriptor_signature, buffer_signature);
+    hash_combine(descriptor_signature, image_signature);
+    frame_resources.descriptor_set_signature = descriptor_signature;
+    ++stats.descriptor_set_update_count;
+}
+
 void GeometryRenderer3D::EnsurePipelineObjects(VulkanContext& context_,
                                                render::PipelineHost& pipeline_host_,
                                                VkFormat color_format_,
@@ -882,6 +1587,7 @@ void GeometryRenderer3D::EnsurePipelineObjects(VulkanContext& context_,
     }
 
     EnsureMaterialPipelineObjects(context_, *descriptor_host);
+    EnsureLightingDescriptorObjects(context_, *descriptor_host);
 
     if (!shader_vertex_id.IsValid()) {
         render::ShaderModuleCreateInfo shader_info{};
@@ -898,13 +1604,9 @@ void GeometryRenderer3D::EnsurePipelineObjects(VulkanContext& context_,
     if (!pipeline_layout_id.IsValid()) {
         render::PipelineLayoutDesc layout_desc{};
         layout_desc.set_layouts.push_back(descriptor_host->GetLayout(descriptor_layout_id));
+        layout_desc.set_layouts.push_back(descriptor_host->GetLayout(lighting_descriptor_layout_id));
         layout_desc.push_constant_ranges.push_back({
-            .stage_flags = VK_SHADER_STAGE_VERTEX_BIT,
-            .offset = 0U,
-            .size = sizeof(FramePushConstants)
-        });
-        layout_desc.push_constant_ranges.push_back({
-            .stage_flags = VK_SHADER_STAGE_FRAGMENT_BIT,
+            .stage_flags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
             .offset = 0U,
             .size = sizeof(PushConstants)
         });
@@ -1139,6 +1841,7 @@ void GeometryRenderer3D::EnsureFallbackMaterialResources(VulkanContext& context_
     if (fallback_material_sampler_id.IsValid() &&
         fallback_material_image.image != VK_NULL_HANDLE &&
         fallback_material_image.default_view != VK_NULL_HANDLE &&
+        fallback_shadow_array_view != VK_NULL_HANDLE &&
         fallback_material_layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
         return;
     }
@@ -1181,6 +1884,10 @@ void GeometryRenderer3D::EnsureFallbackMaterialResources(VulkanContext& context_
         image_create_info.default_layer_count = 1U;
         fallback_material_image = resource::ImageHost::CreateImage(context_, image_create_info, *gpu_memory_host);
         fallback_material_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+        if (fallback_shadow_array_view != VK_NULL_HANDLE) {
+            resource::ImageHost::DestroyView(context_, fallback_shadow_array_view);
+            fallback_shadow_array_view = VK_NULL_HANDLE;
+        }
     }
 
     if (fallback_material_layout != VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
@@ -1240,6 +1947,27 @@ void GeometryRenderer3D::EnsureFallbackMaterialResources(VulkanContext& context_
         upload_host->RecordImageBarrier2(active_frame_index, to_shader_read);
 
         fallback_material_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    }
+
+    if (fallback_shadow_array_view == VK_NULL_HANDLE &&
+        fallback_material_image.image != VK_NULL_HANDLE) {
+        VkImageViewCreateInfo shadow_view_create_info{};
+        shadow_view_create_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        shadow_view_create_info.image = fallback_material_image.image;
+        shadow_view_create_info.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
+        shadow_view_create_info.format = VK_FORMAT_R8G8B8A8_UNORM;
+        shadow_view_create_info.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
+        shadow_view_create_info.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
+        shadow_view_create_info.components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
+        shadow_view_create_info.components.a = VK_COMPONENT_SWIZZLE_IDENTITY;
+        shadow_view_create_info.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        shadow_view_create_info.subresourceRange.baseMipLevel = 0U;
+        shadow_view_create_info.subresourceRange.levelCount = 1U;
+        shadow_view_create_info.subresourceRange.baseArrayLayer = 0U;
+        shadow_view_create_info.subresourceRange.layerCount = 1U;
+        fallback_shadow_array_view = resource::ImageHost::CreateView(context_,
+                                                                     fallback_material_image.image,
+                                                                     shadow_view_create_info);
     }
 }
 

@@ -10,8 +10,11 @@
 #include "vr/vulkan_context.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
+#include <cstring>
 #include <cstdint>
+#include <limits>
 #include <stdexcept>
 #include <utility>
 
@@ -70,6 +73,7 @@ void SurfaceRenderer2D::Initialize(const SurfaceRenderer2DCreateInfo& create_inf
     }
 
     descriptor_layout_id = {};
+    lighting_descriptor_layout_id = {};
     pipeline_layout_id = {};
     shader_vertex_id = {};
     shader_fragment_id = {};
@@ -79,12 +83,15 @@ void SurfaceRenderer2D::Initialize(const SurfaceRenderer2DCreateInfo& create_inf
     pipeline_color_format = VK_FORMAT_UNDEFINED;
 
     frame_texture_sets.clear();
+    frame_lighting_resources.clear();
     descriptor_image_write_scratch.clear();
     descriptor_buffer_write_scratch.clear();
     descriptor_texel_write_scratch.clear();
     fallback_texture = {};
     fallback_sampler_id = {};
     fallback_texture_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    fallback_shadow_array_view = VK_NULL_HANDLE;
+    shadow_sampler_id = {};
 
     image_initialized.clear();
     appearance_runtime_stats = {};
@@ -111,6 +118,13 @@ void SurfaceRenderer2D::Initialize(const SurfaceRenderer2DCreateInfo& create_inf
     swapchain_format = VK_FORMAT_UNDEFINED;
     last_submitted_value_seen = 0U;
     completed_submit_value_seen = 0U;
+    light_frame_coordinator = nullptr;
+    shadow_frame_coordinator = nullptr;
+    shadow_atlas_host = nullptr;
+    local_light_shadow_link_coordinator.Reset();
+    light_shadow_link_coordinator = nullptr;
+    local_shadow_atlas_binding_coordinator.Reset();
+    shadow_atlas_binding_coordinator = nullptr;
     pending_dirty_component_indices = nullptr;
     pending_dirty_component_count = 0U;
 
@@ -123,11 +137,23 @@ void SurfaceRenderer2D::Shutdown(VulkanContext& context_) {
     }
 
     if (context_.Device() != VK_NULL_HANDLE) {
+        (void)vkDeviceWaitIdle(context_.Device());
+    }
+
+    if (light_shadow_upload_host.IsInitialized()) {
+        light_shadow_upload_host.Shutdown(context_);
+    }
+    if (fallback_shadow_array_view != VK_NULL_HANDLE) {
+        resource::ImageHost::DestroyView(context_, fallback_shadow_array_view);
+        fallback_shadow_array_view = VK_NULL_HANDLE;
+    }
+    if (context_.Device() != VK_NULL_HANDLE) {
         resource::ImageHost::DestroyImage(context_, fallback_texture);
     } else {
         fallback_texture = {};
     }
     fallback_sampler_id = {};
+    shadow_sampler_id = {};
 
     surface_components = nullptr;
     transforms = nullptr;
@@ -144,6 +170,7 @@ void SurfaceRenderer2D::Shutdown(VulkanContext& context_) {
     sampler_host = nullptr;
 
     descriptor_layout_id = {};
+    lighting_descriptor_layout_id = {};
     pipeline_layout_id = {};
     shader_vertex_id = {};
     shader_fragment_id = {};
@@ -153,6 +180,7 @@ void SurfaceRenderer2D::Shutdown(VulkanContext& context_) {
     pipeline_color_format = VK_FORMAT_UNDEFINED;
 
     frame_texture_sets.clear();
+    frame_lighting_resources.clear();
     descriptor_image_write_scratch.clear();
     descriptor_buffer_write_scratch.clear();
     descriptor_texel_write_scratch.clear();
@@ -180,6 +208,13 @@ void SurfaceRenderer2D::Shutdown(VulkanContext& context_) {
     swapchain_format = VK_FORMAT_UNDEFINED;
     last_submitted_value_seen = 0U;
     completed_submit_value_seen = 0U;
+    light_frame_coordinator = nullptr;
+    shadow_frame_coordinator = nullptr;
+    shadow_atlas_host = nullptr;
+    local_light_shadow_link_coordinator.Reset();
+    light_shadow_link_coordinator = nullptr;
+    local_shadow_atlas_binding_coordinator.Reset();
+    shadow_atlas_binding_coordinator = nullptr;
     pending_dirty_component_indices = nullptr;
     pending_dirty_component_count = 0U;
     initialized = false;
@@ -233,6 +268,50 @@ void SurfaceRenderer2D::SetAppearanceCoordinator(
     appearance_prepare_bridge.Reserve(appearance_component_count);
 }
 
+void SurfaceRenderer2D::SetLightFrameCoordinator(
+    render::LightFrameCoordinator<ecs::Dim2>* light_frame_coordinator_) noexcept {
+    light_frame_coordinator = light_frame_coordinator_;
+}
+
+void SurfaceRenderer2D::SetLightShadowLinkCoordinator(
+    render::LightShadowLinkCoordinator2D* light_shadow_link_coordinator_) noexcept {
+    light_shadow_link_coordinator = light_shadow_link_coordinator_;
+}
+
+void SurfaceRenderer2D::SetShadowAtlasBindingCoordinator(
+    render::ShadowAtlasBindingCoordinator* shadow_atlas_binding_coordinator_) noexcept {
+    if (shadow_atlas_binding_coordinator != shadow_atlas_binding_coordinator_) {
+        for (auto& frame_resources : frame_lighting_resources) {
+            frame_resources.descriptor_buffer_signature = 0U;
+            frame_resources.descriptor_image_signature = 0U;
+            frame_resources.descriptor_set_signature = 0U;
+        }
+        if (shadow_atlas_binding_coordinator_ == nullptr) {
+            local_shadow_atlas_binding_coordinator.Reset();
+        }
+    }
+    shadow_atlas_binding_coordinator = shadow_atlas_binding_coordinator_;
+}
+
+void SurfaceRenderer2D::SetShadowFrameCoordinator(
+    render::ShadowFrameCoordinator<ecs::Dim2>* shadow_frame_coordinator_) noexcept {
+    shadow_frame_coordinator = shadow_frame_coordinator_;
+}
+
+void SurfaceRenderer2D::SetShadowAtlasHost(shadow::ShadowAtlasHost* shadow_atlas_host_) noexcept {
+    if (shadow_atlas_host != shadow_atlas_host_) {
+        for (auto& frame_resources : frame_lighting_resources) {
+            frame_resources.descriptor_buffer_signature = 0U;
+            frame_resources.descriptor_image_signature = 0U;
+            frame_resources.descriptor_set_signature = 0U;
+        }
+        if (shadow_atlas_binding_coordinator == nullptr) {
+            local_shadow_atlas_binding_coordinator.Reset();
+        }
+    }
+    shadow_atlas_host = shadow_atlas_host_;
+}
+
 void SurfaceRenderer2D::PrepareFrame(const render::RuntimePrepareContext& prepare_context_) {
     if (!initialized) {
         throw std::runtime_error("SurfaceRenderer2D::PrepareFrame called before Initialize");
@@ -270,6 +349,19 @@ void SurfaceRenderer2D::PrepareFrame(const render::RuntimePrepareContext& prepar
         frame_texture_sets.resize(active_frame_index + 1U);
     }
     frame_texture_sets[active_frame_index].clear();
+    if (active_frame_index >= frame_lighting_resources.size()) {
+        frame_lighting_resources.resize(active_frame_index + 1U);
+    }
+    {
+        FrameLightingResources& frame_resources = frame_lighting_resources[active_frame_index];
+        // DescriptorHost::BeginFrame 会对当前 frame arena 执行 vkResetDescriptorPool。
+        // 该操作会使此前为该 frame 分配的所有 VkDescriptorSet 句柄立即失效。
+        // 因此必须在每帧 Prepare 阶段强制失效本地缓存句柄，避免绑定悬空集合。
+        frame_resources.descriptor_set = VK_NULL_HANDLE;
+        frame_resources.descriptor_buffer_signature = 0U;
+        frame_resources.descriptor_image_signature = 0U;
+        frame_resources.descriptor_set_signature = 0U;
+    }
 
     stats = {};
     stats.component_count = component_count;
@@ -325,6 +417,16 @@ void SurfaceRenderer2D::PrepareFrame(const render::RuntimePrepareContext& prepar
     stats.transform_only_update = last_upload_result.runtime.transform_only_update;
     stats.used_partial_upload = last_upload_result.used_partial_upload;
     stats.skipped_upload = last_upload_result.skipped_upload;
+
+    EnsureLightingDescriptorObjects(*context, *descriptor_host);
+    if (!light_shadow_upload_host.IsInitialized()) {
+        light::LightShadowUploadHostCreateInfo upload_create_info{};
+        upload_create_info.frames_in_flight = descriptor_host->FramesInFlight();
+        light_shadow_upload_host.Initialize(*context, *gpu_memory_host, upload_create_info);
+    }
+    light_shadow_upload_host.BeginFrame(*context, active_frame_index);
+    EnsureLightingResourcesForFrame(*context);
+    PrepareLightingDescriptorSetForFrame(active_frame_index);
 
     pending_dirty_component_indices = nullptr;
     pending_dirty_component_count = 0U;
@@ -422,9 +524,19 @@ void SurfaceRenderer2D::Record(const render::FrameRecordContext& record_context_
         push_constants.reserved1 = 0U;
         push_constants.reserved2 = 0U;
 
+        VkDescriptorSet frame_lighting_descriptor_set = VK_NULL_HANDLE;
+        if (active_frame_index < frame_lighting_resources.size()) {
+            frame_lighting_descriptor_set = frame_lighting_resources[active_frame_index].descriptor_set;
+        }
+
         render::GraphicsPipelineId bound_pipeline{};
         VkDescriptorSet bound_descriptor_set = VK_NULL_HANDLE;
+        bool lighting_set_bound = false;
         for (const ecs::Surface2DDrawBatch& batch : runtime_scratch.draw_batches) {
+            if (frame_lighting_descriptor_set == VK_NULL_HANDLE) {
+                ++stats.skipped_batch_count;
+                continue;
+            }
             if (batch.instance_count == 0U) {
                 ++stats.skipped_batch_count;
                 continue;
@@ -450,12 +562,25 @@ void SurfaceRenderer2D::Record(const render::FrameRecordContext& record_context_
                                   pipeline_host->GetGraphicsPipeline(pipeline_id));
                 vkCmdPushConstants(record_context_.command_buffer,
                                    pipeline_host->GetPipelineLayout(pipeline_layout_id),
-                                   VK_SHADER_STAGE_VERTEX_BIT,
+                                   VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                                    0U,
                                    sizeof(PushConstants),
                                    &push_constants);
                 bound_pipeline = pipeline_id;
                 bound_descriptor_set = VK_NULL_HANDLE;
+
+                if (!lighting_set_bound && frame_lighting_descriptor_set != VK_NULL_HANDLE) {
+                    vkCmdBindDescriptorSets(record_context_.command_buffer,
+                                            VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                            pipeline_host->GetPipelineLayout(pipeline_layout_id),
+                                            1U,
+                                            1U,
+                                            &frame_lighting_descriptor_set,
+                                            0U,
+                                            nullptr);
+                    lighting_set_bound = true;
+                    ++stats.light_descriptor_set_bind_count;
+                }
             }
 
             if (bound_descriptor_set != descriptor_set) {
@@ -539,6 +664,7 @@ void SurfaceRenderer2D::EnsurePipelineObjects(VulkanContext& context_,
         });
         descriptor_layout_id = descriptor_host_.RegisterLayout(context_, layout_desc);
     }
+    EnsureLightingDescriptorObjects(context_, descriptor_host_);
 
     if (!shader_vertex_id.IsValid()) {
         render::ShaderModuleCreateInfo shader_info{};
@@ -555,8 +681,9 @@ void SurfaceRenderer2D::EnsurePipelineObjects(VulkanContext& context_,
     if (!pipeline_layout_id.IsValid()) {
         render::PipelineLayoutDesc layout_desc{};
         layout_desc.set_layouts.push_back(descriptor_host_.GetLayout(descriptor_layout_id));
+        layout_desc.set_layouts.push_back(descriptor_host_.GetLayout(lighting_descriptor_layout_id));
         layout_desc.push_constant_ranges.push_back({
-            .stage_flags = VK_SHADER_STAGE_VERTEX_BIT,
+            .stage_flags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
             .offset = 0U,
             .size = sizeof(PushConstants)
         });
@@ -712,9 +839,21 @@ void SurfaceRenderer2D::EnsureFallbackTexture(VulkanContext& context_,
         sampler_desc.max_lod = 0.0F;
         fallback_sampler_id = sampler_host->RegisterSampler(context_, sampler_desc);
     }
+    if (!shadow_sampler_id.IsValid()) {
+        resource::SamplerDesc sampler_desc{};
+        sampler_desc.mag_filter = VK_FILTER_NEAREST;
+        sampler_desc.min_filter = VK_FILTER_NEAREST;
+        sampler_desc.mipmap_mode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+        sampler_desc.address_mode_u = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        sampler_desc.address_mode_v = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        sampler_desc.address_mode_w = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        sampler_desc.max_lod = 0.0F;
+        shadow_sampler_id = sampler_host->RegisterSampler(context_, sampler_desc);
+    }
 
     if (fallback_texture.image != VK_NULL_HANDLE &&
-        fallback_texture.default_view != VK_NULL_HANDLE) {
+        fallback_texture.default_view != VK_NULL_HANDLE &&
+        fallback_shadow_array_view != VK_NULL_HANDLE) {
         return;
     }
     if (context_.EnabledVulkan13Features().synchronization2 != VK_TRUE) {
@@ -796,6 +935,611 @@ void SurfaceRenderer2D::EnsureFallbackTexture(VulkanContext& context_,
     to_shader_read.subresourceRange.baseArrayLayer = 0U;
     to_shader_read.subresourceRange.layerCount = 1U;
     upload_host_.RecordImageBarrier2(frame_index_, to_shader_read);
+
+    if (fallback_shadow_array_view == VK_NULL_HANDLE) {
+        VkImageViewCreateInfo array_view_create_info{};
+        array_view_create_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        array_view_create_info.image = fallback_texture.image;
+        array_view_create_info.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
+        array_view_create_info.format = fallback_texture.format;
+        array_view_create_info.components = VkComponentMapping{
+            VK_COMPONENT_SWIZZLE_IDENTITY,
+            VK_COMPONENT_SWIZZLE_IDENTITY,
+            VK_COMPONENT_SWIZZLE_IDENTITY,
+            VK_COMPONENT_SWIZZLE_IDENTITY,
+        };
+        array_view_create_info.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        array_view_create_info.subresourceRange.baseMipLevel = 0U;
+        array_view_create_info.subresourceRange.levelCount = 1U;
+        array_view_create_info.subresourceRange.baseArrayLayer = 0U;
+        array_view_create_info.subresourceRange.layerCount = 1U;
+        fallback_shadow_array_view = resource::ImageHost::CreateView(context_,
+                                                                     fallback_texture.image,
+                                                                     array_view_create_info);
+    }
+}
+
+void SurfaceRenderer2D::EnsureLightingDescriptorObjects(VulkanContext& context_,
+                                                        render::DescriptorHost& descriptor_host_) {
+    if (lighting_descriptor_layout_id.IsValid()) {
+        return;
+    }
+
+    render::DescriptorSetLayoutDesc layout_desc{};
+    layout_desc.bindings.push_back({
+        .binding = 0U,
+        .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+        .descriptorCount = 1U,
+        .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
+        .pImmutableSamplers = nullptr
+    });
+    layout_desc.bindings.push_back({
+        .binding = 1U,
+        .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+        .descriptorCount = 1U,
+        .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
+        .pImmutableSamplers = nullptr
+    });
+    layout_desc.bindings.push_back({
+        .binding = 2U,
+        .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+        .descriptorCount = 1U,
+        .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
+        .pImmutableSamplers = nullptr
+    });
+    layout_desc.bindings.push_back({
+        .binding = 3U,
+        .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+        .descriptorCount = 1U,
+        .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
+        .pImmutableSamplers = nullptr
+    });
+    layout_desc.bindings.push_back({
+        .binding = 4U,
+        .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+        .descriptorCount = 1U,
+        .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
+        .pImmutableSamplers = nullptr
+    });
+    layout_desc.bindings.push_back({
+        .binding = 5U,
+        .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+        .descriptorCount = 1U,
+        .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
+        .pImmutableSamplers = nullptr
+    });
+    lighting_descriptor_layout_id = descriptor_host_.RegisterLayout(context_, layout_desc);
+}
+
+SurfaceRenderer2D::LightingParamsGpu SurfaceRenderer2D::BuildLightingParamsGpu(VkExtent2D extent_) const noexcept {
+    LightingParamsGpu params{};
+    const float width = static_cast<float>(std::max(extent_.width, 1U));
+    const float height = static_cast<float>(std::max(extent_.height, 1U));
+
+    if (create_info_cache.input_positions_pixel_space) {
+        params.world_to_ndc_x = 2.0F / width;
+        params.world_to_ndc_bias_x = -1.0F;
+        if (create_info_cache.pixel_space_origin_top_left) {
+            params.world_to_ndc_y = -2.0F / height;
+            params.world_to_ndc_bias_y = 1.0F;
+        } else {
+            params.world_to_ndc_y = 2.0F / height;
+            params.world_to_ndc_bias_y = -1.0F;
+        }
+    } else {
+        params.world_to_ndc_x = 1.0F;
+        params.world_to_ndc_y = 1.0F;
+        params.world_to_ndc_bias_x = 0.0F;
+        params.world_to_ndc_bias_y = 0.0F;
+    }
+
+    const std::uint32_t tile_count_x = std::max<std::uint32_t>(create_info_cache.light_culling_config.tile_count_x, 1U);
+    const std::uint32_t tile_count_y = std::max<std::uint32_t>(create_info_cache.light_culling_config.tile_count_y, 1U);
+    params.tile_count_x = tile_count_x;
+    params.tile_count_y = tile_count_y;
+    params.reverse_z = 0U;
+
+    params.framebuffer_width = width;
+    params.framebuffer_height = height;
+    params.light_ambient = std::clamp(create_info_cache.light_ambient, 0.0F, 4.0F);
+    params.max_fragment_lights = static_cast<float>(std::max<std::uint32_t>(create_info_cache.max_fragment_lights, 1U));
+    return params;
+}
+
+void SurfaceRenderer2D::EnsureLightingResourcesForFrame(VulkanContext& context_) {
+    if (active_frame_index >= frame_lighting_resources.size() ||
+        !light_shadow_upload_host.IsInitialized()) {
+        return;
+    }
+
+    FrameLightingResources& frame_resources = frame_lighting_resources[active_frame_index];
+    frame_resources.shadow_namespace_id = 0U;
+
+    stats.light_count = 0U;
+    stats.visible_light_count = 0U;
+    stats.shadow_view_count = 0U;
+    stats.light_upload_range_count = 0U;
+    stats.shadow_view_upload_range_count = 0U;
+    stats.light_cluster_count = 0U;
+    stats.light_cluster_index_count = 0U;
+    stats.light_buffer_upload_count = 0U;
+    stats.light_shadow_linked_count = 0U;
+    stats.light_shadow_namespace_drop_count = 0U;
+    stats.light_shadow_unmapped_count = 0U;
+
+    auto hash_combine = [](std::uint64_t& hash_, std::uint64_t value_) noexcept {
+        hash_ ^= value_;
+        hash_ *= 1099511628211ULL;
+    };
+    auto hash_from_handle = [&](std::uint64_t& hash_, std::uintptr_t handle_) noexcept {
+        hash_combine(hash_, static_cast<std::uint64_t>(handle_));
+    };
+
+    static const ecs::LightGpuRecord2D default_light_record{};
+    static const ecs::ShadowViewGpuRecord default_shadow_view_record{};
+    static const std::uint32_t default_cluster_index = 0U;
+
+    SurfaceRenderer2DMcVector<ecs::LightClusterHeader> fallback_cluster_headers{};
+    const std::uint32_t fallback_tile_count_x = std::max<std::uint32_t>(create_info_cache.light_culling_config.tile_count_x, 1U);
+    const std::uint32_t fallback_tile_count_y = std::max<std::uint32_t>(create_info_cache.light_culling_config.tile_count_y, 1U);
+    const std::uint32_t fallback_cluster_count = std::max<std::uint32_t>(fallback_tile_count_x * fallback_tile_count_y, 1U);
+    fallback_cluster_headers.resize(fallback_cluster_count);
+
+    const ecs::LightGpuRecord2D* linked_light_records = &default_light_record;
+    std::uint32_t linked_light_record_count = 1U;
+    const ecs::LightUploadRange* light_upload_ranges = nullptr;
+    std::uint32_t light_upload_range_count = 0U;
+    const ecs::LightClusterHeader* cluster_headers = fallback_cluster_headers.data();
+    std::uint32_t cluster_header_count = static_cast<std::uint32_t>(fallback_cluster_headers.size());
+    const std::uint32_t* cluster_indices = &default_cluster_index;
+    std::uint32_t cluster_index_count = 1U;
+    const ecs::ShadowViewGpuRecord* shadow_view_records = &default_shadow_view_record;
+    std::uint32_t shadow_view_count = 1U;
+    const ecs::ShadowUploadRange* shadow_view_upload_ranges = nullptr;
+    std::uint32_t shadow_view_upload_range_count = 0U;
+
+    const ecs::Shadow<ecs::Dim2>* shadow_components = nullptr;
+    std::uint32_t shadow_component_count = 0U;
+    const ecs::ShadowGpuRecord2D* shadow_records = nullptr;
+    std::uint32_t shadow_record_count = 0U;
+    std::uint64_t shadow_signature = 0U;
+    std::uint64_t light_signature = 0U;
+    std::uint32_t shadow_namespace_hint = 0U;
+
+    bool light_cache_reused = false;
+    bool shadow_cache_reused = false;
+
+    if (create_info_cache.enable_light_shadow &&
+        light_frame_coordinator != nullptr) {
+        ecs::LightCullingBuildConfig<ecs::Dim2> light_culling_config = create_info_cache.light_culling_config;
+        light_culling_config.tile_count_x = static_cast<std::uint16_t>(
+            std::max<std::uint32_t>(light_culling_config.tile_count_x, 1U));
+        light_culling_config.tile_count_y = static_cast<std::uint16_t>(
+            std::max<std::uint32_t>(light_culling_config.tile_count_y, 1U));
+        light_culling_config.max_lights_per_tile = static_cast<std::uint16_t>(
+            std::max<std::uint32_t>(light_culling_config.max_lights_per_tile, 1U));
+
+        const auto light_prepare_result = light_frame_coordinator->PrepareFrame(active_frame_index,
+                                                                                 {},
+                                                                                 light_culling_config);
+        light_cache_reused = !light_prepare_result.runtime_build_invoked &&
+                             !light_prepare_result.culling_build_invoked &&
+                             light_prepare_result.has_light_data;
+        const auto& light_runtime_scratch = light_frame_coordinator->RuntimeScratch();
+        const auto& light_culling_scratch = light_frame_coordinator->CullingScratch();
+
+        const ecs::LightGpuRecord2D* runtime_light_records =
+            ecs::LightRuntimeSystem<ecs::Dim2>::GpuRecords(light_runtime_scratch);
+        const std::uint32_t runtime_light_count =
+            ecs::LightRuntimeSystem<ecs::Dim2>::GpuRecordCount(light_runtime_scratch);
+        if (runtime_light_records != nullptr && runtime_light_count > 0U) {
+            linked_light_records = runtime_light_records;
+            linked_light_record_count = runtime_light_count;
+            light_upload_ranges = ecs::LightRuntimeSystem<ecs::Dim2>::UploadRanges(light_runtime_scratch);
+            light_upload_range_count = ecs::LightRuntimeSystem<ecs::Dim2>::UploadRangeCount(light_runtime_scratch);
+            light_signature = light_prepare_result.runtime_stats.style_signature ^
+                              (light_prepare_result.runtime_stats.binding_signature << 1U) ^
+                              (light_prepare_result.runtime_stats.transform_signature << 7U);
+            stats.light_count = runtime_light_count;
+            stats.visible_light_count = light_prepare_result.culling_stats.accepted_light_count;
+            stats.light_upload_range_count = light_upload_range_count;
+        }
+
+        const ecs::LightClusterHeader* runtime_cluster_headers =
+            ecs::LightCullingSystem<ecs::Dim2>::ClusterHeaders(light_culling_scratch);
+        const std::uint32_t runtime_cluster_header_count =
+            ecs::LightCullingSystem<ecs::Dim2>::ClusterHeaderCount(light_culling_scratch);
+        if (runtime_cluster_headers != nullptr && runtime_cluster_header_count > 0U) {
+            cluster_headers = runtime_cluster_headers;
+            cluster_header_count = runtime_cluster_header_count;
+            stats.light_cluster_count = runtime_cluster_header_count;
+        }
+
+        const std::uint32_t* runtime_cluster_indices =
+            ecs::LightCullingSystem<ecs::Dim2>::ClusterLightIndices(light_culling_scratch);
+        const std::uint32_t runtime_cluster_index_count =
+            ecs::LightCullingSystem<ecs::Dim2>::ClusterLightIndexCount(light_culling_scratch);
+        if (runtime_cluster_indices != nullptr && runtime_cluster_index_count > 0U) {
+            cluster_indices = runtime_cluster_indices;
+            cluster_index_count = runtime_cluster_index_count;
+            stats.light_cluster_index_count = runtime_cluster_index_count;
+        }
+    }
+
+    if (create_info_cache.enable_light_shadow &&
+        shadow_frame_coordinator != nullptr) {
+        const auto shadow_prepare_result = shadow_frame_coordinator->PrepareFrame(active_frame_index);
+        shadow_cache_reused = !shadow_prepare_result.runtime_build_invoked &&
+                              !shadow_prepare_result.caster_build_invoked &&
+                              shadow_prepare_result.has_shadow_data;
+        const auto& shadow_runtime_scratch = shadow_frame_coordinator->RuntimeScratch();
+        shadow_components = shadow_frame_coordinator->ShadowComponents();
+        shadow_component_count = shadow_frame_coordinator->ShadowCount();
+        shadow_records = ecs::ShadowRuntimeSystem<ecs::Dim2>::GpuRecords(shadow_runtime_scratch);
+        shadow_record_count = ecs::ShadowRuntimeSystem<ecs::Dim2>::GpuRecordCount(shadow_runtime_scratch);
+
+        const ecs::ShadowViewGpuRecord* runtime_shadow_view_records =
+            ecs::ShadowRuntimeSystem<ecs::Dim2>::ViewRecords(shadow_runtime_scratch);
+        const std::uint32_t runtime_shadow_view_count =
+            ecs::ShadowRuntimeSystem<ecs::Dim2>::ViewRecordCount(shadow_runtime_scratch);
+        if (runtime_shadow_view_records != nullptr && runtime_shadow_view_count > 0U) {
+            shadow_view_records = runtime_shadow_view_records;
+            shadow_view_count = runtime_shadow_view_count;
+            shadow_view_upload_ranges = ecs::ShadowRuntimeSystem<ecs::Dim2>::ViewUploadRanges(shadow_runtime_scratch);
+            shadow_view_upload_range_count = ecs::ShadowRuntimeSystem<ecs::Dim2>::ViewUploadRangeCount(shadow_runtime_scratch);
+            stats.shadow_view_count = runtime_shadow_view_count;
+            stats.shadow_view_upload_range_count = shadow_view_upload_range_count;
+        }
+
+        shadow_signature = shadow_prepare_result.runtime_stats.style_signature ^
+                           (shadow_prepare_result.runtime_stats.binding_signature << 1U) ^
+                           (shadow_prepare_result.runtime_stats.transform_signature << 7U) ^
+                           (shadow_prepare_result.runtime_stats.camera_signature << 13U);
+    }
+
+    if (shadow_component_count > 0U && shadow_components != nullptr) {
+        for (std::uint32_t i = 0U; i < shadow_component_count; ++i) {
+            const ecs::Shadow<ecs::Dim2>& shadow_component = shadow_components[i];
+            if (shadow_component.visibility.enabled == 0U || shadow_component.visibility.visible == 0U) {
+                continue;
+            }
+            if (shadow_component.binding.atlas_namespace_id == 0U) {
+                continue;
+            }
+            shadow_namespace_hint = shadow_component.binding.atlas_namespace_id;
+            break;
+        }
+    }
+
+    render::LightShadowLinkStageResult2D link_result{};
+    if (create_info_cache.enable_light_shadow &&
+        linked_light_records != nullptr &&
+        linked_light_record_count > 0U) {
+        render::LightShadowLinkCoordinator2D* link_coordinator = light_shadow_link_coordinator;
+        if (link_coordinator == nullptr) {
+            link_coordinator = &local_light_shadow_link_coordinator;
+        }
+
+        render::LightShadowLinkCoordinator2DPrepareInfo link_prepare_info{};
+        link_prepare_info.signature = light_signature ^ (shadow_signature << 1U) ^
+                                      (static_cast<std::uint64_t>(shadow_namespace_hint) << 17U);
+        link_prepare_info.light_signature = light_signature;
+        link_prepare_info.shadow_signature = shadow_signature;
+        link_prepare_info.light_records = linked_light_records;
+        link_prepare_info.light_record_count = linked_light_record_count;
+        link_prepare_info.shadow_components = shadow_components;
+        link_prepare_info.shadow_component_count = shadow_component_count;
+        link_prepare_info.shadow_records = shadow_records;
+        link_prepare_info.shadow_record_count = shadow_record_count;
+        link_prepare_info.shadow_namespace_hint = shadow_namespace_hint;
+        if (light_frame_coordinator != nullptr) {
+            const auto& light_runtime_scratch = light_frame_coordinator->RuntimeScratch();
+            link_prepare_info.light_updated_component_indices =
+                ecs::LightRuntimeSystem<ecs::Dim2>::UpdatedComponentIndices(light_runtime_scratch);
+            link_prepare_info.light_updated_component_count =
+                ecs::LightRuntimeSystem<ecs::Dim2>::UpdatedComponentIndexCount(light_runtime_scratch);
+        }
+
+        const render::LightShadowLinkCoordinator2DResult link_prepare_result =
+            link_coordinator->Prepare(link_prepare_info);
+        link_result = link_prepare_result.link_result;
+        if (link_prepare_result.cache_reused) {
+            ++stats.light_shadow_link_cache_hit_count;
+        }
+        if (link_result.linked_light_records != nullptr &&
+            link_result.linked_light_record_count > 0U) {
+            linked_light_records = link_result.linked_light_records;
+            linked_light_record_count = link_result.linked_light_record_count;
+        }
+        frame_resources.shadow_namespace_id = link_result.shadow_namespace_id;
+        stats.light_shadow_linked_count = link_result.linked_light_count;
+        stats.light_shadow_namespace_drop_count = link_result.namespace_drop_count;
+        stats.light_shadow_unmapped_count = link_result.unmapped_light_count;
+    } else if (light_shadow_link_coordinator == nullptr) {
+        local_light_shadow_link_coordinator.Reset();
+    }
+
+    if (frame_resources.shadow_namespace_id == 0U) {
+        frame_resources.shadow_namespace_id = shadow_namespace_hint;
+    }
+
+    if (linked_light_records == nullptr || linked_light_record_count == 0U) {
+        linked_light_records = &default_light_record;
+        linked_light_record_count = 1U;
+        light_upload_ranges = nullptr;
+        light_upload_range_count = 0U;
+    }
+    if (cluster_headers == nullptr || cluster_header_count == 0U) {
+        cluster_headers = fallback_cluster_headers.data();
+        cluster_header_count = static_cast<std::uint32_t>(fallback_cluster_headers.size());
+    }
+    if (cluster_indices == nullptr || cluster_index_count == 0U) {
+        cluster_indices = &default_cluster_index;
+        cluster_index_count = 1U;
+    }
+    if (shadow_view_records == nullptr || shadow_view_count == 0U) {
+        shadow_view_records = &default_shadow_view_record;
+        shadow_view_count = 1U;
+        shadow_view_upload_ranges = nullptr;
+        shadow_view_upload_range_count = 0U;
+    }
+
+    LightingParamsGpu lighting_params = BuildLightingParamsGpu(
+        swapchain_extent.width > 0U && swapchain_extent.height > 0U
+            ? swapchain_extent
+            : VkExtent2D{1U, 1U});
+    lighting_params.light_count = static_cast<float>(stats.light_count);
+    lighting_params.shadow_view_count = static_cast<float>(stats.shadow_view_count);
+
+    std::uint64_t upload_signature = 14695981039346656037ULL;
+    hash_combine(upload_signature, light_signature);
+    hash_combine(upload_signature, shadow_signature);
+    hash_combine(upload_signature, static_cast<std::uint64_t>(stats.light_count));
+    hash_combine(upload_signature, static_cast<std::uint64_t>(stats.shadow_view_count));
+    hash_combine(upload_signature, static_cast<std::uint64_t>(cluster_header_count));
+    hash_combine(upload_signature, static_cast<std::uint64_t>(cluster_index_count));
+    hash_combine(upload_signature, static_cast<std::uint64_t>(frame_resources.shadow_namespace_id));
+    frame_resources.upload_signature = upload_signature;
+
+    frame_resources.light_records = light_shadow_upload_host.UploadLightRecordsRanges(
+        context_,
+        *upload_host,
+        active_frame_index,
+        linked_light_records,
+        linked_light_record_count,
+        light_upload_ranges,
+        light_upload_range_count,
+        upload_signature ^ 0x31ULL);
+    frame_resources.cluster_headers = light_shadow_upload_host.UploadClusterHeaders(
+        context_,
+        *upload_host,
+        active_frame_index,
+        cluster_headers,
+        cluster_header_count,
+        upload_signature ^ 0x32ULL);
+    frame_resources.cluster_indices = light_shadow_upload_host.UploadClusterIndices(
+        context_,
+        *upload_host,
+        active_frame_index,
+        cluster_indices,
+        cluster_index_count,
+        upload_signature ^ 0x33ULL);
+    frame_resources.shadow_views = light_shadow_upload_host.UploadShadowViewsRanges(
+        context_,
+        *upload_host,
+        active_frame_index,
+        shadow_view_records,
+        shadow_view_count,
+        shadow_view_upload_ranges,
+        shadow_view_upload_range_count,
+        upload_signature ^ 0x34ULL);
+    frame_resources.lighting_uniform = light_shadow_upload_host.UploadLightingUniform(
+        context_,
+        *upload_host,
+        active_frame_index,
+        &lighting_params,
+        sizeof(LightingParamsGpu),
+        upload_signature ^ 0x35ULL);
+
+    stats.light_buffer_upload_count =
+        static_cast<std::uint32_t>(frame_resources.light_records.uploaded) +
+        static_cast<std::uint32_t>(frame_resources.cluster_headers.uploaded) +
+        static_cast<std::uint32_t>(frame_resources.cluster_indices.uploaded) +
+        static_cast<std::uint32_t>(frame_resources.shadow_views.uploaded) +
+        static_cast<std::uint32_t>(frame_resources.lighting_uniform.uploaded);
+
+    if (frame_resources.light_records.uploaded) {
+        stats.uploaded_bytes += frame_resources.light_records.size_bytes;
+    }
+    if (frame_resources.cluster_headers.uploaded) {
+        stats.uploaded_bytes += frame_resources.cluster_headers.size_bytes;
+    }
+    if (frame_resources.cluster_indices.uploaded) {
+        stats.uploaded_bytes += frame_resources.cluster_indices.size_bytes;
+    }
+    if (frame_resources.shadow_views.uploaded) {
+        stats.uploaded_bytes += frame_resources.shadow_views.size_bytes;
+    }
+    if (frame_resources.lighting_uniform.uploaded) {
+        stats.uploaded_bytes += frame_resources.lighting_uniform.size_bytes;
+    }
+
+    std::uint64_t descriptor_signature = 14695981039346656037ULL;
+    hash_from_handle(descriptor_signature,
+                     reinterpret_cast<std::uintptr_t>(frame_resources.light_records.buffer));
+    hash_from_handle(descriptor_signature,
+                     reinterpret_cast<std::uintptr_t>(frame_resources.cluster_headers.buffer));
+    hash_from_handle(descriptor_signature,
+                     reinterpret_cast<std::uintptr_t>(frame_resources.cluster_indices.buffer));
+    hash_from_handle(descriptor_signature,
+                     reinterpret_cast<std::uintptr_t>(frame_resources.shadow_views.buffer));
+    hash_from_handle(descriptor_signature,
+                     reinterpret_cast<std::uintptr_t>(frame_resources.lighting_uniform.buffer));
+    hash_combine(descriptor_signature, static_cast<std::uint64_t>(frame_resources.light_records.offset));
+    hash_combine(descriptor_signature, static_cast<std::uint64_t>(frame_resources.cluster_headers.offset));
+    hash_combine(descriptor_signature, static_cast<std::uint64_t>(frame_resources.cluster_indices.offset));
+    hash_combine(descriptor_signature, static_cast<std::uint64_t>(frame_resources.shadow_views.offset));
+    hash_combine(descriptor_signature, static_cast<std::uint64_t>(frame_resources.lighting_uniform.offset));
+    hash_combine(descriptor_signature, static_cast<std::uint64_t>(frame_resources.light_records.size_bytes));
+    hash_combine(descriptor_signature, static_cast<std::uint64_t>(frame_resources.cluster_headers.size_bytes));
+    hash_combine(descriptor_signature, static_cast<std::uint64_t>(frame_resources.cluster_indices.size_bytes));
+    hash_combine(descriptor_signature, static_cast<std::uint64_t>(frame_resources.shadow_views.size_bytes));
+    hash_combine(descriptor_signature, static_cast<std::uint64_t>(frame_resources.lighting_uniform.size_bytes));
+    frame_resources.descriptor_payload_signature = descriptor_signature;
+
+    if (light_cache_reused || shadow_cache_reused) {
+        // no-op; place-holder for future fast-path diagnostics
+    }
+}
+
+void SurfaceRenderer2D::PrepareLightingDescriptorSetForFrame(std::uint32_t frame_index_) {
+    if (descriptor_host == nullptr ||
+        sampler_host == nullptr ||
+        frame_index_ >= frame_lighting_resources.size()) {
+        return;
+    }
+    if (!lighting_descriptor_layout_id.IsValid()) {
+        return;
+    }
+
+    FrameLightingResources& frame_resources = frame_lighting_resources[frame_index_];
+    if (frame_resources.light_records.buffer == VK_NULL_HANDLE ||
+        frame_resources.cluster_headers.buffer == VK_NULL_HANDLE ||
+        frame_resources.cluster_indices.buffer == VK_NULL_HANDLE ||
+        frame_resources.shadow_views.buffer == VK_NULL_HANDLE ||
+        frame_resources.lighting_uniform.buffer == VK_NULL_HANDLE) {
+        return;
+    }
+    if (frame_resources.descriptor_set == VK_NULL_HANDLE) {
+        frame_resources.descriptor_set = descriptor_host->AllocateSet(*context,
+                                                                      frame_index_,
+                                                                      lighting_descriptor_layout_id);
+        frame_resources.descriptor_buffer_signature = 0U;
+        frame_resources.descriptor_image_signature = 0U;
+        frame_resources.descriptor_set_signature = 0U;
+    }
+    if (frame_resources.descriptor_set == VK_NULL_HANDLE) {
+        return;
+    }
+
+    const VkSampler configured_shadow_sampler = shadow_sampler_id.IsValid()
+        ? sampler_host->GetSampler(shadow_sampler_id)
+        : VK_NULL_HANDLE;
+    const VkSampler fallback_shadow_sampler = fallback_sampler_id.IsValid()
+        ? sampler_host->GetSampler(fallback_sampler_id)
+        : VK_NULL_HANDLE;
+
+    render::ShadowAtlasBindingCoordinator* atlas_binding_coordinator = shadow_atlas_binding_coordinator;
+    if (atlas_binding_coordinator == nullptr) {
+        atlas_binding_coordinator = &local_shadow_atlas_binding_coordinator;
+    }
+
+    render::ShadowAtlasBindingResolveInput resolve_input{};
+    resolve_input.atlas_host = shadow_atlas_host;
+    resolve_input.namespace_id = frame_resources.shadow_namespace_id;
+    resolve_input.fallback_namespace_id = 1U;
+    resolve_input.allow_namespace_fallback = 1U;
+    resolve_input.primary_sampler = configured_shadow_sampler;
+    resolve_input.fallback_view = fallback_shadow_array_view;
+    resolve_input.fallback_sampler = fallback_shadow_sampler;
+    resolve_input.fallback_layout = fallback_texture_layout;
+
+    const render::ShadowAtlasBindingResolveResult binding_result =
+        atlas_binding_coordinator->Resolve(resolve_input);
+    if (binding_result.cache_reused) {
+        ++stats.light_shadow_atlas_binding_cache_hit_count;
+    }
+    if (!binding_result.valid ||
+        binding_result.image_view == VK_NULL_HANDLE ||
+        binding_result.sampler == VK_NULL_HANDLE) {
+        return;
+    }
+
+    auto hash_combine = [](std::uint64_t& hash_, std::uint64_t value_) noexcept {
+        hash_ ^= value_;
+        hash_ *= 1099511628211ULL;
+    };
+    const std::uint64_t buffer_signature = frame_resources.descriptor_payload_signature;
+    const std::uint64_t image_signature = binding_result.binding_signature;
+    const bool need_buffer_update = frame_resources.descriptor_buffer_signature != buffer_signature;
+    const bool need_image_update = frame_resources.descriptor_image_signature != image_signature;
+    if (!need_buffer_update && !need_image_update) {
+        ++stats.light_descriptor_set_reuse_hit_count;
+        return;
+    }
+
+    descriptor_buffer_write_scratch.clear();
+    descriptor_image_write_scratch.clear();
+    descriptor_texel_write_scratch.clear();
+    descriptor_buffer_write_scratch.reserve(need_buffer_update ? 5U : 0U);
+    descriptor_image_write_scratch.reserve(need_image_update ? 1U : 0U);
+
+    if (need_buffer_update) {
+        descriptor_buffer_write_scratch.push_back({
+            .binding = 0U,
+            .array_element = 0U,
+            .descriptor_type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+            .buffer = frame_resources.light_records.buffer,
+            .offset = frame_resources.light_records.offset,
+            .range = frame_resources.light_records.size_bytes
+        });
+        descriptor_buffer_write_scratch.push_back({
+            .binding = 1U,
+            .array_element = 0U,
+            .descriptor_type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+            .buffer = frame_resources.cluster_headers.buffer,
+            .offset = frame_resources.cluster_headers.offset,
+            .range = frame_resources.cluster_headers.size_bytes
+        });
+        descriptor_buffer_write_scratch.push_back({
+            .binding = 2U,
+            .array_element = 0U,
+            .descriptor_type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+            .buffer = frame_resources.cluster_indices.buffer,
+            .offset = frame_resources.cluster_indices.offset,
+            .range = frame_resources.cluster_indices.size_bytes
+        });
+        descriptor_buffer_write_scratch.push_back({
+            .binding = 3U,
+            .array_element = 0U,
+            .descriptor_type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+            .buffer = frame_resources.shadow_views.buffer,
+            .offset = frame_resources.shadow_views.offset,
+            .range = frame_resources.shadow_views.size_bytes
+        });
+        descriptor_buffer_write_scratch.push_back({
+            .binding = 5U,
+            .array_element = 0U,
+            .descriptor_type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+            .buffer = frame_resources.lighting_uniform.buffer,
+            .offset = frame_resources.lighting_uniform.offset,
+            .range = frame_resources.lighting_uniform.size_bytes
+        });
+    }
+
+    if (need_image_update) {
+        descriptor_image_write_scratch.push_back({
+            .binding = 4U,
+            .array_element = 0U,
+            .descriptor_type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+            .sampler = binding_result.sampler,
+            .image_view = binding_result.image_view,
+            .image_layout = binding_result.image_layout
+        });
+    }
+
+    descriptor_host->UpdateSet(*context,
+                               frame_resources.descriptor_set,
+                               descriptor_buffer_write_scratch,
+                               descriptor_image_write_scratch,
+                               descriptor_texel_write_scratch);
+    frame_resources.descriptor_buffer_signature = buffer_signature;
+    frame_resources.descriptor_image_signature = image_signature;
+    std::uint64_t descriptor_signature = 14695981039346656037ULL;
+    hash_combine(descriptor_signature, buffer_signature);
+    hash_combine(descriptor_signature, image_signature);
+    frame_resources.descriptor_set_signature = descriptor_signature;
+    ++stats.descriptor_set_update_count;
 }
 
 VkDescriptorSet SurfaceRenderer2D::AcquireTextureDescriptorSet(std::uint32_t frame_index_,

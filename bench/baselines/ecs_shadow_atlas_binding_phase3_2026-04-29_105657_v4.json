@@ -1,0 +1,229 @@
+{
+  "options": {
+    "filter": "RenderShadowAtlasBindingCoordinator",
+    "iterations": 1024,
+    "min_calibrated_iterations": 8,
+    "warmup_runs": 4,
+    "measured_runs": 11,
+    "min_duration_ms": 20,
+    "baseline_json": "",
+    "baseline_metric": "mean_ns_per_iteration",
+    "fail_on_regression_ratio": -1.000000,
+    "require_baseline_match": false,
+    "fail_on_empty_selection": false
+  },
+  "summary": {
+    "selected_count": 2,
+    "executed_count": 2,
+    "completed_count": 2,
+    "failed_count": 0,
+    "skipped_count": 0,
+    "regression_fail_count": 0,
+    "baseline_missing_count": 0,
+    "total_duration_ms": 13.836
+  },
+  "results": [
+    {
+      "name": "RenderShadowAtlasBindingCoordinator_fallback_build_path",
+      "outcome": "completed",
+      "message": "",
+      "metrics": {
+        "iterations": 1024,
+        "min_ms": 0.647400,
+        "max_ms": 0.785800,
+        "mean_ms": 0.692991,
+        "median_ms": 0.685100,
+        "p95_ms": 0.785800,
+        "stddev_ms": 0.039704,
+        "min_ns_per_iteration": 632.226562,
+        "max_ns_per_iteration": 767.382812,
+        "mean_ns_per_iteration": 676.748935,
+        "median_ns_per_iteration": 669.042969,
+        "p95_ns_per_iteration": 767.382812,
+        "stddev_ns_per_iteration": 38.773175,
+        "items_per_second": 1477652.862,
+        "bytes_per_second": 82748560.259
+      },
+      "baseline": {
+        "status": "not_checked",
+        "metric_kind": "mean_ns_per_iteration",
+        "has_baseline": false,
+        "baseline_mean_ms": 0.000000,
+        "current_mean_ms": 0.000000,
+        "baseline_metric_value": 0.000000,
+        "current_metric_value": 0.000000,
+        "delta_ratio": 0.000000
+      },
+      "tags": ["atlas", "binding", "core", "cpu", "render", "shadow"],
+      "samples": [
+        {
+          "duration_ms": 0.751400,
+          "iterations": 1024,
+          "items_processed": 1024,
+          "bytes_processed": 57344
+        },
+        {
+          "duration_ms": 0.785800,
+          "iterations": 1024,
+          "items_processed": 1024,
+          "bytes_processed": 57344
+        },
+        {
+          "duration_ms": 0.685100,
+          "iterations": 1024,
+          "items_processed": 1024,
+          "bytes_processed": 57344
+        },
+        {
+          "duration_ms": 0.677700,
+          "iterations": 1024,
+          "items_processed": 1024,
+          "bytes_processed": 57344
+        },
+        {
+          "duration_ms": 0.706900,
+          "iterations": 1024,
+          "items_processed": 1024,
+          "bytes_processed": 57344
+        },
+        {
+          "duration_ms": 0.669400,
+          "iterations": 1024,
+          "items_processed": 1024,
+          "bytes_processed": 57344
+        },
+        {
+          "duration_ms": 0.686900,
+          "iterations": 1024,
+          "items_processed": 1024,
+          "bytes_processed": 57344
+        },
+        {
+          "duration_ms": 0.686400,
+          "iterations": 1024,
+          "items_processed": 1024,
+          "bytes_processed": 57344
+        },
+        {
+          "duration_ms": 0.675300,
+          "iterations": 1024,
+          "items_processed": 1024,
+          "bytes_processed": 57344
+        },
+        {
+          "duration_ms": 0.647400,
+          "iterations": 1024,
+          "items_processed": 1024,
+          "bytes_processed": 57344
+        },
+        {
+          "duration_ms": 0.650600,
+          "iterations": 1024,
+          "items_processed": 1024,
+          "bytes_processed": 57344
+        }
+      ]
+    },
+    {
+      "name": "RenderShadowAtlasBindingCoordinator_fallback_reuse_hot_path",
+      "outcome": "completed",
+      "message": "",
+      "metrics": {
+        "iterations": 1024,
+        "min_ms": 0.025500,
+        "max_ms": 0.027700,
+        "mean_ms": 0.026809,
+        "median_ms": 0.026800,
+        "p95_ms": 0.027700,
+        "stddev_ms": 0.000598,
+        "min_ns_per_iteration": 24.902344,
+        "max_ns_per_iteration": 27.050781,
+        "mean_ns_per_iteration": 26.180753,
+        "median_ns_per_iteration": 26.171875,
+        "p95_ns_per_iteration": 27.050781,
+        "stddev_ns_per_iteration": 0.583646,
+        "items_per_second": 38195998.644,
+        "bytes_per_second": 305567989.149
+      },
+      "baseline": {
+        "status": "not_checked",
+        "metric_kind": "mean_ns_per_iteration",
+        "has_baseline": false,
+        "baseline_mean_ms": 0.000000,
+        "current_mean_ms": 0.000000,
+        "baseline_metric_value": 0.000000,
+        "current_metric_value": 0.000000,
+        "delta_ratio": 0.000000
+      },
+      "tags": ["atlas", "binding", "core", "cpu", "render", "reuse", "shadow"],
+      "samples": [
+        {
+          "duration_ms": 0.027200,
+          "iterations": 1024,
+          "items_processed": 1024,
+          "bytes_processed": 8192
+        },
+        {
+          "duration_ms": 0.027400,
+          "iterations": 1024,
+          "items_processed": 1024,
+          "bytes_processed": 8192
+        },
+        {
+          "duration_ms": 0.027100,
+          "iterations": 1024,
+          "items_processed": 1024,
+          "bytes_processed": 8192
+        },
+        {
+          "duration_ms": 0.025500,
+          "iterations": 1024,
+          "items_processed": 1024,
+          "bytes_processed": 8192
+        },
+        {
+          "duration_ms": 0.027300,
+          "iterations": 1024,
+          "items_processed": 1024,
+          "bytes_processed": 8192
+        },
+        {
+          "duration_ms": 0.027700,
+          "iterations": 1024,
+          "items_processed": 1024,
+          "bytes_processed": 8192
+        },
+        {
+          "duration_ms": 0.026400,
+          "iterations": 1024,
+          "items_processed": 1024,
+          "bytes_processed": 8192
+        },
+        {
+          "duration_ms": 0.026700,
+          "iterations": 1024,
+          "items_processed": 1024,
+          "bytes_processed": 8192
+        },
+        {
+          "duration_ms": 0.026200,
+          "iterations": 1024,
+          "items_processed": 1024,
+          "bytes_processed": 8192
+        },
+        {
+          "duration_ms": 0.026800,
+          "iterations": 1024,
+          "items_processed": 1024,
+          "bytes_processed": 8192
+        },
+        {
+          "duration_ms": 0.026600,
+          "iterations": 1024,
+          "items_processed": 1024,
+          "bytes_processed": 8192
+        }
+      ]
+    }
+  ]
+}

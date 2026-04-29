@@ -1,0 +1,205 @@
+{
+  "options": {
+    "filter": "dual_renderer",
+    "iterations": 512,
+    "min_calibrated_iterations": 8,
+    "warmup_runs": 2,
+    "measured_runs": 9,
+    "min_duration_ms": 25,
+    "baseline_json": "",
+    "baseline_metric": "mean_ns_per_iteration",
+    "fail_on_regression_ratio": -1.000000,
+    "require_baseline_match": false,
+    "fail_on_empty_selection": false
+  },
+  "summary": {
+    "selected_count": 2,
+    "executed_count": 2,
+    "completed_count": 2,
+    "failed_count": 0,
+    "skipped_count": 0,
+    "regression_fail_count": 0,
+    "baseline_missing_count": 0,
+    "total_duration_ms": 226.745
+  },
+  "results": [
+    {
+      "name": "EcsAppearanceFrameCoordinator_dim3_dual_renderer_shared_build_1k",
+      "outcome": "completed",
+      "message": "",
+      "metrics": {
+        "iterations": 512,
+        "min_ms": 8.415900,
+        "max_ms": 9.518700,
+        "mean_ms": 9.009589,
+        "median_ms": 9.097200,
+        "p95_ms": 9.518700,
+        "stddev_ms": 0.332074,
+        "min_ns_per_iteration": 16437.304688,
+        "max_ns_per_iteration": 18591.210938,
+        "mean_ns_per_iteration": 17596.853299,
+        "median_ns_per_iteration": 17767.968750,
+        "p95_ns_per_iteration": 18591.210938,
+        "stddev_ns_per_iteration": 648.581866,
+        "items_per_second": 116384444.721,
+        "bytes_per_second": 12103982251.009
+      },
+      "baseline": {
+        "status": "not_checked",
+        "metric_kind": "mean_ns_per_iteration",
+        "has_baseline": false,
+        "baseline_mean_ms": 0.000000,
+        "current_mean_ms": 0.000000,
+        "baseline_metric_value": 0.000000,
+        "current_metric_value": 0.000000,
+        "delta_ratio": 0.000000
+      },
+      "tags": ["appearance", "coordinator", "core", "cpu", "dual_renderer", "ecs", "prepare"],
+      "samples": [
+        {
+          "duration_ms": 8.415900,
+          "iterations": 512,
+          "items_processed": 1048576,
+          "bytes_processed": 109051904
+        },
+        {
+          "duration_ms": 8.489600,
+          "iterations": 512,
+          "items_processed": 1048576,
+          "bytes_processed": 109051904
+        },
+        {
+          "duration_ms": 9.142700,
+          "iterations": 512,
+          "items_processed": 1048576,
+          "bytes_processed": 109051904
+        },
+        {
+          "duration_ms": 9.257200,
+          "iterations": 512,
+          "items_processed": 1048576,
+          "bytes_processed": 109051904
+        },
+        {
+          "duration_ms": 8.952600,
+          "iterations": 512,
+          "items_processed": 1048576,
+          "bytes_processed": 109051904
+        },
+        {
+          "duration_ms": 9.136100,
+          "iterations": 512,
+          "items_processed": 1048576,
+          "bytes_processed": 109051904
+        },
+        {
+          "duration_ms": 9.076300,
+          "iterations": 512,
+          "items_processed": 1048576,
+          "bytes_processed": 109051904
+        },
+        {
+          "duration_ms": 9.518700,
+          "iterations": 512,
+          "items_processed": 1048576,
+          "bytes_processed": 109051904
+        },
+        {
+          "duration_ms": 9.097200,
+          "iterations": 512,
+          "items_processed": 1048576,
+          "bytes_processed": 109051904
+        }
+      ]
+    },
+    {
+      "name": "EcsAppearancePrepareStage_dim3_dual_renderer_duplicate_build_1k",
+      "outcome": "completed",
+      "message": "",
+      "metrics": {
+        "iterations": 512,
+        "min_ms": 10.079600,
+        "max_ms": 10.630100,
+        "mean_ms": 10.250744,
+        "median_ms": 10.193900,
+        "p95_ms": 10.630100,
+        "stddev_ms": 0.159791,
+        "min_ns_per_iteration": 19686.718750,
+        "max_ns_per_iteration": 20761.914062,
+        "mean_ns_per_iteration": 20020.985243,
+        "median_ns_per_iteration": 19909.960938,
+        "p95_ns_per_iteration": 20761.914062,
+        "stddev_ns_per_iteration": 312.091233,
+        "items_per_second": 102292668.175,
+        "bytes_per_second": 11456778835.575
+      },
+      "baseline": {
+        "status": "not_checked",
+        "metric_kind": "mean_ns_per_iteration",
+        "has_baseline": false,
+        "baseline_mean_ms": 0.000000,
+        "current_mean_ms": 0.000000,
+        "baseline_metric_value": 0.000000,
+        "current_metric_value": 0.000000,
+        "delta_ratio": 0.000000
+      },
+      "tags": ["appearance", "core", "cpu", "dual_renderer", "ecs", "prepare"],
+      "samples": [
+        {
+          "duration_ms": 10.630100,
+          "iterations": 512,
+          "items_processed": 1048576,
+          "bytes_processed": 117440512
+        },
+        {
+          "duration_ms": 10.234400,
+          "iterations": 512,
+          "items_processed": 1048576,
+          "bytes_processed": 117440512
+        },
+        {
+          "duration_ms": 10.084900,
+          "iterations": 512,
+          "items_processed": 1048576,
+          "bytes_processed": 117440512
+        },
+        {
+          "duration_ms": 10.079600,
+          "iterations": 512,
+          "items_processed": 1048576,
+          "bytes_processed": 117440512
+        },
+        {
+          "duration_ms": 10.168800,
+          "iterations": 512,
+          "items_processed": 1048576,
+          "bytes_processed": 117440512
+        },
+        {
+          "duration_ms": 10.343800,
+          "iterations": 512,
+          "items_processed": 1048576,
+          "bytes_processed": 117440512
+        },
+        {
+          "duration_ms": 10.193900,
+          "iterations": 512,
+          "items_processed": 1048576,
+          "bytes_processed": 117440512
+        },
+        {
+          "duration_ms": 10.189800,
+          "iterations": 512,
+          "items_processed": 1048576,
+          "bytes_processed": 117440512
+        },
+        {
+          "duration_ms": 10.331400,
+          "iterations": 512,
+          "items_processed": 1048576,
+          "bytes_processed": 117440512
+        }
+      ]
+    }
+  ]
+}

@@ -32,6 +32,7 @@ layout(location = 5) flat out uint out_atlas_page_id;
 layout(location = 6) flat out uint out_component_index;
 layout(location = 7) flat out uint out_user_data;
 layout(location = 8) flat out uint out_source_kind;
+layout(location = 9) out vec2 out_world_position;
 
 vec2 corner01_for_vertex(uint vertex_index) {
     switch (vertex_index) {
@@ -97,5 +98,5 @@ void main() {
     out_component_index = in_component_index;
     out_user_data = in_user_data;
     out_source_kind = in_source_kind;
+    out_world_position = world;
 }
-

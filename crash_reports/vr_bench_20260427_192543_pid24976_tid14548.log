@@ -1,0 +1,278 @@
+==================== CrashTracer Report ====================
+schema_version: 1
+timestamp_utc: 2026-04-27T11:25:43.143Z
+application: vr_bench_runner
+event.kind: windows_unhandled_exception_filter
+event.source: SetUnhandledExceptionFilter
+
+[exception]
+EXCEPTION_STACK_OVERFLOW (code=0xC00000FD), flags=0x00000000, address=0x00007FF6D2A32B67, params=[0x0000000000000001, 0x000000A314403000]
+
+[process]
+pid: 24976
+executable: E:\Project\MelosyneTest\VulkanRender_New\build\bench\vr_bench_runner.exe
+command_line: "E:\Project\MelosyneTest\VulkanRender_New\build\bench\vr_bench_runner.exe" --filter EcsSurfaceUploadPlan --warmup 1 --runs 5 --min-duration-ms 20
+cwd: E:\Project\MelosyneTest\VulkanRender_New
+
+[thread]
+tid: 14548
+name: <unnamed>
+
+[build]
+compiler=clang 22.1.0 (https://github.com/llvm/llvm-project 4434dabb69916856b824f68a64b029c67175e532), cplusplus=202302, build=DebugLike, os=Windows, arch=x86_64
+
+[memory]
+process.working_set=9.64 MiB, process.peak_working_set=9.64 MiB, process.private_bytes=2.93 MiB, process.pagefile=2.93 MiB
+system.memory_load=55%, system.total_phys=15.63 GiB, system.avail_phys=6.88 GiB, system.total_pagefile=21.46 GiB, system.avail_pagefile=9.96 GiB
+
+[registers]
+RAX=0x000000000012B280 RBX=0x0000000000000000 RCX=0x000000A3144FEC88 RDX=0x000000A3144FEBF0
+RSI=0x0000000000000000 RDI=0x0000000000000000 RBP=0x000000A3144FEE00 RSP=0x000000A3144FEC08
+R8 =0x000000007FFE9000 R9 =0x0000000000000083 R10=0x000000A3143D3000 R11=0x000000A314403000
+R12=0x0000000000000000 R13=0x0000000000000000 R14=0x0000000000000000 R15=0x0000000000000000
+RIP=0x00007FF6D2A32B67 EFLAGS=0x00010287
+
+[crash_location]
+frame_index: 1
+symbol: `anonymous namespace'::EcsSurfaceUploadPlan_dim3_dense_4k
+location: E:\Project\MelosyneTest\VulkanRender_New\bench\cases\ecs_surface_upload_plan_system_bench.cpp:81
+address: 0x00007FF6D24F55CB
+module: E:\Project\MelosyneTest\VulkanRender_New\build\bench\vr_bench_runner.exe
+
+
+[stacktrace]
+#00 0x00007FF6D2A32B67 E:\Project\MelosyneTest\VulkanRender_New\build\bench\vr_bench_runner.exe!__chkstk+0x37 (D:\a\_work\1\s\src\vctools\crt\vcstartup\src\misc\amd64\chkstk.asm:109)
+#01 [CRASH] 0x00007FF6D24F55CB E:\Project\MelosyneTest\VulkanRender_New\build\bench\vr_bench_runner.exe!`anonymous namespace'::EcsSurfaceUploadPlan_dim3_dense_4k+0xb (E:\Project\MelosyneTest\VulkanRender_New\bench\cases\ecs_surface_upload_plan_system_bench.cpp:81)
+#02 0x00007FF6D252E97C E:\Project\MelosyneTest\VulkanRender_New\build\bench\vr_bench_runner.exe!vr::bench::`anonymous namespace'::ExecuteSample+0x4c (E:\Project\MelosyneTest\VulkanRender_New\bench\support\bench_framework.cpp:495)
+#03 0x00007FF6D252E793 E:\Project\MelosyneTest\VulkanRender_New\build\bench\vr_bench_runner.exe!vr::bench::`anonymous namespace'::CalibrateIterations+0xd3 (E:\Project\MelosyneTest\VulkanRender_New\bench\support\bench_framework.cpp:518)
+#04 0x00007FF6D252AAD9 E:\Project\MelosyneTest\VulkanRender_New\build\bench\vr_bench_runner.exe!vr::bench::RunAllBenchmarksMain+0xaa9 (E:\Project\MelosyneTest\VulkanRender_New\bench\support\bench_framework.cpp:1397)
+#05 0x00007FF6D24E1036 E:\Project\MelosyneTest\VulkanRender_New\build\bench\vr_bench_runner.exe!main+0x36 (E:\Project\MelosyneTest\VulkanRender_New\bench\bench_main.cpp:29)
+#06 0x00007FF6D2A9DD79 E:\Project\MelosyneTest\VulkanRender_New\build\bench\vr_bench_runner.exe!invoke_main+0x39 (D:\a\_work\1\s\src\vctools\crt\vcstartup\src\startup\exe_common.inl:79)
+#07 0x00007FF6D2A9DEB2 E:\Project\MelosyneTest\VulkanRender_New\build\bench\vr_bench_runner.exe!__scrt_common_main_seh+0x132 (D:\a\_work\1\s\src\vctools\crt\vcstartup\src\startup\exe_common.inl:288)
+#08 0x00007FF6D2A9DF3E E:\Project\MelosyneTest\VulkanRender_New\build\bench\vr_bench_runner.exe!__scrt_common_main+0xe (D:\a\_work\1\s\src\vctools\crt\vcstartup\src\startup\exe_common.inl:331)
+#09 0x00007FF6D2A9DF5E E:\Project\MelosyneTest\VulkanRender_New\build\bench\vr_bench_runner.exe!mainCRTStartup+0xe (D:\a\_work\1\s\src\vctools\crt\vcstartup\src\startup\exe_main.cpp:17)
+#10 0x00007FFB8F2B259D C:\WINDOWS\System32\KERNEL32.DLL!BaseThreadInitThunk+0x1d
+#11 0x00007FFB8FD6AF78 C:\WINDOWS\SYSTEM32\ntdll.dll!RtlUserThreadStart+0x28
+
+[friendly_call_chain]
+(omitted 1 non-primary frames before crash location; see [stacktrace] for full raw frames)
+[01] [CRASH] `anonymous namespace'::EcsSurfaceUploadPlan_dim3_dense_4k
+     at: E:\Project\MelosyneTest\VulkanRender_New\bench\cases\ecs_surface_upload_plan_system_bench.cpp:81
+     pc: 0x00007FF6D24F55CB   module: E:\Project\MelosyneTest\VulkanRender_New\build\bench\vr_bench_runner.exe
+     |
+     v
+[02] vr::bench::`anonymous namespace'::ExecuteSample
+     at: E:\Project\MelosyneTest\VulkanRender_New\bench\support\bench_framework.cpp:495
+     pc: 0x00007FF6D252E97C   module: E:\Project\MelosyneTest\VulkanRender_New\build\bench\vr_bench_runner.exe
+     |
+     v
+[03] vr::bench::`anonymous namespace'::CalibrateIterations
+     at: E:\Project\MelosyneTest\VulkanRender_New\bench\support\bench_framework.cpp:518
+     pc: 0x00007FF6D252E793   module: E:\Project\MelosyneTest\VulkanRender_New\build\bench\vr_bench_runner.exe
+     |
+     v
+[04] vr::bench::RunAllBenchmarksMain
+     at: E:\Project\MelosyneTest\VulkanRender_New\bench\support\bench_framework.cpp:1397
+     pc: 0x00007FF6D252AAD9   module: E:\Project\MelosyneTest\VulkanRender_New\build\bench\vr_bench_runner.exe
+     |
+     v
+[05] main
+     at: E:\Project\MelosyneTest\VulkanRender_New\bench\bench_main.cpp:29
+     pc: 0x00007FF6D24E1036   module: E:\Project\MelosyneTest\VulkanRender_New\build\bench\vr_bench_runner.exe
+     |
+     v
+[06] invoke_main
+     at: D:\a\_work\1\s\src\vctools\crt\vcstartup\src\startup\exe_common.inl:79
+     pc: 0x00007FF6D2A9DD79   module: E:\Project\MelosyneTest\VulkanRender_New\build\bench\vr_bench_runner.exe
+     |
+     v
+[07] __scrt_common_main_seh
+     at: D:\a\_work\1\s\src\vctools\crt\vcstartup\src\startup\exe_common.inl:288
+     pc: 0x00007FF6D2A9DEB2   module: E:\Project\MelosyneTest\VulkanRender_New\build\bench\vr_bench_runner.exe
+     |
+     v
+[08] __scrt_common_main
+     at: D:\a\_work\1\s\src\vctools\crt\vcstartup\src\startup\exe_common.inl:331
+     pc: 0x00007FF6D2A9DF3E   module: E:\Project\MelosyneTest\VulkanRender_New\build\bench\vr_bench_runner.exe
+     |
+     v
+[09] mainCRTStartup
+     at: D:\a\_work\1\s\src\vctools\crt\vcstartup\src\startup\exe_main.cpp:17
+     pc: 0x00007FF6D2A9DF5E   module: E:\Project\MelosyneTest\VulkanRender_New\build\bench\vr_bench_runner.exe
+     |
+     v
+[10] BaseThreadInitThunk
+     at: 0x00007FFB8F2B259D
+     pc: 0x00007FFB8F2B259D   module: C:\WINDOWS\System32\KERNEL32.DLL
+     |
+     v
+[11] RtlUserThreadStart
+     at: 0x00007FFB8FD6AF78
+     pc: 0x00007FFB8FD6AF78   module: C:\WINDOWS\SYSTEM32\ntdll.dll
+
+
+[source_context]
+-- frame #00  __chkstk
+   location: D:\a\_work\1\s\src\vctools\crt\vcstartup\src\misc\amd64\chkstk.asm:109
+   address : 0x00007FF6D2A32B67
+   module  : E:\Project\MelosyneTest\VulkanRender_New\build\bench\vr_bench_runner.exe
+   source  : unavailable (cannot open source file)
+
+-- frame #01  `anonymous namespace'::EcsSurfaceUploadPlan_dim3_dense_4k
+   location: E:\Project\MelosyneTest\VulkanRender_New\bench\cases\ecs_surface_upload_plan_system_bench.cpp:81
+   address : 0x00007FF6D24F55CB
+   module  : E:\Project\MelosyneTest\VulkanRender_New\build\bench\vr_bench_runner.exe
+   context : lines 76-86
+     76 |         vr::bench::BenchmarkContext::DoNotOptimize(stats.range_count);
+     77 |         vr::bench::BenchmarkContext::ClobberMemory();
+     78 |     });
+     79 | }
+     80 | 
+ >>  81 | VR_BENCHMARK_CASE(EcsSurfaceUploadPlan_dim3_dense_4k, "perf;ecs;surface;surface-upload-plan") {
+     82 |     constexpr std::size_t component_count = 4096U;
+     83 |     SurfacePlanBenchData<component_count> data{};
+     84 |     InitializeBenchData(data);
+     85 | 
+     86 |     std::array<std::uint32_t, 3072U> dirty_components{};
+
+-- frame #02  vr::bench::`anonymous namespace'::ExecuteSample
+   location: E:\Project\MelosyneTest\VulkanRender_New\bench\support\bench_framework.cpp:495
+   address : 0x00007FF6D252E97C
+   module  : E:\Project\MelosyneTest\VulkanRender_New\build\bench\vr_bench_runner.exe
+   context : lines 490-500
+     490 | [[nodiscard]] SampleMeasurement ExecuteSample(const BenchmarkCaseDefinition& definition_,
+     491 |                                               std::uint64_t iterations_) {
+     492 |     BenchmarkContext bench_context(iterations_);
+     493 |     const auto start = std::chrono::steady_clock::now();
+     494 |     definition_.function(bench_context);
+ >>  495 |     const auto end = std::chrono::steady_clock::now();
+     496 | 
+     497 |     SampleMeasurement sample{};
+     498 |     sample.duration_ms = std::chrono::duration<double, std::milli>(end - start).count();
+     499 |     sample.iterations = iterations_;
+     500 |     sample.items_processed = bench_context.ItemsProcessed();
+
+-- frame #03  vr::bench::`anonymous namespace'::CalibrateIterations
+   location: E:\Project\MelosyneTest\VulkanRender_New\bench\support\bench_framework.cpp:518
+   address : 0x00007FF6D252E793
+   module  : E:\Project\MelosyneTest\VulkanRender_New\build\bench\vr_bench_runner.exe
+   context : lines 513-523
+     513 |     std::uint64_t iterations = 1U;
+     514 |     const double target_duration_ms = static_cast<double>(options_.min_duration_ms);
+     515 | 
+     516 |     for (std::uint32_t attempt = 0U; attempt < 12U; ++attempt) {
+     517 |         const SampleMeasurement sample = ExecuteSample(definition_, iterations);
+ >>  518 |         const double measured_ms = std::max(sample.duration_ms, 0.001);
+     519 |         if (measured_ms >= target_duration_ms) {
+     520 |             return std::max(iterations, min_auto_iterations);
+     521 |         }
+     522 | 
+     523 |         const double scale = std::max(target_duration_ms / measured_ms, 1.6);
+
+-- frame #04  vr::bench::RunAllBenchmarksMain
+   location: E:\Project\MelosyneTest\VulkanRender_New\bench\support\bench_framework.cpp:1397
+   address : 0x00007FF6D252AAD9
+   module  : E:\Project\MelosyneTest\VulkanRender_New\build\bench\vr_bench_runner.exe
+   context : lines 1392-1402
+    1392 |         case_result.tags = selected_case.second;
+    1393 |         case_result.outcome = BenchmarkOutcome::completed;
+    1394 | 
+    1395 |         try {
+    1396 |             std::cout << "[RUN  ] " << definition.name << " calibrating..." << std::endl;
+ >> 1397 |             const std::uint64_t iterations = CalibrateIterations(definition, parsed.options);
+    1398 |             std::cout << "[RUN  ] " << definition.name
+    1399 |                       << " iterations=" << iterations
+    1400 |                       << " warmup=" << parsed.options.warmup_runs
+    1401 |                       << " measured=" << parsed.options.measured_runs
+    1402 |                       << std::endl;
+
+-- frame #05  main
+   location: E:\Project\MelosyneTest\VulkanRender_New\bench\bench_main.cpp:29
+   address : 0x00007FF6D24E1036
+   module  : E:\Project\MelosyneTest\VulkanRender_New\build\bench\vr_bench_runner.exe
+   context : lines 24-30
+    24 | } // namespace
+    25 | 
+    26 | int main(int argc_, char** argv_) {
+    27 |     ConfigureNonInteractiveCrashBehavior();
+    28 |     vr::bench::InstallBenchCrashTracer(argc_, argv_);
+ >> 29 |     return vr::bench::RunAllBenchmarksMain(argc_, argv_);
+    30 | }
+
+-- frame #06  invoke_main
+   location: D:\a\_work\1\s\src\vctools\crt\vcstartup\src\startup\exe_common.inl:79
+   address : 0x00007FF6D2A9DD79
+   module  : E:\Project\MelosyneTest\VulkanRender_New\build\bench\vr_bench_runner.exe
+   source  : unavailable (cannot open source file)
+
+-- frame #07  __scrt_common_main_seh
+   location: D:\a\_work\1\s\src\vctools\crt\vcstartup\src\startup\exe_common.inl:288
+   address : 0x00007FF6D2A9DEB2
+   module  : E:\Project\MelosyneTest\VulkanRender_New\build\bench\vr_bench_runner.exe
+   source  : unavailable (cannot open source file)
+
+-- frame #08  __scrt_common_main
+   location: D:\a\_work\1\s\src\vctools\crt\vcstartup\src\startup\exe_common.inl:331
+   address : 0x00007FF6D2A9DF3E
+   module  : E:\Project\MelosyneTest\VulkanRender_New\build\bench\vr_bench_runner.exe
+   source  : unavailable (cannot open source file)
+
+-- frame #09  mainCRTStartup
+   location: D:\a\_work\1\s\src\vctools\crt\vcstartup\src\startup\exe_main.cpp:17
+   address : 0x00007FF6D2A9DF5E
+   module  : E:\Project\MelosyneTest\VulkanRender_New\build\bench\vr_bench_runner.exe
+   source  : unavailable (cannot open source file)
+
+-- frame #10  BaseThreadInitThunk
+   location: 0x00007FFB8F2B259D
+   address : 0x00007FFB8F2B259D
+   module  : C:\WINDOWS\System32\KERNEL32.DLL
+   source  : unavailable (no file/line mapping)
+
+-- frame #11  RtlUserThreadStart
+   location: 0x00007FFB8FD6AF78
+   address : 0x00007FFB8FD6AF78
+   module  : C:\WINDOWS\SYSTEM32\ntdll.dll
+   source  : unavailable (no file/line mapping)
+
+
+[loaded_modules]
+#000 0x00007FF6D24E0000-0x00007FF6D2C91000 E:\Project\MelosyneTest\VulkanRender_New\build\bench\vr_bench_runner.exe
+#001 0x00007FFB22080000-0x00007FFB22284000 C:\WINDOWS\SYSTEM32\ucrtbased.dll
+#002 0x00007FFB24D70000-0x00007FFB24EF6000 C:\WINDOWS\SYSTEM32\vulkan-1.dll
+#003 0x00007FFB2EDC0000-0x00007FFB2EEA1000 C:\WINDOWS\SYSTEM32\MSVCP140D.dll
+#004 0x00007FFB741E0000-0x00007FFB74210000 C:\WINDOWS\SYSTEM32\VCRUNTIME140D.dll
+#005 0x00007FFB86020000-0x00007FFB8602F000 C:\WINDOWS\SYSTEM32\VCRUNTIME140_1D.dll
+#006 0x00007FFB87D90000-0x00007FFB87D9A000 C:\WINDOWS\SYSTEM32\VERSION.dll
+#007 0x00007FFB87E40000-0x00007FFB87E74000 C:\WINDOWS\SYSTEM32\WINMM.dll
+#008 0x00007FFB8A220000-0x00007FFB8A453000 C:\WINDOWS\SYSTEM32\dbghelp.dll
+#009 0x00007FFB8CAC0000-0x00007FFB8CB0E000 C:\WINDOWS\SYSTEM32\CFGMGR32.dll
+#010 0x00007FFB8CE20000-0x00007FFB8CE46000 C:\WINDOWS\System32\win32u.dll
+#011 0x00007FFB8CED0000-0x00007FFB8CFEB000 C:\WINDOWS\System32\gdi32full.dll
+#012 0x00007FFB8D160000-0x00007FFB8D188000 C:\WINDOWS\System32\bcrypt.dll
+#013 0x00007FFB8D190000-0x00007FFB8D20B000 C:\WINDOWS\System32\bcryptprimitives.dll
+#014 0x00007FFB8D210000-0x00007FFB8D2AA000 C:\WINDOWS\System32\msvcp_win.dll
+#015 0x00007FFB8D370000-0x00007FFB8D481000 C:\WINDOWS\System32\ucrtbase.dll
+#016 0x00007FFB8D490000-0x00007FFB8D5CF000 C:\WINDOWS\System32\wintypes.dll
+#017 0x00007FFB8D5D0000-0x00007FFB8D9A3000 C:\WINDOWS\System32\KERNELBASE.dll
+#018 0x00007FFB8D9B0000-0x00007FFB8DAC8000 C:\WINDOWS\System32\RPCRT4.dll
+#019 0x00007FFB8DAD0000-0x00007FFB8DF44000 C:\WINDOWS\System32\SETUPAPI.dll
+#020 0x00007FFB8E080000-0x00007FFB8E411000 C:\WINDOWS\System32\combase.dll
+#021 0x00007FFB8E660000-0x00007FFB8EEFC000 C:\WINDOWS\System32\SHELL32.dll
+#022 0x00007FFB8EF00000-0x00007FFB8F0B2000 C:\WINDOWS\System32\USER32.dll
+#023 0x00007FFB8F0D0000-0x00007FFB8F181000 C:\WINDOWS\System32\ADVAPI32.dll
+#024 0x00007FFB8F2A0000-0x00007FFB8F364000 C:\WINDOWS\System32\KERNEL32.DLL
+#025 0x00007FFB8F550000-0x00007FFB8F628000 C:\WINDOWS\System32\OLEAUT32.dll
+#026 0x00007FFB8F630000-0x00007FFB8F659000 C:\WINDOWS\System32\GDI32.dll
+#027 0x00007FFB8F660000-0x00007FFB8F707000 C:\WINDOWS\System32\msvcrt.dll
+#028 0x00007FFB8F820000-0x00007FFB8F8C8000 C:\WINDOWS\System32\sechost.dll
+#029 0x00007FFB8F8D0000-0x00007FFB8FA71000 C:\WINDOWS\System32\ole32.dll
+#030 0x00007FFB8FB30000-0x00007FFB8FB61000 C:\WINDOWS\System32\IMM32.dll
+#031 0x00007FFB8FD10000-0x00007FFB8FF28000 C:\WINDOWS\SYSTEM32\ntdll.dll
+
+[extra]
+[bench]
+argc=9
+argv=E:\Project\MelosyneTest\VulkanRender_New\build\bench\vr_bench_runner.exe --filter EcsSurfaceUploadPlan --warmup 1 --runs 5 --min-duration-ms 20
+
+================== End CrashTracer Report ==================

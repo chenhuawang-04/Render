@@ -1,0 +1,1336 @@
+{
+  "options": {
+    "filter": "Ecs*",
+    "iterations": 0,
+    "min_calibrated_iterations": 8,
+    "warmup_runs": 2,
+    "measured_runs": 7,
+    "min_duration_ms": 20,
+    "baseline_json": "bench/baselines/ecs_core_cpu_baseline_2026-04-27_233020.json",
+    "baseline_metric": "mean_ns_per_iteration",
+    "fail_on_regression_ratio": -1.000000,
+    "require_baseline_match": false,
+    "fail_on_empty_selection": false
+  },
+  "summary": {
+    "selected_count": 17,
+    "executed_count": 17,
+    "completed_count": 17,
+    "failed_count": 0,
+    "skipped_count": 0,
+    "regression_fail_count": 0,
+    "baseline_missing_count": 0,
+    "total_duration_ms": 4918.301
+  },
+  "results": [
+    {
+      "name": "EcsBoundsSystem_dim3_update_aligned_4k_dirty_indices",
+      "outcome": "completed",
+      "message": "",
+      "metrics": {
+        "iterations": 222415,
+        "min_ms": 25.416600,
+        "max_ms": 26.917300,
+        "mean_ms": 26.020429,
+        "median_ms": 25.890100,
+        "p95_ms": 26.917300,
+        "stddev_ms": 0.519917,
+        "min_ns_per_iteration": 114.275566,
+        "max_ns_per_iteration": 121.022863,
+        "mean_ns_per_iteration": 116.990439,
+        "median_ns_per_iteration": 116.404469,
+        "p95_ns_per_iteration": 121.022863,
+        "stddev_ns_per_iteration": 2.337598,
+        "items_per_second": 8547707.021,
+        "bytes_per_second": 957343186.398
+      },
+      "baseline": {
+        "status": "within_threshold",
+        "metric_kind": "mean_ns_per_iteration",
+        "has_baseline": true,
+        "baseline_mean_ms": 28.123186,
+        "current_mean_ms": 26.020429,
+        "baseline_metric_value": 95.588167,
+        "current_metric_value": 116.990439,
+        "delta_ratio": 0.223901
+      },
+      "tags": ["bounds", "core", "cpu", "ecs"],
+      "samples": [
+        {
+          "duration_ms": 25.416600,
+          "iterations": 222415,
+          "items_processed": 222415,
+          "bytes_processed": 24910480
+        },
+        {
+          "duration_ms": 25.543600,
+          "iterations": 222415,
+          "items_processed": 222415,
+          "bytes_processed": 24910480
+        },
+        {
+          "duration_ms": 26.578500,
+          "iterations": 222415,
+          "items_processed": 222415,
+          "bytes_processed": 24910480
+        },
+        {
+          "duration_ms": 26.160800,
+          "iterations": 222415,
+          "items_processed": 222415,
+          "bytes_processed": 24910480
+        },
+        {
+          "duration_ms": 25.890100,
+          "iterations": 222415,
+          "items_processed": 222415,
+          "bytes_processed": 24910480
+        },
+        {
+          "duration_ms": 25.636100,
+          "iterations": 222415,
+          "items_processed": 222415,
+          "bytes_processed": 24910480
+        },
+        {
+          "duration_ms": 26.917300,
+          "iterations": 222415,
+          "items_processed": 222415,
+          "bytes_processed": 24910480
+        }
+      ]
+    },
+    {
+      "name": "EcsBoundsSystem_dim3_update_aligned_4k_full_scan",
+      "outcome": "completed",
+      "message": "",
+      "metrics": {
+        "iterations": 1292,
+        "min_ms": 26.742900,
+        "max_ms": 28.890500,
+        "mean_ms": 27.825914,
+        "median_ms": 28.090300,
+        "p95_ms": 28.890500,
+        "stddev_ms": 0.781532,
+        "min_ns_per_iteration": 20698.839009,
+        "max_ns_per_iteration": 22361.068111,
+        "mean_ns_per_iteration": 21537.085360,
+        "median_ns_per_iteration": 21741.718266,
+        "p95_ns_per_iteration": 22361.068111,
+        "stddev_ns_per_iteration": 604.901178,
+        "items_per_second": 190183580.157,
+        "bytes_per_second": 21300560977.588
+      },
+      "baseline": {
+        "status": "within_threshold",
+        "metric_kind": "mean_ns_per_iteration",
+        "has_baseline": true,
+        "baseline_mean_ms": 23.186929,
+        "current_mean_ms": 27.825914,
+        "baseline_metric_value": 21429.693689,
+        "current_metric_value": 21537.085360,
+        "delta_ratio": 0.005011
+      },
+      "tags": ["bounds", "core", "cpu", "ecs"],
+      "samples": [
+        {
+          "duration_ms": 28.571600,
+          "iterations": 1292,
+          "items_processed": 5292032,
+          "bytes_processed": 592707584
+        },
+        {
+          "duration_ms": 26.907800,
+          "iterations": 1292,
+          "items_processed": 5292032,
+          "bytes_processed": 592707584
+        },
+        {
+          "duration_ms": 28.090300,
+          "iterations": 1292,
+          "items_processed": 5292032,
+          "bytes_processed": 592707584
+        },
+        {
+          "duration_ms": 28.288000,
+          "iterations": 1292,
+          "items_processed": 5292032,
+          "bytes_processed": 592707584
+        },
+        {
+          "duration_ms": 26.742900,
+          "iterations": 1292,
+          "items_processed": 5292032,
+          "bytes_processed": 592707584
+        },
+        {
+          "duration_ms": 28.890500,
+          "iterations": 1292,
+          "items_processed": 5292032,
+          "bytes_processed": 592707584
+        },
+        {
+          "duration_ms": 27.290300,
+          "iterations": 1292,
+          "items_processed": 5292032,
+          "bytes_processed": 592707584
+        }
+      ]
+    },
+    {
+      "name": "EcsCullingSystem_dim3_candidate_scan_4k_of_16k",
+      "outcome": "completed",
+      "message": "",
+      "metrics": {
+        "iterations": 264,
+        "min_ms": 27.378800,
+        "max_ms": 28.580500,
+        "mean_ms": 27.976943,
+        "median_ms": 27.961300,
+        "p95_ms": 28.580500,
+        "stddev_ms": 0.373490,
+        "min_ns_per_iteration": 103707.575758,
+        "max_ns_per_iteration": 108259.469697,
+        "mean_ns_per_iteration": 105973.268398,
+        "median_ns_per_iteration": 105914.015152,
+        "p95_ns_per_iteration": 108259.469697,
+        "stddev_ns_per_iteration": 1414.736599,
+        "items_per_second": 38651256.698,
+        "bytes_per_second": 4328940750.189
+      },
+      "baseline": {
+        "status": "improved",
+        "metric_kind": "mean_ns_per_iteration",
+        "has_baseline": true,
+        "baseline_mean_ms": 22.300700,
+        "current_mean_ms": 27.976943,
+        "baseline_metric_value": 146715.131579,
+        "current_metric_value": 105973.268398,
+        "delta_ratio": -0.277694
+      },
+      "tags": ["core", "cpu", "culling", "ecs"],
+      "samples": [
+        {
+          "duration_ms": 27.378800,
+          "iterations": 264,
+          "items_processed": 1081344,
+          "bytes_processed": 121110528
+        },
+        {
+          "duration_ms": 28.342600,
+          "iterations": 264,
+          "items_processed": 1081344,
+          "bytes_processed": 121110528
+        },
+        {
+          "duration_ms": 27.689000,
+          "iterations": 264,
+          "items_processed": 1081344,
+          "bytes_processed": 121110528
+        },
+        {
+          "duration_ms": 28.580500,
+          "iterations": 264,
+          "items_processed": 1081344,
+          "bytes_processed": 121110528
+        },
+        {
+          "duration_ms": 27.961300,
+          "iterations": 264,
+          "items_processed": 1081344,
+          "bytes_processed": 121110528
+        },
+        {
+          "duration_ms": 28.076000,
+          "iterations": 264,
+          "items_processed": 1081344,
+          "bytes_processed": 121110528
+        },
+        {
+          "duration_ms": 27.810400,
+          "iterations": 264,
+          "items_processed": 1081344,
+          "bytes_processed": 121110528
+        }
+      ]
+    },
+    {
+      "name": "EcsCullingSystem_dim3_full_scan_16k",
+      "outcome": "completed",
+      "message": "",
+      "metrics": {
+        "iterations": 104,
+        "min_ms": 22.807900,
+        "max_ms": 25.179000,
+        "mean_ms": 24.242043,
+        "median_ms": 24.214200,
+        "p95_ms": 25.179000,
+        "stddev_ms": 0.738956,
+        "min_ns_per_iteration": 219306.730769,
+        "max_ns_per_iteration": 242105.769231,
+        "mean_ns_per_iteration": 233096.565934,
+        "median_ns_per_iteration": 232828.846154,
+        "p95_ns_per_iteration": 242105.769231,
+        "stddev_ns_per_iteration": 7105.341941,
+        "items_per_second": 70288465.788,
+        "bytes_per_second": 7872308168.277
+      },
+      "baseline": {
+        "status": "improved",
+        "metric_kind": "mean_ns_per_iteration",
+        "has_baseline": true,
+        "baseline_mean_ms": 26.031300,
+        "current_mean_ms": 24.242043,
+        "baseline_metric_value": 338068.831169,
+        "current_metric_value": 233096.565934,
+        "delta_ratio": -0.310506
+      },
+      "tags": ["core", "cpu", "culling", "ecs"],
+      "samples": [
+        {
+          "duration_ms": 22.807900,
+          "iterations": 104,
+          "items_processed": 1703936,
+          "bytes_processed": 190840832
+        },
+        {
+          "duration_ms": 23.729900,
+          "iterations": 104,
+          "items_processed": 1703936,
+          "bytes_processed": 190840832
+        },
+        {
+          "duration_ms": 24.214200,
+          "iterations": 104,
+          "items_processed": 1703936,
+          "bytes_processed": 190840832
+        },
+        {
+          "duration_ms": 24.176800,
+          "iterations": 104,
+          "items_processed": 1703936,
+          "bytes_processed": 190840832
+        },
+        {
+          "duration_ms": 25.179000,
+          "iterations": 104,
+          "items_processed": 1703936,
+          "bytes_processed": 190840832
+        },
+        {
+          "duration_ms": 24.713400,
+          "iterations": 104,
+          "items_processed": 1703936,
+          "bytes_processed": 190840832
+        },
+        {
+          "duration_ms": 24.873100,
+          "iterations": 104,
+          "items_processed": 1703936,
+          "bytes_processed": 190840832
+        }
+      ]
+    },
+    {
+      "name": "EcsGeometryRuntimeSystem_dim3_build_1k_candidate_visibility_half",
+      "outcome": "completed",
+      "message": "",
+      "metrics": {
+        "iterations": 410,
+        "min_ms": 27.355400,
+        "max_ms": 28.706300,
+        "mean_ms": 28.088943,
+        "median_ms": 28.208300,
+        "p95_ms": 28.706300,
+        "stddev_ms": 0.470553,
+        "min_ns_per_iteration": 66720.487805,
+        "max_ns_per_iteration": 70015.365854,
+        "mean_ns_per_iteration": 68509.616725,
+        "median_ns_per_iteration": 68800.731707,
+        "p95_ns_per_iteration": 70015.365854,
+        "stddev_ns_per_iteration": 1147.689510,
+        "items_per_second": 7473403.363,
+        "bytes_per_second": 1076170084.212
+      },
+      "baseline": {
+        "status": "within_threshold",
+        "metric_kind": "mean_ns_per_iteration",
+        "has_baseline": true,
+        "baseline_mean_ms": 25.743686,
+        "current_mean_ms": 28.088943,
+        "baseline_metric_value": 56455.451128,
+        "current_metric_value": 68509.616725,
+        "delta_ratio": 0.213516
+      },
+      "tags": ["core", "cpu", "ecs", "geometry", "runtime"],
+      "samples": [
+        {
+          "duration_ms": 27.478800,
+          "iterations": 410,
+          "items_processed": 209920,
+          "bytes_processed": 30228480
+        },
+        {
+          "duration_ms": 28.208300,
+          "iterations": 410,
+          "items_processed": 209920,
+          "bytes_processed": 30228480
+        },
+        {
+          "duration_ms": 28.492500,
+          "iterations": 410,
+          "items_processed": 209920,
+          "bytes_processed": 30228480
+        },
+        {
+          "duration_ms": 28.706300,
+          "iterations": 410,
+          "items_processed": 209920,
+          "bytes_processed": 30228480
+        },
+        {
+          "duration_ms": 28.016500,
+          "iterations": 410,
+          "items_processed": 209920,
+          "bytes_processed": 30228480
+        },
+        {
+          "duration_ms": 28.364800,
+          "iterations": 410,
+          "items_processed": 209920,
+          "bytes_processed": 30228480
+        },
+        {
+          "duration_ms": 27.355400,
+          "iterations": 410,
+          "items_processed": 209920,
+          "bytes_processed": 30228480
+        }
+      ]
+    },
+    {
+      "name": "EcsGeometryRuntimeSystem_dim3_build_1k_full_rebuild",
+      "outcome": "completed",
+      "message": "",
+      "metrics": {
+        "iterations": 81,
+        "min_ms": 19.794800,
+        "max_ms": 21.035600,
+        "mean_ms": 20.550300,
+        "median_ms": 20.611400,
+        "p95_ms": 21.035600,
+        "stddev_ms": 0.475586,
+        "min_ns_per_iteration": 244380.246914,
+        "max_ns_per_iteration": 259698.765432,
+        "mean_ns_per_iteration": 253707.407407,
+        "median_ns_per_iteration": 254461.728395,
+        "p95_ns_per_iteration": 259698.765432,
+        "stddev_ns_per_iteration": 5871.435318,
+        "items_per_second": 4036145.458,
+        "bytes_per_second": 581204945.913
+      },
+      "baseline": {
+        "status": "improved",
+        "metric_kind": "mean_ns_per_iteration",
+        "has_baseline": true,
+        "baseline_mean_ms": 28.701529,
+        "current_mean_ms": 20.550300,
+        "baseline_metric_value": 270769.137466,
+        "current_metric_value": 253707.407407,
+        "delta_ratio": -0.063012
+      },
+      "tags": ["core", "cpu", "ecs", "geometry", "runtime"],
+      "samples": [
+        {
+          "duration_ms": 21.035600,
+          "iterations": 81,
+          "items_processed": 82944,
+          "bytes_processed": 11943936
+        },
+        {
+          "duration_ms": 20.931500,
+          "iterations": 81,
+          "items_processed": 82944,
+          "bytes_processed": 11943936
+        },
+        {
+          "duration_ms": 20.611400,
+          "iterations": 81,
+          "items_processed": 82944,
+          "bytes_processed": 11943936
+        },
+        {
+          "duration_ms": 20.579300,
+          "iterations": 81,
+          "items_processed": 82944,
+          "bytes_processed": 11943936
+        },
+        {
+          "duration_ms": 19.794800,
+          "iterations": 81,
+          "items_processed": 82944,
+          "bytes_processed": 11943936
+        },
+        {
+          "duration_ms": 21.000600,
+          "iterations": 81,
+          "items_processed": 82944,
+          "bytes_processed": 11943936
+        },
+        {
+          "duration_ms": 19.898900,
+          "iterations": 81,
+          "items_processed": 82944,
+          "bytes_processed": 11943936
+        }
+      ]
+    },
+    {
+      "name": "EcsGeometryRuntimeSystem_dim3_build_1k_transform_only",
+      "outcome": "completed",
+      "message": "",
+      "metrics": {
+        "iterations": 197,
+        "min_ms": 22.946300,
+        "max_ms": 24.186300,
+        "mean_ms": 23.768129,
+        "median_ms": 23.884800,
+        "p95_ms": 24.186300,
+        "stddev_ms": 0.379584,
+        "min_ns_per_iteration": 116478.680203,
+        "max_ns_per_iteration": 122773.096447,
+        "mean_ns_per_iteration": 120650.398840,
+        "median_ns_per_iteration": 121242.639594,
+        "p95_ns_per_iteration": 122773.096447,
+        "stddev_ns_per_iteration": 1926.823580,
+        "items_per_second": 8487332.076,
+        "bytes_per_second": 1222175818.879
+      },
+      "baseline": {
+        "status": "within_threshold",
+        "metric_kind": "mean_ns_per_iteration",
+        "has_baseline": true,
+        "baseline_mean_ms": 26.238686,
+        "current_mean_ms": 23.768129,
+        "baseline_metric_value": 100531.362890,
+        "current_metric_value": 120650.398840,
+        "delta_ratio": 0.200127
+      },
+      "tags": ["core", "cpu", "ecs", "geometry", "runtime"],
+      "samples": [
+        {
+          "duration_ms": 23.884800,
+          "iterations": 197,
+          "items_processed": 201728,
+          "bytes_processed": 29048832
+        },
+        {
+          "duration_ms": 23.994100,
+          "iterations": 197,
+          "items_processed": 201728,
+          "bytes_processed": 29048832
+        },
+        {
+          "duration_ms": 23.988200,
+          "iterations": 197,
+          "items_processed": 201728,
+          "bytes_processed": 29048832
+        },
+        {
+          "duration_ms": 23.816200,
+          "iterations": 197,
+          "items_processed": 201728,
+          "bytes_processed": 29048832
+        },
+        {
+          "duration_ms": 24.186300,
+          "iterations": 197,
+          "items_processed": 201728,
+          "bytes_processed": 29048832
+        },
+        {
+          "duration_ms": 22.946300,
+          "iterations": 197,
+          "items_processed": 201728,
+          "bytes_processed": 29048832
+        },
+        {
+          "duration_ms": 23.561000,
+          "iterations": 197,
+          "items_processed": 201728,
+          "bytes_processed": 29048832
+        }
+      ]
+    },
+    {
+      "name": "EcsGeometryRuntimeSystem_dim3_build_1k_transform_only_dirty_hint",
+      "outcome": "completed",
+      "message": "",
+      "metrics": {
+        "iterations": 884,
+        "min_ms": 20.192700,
+        "max_ms": 21.962500,
+        "mean_ms": 21.089414,
+        "median_ms": 21.339900,
+        "p95_ms": 21.962500,
+        "stddev_ms": 0.578939,
+        "min_ns_per_iteration": 22842.420814,
+        "max_ns_per_iteration": 24844.457014,
+        "mean_ns_per_iteration": 23856.803491,
+        "median_ns_per_iteration": 24140.158371,
+        "p95_ns_per_iteration": 24844.457014,
+        "stddev_ns_per_iteration": 654.907828,
+        "items_per_second": 42922766.263,
+        "bytes_per_second": 6180878341.809
+      },
+      "baseline": {
+        "status": "within_threshold",
+        "metric_kind": "mean_ns_per_iteration",
+        "has_baseline": true,
+        "baseline_mean_ms": 33.198114,
+        "current_mean_ms": 21.089414,
+        "baseline_metric_value": 18260.788936,
+        "current_metric_value": 23856.803491,
+        "delta_ratio": 0.306450
+      },
+      "tags": ["core", "cpu", "ecs", "geometry", "runtime"],
+      "samples": [
+        {
+          "duration_ms": 21.962500,
+          "iterations": 884,
+          "items_processed": 905216,
+          "bytes_processed": 130351104
+        },
+        {
+          "duration_ms": 21.442200,
+          "iterations": 884,
+          "items_processed": 905216,
+          "bytes_processed": 130351104
+        },
+        {
+          "duration_ms": 20.192700,
+          "iterations": 884,
+          "items_processed": 905216,
+          "bytes_processed": 130351104
+        },
+        {
+          "duration_ms": 20.937600,
+          "iterations": 884,
+          "items_processed": 905216,
+          "bytes_processed": 130351104
+        },
+        {
+          "duration_ms": 21.364400,
+          "iterations": 884,
+          "items_processed": 905216,
+          "bytes_processed": 130351104
+        },
+        {
+          "duration_ms": 21.339900,
+          "iterations": 884,
+          "items_processed": 905216,
+          "bytes_processed": 130351104
+        },
+        {
+          "duration_ms": 20.386600,
+          "iterations": 884,
+          "items_processed": 905216,
+          "bytes_processed": 130351104
+        }
+      ]
+    },
+    {
+      "name": "EcsSurfaceRuntimeSystem_dim3_build_1k_candidate_visibility_half",
+      "outcome": "completed",
+      "message": "",
+      "metrics": {
+        "iterations": 245,
+        "min_ms": 30.619900,
+        "max_ms": 32.633300,
+        "mean_ms": 31.364857,
+        "median_ms": 31.214900,
+        "p95_ms": 32.633300,
+        "stddev_ms": 0.668246,
+        "min_ns_per_iteration": 124979.183673,
+        "max_ns_per_iteration": 133197.142857,
+        "mean_ns_per_iteration": 128019.825073,
+        "median_ns_per_iteration": 127407.755102,
+        "p95_ns_per_iteration": 133197.142857,
+        "stddev_ns_per_iteration": 2727.533229,
+        "items_per_second": 3999380.562,
+        "bytes_per_second": 479925667.490
+      },
+      "baseline": {
+        "status": "within_threshold",
+        "metric_kind": "mean_ns_per_iteration",
+        "has_baseline": true,
+        "baseline_mean_ms": 28.479786,
+        "current_mean_ms": 31.364857,
+        "baseline_metric_value": 103940.823775,
+        "current_metric_value": 128019.825073,
+        "delta_ratio": 0.231661
+      },
+      "tags": ["candidates", "core", "cpu", "ecs", "runtime", "surface"],
+      "samples": [
+        {
+          "duration_ms": 32.633300,
+          "iterations": 245,
+          "items_processed": 125440,
+          "bytes_processed": 15052800
+        },
+        {
+          "duration_ms": 31.091800,
+          "iterations": 245,
+          "items_processed": 125440,
+          "bytes_processed": 15052800
+        },
+        {
+          "duration_ms": 32.010900,
+          "iterations": 245,
+          "items_processed": 125440,
+          "bytes_processed": 15052800
+        },
+        {
+          "duration_ms": 30.701000,
+          "iterations": 245,
+          "items_processed": 125440,
+          "bytes_processed": 15052800
+        },
+        {
+          "duration_ms": 31.214900,
+          "iterations": 245,
+          "items_processed": 125440,
+          "bytes_processed": 15052800
+        },
+        {
+          "duration_ms": 30.619900,
+          "iterations": 245,
+          "items_processed": 125440,
+          "bytes_processed": 15052800
+        },
+        {
+          "duration_ms": 31.282200,
+          "iterations": 245,
+          "items_processed": 125440,
+          "bytes_processed": 15052800
+        }
+      ]
+    },
+    {
+      "name": "EcsSurfaceRuntimeSystem_dim3_build_1k_full_rebuild",
+      "outcome": "completed",
+      "message": "",
+      "metrics": {
+        "iterations": 146,
+        "min_ms": 30.560400,
+        "max_ms": 33.631700,
+        "mean_ms": 32.410843,
+        "median_ms": 32.769200,
+        "p95_ms": 33.631700,
+        "stddev_ms": 0.935624,
+        "min_ns_per_iteration": 209317.808219,
+        "max_ns_per_iteration": 230354.109589,
+        "mean_ns_per_iteration": 221992.074364,
+        "median_ns_per_iteration": 224446.575342,
+        "p95_ns_per_iteration": 230354.109589,
+        "stddev_ns_per_iteration": 6408.386831,
+        "items_per_second": 4612777.294,
+        "bytes_per_second": 553533275.240
+      },
+      "baseline": {
+        "status": "within_threshold",
+        "metric_kind": "mean_ns_per_iteration",
+        "has_baseline": true,
+        "baseline_mean_ms": 18.798229,
+        "current_mean_ms": 32.410843,
+        "baseline_metric_value": 167841.326531,
+        "current_metric_value": 221992.074364,
+        "delta_ratio": 0.322631
+      },
+      "tags": ["core", "cpu", "ecs", "runtime", "surface"],
+      "samples": [
+        {
+          "duration_ms": 32.915700,
+          "iterations": 146,
+          "items_processed": 149504,
+          "bytes_processed": 17940480
+        },
+        {
+          "duration_ms": 30.560400,
+          "iterations": 146,
+          "items_processed": 149504,
+          "bytes_processed": 17940480
+        },
+        {
+          "duration_ms": 32.769200,
+          "iterations": 146,
+          "items_processed": 149504,
+          "bytes_processed": 17940480
+        },
+        {
+          "duration_ms": 31.625600,
+          "iterations": 146,
+          "items_processed": 149504,
+          "bytes_processed": 17940480
+        },
+        {
+          "duration_ms": 32.861400,
+          "iterations": 146,
+          "items_processed": 149504,
+          "bytes_processed": 17940480
+        },
+        {
+          "duration_ms": 32.511900,
+          "iterations": 146,
+          "items_processed": 149504,
+          "bytes_processed": 17940480
+        },
+        {
+          "duration_ms": 33.631700,
+          "iterations": 146,
+          "items_processed": 149504,
+          "bytes_processed": 17940480
+        }
+      ]
+    },
+    {
+      "name": "EcsSurfaceRuntimeSystem_dim3_build_1k_transform_only_dirty_hint",
+      "outcome": "completed",
+      "message": "",
+      "metrics": {
+        "iterations": 1228,
+        "min_ms": 28.004500,
+        "max_ms": 31.883100,
+        "mean_ms": 30.661471,
+        "median_ms": 30.834900,
+        "p95_ms": 31.883100,
+        "stddev_ms": 1.204332,
+        "min_ns_per_iteration": 22804.967427,
+        "max_ns_per_iteration": 25963.436482,
+        "mean_ns_per_iteration": 24968.624942,
+        "median_ns_per_iteration": 25109.853420,
+        "p95_ns_per_iteration": 25963.436482,
+        "stddev_ns_per_iteration": 980.726084,
+        "items_per_second": 41011469.490,
+        "bytes_per_second": 4921376338.756
+      },
+      "baseline": {
+        "status": "within_threshold",
+        "metric_kind": "mean_ns_per_iteration",
+        "has_baseline": true,
+        "baseline_mean_ms": 19.439000,
+        "current_mean_ms": 30.661471,
+        "baseline_metric_value": 17309.884239,
+        "current_metric_value": 24968.624942,
+        "delta_ratio": 0.442449
+      },
+      "tags": ["core", "cpu", "ecs", "runtime", "surface"],
+      "samples": [
+        {
+          "duration_ms": 31.864200,
+          "iterations": 1228,
+          "items_processed": 1257472,
+          "bytes_processed": 150896640
+        },
+        {
+          "duration_ms": 30.873900,
+          "iterations": 1228,
+          "items_processed": 1257472,
+          "bytes_processed": 150896640
+        },
+        {
+          "duration_ms": 30.834900,
+          "iterations": 1228,
+          "items_processed": 1257472,
+          "bytes_processed": 150896640
+        },
+        {
+          "duration_ms": 30.401100,
+          "iterations": 1228,
+          "items_processed": 1257472,
+          "bytes_processed": 150896640
+        },
+        {
+          "duration_ms": 30.768600,
+          "iterations": 1228,
+          "items_processed": 1257472,
+          "bytes_processed": 150896640
+        },
+        {
+          "duration_ms": 31.883100,
+          "iterations": 1228,
+          "items_processed": 1257472,
+          "bytes_processed": 150896640
+        },
+        {
+          "duration_ms": 28.004500,
+          "iterations": 1228,
+          "items_processed": 1257472,
+          "bytes_processed": 150896640
+        }
+      ]
+    },
+    {
+      "name": "EcsTextBatchSystem_dim2_build_and_sort_4k",
+      "outcome": "completed",
+      "message": "",
+      "metrics": {
+        "iterations": 132,
+        "min_ms": 32.044600,
+        "max_ms": 33.575000,
+        "mean_ms": 32.958629,
+        "median_ms": 33.042500,
+        "p95_ms": 33.575000,
+        "stddev_ms": 0.469173,
+        "min_ns_per_iteration": 242762.121212,
+        "max_ns_per_iteration": 254356.060606,
+        "mean_ns_per_iteration": 249686.580087,
+        "median_ns_per_iteration": 250321.969697,
+        "p95_ns_per_iteration": 254356.060606,
+        "stddev_ns_per_iteration": 3554.340732,
+        "items_per_second": 16404566.071,
+        "bytes_per_second": 262473057.131
+      },
+      "baseline": {
+        "status": "within_threshold",
+        "metric_kind": "mean_ns_per_iteration",
+        "has_baseline": true,
+        "baseline_mean_ms": 19.814757,
+        "current_mean_ms": 32.958629,
+        "baseline_metric_value": 194262.324930,
+        "current_metric_value": 249686.580087,
+        "delta_ratio": 0.285306
+      },
+      "tags": ["batch", "core", "cpu", "ecs", "text"],
+      "samples": [
+        {
+          "duration_ms": 33.136100,
+          "iterations": 132,
+          "items_processed": 540672,
+          "bytes_processed": 8650752
+        },
+        {
+          "duration_ms": 33.407200,
+          "iterations": 132,
+          "items_processed": 540672,
+          "bytes_processed": 8650752
+        },
+        {
+          "duration_ms": 33.042500,
+          "iterations": 132,
+          "items_processed": 540672,
+          "bytes_processed": 8650752
+        },
+        {
+          "duration_ms": 32.772200,
+          "iterations": 132,
+          "items_processed": 540672,
+          "bytes_processed": 8650752
+        },
+        {
+          "duration_ms": 32.044600,
+          "iterations": 132,
+          "items_processed": 540672,
+          "bytes_processed": 8650752
+        },
+        {
+          "duration_ms": 32.732800,
+          "iterations": 132,
+          "items_processed": 540672,
+          "bytes_processed": 8650752
+        },
+        {
+          "duration_ms": 33.575000,
+          "iterations": 132,
+          "items_processed": 540672,
+          "bytes_processed": 8650752
+        }
+      ]
+    },
+    {
+      "name": "EcsTextBatchSystem_dim2_build_visible_only_4k",
+      "outcome": "completed",
+      "message": "",
+      "metrics": {
+        "iterations": 1136,
+        "min_ms": 30.345600,
+        "max_ms": 31.460800,
+        "mean_ms": 30.970971,
+        "median_ms": 31.078800,
+        "p95_ms": 31.460800,
+        "stddev_ms": 0.402019,
+        "min_ns_per_iteration": 26712.676056,
+        "max_ns_per_iteration": 27694.366197,
+        "mean_ns_per_iteration": 27263.179074,
+        "median_ns_per_iteration": 27358.098592,
+        "p95_ns_per_iteration": 27694.366197,
+        "stddev_ns_per_iteration": 353.890387,
+        "items_per_second": 150239265.524,
+        "bytes_per_second": 2403828248.387
+      },
+      "baseline": {
+        "status": "within_threshold",
+        "metric_kind": "mean_ns_per_iteration",
+        "has_baseline": true,
+        "baseline_mean_ms": 24.543543,
+        "current_mean_ms": 30.970971,
+        "baseline_metric_value": 21454.145854,
+        "current_metric_value": 27263.179074,
+        "delta_ratio": 0.270765
+      },
+      "tags": ["batch", "core", "cpu", "ecs", "text"],
+      "samples": [
+        {
+          "duration_ms": 31.455200,
+          "iterations": 1136,
+          "items_processed": 4653056,
+          "bytes_processed": 74448896
+        },
+        {
+          "duration_ms": 31.460800,
+          "iterations": 1136,
+          "items_processed": 4653056,
+          "bytes_processed": 74448896
+        },
+        {
+          "duration_ms": 30.506000,
+          "iterations": 1136,
+          "items_processed": 4653056,
+          "bytes_processed": 74448896
+        },
+        {
+          "duration_ms": 30.837400,
+          "iterations": 1136,
+          "items_processed": 4653056,
+          "bytes_processed": 74448896
+        },
+        {
+          "duration_ms": 31.078800,
+          "iterations": 1136,
+          "items_processed": 4653056,
+          "bytes_processed": 74448896
+        },
+        {
+          "duration_ms": 30.345600,
+          "iterations": 1136,
+          "items_processed": 4653056,
+          "bytes_processed": 74448896
+        },
+        {
+          "duration_ms": 31.113000,
+          "iterations": 1136,
+          "items_processed": 4653056,
+          "bytes_processed": 74448896
+        }
+      ]
+    },
+    {
+      "name": "EcsTextRuntimeSystem_dim2_build_1k",
+      "outcome": "completed",
+      "message": "",
+      "metrics": {
+        "iterations": 8,
+        "min_ms": 17.482800,
+        "max_ms": 18.749000,
+        "mean_ms": 18.311957,
+        "median_ms": 18.288900,
+        "p95_ms": 18.749000,
+        "stddev_ms": 0.396073,
+        "min_ns_per_iteration": 2185350.000000,
+        "max_ns_per_iteration": 2343625.000000,
+        "mean_ns_per_iteration": 2288994.642857,
+        "median_ns_per_iteration": 2286112.500000,
+        "p95_ns_per_iteration": 2343625.000000,
+        "stddev_ns_per_iteration": 49509.112102,
+        "items_per_second": 447357.971,
+        "bytes_per_second": 127497021.852
+      },
+      "baseline": {
+        "status": "within_threshold",
+        "metric_kind": "mean_ns_per_iteration",
+        "has_baseline": true,
+        "baseline_mean_ms": 15.233129,
+        "current_mean_ms": 18.311957,
+        "baseline_metric_value": 1904141.071429,
+        "current_metric_value": 2288994.642857,
+        "delta_ratio": 0.202114
+      },
+      "tags": ["core", "cpu", "ecs", "runtime", "text"],
+      "samples": [
+        {
+          "duration_ms": 18.496700,
+          "iterations": 8,
+          "items_processed": 8192,
+          "bytes_processed": 2334720
+        },
+        {
+          "duration_ms": 18.749000,
+          "iterations": 8,
+          "items_processed": 8192,
+          "bytes_processed": 2334720
+        },
+        {
+          "duration_ms": 18.722000,
+          "iterations": 8,
+          "items_processed": 8192,
+          "bytes_processed": 2334720
+        },
+        {
+          "duration_ms": 17.482800,
+          "iterations": 8,
+          "items_processed": 8192,
+          "bytes_processed": 2334720
+        },
+        {
+          "duration_ms": 18.288900,
+          "iterations": 8,
+          "items_processed": 8192,
+          "bytes_processed": 2334720
+        },
+        {
+          "duration_ms": 18.240600,
+          "iterations": 8,
+          "items_processed": 8192,
+          "bytes_processed": 2334720
+        },
+        {
+          "duration_ms": 18.203700,
+          "iterations": 8,
+          "items_processed": 8192,
+          "bytes_processed": 2334720
+        }
+      ]
+    },
+    {
+      "name": "EcsTextSystem_dim2_append_text_hot_path",
+      "outcome": "completed",
+      "message": "",
+      "metrics": {
+        "iterations": 308620,
+        "min_ms": 19.111100,
+        "max_ms": 20.892100,
+        "mean_ms": 20.018600,
+        "median_ms": 19.967600,
+        "p95_ms": 20.892100,
+        "stddev_ms": 0.622553,
+        "min_ns_per_iteration": 61.924373,
+        "max_ns_per_iteration": 67.695224,
+        "mean_ns_per_iteration": 64.864882,
+        "median_ns_per_iteration": 64.699631,
+        "p95_ns_per_iteration": 67.695224,
+        "stddev_ns_per_iteration": 2.017215,
+        "items_per_second": 46249987.512,
+        "bytes_per_second": 246666600.062
+      },
+      "baseline": {
+        "status": "within_threshold",
+        "metric_kind": "mean_ns_per_iteration",
+        "has_baseline": true,
+        "baseline_mean_ms": 27.811457,
+        "current_mean_ms": 20.018600,
+        "baseline_metric_value": 50.482118,
+        "current_metric_value": 64.864882,
+        "delta_ratio": 0.284908
+      },
+      "tags": ["core", "cpu", "ecs", "text"],
+      "samples": [
+        {
+          "duration_ms": 19.527400,
+          "iterations": 308620,
+          "items_processed": 925860,
+          "bytes_processed": 4937920
+        },
+        {
+          "duration_ms": 19.673500,
+          "iterations": 308620,
+          "items_processed": 925860,
+          "bytes_processed": 4937920
+        },
+        {
+          "duration_ms": 20.892100,
+          "iterations": 308620,
+          "items_processed": 925860,
+          "bytes_processed": 4937920
+        },
+        {
+          "duration_ms": 20.891000,
+          "iterations": 308620,
+          "items_processed": 925860,
+          "bytes_processed": 4937920
+        },
+        {
+          "duration_ms": 19.967600,
+          "iterations": 308620,
+          "items_processed": 925860,
+          "bytes_processed": 4937920
+        },
+        {
+          "duration_ms": 19.111100,
+          "iterations": 308620,
+          "items_processed": 925860,
+          "bytes_processed": 4937920
+        },
+        {
+          "duration_ms": 20.067500,
+          "iterations": 308620,
+          "items_processed": 925860,
+          "bytes_processed": 4937920
+        }
+      ]
+    },
+    {
+      "name": "EcsTextSystem_dim2_set_text_hot_path",
+      "outcome": "completed",
+      "message": "",
+      "metrics": {
+        "iterations": 1296862,
+        "min_ms": 19.416700,
+        "max_ms": 20.834600,
+        "mean_ms": 19.941200,
+        "median_ms": 19.609500,
+        "p95_ms": 20.834600,
+        "stddev_ms": 0.487840,
+        "min_ns_per_iteration": 14.972063,
+        "max_ns_per_iteration": 16.065395,
+        "mean_ns_per_iteration": 15.376501,
+        "median_ns_per_iteration": 15.120730,
+        "p95_ns_per_iteration": 16.065395,
+        "stddev_ns_per_iteration": 0.376169,
+        "items_per_second": 65034300.844,
+        "bytes_per_second": 520274406.756
+      },
+      "baseline": {
+        "status": "within_threshold",
+        "metric_kind": "mean_ns_per_iteration",
+        "has_baseline": true,
+        "baseline_mean_ms": 27.729200,
+        "current_mean_ms": 19.941200,
+        "baseline_metric_value": 11.104668,
+        "current_metric_value": 15.376501,
+        "delta_ratio": 0.384688
+      },
+      "tags": ["core", "cpu", "ecs", "text"],
+      "samples": [
+        {
+          "duration_ms": 19.584300,
+          "iterations": 1296862,
+          "items_processed": 1296862,
+          "bytes_processed": 10374896
+        },
+        {
+          "duration_ms": 19.609500,
+          "iterations": 1296862,
+          "items_processed": 1296862,
+          "bytes_processed": 10374896
+        },
+        {
+          "duration_ms": 20.318400,
+          "iterations": 1296862,
+          "items_processed": 1296862,
+          "bytes_processed": 10374896
+        },
+        {
+          "duration_ms": 20.237500,
+          "iterations": 1296862,
+          "items_processed": 1296862,
+          "bytes_processed": 10374896
+        },
+        {
+          "duration_ms": 20.834600,
+          "iterations": 1296862,
+          "items_processed": 1296862,
+          "bytes_processed": 10374896
+        },
+        {
+          "duration_ms": 19.416700,
+          "iterations": 1296862,
+          "items_processed": 1296862,
+          "bytes_processed": 10374896
+        },
+        {
+          "duration_ms": 19.587400,
+          "iterations": 1296862,
+          "items_processed": 1296862,
+          "bytes_processed": 10374896
+        }
+      ]
+    },
+    {
+      "name": "EcsTextSystem_dim3_set_append_route",
+      "outcome": "completed",
+      "message": "",
+      "metrics": {
+        "iterations": 521514,
+        "min_ms": 29.771100,
+        "max_ms": 34.418300,
+        "mean_ms": 32.269457,
+        "median_ms": 32.797900,
+        "p95_ms": 34.418300,
+        "stddev_ms": 1.444618,
+        "min_ns_per_iteration": 57.085908,
+        "max_ns_per_iteration": 65.996886,
+        "mean_ns_per_iteration": 61.876493,
+        "median_ns_per_iteration": 62.889779,
+        "p95_ns_per_iteration": 65.996886,
+        "stddev_ns_per_iteration": 2.770047,
+        "items_per_second": 16161226.317,
+        "bytes_per_second": 145451036.850
+      },
+      "baseline": {
+        "status": "within_threshold",
+        "metric_kind": "mean_ns_per_iteration",
+        "has_baseline": true,
+        "baseline_mean_ms": 19.313371,
+        "current_mean_ms": 32.269457,
+        "baseline_metric_value": 44.815494,
+        "current_metric_value": 61.876493,
+        "delta_ratio": 0.380694
+      },
+      "tags": ["core", "cpu", "ecs", "text"],
+      "samples": [
+        {
+          "duration_ms": 33.278200,
+          "iterations": 521514,
+          "items_processed": 521514,
+          "bytes_processed": 4693626
+        },
+        {
+          "duration_ms": 34.418300,
+          "iterations": 521514,
+          "items_processed": 521514,
+          "bytes_processed": 4693626
+        },
+        {
+          "duration_ms": 33.003800,
+          "iterations": 521514,
+          "items_processed": 521514,
+          "bytes_processed": 4693626
+        },
+        {
+          "duration_ms": 31.490100,
+          "iterations": 521514,
+          "items_processed": 521514,
+          "bytes_processed": 4693626
+        },
+        {
+          "duration_ms": 29.771100,
+          "iterations": 521514,
+          "items_processed": 521514,
+          "bytes_processed": 4693626
+        },
+        {
+          "duration_ms": 31.126800,
+          "iterations": 521514,
+          "items_processed": 521514,
+          "bytes_processed": 4693626
+        },
+        {
+          "duration_ms": 32.797900,
+          "iterations": 521514,
+          "items_processed": 521514,
+          "bytes_processed": 4693626
+        }
+      ]
+    }
+  ]
+}

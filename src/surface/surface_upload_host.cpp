@@ -39,6 +39,10 @@ void SurfaceUploadHost::Shutdown(VulkanContext& context_) {
         return;
     }
 
+    if (context_.Device() != VK_NULL_HANDLE) {
+        (void)vkDeviceWaitIdle(context_.Device());
+    }
+
     for (auto& frame : frames) {
         DestroyStreamBuffer(context_, frame.instances_2d);
         DestroyStreamBuffer(context_, frame.instances_3d);

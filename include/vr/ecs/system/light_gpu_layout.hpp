@@ -27,6 +27,11 @@ struct alignas(16) LightGpuRecord2D final {
     std::uint32_t light_type;
     std::uint32_t channel_mask;
     std::uint32_t flags;
+
+    std::uint32_t shadow_view_begin;
+    std::uint32_t shadow_meta;
+    std::uint32_t shadow_namespace_id;
+    std::uint32_t reserved0;
 };
 
 struct alignas(16) LightGpuRecord3D final {
@@ -83,4 +88,3 @@ static_assert(sizeof(LightGpuRecord2D) % 16U == 0U);
 static_assert(sizeof(LightGpuRecord3D) % 16U == 0U);
 
 } // namespace vr::ecs
-

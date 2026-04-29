@@ -1,0 +1,137 @@
+{
+  "options": {
+    "filter": "EcsGeometryRuntimeSystem",
+    "iterations": 1,
+    "warmup_runs": 1,
+    "measured_runs": 5,
+    "min_duration_ms": 25,
+    "baseline_json": "",
+    "fail_on_regression_ratio": -1.000000,
+    "require_baseline_match": false,
+    "fail_on_empty_selection": false
+  },
+  "summary": {
+    "selected_count": 2,
+    "executed_count": 2,
+    "completed_count": 2,
+    "failed_count": 0,
+    "skipped_count": 0,
+    "regression_fail_count": 0,
+    "baseline_missing_count": 0,
+    "total_duration_ms": 49.090
+  },
+  "results": [
+    {
+      "name": "EcsGeometryRuntimeSystem_dim3_build_1k_full_rebuild",
+      "outcome": "completed",
+      "message": "",
+      "metrics": {
+        "iterations": 1,
+        "min_ms": 0.872900,
+        "max_ms": 0.902700,
+        "mean_ms": 0.886620,
+        "median_ms": 0.886500,
+        "p95_ms": 0.902700,
+        "stddev_ms": 0.011025,
+        "items_per_second": 1154948.005,
+        "bytes_per_second": 166312512.689
+      },
+      "baseline": {
+        "status": "not_checked",
+        "has_baseline": false,
+        "baseline_mean_ms": 0.000000,
+        "current_mean_ms": 0.000000,
+        "delta_ratio": 0.000000
+      },
+      "tags": ["core", "cpu", "ecs", "geometry", "runtime"],
+      "samples": [
+        {
+          "duration_ms": 0.886500,
+          "iterations": 1,
+          "items_processed": 1024,
+          "bytes_processed": 147456
+        },
+        {
+          "duration_ms": 0.902700,
+          "iterations": 1,
+          "items_processed": 1024,
+          "bytes_processed": 147456
+        },
+        {
+          "duration_ms": 0.894400,
+          "iterations": 1,
+          "items_processed": 1024,
+          "bytes_processed": 147456
+        },
+        {
+          "duration_ms": 0.876600,
+          "iterations": 1,
+          "items_processed": 1024,
+          "bytes_processed": 147456
+        },
+        {
+          "duration_ms": 0.872900,
+          "iterations": 1,
+          "items_processed": 1024,
+          "bytes_processed": 147456
+        }
+      ]
+    },
+    {
+      "name": "EcsGeometryRuntimeSystem_dim3_build_1k_transform_only",
+      "outcome": "completed",
+      "message": "",
+      "metrics": {
+        "iterations": 1,
+        "min_ms": 0.988200,
+        "max_ms": 1.008400,
+        "mean_ms": 0.994960,
+        "median_ms": 0.993300,
+        "p95_ms": 1.008400,
+        "stddev_ms": 0.007005,
+        "items_per_second": 1029187.103,
+        "bytes_per_second": 148202942.832
+      },
+      "baseline": {
+        "status": "not_checked",
+        "has_baseline": false,
+        "baseline_mean_ms": 0.000000,
+        "current_mean_ms": 0.000000,
+        "delta_ratio": 0.000000
+      },
+      "tags": ["core", "cpu", "ecs", "geometry", "runtime"],
+      "samples": [
+        {
+          "duration_ms": 0.993300,
+          "iterations": 1,
+          "items_processed": 1024,
+          "bytes_processed": 147456
+        },
+        {
+          "duration_ms": 0.991100,
+          "iterations": 1,
+          "items_processed": 1024,
+          "bytes_processed": 147456
+        },
+        {
+          "duration_ms": 1.008400,
+          "iterations": 1,
+          "items_processed": 1024,
+          "bytes_processed": 147456
+        },
+        {
+          "duration_ms": 0.988200,
+          "iterations": 1,
+          "items_processed": 1024,
+          "bytes_processed": 147456
+        },
+        {
+          "duration_ms": 0.993800,
+          "iterations": 1,
+          "items_processed": 1024,
+          "bytes_processed": 147456
+        }
+      ]
+    }
+  ]
+}

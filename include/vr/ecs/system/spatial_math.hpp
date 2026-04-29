@@ -263,4 +263,69 @@ namespace vr::ecs::spatial_math {
                                              far_plane);
 }
 
+[[nodiscard]] inline float Dot3(const Float3& lhs_, const Float3& rhs_) noexcept {
+    return lhs_.x * rhs_.x + lhs_.y * rhs_.y + lhs_.z * rhs_.z;
+}
+
+[[nodiscard]] inline Float3 Cross3(const Float3& lhs_, const Float3& rhs_) noexcept {
+    return Float3{
+        .x = lhs_.y * rhs_.z - lhs_.z * rhs_.y,
+        .y = lhs_.z * rhs_.x - lhs_.x * rhs_.z,
+        .z = lhs_.x * rhs_.y - lhs_.y * rhs_.x,
+    };
+}
+
+[[nodiscard]] inline Float3 Normalize3(const Float3& value_,
+                                       const Float3& fallback_ = Float3{.x = 0.0F, .y = 0.0F, .z = -1.0F}) noexcept {
+    const float len_sq = value_.x * value_.x + value_.y * value_.y + value_.z * value_.z;
+    if (len_sq <= 1e-12F) {
+        return fallback_;
+    }
+    const float inv_len = 1.0F / std::sqrt(len_sq);
+    return Float3{
+        .x = value_.x * inv_len,
+        .y = value_.y * inv_len,
+        .z = value_.z * inv_len,
+    };
+}
+
+[[nodiscard]] inline Matrix4x4 BuildLookAtViewRh(const Float3& eye_,
+                                                 const Float3& target_,
+                                                 const Float3& up_hint_) noexcept {
+    const Float3 z_axis = Normalize3(Float3{
+                                         .x = eye_.x - target_.x,
+                                         .y = eye_.y - target_.y,
+                                         .z = eye_.z - target_.z,
+                                     },
+                                     Float3{.x = 0.0F, .y = 0.0F, .z = 1.0F});
+    Float3 x_axis = Cross3(up_hint_, z_axis);
+    x_axis = Normalize3(x_axis, Float3{.x = 1.0F, .y = 0.0F, .z = 0.0F});
+    Float3 y_axis = Cross3(z_axis, x_axis);
+    y_axis = Normalize3(y_axis, Float3{.x = 0.0F, .y = 1.0F, .z = 0.0F});
+
+    Matrix4x4 out{};
+    // Column-major, D3D style.
+    out.m[0] = x_axis.x;
+    out.m[1] = y_axis.x;
+    out.m[2] = z_axis.x;
+    out.m[3] = 0.0F;
+
+    out.m[4] = x_axis.y;
+    out.m[5] = y_axis.y;
+    out.m[6] = z_axis.y;
+    out.m[7] = 0.0F;
+
+    out.m[8] = x_axis.z;
+    out.m[9] = y_axis.z;
+    out.m[10] = z_axis.z;
+    out.m[11] = 0.0F;
+
+    out.m[12] = -Dot3(x_axis, eye_);
+    out.m[13] = -Dot3(y_axis, eye_);
+    out.m[14] = -Dot3(z_axis, eye_);
+    out.m[15] = 1.0F;
+
+    return out;
+}
+
 } // namespace vr::ecs::spatial_math
