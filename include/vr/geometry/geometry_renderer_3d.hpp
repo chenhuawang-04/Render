@@ -23,6 +23,7 @@
 #include "vr/shadow/shadow_atlas_host.hpp"
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 
 namespace vr {
@@ -243,6 +244,12 @@ private:
         std::uint64_t descriptor_image_signature = 0U;
         std::uint64_t descriptor_set_signature = 0U;
     };
+    static_assert(sizeof(LightingParamsGpu) == 80U);
+    static_assert(offsetof(LightingParamsGpu, camera_position_x) == 0U);
+    static_assert(offsetof(LightingParamsGpu, camera_forward_x) == 16U);
+    static_assert(offsetof(LightingParamsGpu, cluster_count_x) == 32U);
+    static_assert(offsetof(LightingParamsGpu, near_plane) == 48U);
+    static_assert(offsetof(LightingParamsGpu, framebuffer_width) == 64U);
 
     enum class PipelineMode : std::uint8_t {
         no_depth = 0U,

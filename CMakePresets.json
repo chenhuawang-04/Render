@@ -1,0 +1,60 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 21,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "dev-debug",
+      "displayName": "Dev Debug (Shader Reflection + ABI)",
+      "description": "Debug development preset with shader reflection/ABI checks enabled and shader optimization disabled.",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build_preset/dev_debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "VR_ENABLE_SHADER_REFLECTION": "ON",
+        "VR_ENABLE_SHADER_ABI_CHECK": "ON",
+        "VR_ENABLE_SHADER_OPTIMIZATION": "OFF",
+        "VR_BUILD_TESTS": "ON",
+        "VR_BUILD_BENCHMARKS": "OFF"
+      }
+    },
+    {
+      "name": "shader-opt",
+      "displayName": "Shader Optimization Pipeline",
+      "description": "Enable spirv-opt for SPIR-V optimization while keeping reflection and ABI checks on.",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build_preset/shader_opt",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "VR_ENABLE_SHADER_REFLECTION": "ON",
+        "VR_ENABLE_SHADER_ABI_CHECK": "ON",
+        "VR_ENABLE_SHADER_OPTIMIZATION": "ON",
+        "VR_SHADER_OPTIMIZATION_LEVEL": "-O",
+        "VR_BUILD_TESTS": "OFF",
+        "VR_BUILD_BENCHMARKS": "OFF"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "build-dev-debug-shaders",
+      "displayName": "Build Dev Debug Shader Artifacts",
+      "configurePreset": "dev-debug",
+      "targets": [
+        "vr_generated_shaders"
+      ]
+    },
+    {
+      "name": "build-shader-opt-shaders",
+      "displayName": "Build Optimized Shader Artifacts",
+      "configurePreset": "shader-opt",
+      "targets": [
+        "vr_generated_shaders"
+      ]
+    }
+  ]
+}
+

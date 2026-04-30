@@ -302,6 +302,14 @@ void GlyphUploadHost::EnsurePageResources(VulkanContext& context_,
             image_create_info.samples = VK_SAMPLE_COUNT_1_BIT;
             image_create_info.tiling = VK_IMAGE_TILING_OPTIMAL;
             image_create_info.usage = create_info_cache.image_usage;
+            const auto& families = context_.QueueFamilies();
+            if (families.graphics.has_value() &&
+                families.transfer.has_value() &&
+                families.graphics.value() != families.transfer.value()) {
+                image_create_info.sharing_mode = VK_SHARING_MODE_CONCURRENT;
+                image_create_info.queue_family_indices.push_back(families.graphics.value());
+                image_create_info.queue_family_indices.push_back(families.transfer.value());
+            }
             image_create_info.initial_layout = use_general_layout
                 ? VK_IMAGE_LAYOUT_GENERAL
                 : VK_IMAGE_LAYOUT_UNDEFINED;

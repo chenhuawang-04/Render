@@ -232,6 +232,14 @@ void GeometryUploadHost::EnsureStreamCapacity(VulkanContext& context_,
     buffer_create_info.size = target_capacity;
     buffer_create_info.usage = usage_;
     buffer_create_info.memory_properties = create_info_cache.memory_properties;
+    const auto& families = context_.QueueFamilies();
+    if (families.graphics.has_value() &&
+        families.transfer.has_value() &&
+        families.graphics.value() != families.transfer.value()) {
+        buffer_create_info.sharing_mode = VK_SHARING_MODE_CONCURRENT;
+        buffer_create_info.queue_family_indices.push_back(families.graphics.value());
+        buffer_create_info.queue_family_indices.push_back(families.transfer.value());
+    }
     stream_.buffer = resource::BufferHost::CreateBuffer(context_,
                                                         buffer_create_info,
                                                         *gpu_memory_host);

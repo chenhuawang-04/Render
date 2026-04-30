@@ -1,4 +1,6 @@
 #version 460
+#extension GL_GOOGLE_include_directive : require
+#include "vr/common/math.glsl"
 
 layout(push_constant) uniform Geometry3DPushConstants {
     mat4 view_projection;
@@ -89,10 +91,6 @@ const uint k_shadow_projection_point = 2u;
 
 const uint k_invalid_shadow_view_begin = 0xFFFFFFFFu;
 
-float saturate(float value_) {
-    return clamp(value_, 0.0, 1.0);
-}
-
 uint unpack_shadow_view_count(uint shadow_meta_) {
     return shadow_meta_ & 0xFFFFu;
 }
@@ -117,7 +115,7 @@ uint compute_cluster_z(float depth_distance) {
     float far_t = log2(far_plane * z_scale + z_bias);
     float depth_t = log2(clamped_depth * z_scale + z_bias);
     float denom = max(1e-4, far_t - near_t);
-    float normalized = saturate((depth_t - near_t) / denom);
+    float normalized = vr_saturate((depth_t - near_t) / denom);
     if ((lighting_params.cluster_dims_reverse_z.w & 0x1u) != 0u) {
         normalized = 1.0 - normalized;
     }
@@ -132,8 +130,8 @@ uint compute_cluster_index(vec2 frag_coord, float depth_distance) {
     const float framebuffer_width = max(lighting_params.framebuffer_shadow_views.x, 1.0);
     const float framebuffer_height = max(lighting_params.framebuffer_shadow_views.y, 1.0);
 
-    float norm_x = saturate(frag_coord.x / framebuffer_width);
-    float norm_y = saturate(frag_coord.y / framebuffer_height);
+    float norm_x = vr_saturate(frag_coord.x / framebuffer_width);
+    float norm_y = vr_saturate(frag_coord.y / framebuffer_height);
     uint x_index = min(uint(norm_x * float(cluster_count_x)), cluster_count_x - 1u);
     uint y_index = min(uint(norm_y * float(cluster_count_y)), cluster_count_y - 1u);
     uint z_index = compute_cluster_z(depth_distance);
@@ -305,8 +303,8 @@ void evaluate_light(LightRecord3D light_record_,
         }
 
         light_dir = to_light / distance_to_light;
-        float distance_ratio = saturate(distance_to_light / radius);
-        attenuation = saturate(1.0 - pow(distance_ratio, max(light_record_.falloff_exponent, 1.0)));
+        float distance_ratio = vr_saturate(distance_to_light / radius);
+        attenuation = vr_saturate(1.0 - pow(distance_ratio, max(light_record_.falloff_exponent, 1.0)));
 
         if (light_kind == k_light_kind_spot) {
             vec3 spot_dir = normalize(light_record_.direction_cone_outer.xyz);
@@ -314,7 +312,7 @@ void evaluate_light(LightRecord3D light_record_,
             float cone_inner = clamp(light_record_.cone_source.x, -1.0, 1.0);
             float cone_cos = dot(-light_dir, spot_dir);
             float cone_denom = max(1e-4, cone_inner - cone_outer);
-            float cone_t = saturate((cone_cos - cone_outer) / cone_denom);
+            float cone_t = vr_saturate((cone_cos - cone_outer) / cone_denom);
             attenuation *= cone_t;
         }
     }

@@ -2,6 +2,7 @@
 
 #include "vr/ecs/component/shadow_component.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <type_traits>
 
@@ -102,5 +103,21 @@ static_assert(std::is_standard_layout_v<ShadowGpuRecord3D> && std::is_trivial_v<
 static_assert(sizeof(ShadowViewGpuRecord) % 16U == 0U);
 static_assert(sizeof(ShadowGpuRecord2D) % 16U == 0U);
 static_assert(sizeof(ShadowGpuRecord3D) % 16U == 0U);
+static_assert(sizeof(ShadowViewGpuRecord) == 256U);
+static_assert(sizeof(ShadowGpuRecord2D) == 64U);
+static_assert(sizeof(ShadowGpuRecord3D) == 64U);
+static_assert(offsetof(ShadowViewGpuRecord, view_matrix) == 0U);
+static_assert(offsetof(ShadowViewGpuRecord, projection_matrix) == 64U);
+static_assert(offsetof(ShadowViewGpuRecord, view_projection_matrix) == 128U);
+static_assert(offsetof(ShadowViewGpuRecord, split_near) == 192U);
+static_assert(offsetof(ShadowViewGpuRecord, slope_scaled_bias) == 208U);
+static_assert(offsetof(ShadowViewGpuRecord, atlas_x) == 224U);
+static_assert(offsetof(ShadowViewGpuRecord, atlas_layer) == 240U);
+static_assert(offsetof(ShadowGpuRecord2D, first_view_index) == 16U);
+static_assert(offsetof(ShadowGpuRecord2D, projection_kind) == 32U);
+static_assert(offsetof(ShadowGpuRecord2D, atlas_namespace_id) == 48U);
+static_assert(offsetof(ShadowGpuRecord3D, first_view_index) == 16U);
+static_assert(offsetof(ShadowGpuRecord3D, projection_kind) == 32U);
+static_assert(offsetof(ShadowGpuRecord3D, atlas_namespace_id) == 48U);
 
 } // namespace vr::ecs

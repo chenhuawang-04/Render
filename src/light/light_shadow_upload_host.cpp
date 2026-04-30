@@ -411,6 +411,14 @@ void LightShadowUploadHost::EnsureStreamCapacity(VulkanContext& context_,
     buffer_create.size = target_capacity;
     buffer_create.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT | usage_;
     buffer_create.memory_properties = create_info_cache.memory_properties;
+    const auto& families = context_.QueueFamilies();
+    if (families.graphics.has_value() &&
+        families.transfer.has_value() &&
+        families.graphics.value() != families.transfer.value()) {
+        buffer_create.sharing_mode = VK_SHARING_MODE_CONCURRENT;
+        buffer_create.queue_family_indices.push_back(families.graphics.value());
+        buffer_create.queue_family_indices.push_back(families.transfer.value());
+    }
     stream_.buffer = resource::BufferHost::CreateBuffer(context_, buffer_create, *gpu_memory_host);
     stream_.capacity_bytes = target_capacity;
     ++stats.resized_buffer_count;

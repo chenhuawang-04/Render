@@ -322,6 +322,14 @@ resource::ImageResource GeometryImageHost::CreateImageResource(VulkanContext& co
     create_info.tiling = VK_IMAGE_TILING_OPTIMAL;
     create_info.usage = upload_info_.usage;
     create_info.sharing_mode = VK_SHARING_MODE_EXCLUSIVE;
+    const auto& families = context_.QueueFamilies();
+    if (families.graphics.has_value() &&
+        families.transfer.has_value() &&
+        families.graphics.value() != families.transfer.value()) {
+        create_info.sharing_mode = VK_SHARING_MODE_CONCURRENT;
+        create_info.queue_family_indices.push_back(families.graphics.value());
+        create_info.queue_family_indices.push_back(families.transfer.value());
+    }
     create_info.initial_layout = VK_IMAGE_LAYOUT_UNDEFINED;
     create_info.memory_properties = create_info_.memory_properties;
     create_info.create_default_view = true;

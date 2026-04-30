@@ -3,7 +3,7 @@
 ## 1. 项目概述
 
 **项目名称**: VulkanRender_New (Melosyne 引擎 Vulkan 渲染模块)
-**语言标准**: C++23
+**语言标准**: C++23 (预留 C++20 Module 迁移 — 见 `feature/cpp20-modules` 分支)
 **构建系统**: CMake 3.21+
 **API 目标**: Vulkan 1.3
 **主要平台**: Windows (SDL3 后端)
@@ -12,50 +12,73 @@
 项目是一个基于 Vulkan 1.3 的实时 2D/3D 图形渲染框架，由以下核心层次组成：
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                    Examples (Demo)                       │
-├─────────────────────────────────────────────────────────┤
-│              ECS (Entity Component System)               │
-│  ┌──────────┬──────────┬──────────┬──────────────────┐  │
-│  │ Transform │  Camera  │  Bounds  │  Culling         │  │
-│  │  System   │  System  │  System  │  System          │  │
-│  ├──────────┼──────────┼──────────┼──────────────────┤  │
-│  │ Geometry  │ Surface  │  Text    │ Runtime Systems  │  │
-│  │  System   │  System  │  System  │ (Batch/Upload)   │  │
-│  └──────────┴──────────┴──────────┴──────────────────┘  │
-├─────────────────────────────────────────────────────────┤
-│              Render Runtime Host                         │
-│  ┌──────────┬──────────┬──────────┬──────────────────┐  │
-│  │ Loop     │ Swapchain│  Sync    │  Command         │  │
-│  │ Host     │  Host    │  Host    │  Host            │  │
-│  ├──────────┼──────────┼──────────┼──────────────────┤  │
-│  │ Upload   │Descriptor│ Pipeline │  Retire          │  │
-│  │ Host     │  Host    │  Host    │  Host            │  │
-│  └──────────┴──────────┴──────────┴──────────────────┘  │
-├─────────────────────────────────────────────────────────┤
-│               Renderer Backends                          │
-│  ┌──────────┬──────────┬───────────────────────────────┐│
-│  │ Text     │ Geometry │ Surface                       ││
-│  │Renderer  │ Renderer │ Renderer                      ││
-│  │  2D / 3D │  2D / 3D │  2D / 3D                     ││
-│  └──────────┴──────────┴───────────────────────────────┘│
-├─────────────────────────────────────────────────────────┤
-│                  Resource Layer                          │
-│  ┌──────────┬──────────┬──────────┬──────────────────┐  │
-│  │  Buffer  │  Image   │  GPU     │  Sampler         │  │
-│  │  Host    │  Host    │  Memory  │  Host            │  │
-│  └──────────┴──────────┴──────────┴──────────────────┘  │
-├─────────────────────────────────────────────────────────┤
-│               Platform Layer                             │
-│  ┌─────────────────┬──────────────────────────────────┐  │
-│  │  VulkanContext   │  WindowSurface (SDL3)           │  │
-│  │  RenderHost      │                                  │  │
-│  └─────────────────┴──────────────────────────────────┘  │
-├─────────────────────────────────────────────────────────┤
-│            External Dependencies                         │
-│  Vulkan SDK | SDL3 | FreeType | MemoryCenter (mimalloc) │
-│  fast_math  | McVector | CrashTracer                    │
-└─────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────┐
+│                        Examples (Demo)                                │
+├──────────────────────────────────────────────────────────────────────┤
+│                    Render Runtime Host                                │
+│  ┌──────────┬──────────┬──────────┬──────────┬────────────────────┐  │
+│  │ Loop     │ Swapchain│  Sync    │ Command  │ Retire / RetireBus │  │
+│  │ Host     │  Host    │  Host    │  Host    │                    │  │
+│  ├──────────┼──────────┼──────────┼──────────┼────────────────────┤  │
+│  │ Upload   │Descriptor│ Pipeline │ Frame    │ Render Runtime     │  │
+│  │ Host     │  Host    │  Host    │ Prepare  │ Prepare Stages     │  │
+│  └──────────┴──────────┴──────────┴──────────┴────────────────────┘  │
+├──────────────────────────────────────────────────────────────────────┤
+│                    Frame Coordinators                                 │
+│  ┌──────────────┬──────────────┬──────────────┬────────────────────┐ │
+│  │ Appearance   │ Light        │ Shadow       │ Light-Shadow Link  │ │
+│  │ Coordinator  │ Coordinator  │ Coordinator  │ Coordinator        │ │
+│  ├──────────────┼──────────────┼──────────────┼────────────────────┤ │
+│  │ Shadow Atlas │                                                                     │
+│  │ Coordinator  │                                                                     │
+│  └──────────────┴──────────────────────────────────────────────────┘ │
+├──────────────────────────────────────────────────────────────────────┤
+│                    ECS (Entity Component System)                      │
+│  ┌──────────┬──────────┬──────────┬──────────┬──────────────────┐   │
+│  │ Transform │ Camera   │ Bounds   │ Culling  │ Spatial Math     │   │
+│  ├──────────┼──────────┼──────────┼──────────┼──────────────────┤   │
+│  │ Geometry  │ Surface  │ Text     │ Light    │ Shadow           │   │
+│  │ System    │ System   │ System   │ System   │ System           │   │
+│  ├──────────┼──────────┼──────────┼──────────┼──────────────────┤   │
+│  │ Geometry  │ Surface  │ Text     │ Light    │ Shadow           │   │
+│  │ Batch     │ Batch    │ Batch    │ Culling  │ Caster           │   │
+│  ├──────────┼──────────┼──────────┼──────────┼──────────────────┤   │
+│  │ Geometry  │ Surface  │ Text     │ Light    │ Shadow           │   │
+│  │ Runtime   │ Runtime  │ Runtime  │ Runtime  │ Runtime          │   │
+│  ├──────────┼──────────┼──────────┼──────────┼──────────────────┤   │
+│  │ Appear.   │ Appear.  │ Appear.  │ Surface  │                  │   │
+│  │ System    │ Link     │ Runtime  │ Upload   │                  │   │
+│  └──────────┴──────────┴──────────┴──────────┴──────────────────┘   │
+├──────────────────────────────────────────────────────────────────────┤
+│                    Renderer Backends                                  │
+│  ┌──────────┬──────────┬──────────┬────────────────────────────────┐ │
+│  │ Text     │ Geometry │ Surface  │ Shadow                         │ │
+│  │Renderer  │ Renderer │ Renderer │ Renderer 2D/3D                 │ │
+│  │ 2D / 3D  │ 2D / 3D  │ 2D / 3D  │                                │ │
+│  └──────────┴──────────┴──────────┴────────────────────────────────┘ │
+├──────────────────────────────────────────────────────────────────────┤
+│                    Resource & Domain Hosts                            │
+│  ┌──────────┬──────────┬──────────┬──────────┬──────────────────┐   │
+│  │  Buffer  │  Image   │  GPU     │ Sampler  │ Geometry         │   │
+│  │  Host    │  Host    │  Memory  │  Host    │ Resource/Material│   │
+│  ├──────────┼──────────┼──────────┼──────────┼──────────────────┤   │
+│  │ Geometry │ Surface  │ Glyph    │ FreeType │ Glyph Atlas      │   │
+│  │ Image    │ Image    │ Upload   │  Host    │ Host             │   │
+│  ├──────────┼──────────┼──────────┼──────────┼──────────────────┤   │
+│  │ Geometry │ Surface  │ Light    │ Shadow   │                  │   │
+│  │ Upload   │ Upload   │ Upload   │ Atlas    │                  │   │
+│  └──────────┴──────────┴──────────┴──────────┴──────────────────┘   │
+├──────────────────────────────────────────────────────────────────────┤
+│                    Platform Layer                                     │
+│  ┌───────────────────┬────────────────────────────────────────────┐  │
+│  │  VulkanContext     │  WindowSurface (SDL3)                      │  │
+│  │  RenderHost        │                                            │  │
+│  └───────────────────┴────────────────────────────────────────────┘  │
+├──────────────────────────────────────────────────────────────────────┤
+│              External Dependencies                                    │
+│  Vulkan SDK 1.3 | SDL 3.4.0 | FreeType | MemoryCenter (mimalloc)    │
+│  fast_math | McVector | CrashTracer                                  │
+└──────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -77,7 +100,7 @@
 
 ## 3. 层次架构详解
 
-### 3.1 Platform 层 (`vr/platform`)
+### 3.1 Platform 层 (`vr/platform` / `vr/vulkan_context`)
 
 **职责**: 窗口创建、Vulkan 实例/设备初始化、平台抽象。
 
@@ -103,7 +126,7 @@
 
 ### 3.3 Render 层 (`vr/render`)
 
-**职责**: 帧循环、交换链管理、命令缓冲、描述符/管线管理、上传系统。
+**职责**: 帧循环、交换链管理、命令缓冲、描述符/管线管理、上传系统、帧协调器。
 
 #### 3.3.1 帧循环核心
 
@@ -114,20 +137,38 @@
 | `FrameCommandHost` | 每帧 CommandPool + CommandBuffer 池化管理。支持按需增长。 |
 | `RenderLoopHost<...>` | 主帧循环：组合 Swapchain + Sync + Command + Retire。Tick() 驱动单帧录制与呈现。支持 Recorder 模式 (模板回调)。 |
 | `FrameRetireHost` | 延迟资源回收：基于提交值的退役队列，避免 use-after-submit。 |
+| `RetireBus` | 退休总线：管道化延迟销毁操作，支持跨模块发布延迟回收事件。 |
 
 #### 3.3.2 渲染资源管理
 
 | 组件 | 说明 |
 |------|------|
-| `DescriptorHost` | 描述符池管理 + DescriptorSetLayout 缓存 (哈希去重)。支持 buffer/image/texel buffer writes。每帧独立池。 |
+| `DescriptorHost` | 描述符池管理 + DescriptorSetLayout 缓存 (哈希去重)。支持 buffer/image/texel buffer writes。每帧独立池，可选验证。 |
 | `PipelineHost` | ShaderModule + PipelineLayout + Graphics/Compute Pipeline 缓存 + 延迟编译队列。支持 VkPipelineCache 持久化。可配置 Pipeline 预热。 |
 | `UploadHost` | Staging Buffer 上传：Allocate/Write/RecordCopy。支持 Transfer Queue 异步上传 (带 Semaphore 跨队列同步)。支持 Synchronization2 barrier。 |
+| `RuntimePrepareContext` | 帧准备上下文结构体，聚合所有运行时子系统指针，传递至 `PrepareFrame` 回调。包含 VulkanContext、帧索引、提交值、GpuMemoryHost、UploadHost、DescriptorHost、PipelineHost、SamplerHost、FreeTypeHost、GlyphAtlasHost、GlyphUploadHost。 |
 
-#### 3.3.3 运行时编排
+#### 3.3.3 帧协调器 (Frame Coordinators)
 
-| 组件 | 说明 |
+帧协调器是位于 RenderRuntimeHost 和 ECS 系统之间的编排层，负责每帧的数据准备、排序、缓存和跨系统协调。
+
+| 协调器 | 说明 |
+|--------|------|
+| `AppearanceFrameCoordinator` | Appearance 帧协调。管理 Appearance 组件的帧级生命周期：脏记录扫描、链接扫描、与 Geometry/Surface 渲染器协调。支持 2D 和 3D 双渲染器模式。 |
+| `LightFrameCoordinator` | Light 帧协调。收集活跃光源组件、处理光源 GPU 数据准备、协调光源上传。 |
+| `ShadowFrameCoordinator` | Shadow 帧协调。管理 Shadow Caster 组件收集、Shadow Map 渲染准备、与光源的关联。 |
+| `LightShadowLinkCoordinator` | Light-Shadow 链接协调。建立光源与阴影投射器之间的关联关系。 |
+| `ShadowAtlasBindingCoordinator` | Shadow Atlas 绑定协调。管理 Shadow Map Atlas 的纹理绑定和描述符更新。 |
+
+#### 3.3.4 准备阶段 (Prepare Stages)
+
+| 阶段 | 说明 |
 |------|------|
-| `RenderRuntimeHost<BackendTag, framesInFlight>` | 顶层运行时：组合 Platform + Swapchain + Loop + 所有资源模块。统一初始化/关闭顺序。提供 Tick() 驱动帧循环，支持 `PrepareFrame` 回调。可选模块化启用 (Upload/Descriptor/Pipeline/Sampler/FreeType/GlyphAtlas/GlyphUpload)。 |
+| `AppearancePrepareBridge` | Appearance 准备桥接：连接 AppearanceFrameCoordinator 和 RenderRuntime 的帧准备流程。 |
+| `AppearancePrepareStage` | Appearance 准备阶段：执行 Appearance 数据的帧级准备操作。 |
+| `LightPrepareStage` | Light 准备阶段：执行光源数据的帧级准备。 |
+| `LightShadowLinkStage` | Light-Shadow 链接阶段：执行光源-阴影关联的帧级操作。 |
+| `ShadowPrepareStage` | Shadow 准备阶段：执行阴影数据的帧级准备。 |
 
 ### 3.4 ECS 层 (`vr/ecs`)
 
@@ -150,29 +191,75 @@
 | **Geometry** | path inline data, 2D style (fill/stroke/aa) | mesh route, 3D style (PBR) | sort key, render route, dirty flags, bounds |
 | **Surface** | image/sprite source, 2D blend mode | texture route, filter/address mode | sort key, render route, tint, opacity, size/pivot |
 | **Text** | pixel size, 2D style | world size, billboard, 3D style | UTF8 buffer, font/material/batch data, color, align, SDF |
+| **Light** | 2D point light (position+radius+color) | 3D point/spot/directional | intensity, color, range, shadow flags, culling mask |
+| **Shadow** | 2D shadow caster (occluder shape) | 3D shadow caster (mesh route) | shadow map slot, bias, filter mode, depth format |
+| **Appearance** | 2D visibility+link group | 3D visibility+link group | appearance record, dirty tracking, link handle |
 
 #### 3.4.3 ECS 系统
+
+##### 核心数学与空间系统
 
 | 系统 | 职责 | 关键特性 |
 |------|------|---------|
 | `spatial_math` | 数学工具函数 | 矩阵组合/求逆/相乘, 视锥体/正交投影构建, 四元数工具 |
 | `TransformSystem<Dim>` | 层级变换 | 父子链接、Detach/Attach、脏标记传播、层级更新 (防循环)、平坦层级快速路径 |
 | `CameraSystem<Dim>` | 相机矩阵 | 投影重建 (正交/透视)、View 矩阵 (从 Transform 逆)、ViewProjection 合并 |
-| `BoundsSystem<Dim>` | AABB 世界空间变换 | 中心+范围方法 (避免 8 角点全变换)、多次更新变体 (全部/按索引) |
-| `CullingSystem<Dim>` | 视锥体裁剪 | 视锥体平面提取 (从 VP 矩阵)、球体拒绝 (快速路径) + AABB 细化、可见性掩码过滤、候选列表接口、可见集签名 (哈希) |
+| `BoundsSystem<Dim>` | AABB 世界空间变换 | 中心+范围方法 (避免 8 角点全变换)、多次更新变体 (全部/按索引)、Transform 分离快速路径 |
+| `CullingSystem<Dim>` | 视锥体裁剪 | 视锥体平面提取 (从 VP 矩阵)、球体拒绝 (快速路径) + AABB 细化、可见性掩码过滤、候选列表接口、可见集签名 (哈希)、epoch 机制 |
+
+##### 几何系统组
+
+| 系统 | 职责 | 关键特性 |
+|------|------|---------|
 | `GeometrySystem<Dim>` | 几何排序与路由 | 64 位排序键: [pass:2][material:16][geometry:16][layer/depth:16][batch:14] |
 | `GeometryBatchSystem<Dim>` | 批次收集与排序 | BuildAndSort: 收集可见几何、排序、去重 |
 | `GeometryPathSystem<Dim2>` | 路径命令解析 | MoveTo/LineTo/QuadTo/CubicTo/Close 命令视图、数据哈希 |
 | `GeometryMeshSystem<Dim3>` | 3D 网格路由 | MeshRoute 结构与操作 |
 | `GeometryRuntimeSystem<Dim>` | GPU 数据生成 | 2D: 路径→线段图元 + 合并批次。3D: 组件→GPU 实例 (世界矩阵+材质+包围盒) + 批次合并 + 缓存 (签名追踪)、增量 Transform 更新 |
+
+##### Surface 系统组
+
+| 系统 | 职责 | 关键特性 |
+|------|------|---------|
 | `SurfaceSystem<Dim>` | Surface 路由 | 64 位排序键: [pass:2][material:16][surface:16][minor:16][batch:14]、可见性、source route |
-| `SurfaceBatchSystem<Dim>` | Surface 批次 | 收 与排序 |
+| `SurfaceBatchSystem<Dim>` | Surface 批次 | 收集与排序 |
 | `SurfaceRuntimeSystem<Dim>` | Surface 运行时 | GPU 实例生成 + 批次合并 + 缓存 |
 | `SurfaceUploadPlanSystem` | Surface 上传计划 | 上传脏数据页面调度 |
+
+##### 文本系统组
+
+| 系统 | 职责 | 关键特性 |
+|------|------|---------|
 | `TextSystem<Dim>` | 文本排序与路由 | 64 位排序键: [pass:2][material:16][font:12][atlas:10][minor:16][batch:8]、UTF8 revision 追踪 |
 | `TextBatchSystem<Dim>` | 文本批次 | 收集与排序 |
 | `TextRuntimeSystem<Dim>` | 文本运行时 | 字形实例生成 + 批次合并 + 缓存 |
 | `TextRender3DSystem` | 3D 文本特殊处理 | Billboard、深度测试等 3D 特定逻辑 |
+
+##### 光照系统组
+
+| 系统 | 职责 | 关键特性 |
+|------|------|---------|
+| `LightSystem<Dim>` | 光照路由与排序 | 光源组件管理、阴影关联、排序键 |
+| `LightCullingSystem` | 光源视锥体裁剪 | 光源可见性判断、Tile-based 裁剪预备 |
+| `LightRuntimeSystem<Dim>` | 光照运行时 | GPU 光源数据生成 (UBO/SSBO)，光照参数打包 |
+| `LightGpuLayout` | 光照 GPU Layout | 光源 UBO/SSBO 的内存布局定义 |
+
+##### 阴影系统组
+
+| 系统 | 职责 | 关键特性 |
+|------|------|---------|
+| `ShadowSystem<Dim>` | 阴影路由与排序 | Shadow Caster 管理、Shadow Map 槽分配 |
+| `ShadowCasterSystem<Dim>` | 阴影投射器收集 | 可见投射器筛选、去重 |
+| `ShadowRuntimeSystem<Dim>` | 阴影运行时 | Shadow Map 渲染调度、深度变换矩阵生成 |
+| `ShadowGpuLayout` | 阴影 GPU Layout | Shadow Map 相关 GPU 内存布局定义 |
+
+##### Appearance 系统组
+
+| 系统 | 职责 | 关键特性 |
+|------|------|---------|
+| `AppearanceSystem<Dim>` | Appearance 组件管理 | 可见性记录、脏标记、link 句柄 |
+| `AppearanceLinkSystem` | Appearance 链接 | 链接 Geometry/Surface 到 Appearance 记录、跨渲染器协调 |
+| `AppearanceRuntimeSystem<Dim>` | Appearance 运行时 | 运行时 appearance 数据生成、缓存、与渲染器批量对接 |
 
 ### 3.5 渲染器模块
 
@@ -194,8 +281,8 @@
 | `GeometryMaterialHost` | 材质系统：PBR 材质 (albedo/metallic/roughness)、材质参数缓冲区上传。 |
 | `GeometryImageHost` | 几何图像：纹理 Image/View/Sampler 绑定、Descriptor 写入。 |
 | `GeometryUploadHost` | 几何上传：顶点/索引缓冲区上传、路径数据上传。 |
-| `GeometryRenderer2D` | 2D 几何渲染：路径线段→顶点缓冲、描边/填充、抗锯齿、Push Constant。 |
-| `GeometryRenderer3D` | 3D 几何渲染：GPU 实例化绘制、PBR 材质绑定、Shadow mapping 支持。 |
+| `GeometryRenderer2D` | 2D 几何渲染：路径线段→顶点缓冲、描边/填充、抗锯齿、Push Constant。集成 Appearance 渲染支持。 |
+| `GeometryRenderer3D` | 3D 几何渲染：GPU 实例化绘制、PBR 材质绑定、Shadow mapping 支持。集成 Appearance 渲染支持。 |
 
 #### 3.5.3 Surface 渲染器 (`vr/surface`)
 
@@ -206,9 +293,48 @@
 | `SurfaceRenderer2D` | 2D Surface 渲染：精灵绘制、混合模式、UV 变换、tint color。 |
 | `SurfaceRenderer3D` | 3D Surface 渲染：世界空间 Surface、纹理过滤、双面渲染。 |
 
+#### 3.5.4 Light/Shadow 渲染器 (`vr/light`, `vr/shadow`)
+
+| 组件 | 说明 |
+|------|------|
+| `LightShadowUploadHost` | Light-Shadow 数据上传：光源数据 (UBO)、阴影矩阵、Atlas 引用的 GPU 上传。 |
+| `ShadowAtlasHost` | Shadow Map Atlas 管理：Atlas 页面分配、阴影贴图打包、脏页追踪。 |
+| `ShadowRenderer2D` | 2D 阴影渲染器：2D 遮挡物深度图渲染、光源关联。 |
+| `ShadowRenderer3D` | 3D 阴影渲染器：3D Shadow Map 渲染、深度管线。 |
+
 ---
 
-## 4. 着色器管线
+## 4. 帧协调器管线流程
+
+Appearance、Light、Shadow 三套协调器协同工作，形成完整的每帧渲染准备管线：
+
+```
+RenderRuntime::Tick()
+  │
+  ├── FrameSync::Acquire  → 获取下一帧槽位
+  ├── FrameCommand::Begin  → 开始命令录制
+  │
+  ├── AppearanceFrameCoordinator::Prepare
+  │   ├── AppearancePrepareStage    (扫描脏记录)
+  │   └── AppearancePrepareBridge   (桥接至渲染器)
+  │
+  ├── LightShadowLinkCoordinator::Prepare
+  │   ├── LightPrepareStage         (收集光源)
+  │   ├── ShadowPrepareStage        (收集投射器)
+  │   └── LightShadowLinkStage      (建立关联)
+  │
+  ├── ShadowFrameCoordinator::Prepare
+  │   └── ShadowAtlasBindingCoordinator  (Atlas 绑定)
+  │
+  ├── Renderer::Render  (Text/Geometry/Surface/Shadow)
+  │
+  ├── FrameSync::Submit  → 提交命令
+  └── FrameRetire::Collect  → 延迟回收
+```
+
+---
+
+## 5. 着色器管线
 
 所有着色器位于 `shaders/` 目录，通过 CMake 自定义命令编译为 SPIR-V 后嵌入 C++ 头文件。
 
@@ -220,14 +346,16 @@
 | `geometry_3d.vert/.frag` | 3D 几何 (PBR + 实例化) |
 | `surface_2d.vert/.frag` | 2D Surface (精灵 + 混合模式) |
 | `surface_3d.vert/.frag` | 3D Surface (纹理 + 过滤) |
+| `shadow_depth_2d.vert` | 2D 阴影深度 (遮挡物深度图) |
+| `shadow_depth_3d.vert` | 3D 阴影深度 (深度管线) |
 
 SPIR-V 编译产物嵌入到 `build/generated/vr/{text,geometry,surface}/generated/` 下。
 
 ---
 
-## 5. 构建系统架构
+## 6. 构建系统架构
 
-### 5.1 目标依赖图
+### 6.1 目标依赖图
 
 ```
 vulkan_init (STATIC lib)
@@ -244,7 +372,7 @@ Tests executable   → vulkan_platform_sdl
 Bench executable   → vulkan_platform_sdl + CrashTracer
 ```
 
-### 5.2 关键 CMake 选项
+### 6.2 关键 CMake 选项
 
 | 选项 | 默认 | 说明 |
 |------|------|------|
@@ -254,18 +382,59 @@ Bench executable   → vulkan_platform_sdl + CrashTracer
 
 ---
 
-## 6. 测试与基准测试
+## 7. C++20 模块迁移 (`feature/cpp20-modules` 分支)
 
-### 6.1 测试 (`tests/`)
+仓库的 `feature/cpp20-modules` 分支包含所有 10 个核心库的 C++20 `.cppm` 模块接口单元：
 
-基于自定义轻量框架 (`test_framework.hpp/cpp`)。约 25 个测试文件，覆盖：
-- ECS 组件/系统单元测试
+```
+include/vr/modules/
+├── vr.types/vr.types.cppm        (基础类型, McVector, 空间类型)
+├── vr.context/vr.context.cppm    (VulkanContext 基础设施)
+├── vr.platform/vr.platform.cppm  (WindowSurface, RenderHost)
+├── vr.resource/vr.resource.cppm  (GpuMemoryHost, Buffer/Image/Sampler)
+├── vr.render/vr.render.cppm      (Swapchain, FrameSync, Upload, Descriptor, Pipeline, RenderLoop)
+├── vr.ecs/vr.ecs.cppm            (所有 ECS 组件 + 系统, 含 Appearance/Geometry/Surface)
+├── vr.text/vr.text.cppm          (FreeType/Glyph + Text ECS 系统)
+├── vr.geometry/vr.geometry.cppm  (Geometry 渲染器)
+├── vr.surface/vr.surface.cppm    (Surface 渲染器)
+├── vr.runtime/vr.runtime.cppm    (RenderRuntimeHost)
+└── vr.detail/vr_module_fwd.hpp   (全局模块片段共享头文件)
+```
+
+模块依赖图 (无循环):
+```
+vr.types
+  └─► vr.context ──► vr.resource ──► vr.render ──► vr.runtime
+        │                                │
+        ├─► vr.ecs ◄─────────────────────┤
+        │                                │
+        ├─► vr.platform ─────────────────┤
+        │                                │
+        ├─► vr.text ◄────────────────────┤
+        │    (含 Text ECS 系统)           │
+        │                                │
+        ├─► vr.geometry ◄────────────────┤
+        │                                │
+        └─► vr.surface ◄─────────────────┘
+```
+
+---
+
+## 8. 测试与基准测试
+
+### 8.1 测试 (`tests/`)
+
+基于自定义轻量框架 (`test_framework.hpp/cpp`)。约 41 个测试文件，覆盖：
+- ECS 组件/系统单元测试 (Transform, Camera, Bounds, Culling, Geometry, Surface, Text, Light, Shadow, Appearance)
 - 运行时集成测试
 - GPU 资源类型测试
 - FreeType/Glyph 渲染测试
 - FrameRetire 回收测试
+- Light/Shadow 协调器测试
+- Appearance 协调器测试
+- Shadow Renderer 生命周期测试
 
-### 6.2 基准测试 (`bench/`)
+### 8.2 基准测试 (`bench/`)
 
 基于自定义基准框架 (`bench_framework.hpp/cpp`)，支持：
 - 崩溃追踪器集成
@@ -275,13 +444,15 @@ Bench executable   → vulkan_platform_sdl + CrashTracer
 
 ---
 
-## 7. 关键设计决策
+## 9. 关键设计决策
 
 1. **纯静态 ECS**: 系统全为 `static` 方法类，零虚函数开销，组件全 POD 且 cache-line 友好。
 2. **模板化维度**: `Dim2`/`Dim3` 通过模板特化而非运行时多态，编译期类型安全。
-3. **延迟销毁**: `FrameRetireHost` 按提交值延迟销毁 GPU 资源，避免 use-after-submit。
+3. **延迟销毁**: `FrameRetireHost` 按提交值延迟销毁 GPU 资源，避免 use-after-submit。`RetireBus` 管道化延迟回收事件。
 4. **哈希去重**: `PipelineHost`/`DescriptorHost`/`SamplerHost` 均使用基于哈希的缓存去重。
 5. **排序键**: 64 位复合排序键统一 2D (layer) 和 3D (depth bin) 的绘制顺序控制。
 6. **增量更新**: 3D Geometry Runtime 支持仅更新变换矩阵的快速路径，通过 `world_revision` 追踪。
 7. **跨队列上传**: `UploadHost` 支持使用 Transfer Queue 异步上传，通过 Semaphore 与 Graphics Queue 同步。
 8. **BackendTag 编译期多态**: 平台后端通过标签分发，易于扩展新窗口系统。
+9. **帧协调器模式**: Appearance/Light/Shadow 使用独立的帧协调器 (Frame Coordinator) 进行每帧数据编排，每套协调器有自己的 Prepare Stage 和特定的数据流程。
+10. **C++20 模块**: `feature/cpp20-modules` 分支已迁移所有 10 个核心库为 `.cppm` 接口单元。使用 `vr_module_fwd.hpp` 统一全局片段以实现零重复。`vr.ecs` 模块通过模板声明模式避免了与 `vr.text` 的循环依赖。

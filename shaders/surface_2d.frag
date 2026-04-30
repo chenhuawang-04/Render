@@ -1,4 +1,6 @@
 #version 460
+#extension GL_GOOGLE_include_directive : require
+#include "vr/common/math.glsl"
 
 layout(location = 0) in vec2 in_uv;
 layout(location = 1) in vec4 in_color;
@@ -85,10 +87,6 @@ const uint k_light_kind_spot = 3u;
 
 const uint k_invalid_shadow_view_begin = 0xFFFFFFFFu;
 
-float saturate(float value_) {
-    return clamp(value_, 0.0, 1.0);
-}
-
 uint unpack_shadow_view_count(uint shadow_meta_) {
     return shadow_meta_ & 0xFFFFu;
 }
@@ -99,8 +97,8 @@ uint compute_cluster_index_2d(vec2 frag_coord_) {
     float framebuffer_width = max(pc.viewport.x, 1.0);
     float framebuffer_height = max(pc.viewport.y, 1.0);
 
-    float norm_x = saturate(frag_coord_.x / framebuffer_width);
-    float norm_y = saturate(frag_coord_.y / framebuffer_height);
+    float norm_x = vr_saturate(frag_coord_.x / framebuffer_width);
+    float norm_y = vr_saturate(frag_coord_.y / framebuffer_height);
     uint x_index = min(uint(norm_x * float(tile_count_x)), tile_count_x - 1u);
     uint y_index = min(uint(norm_y * float(tile_count_y)), tile_count_y - 1u);
     return y_index * tile_count_x + x_index;
@@ -227,8 +225,8 @@ vec3 evaluate_light_contribution(LightRecord2D light_record_,
             return vec3(0.0);
         }
         light_dir = to_light / light_distance;
-        float distance_ratio = saturate(light_distance / radius);
-        attenuation = saturate(1.0 - pow(distance_ratio, falloff_exponent));
+        float distance_ratio = vr_saturate(light_distance / radius);
+        attenuation = vr_saturate(1.0 - pow(distance_ratio, falloff_exponent));
 
         if (light_kind == k_light_kind_spot) {
             vec2 spot_dir = light_direction_xy;
@@ -247,7 +245,7 @@ vec3 evaluate_light_contribution(LightRecord2D light_record_,
             to_fragment_xy /= to_fragment_len;
             float cone_cos = dot(to_fragment_xy, spot_dir);
             float cone_denom = max(1e-4, cone_cos_inner - cone_cos_outer);
-            float cone_factor = saturate((cone_cos - cone_cos_outer) / cone_denom);
+            float cone_factor = vr_saturate((cone_cos - cone_cos_outer) / cone_denom);
             attenuation *= cone_factor;
         }
     }
@@ -330,7 +328,7 @@ void main() {
             }
         }
 
-        float ambient = saturate(lighting_params.light_counts.w);
+        float ambient = vr_saturate(lighting_params.light_counts.w);
         final_rgb *= (vec3(ambient) + light_accum);
     }
 

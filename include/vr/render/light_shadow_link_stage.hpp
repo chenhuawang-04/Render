@@ -138,9 +138,9 @@ public:
         linked_light_records_scratch_.resize(light_record_count_);
         for (std::uint32_t light_index = 0U; light_index < light_record_count_; ++light_index) {
             ecs::LightGpuRecord3D record = light_records_[light_index];
-            record.reserved0 = invalid_shadow_view_begin;
-            record.reserved1 = 0U;
-            record.reserved2 = 0U;
+            record.shadow_view_begin = invalid_shadow_view_begin;
+            record.shadow_meta = 0U;
+            record.shadow_namespace_id = 0U;
             linked_light_records_scratch_[light_index] = record;
         }
         result.linked_light_records = linked_light_records_scratch_.data();
@@ -180,15 +180,15 @@ public:
             }
 
             ecs::LightGpuRecord3D& light_record = linked_light_records_scratch_[light_index];
-            if (light_record.reserved0 != invalid_shadow_view_begin) {
+            if (light_record.shadow_view_begin != invalid_shadow_view_begin) {
                 continue;
             }
 
-            light_record.reserved0 = shadow_record.first_view_index;
-            light_record.reserved1 =
+            light_record.shadow_view_begin = shadow_record.first_view_index;
+            light_record.shadow_meta =
                 (shadow_record.view_count & 0xFFFFU) |
                 ((shadow_record.projection_kind & 0xFFU) << 16U);
-            light_record.reserved2 = shadow_component.binding.atlas_namespace_id;
+            light_record.shadow_namespace_id = shadow_component.binding.atlas_namespace_id;
             ++result.linked_light_count;
         }
 

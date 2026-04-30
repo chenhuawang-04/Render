@@ -12,6 +12,13 @@ endif()
 option(VR_ENABLE_DESCRIPTOR_VALIDATION
     "Compile descriptor lifecycle validation layer (OFF means zero runtime overhead)"
     OFF)
+option(VR_ENABLE_SHADER_ABI_CHECK
+    "Validate shader set/binding contracts against reflection JSON (strict build-time check)"
+    ON)
+option(VR_ENABLE_SHADER_OPTIMIZATION
+    "Run spirv-opt after glslang compilation for shader optimization"
+    OFF)
+set(VR_SHADER_OPTIMIZATION_LEVEL "-O" CACHE STRING "spirv-opt optimization level/flags (e.g. -O, -Os)")
 
 find_package(Vulkan REQUIRED)
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
@@ -50,6 +57,39 @@ if(NOT GLSLANG_VALIDATOR_EXECUTABLE)
     message(FATAL_ERROR "glslangValidator was not found. Please install Vulkan SDK and ensure Bin is in PATH.")
 endif()
 
+find_program(SPIRV_CROSS_EXECUTABLE
+    NAMES spirv-cross spirv-cross.exe
+    HINTS "$ENV{VULKAN_SDK}/Bin" "$ENV{VULKAN_SDK}/Bin32")
+find_program(SPIRV_OPT_EXECUTABLE
+    NAMES spirv-opt spirv-opt.exe
+    HINTS "$ENV{VULKAN_SDK}/Bin" "$ENV{VULKAN_SDK}/Bin32")
+set(_vr_default_shader_reflection OFF)
+if(SPIRV_CROSS_EXECUTABLE)
+    set(_vr_default_shader_reflection ON)
+endif()
+option(VR_ENABLE_SHADER_REFLECTION
+    "Generate shader reflection JSON artifacts via spirv-cross"
+    ${_vr_default_shader_reflection})
+if(VR_ENABLE_SHADER_REFLECTION AND NOT SPIRV_CROSS_EXECUTABLE)
+    message(FATAL_ERROR "VR_ENABLE_SHADER_REFLECTION is ON but spirv-cross was not found. Please install Vulkan SDK or provide SPIRV_CROSS_EXECUTABLE.")
+endif()
+if(VR_ENABLE_SHADER_OPTIMIZATION AND NOT SPIRV_OPT_EXECUTABLE)
+    message(FATAL_ERROR "VR_ENABLE_SHADER_OPTIMIZATION is ON but spirv-opt was not found. Please install SPIRV-Tools or Vulkan SDK.")
+endif()
+if(VR_ENABLE_SHADER_ABI_CHECK AND NOT VR_ENABLE_SHADER_REFLECTION)
+    message(STATUS "VR_ENABLE_SHADER_ABI_CHECK requested but VR_ENABLE_SHADER_REFLECTION is OFF. ABI check disabled.")
+    set(VR_ENABLE_SHADER_ABI_CHECK OFF)
+endif()
+message(STATUS "Shader reflection enabled: ${VR_ENABLE_SHADER_REFLECTION}")
+message(STATUS "Shader ABI check enabled: ${VR_ENABLE_SHADER_ABI_CHECK}")
+message(STATUS "Shader optimization enabled: ${VR_ENABLE_SHADER_OPTIMIZATION}")
+if(VR_ENABLE_SHADER_REFLECTION)
+    message(STATUS "spirv-cross: ${SPIRV_CROSS_EXECUTABLE}")
+endif()
+if(VR_ENABLE_SHADER_OPTIMIZATION)
+    message(STATUS "spirv-opt: ${SPIRV_OPT_EXECUTABLE} (${VR_SHADER_OPTIMIZATION_LEVEL})")
+endif()
+
 add_subdirectory("${MEMORYCENTER_ROOT}" "${CMAKE_BINARY_DIR}/_deps/memorycenter" EXCLUDE_FROM_ALL)
 
 set(SDL_SHARED OFF CACHE BOOL "" FORCE)
@@ -82,27 +122,87 @@ set(VR_GENERATED_TEXT_SHADER_DIR "${VR_GENERATED_INCLUDE_DIR}/vr/text/generated"
 set(VR_GENERATED_GEOMETRY_SHADER_DIR "${VR_GENERATED_INCLUDE_DIR}/vr/geometry/generated")
 set(VR_GENERATED_SURFACE_SHADER_DIR "${VR_GENERATED_INCLUDE_DIR}/vr/surface/generated")
 set(VR_GENERATED_SHADOW_SHADER_DIR "${VR_GENERATED_INCLUDE_DIR}/vr/shadow/generated")
+set(VR_GENERATED_SHADER_REFLECT_DIR "${VR_GENERATED_INCLUDE_DIR}/vr/shader_reflect")
+set(VR_GENERATED_SHADER_CONTRACT_DIR "${VR_GENERATED_INCLUDE_DIR}/vr/shader_contract")
 set(VR_SHADER_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/shaders")
+set(VR_SHADER_INCLUDE_DIR "${VR_SHADER_SOURCE_DIR}/include")
+file(GLOB_RECURSE VR_SHADER_INCLUDE_FILES
+    CONFIGURE_DEPENDS
+    "${VR_SHADER_INCLUDE_DIR}/*.glsl")
+set(VR_SHADER_REFLECTION_OUTPUTS "")
+set(VR_SHADER_CONTRACT_OUTPUTS "")
 
 function(vr_compile_shader_to_header input_file stage symbol_name output_header output_namespace)
     get_filename_component(_input_abs "${input_file}" ABSOLUTE)
     get_filename_component(_output_abs "${output_header}" ABSOLUTE)
+    set(_spv_raw_file "${CMAKE_BINARY_DIR}/generated/${symbol_name}.raw.spv")
     set(_spv_file "${CMAKE_BINARY_DIR}/generated/${symbol_name}.spv")
+    set(_reflect_file "${CMAKE_BINARY_DIR}/generated/${symbol_name}.reflect.json")
+    set(_contract_file "${CMAKE_BINARY_DIR}/generated/${symbol_name}.contract.json")
+    set(_outputs "${_spv_file}" "${_output_abs}")
+    set(_tool_dependencies
+        "${CMAKE_CURRENT_SOURCE_DIR}/tools/spv_to_header.py"
+        ${VR_SHADER_INCLUDE_FILES})
+    set(_post_spv_commands "")
+    set(_spv_finalize_commands "")
+
+    if(VR_ENABLE_SHADER_REFLECTION)
+        list(APPEND _outputs "${_reflect_file}")
+        list(APPEND _tool_dependencies "${CMAKE_CURRENT_SOURCE_DIR}/tools/spv_reflect_to_json.py")
+        list(APPEND _post_spv_commands
+            COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/spv_reflect_to_json.py"
+                --input "${_spv_file}"
+                --output "${_reflect_file}"
+                --spirv-cross "${SPIRV_CROSS_EXECUTABLE}")
+
+        list(APPEND VR_SHADER_REFLECTION_OUTPUTS "${_reflect_file}")
+        set(VR_SHADER_REFLECTION_OUTPUTS "${VR_SHADER_REFLECTION_OUTPUTS}" PARENT_SCOPE)
+
+        if(VR_ENABLE_SHADER_ABI_CHECK)
+            list(APPEND _outputs "${_contract_file}")
+            list(APPEND _tool_dependencies "${CMAKE_CURRENT_SOURCE_DIR}/tools/shader_contract_check.py")
+            list(APPEND _post_spv_commands
+                COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/shader_contract_check.py"
+                    --source "${_input_abs}"
+                    --reflect "${_reflect_file}"
+                    --output "${_contract_file}"
+                    --strict)
+
+            list(APPEND VR_SHADER_CONTRACT_OUTPUTS "${_contract_file}")
+            set(VR_SHADER_CONTRACT_OUTPUTS "${VR_SHADER_CONTRACT_OUTPUTS}" PARENT_SCOPE)
+        endif()
+    endif()
+
+    if(VR_ENABLE_SHADER_OPTIMIZATION)
+        list(APPEND _spv_finalize_commands
+            COMMAND "${SPIRV_OPT_EXECUTABLE}" "${VR_SHADER_OPTIMIZATION_LEVEL}" "${_spv_raw_file}" -o "${_spv_file}")
+    else()
+        list(APPEND _spv_finalize_commands
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${_spv_raw_file}" "${_spv_file}")
+    endif()
 
     add_custom_command(
-        OUTPUT "${_spv_file}" "${_output_abs}"
+        OUTPUT ${_outputs}
+        BYPRODUCTS "${_spv_raw_file}"
         COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_BINARY_DIR}/generated"
         COMMAND ${CMAKE_COMMAND} -E make_directory "${VR_GENERATED_TEXT_SHADER_DIR}"
         COMMAND ${CMAKE_COMMAND} -E make_directory "${VR_GENERATED_GEOMETRY_SHADER_DIR}"
         COMMAND ${CMAKE_COMMAND} -E make_directory "${VR_GENERATED_SURFACE_SHADER_DIR}"
         COMMAND ${CMAKE_COMMAND} -E make_directory "${VR_GENERATED_SHADOW_SHADER_DIR}"
-        COMMAND "${GLSLANG_VALIDATOR_EXECUTABLE}" -V --target-env vulkan1.3 -S "${stage}" -e main -o "${_spv_file}" "${_input_abs}"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${VR_GENERATED_SHADER_REFLECT_DIR}"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${VR_GENERATED_SHADER_CONTRACT_DIR}"
+        COMMAND "${GLSLANG_VALIDATOR_EXECUTABLE}" -V --target-env vulkan1.3 -S "${stage}" -e main
+                "-I${VR_SHADER_SOURCE_DIR}"
+                "-I${VR_SHADER_INCLUDE_DIR}"
+                -o "${_spv_raw_file}" "${_input_abs}"
+        ${_spv_finalize_commands}
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/spv_to_header.py"
                 --input "${_spv_file}"
                 --output "${_output_abs}"
                 --symbol "${symbol_name}"
                 --namespace "${output_namespace}"
-        DEPENDS "${_input_abs}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/spv_to_header.py"
+        ${_post_spv_commands}
+        DEPENDS "${_input_abs}" ${_tool_dependencies}
         COMMENT "Compiling shader ${_input_abs} -> ${_output_abs}"
         VERBATIM
     )
@@ -210,7 +310,28 @@ add_custom_target(vr_generated_shaders
         "${VR_SURFACE_3D_FRAG_HEADER}"
         "${VR_SHADOW_2D_VERT_HEADER}"
         "${VR_SHADOW_3D_VERT_HEADER}"
+        ${VR_SHADER_REFLECTION_OUTPUTS}
+        ${VR_SHADER_CONTRACT_OUTPUTS}
 )
+
+if(VR_ENABLE_SHADER_ABI_CHECK)
+    set(VR_SHADER_CONTRACT_SUMMARY_FILE "${CMAKE_BINARY_DIR}/generated/shader_contract_summary.json")
+    add_custom_command(
+        OUTPUT "${VR_SHADER_CONTRACT_SUMMARY_FILE}"
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/shader_contract_summary.py"
+                --input ${VR_SHADER_CONTRACT_OUTPUTS}
+                --output "${VR_SHADER_CONTRACT_SUMMARY_FILE}"
+                --strict
+        DEPENDS
+            ${VR_SHADER_CONTRACT_OUTPUTS}
+            "${CMAKE_CURRENT_SOURCE_DIR}/tools/shader_contract_summary.py"
+        COMMENT "Aggregating shader ABI contract summary"
+        VERBATIM
+    )
+    add_custom_target(vr_shader_contract_summary
+        DEPENDS "${VR_SHADER_CONTRACT_SUMMARY_FILE}")
+    add_dependencies(vr_generated_shaders vr_shader_contract_summary)
+endif()
 
 add_library(vulkan_init STATIC
     src/vulkan_context.cpp

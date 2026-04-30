@@ -19,6 +19,7 @@
 #include "vr/surface/surface_upload_host.hpp"
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 
 namespace vr {
@@ -206,6 +207,11 @@ private:
     };
 
     static_assert(sizeof(PushConstants) == 32U);
+    static_assert(sizeof(LightingParamsGpu) == 64U);
+    static_assert(offsetof(LightingParamsGpu, world_to_ndc_x) == 0U);
+    static_assert(offsetof(LightingParamsGpu, light_count) == 16U);
+    static_assert(offsetof(LightingParamsGpu, tile_count_x) == 32U);
+    static_assert(offsetof(LightingParamsGpu, framebuffer_width) == 48U);
 
     [[nodiscard]] static std::size_t BlendModeIndex(BlendModeKind mode_) noexcept;
     [[nodiscard]] static BlendModeKind ResolveBlendModeFromBatchParams(std::uint32_t params_) noexcept;

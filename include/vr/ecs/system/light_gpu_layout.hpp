@@ -2,6 +2,7 @@
 
 #include "vr/ecs/component/light_component.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <type_traits>
 
@@ -61,9 +62,9 @@ struct alignas(16) LightGpuRecord3D final {
     std::uint32_t channel_mask;
 
     std::uint32_t flags;
-    std::uint32_t reserved0;
-    std::uint32_t reserved1;
-    std::uint32_t reserved2;
+    std::uint32_t shadow_view_begin;
+    std::uint32_t shadow_meta;
+    std::uint32_t shadow_namespace_id;
 };
 
 template<DimensionTag DimensionT>
@@ -86,5 +87,21 @@ static_assert(std::is_standard_layout_v<LightGpuRecord2D> && std::is_trivial_v<L
 static_assert(std::is_standard_layout_v<LightGpuRecord3D> && std::is_trivial_v<LightGpuRecord3D>);
 static_assert(sizeof(LightGpuRecord2D) % 16U == 0U);
 static_assert(sizeof(LightGpuRecord3D) % 16U == 0U);
+static_assert(sizeof(LightGpuRecord2D) == 80U);
+static_assert(sizeof(LightGpuRecord3D) == 96U);
+static_assert(offsetof(LightGpuRecord2D, position_x) == 0U);
+static_assert(offsetof(LightGpuRecord2D, color_r) == 16U);
+static_assert(offsetof(LightGpuRecord2D, direction_x) == 32U);
+static_assert(offsetof(LightGpuRecord2D, source_height) == 48U);
+static_assert(offsetof(LightGpuRecord2D, shadow_view_begin) == 64U);
+static_assert(offsetof(LightGpuRecord3D, position_x) == 0U);
+static_assert(offsetof(LightGpuRecord3D, color_r) == 16U);
+static_assert(offsetof(LightGpuRecord3D, direction_x) == 32U);
+static_assert(offsetof(LightGpuRecord3D, cone_cos_inner) == 48U);
+static_assert(offsetof(LightGpuRecord3D, falloff_exponent) == 64U);
+static_assert(offsetof(LightGpuRecord3D, flags) == 80U);
+static_assert(offsetof(LightGpuRecord3D, shadow_view_begin) == 84U);
+static_assert(offsetof(LightGpuRecord3D, shadow_meta) == 88U);
+static_assert(offsetof(LightGpuRecord3D, shadow_namespace_id) == 92U);
 
 } // namespace vr::ecs

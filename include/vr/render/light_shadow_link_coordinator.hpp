@@ -382,9 +382,9 @@ private:
 
             ecs::LightGpuRecord3D patched_record = prepare_info_.light_records[light_index];
             const ecs::LightGpuRecord3D& linked_record = linked_light_records_scratch[light_index];
-            patched_record.reserved0 = linked_record.reserved0;
-            patched_record.reserved1 = linked_record.reserved1;
-            patched_record.reserved2 = linked_record.reserved2;
+            patched_record.shadow_view_begin = linked_record.shadow_view_begin;
+            patched_record.shadow_meta = linked_record.shadow_meta;
+            patched_record.shadow_namespace_id = linked_record.shadow_namespace_id;
             linked_light_records_scratch[light_index] = patched_record;
             ++patched_count;
         }

@@ -775,9 +775,9 @@ private:
             out_record_.light_type = static_cast<std::uint32_t>(component_.style.kind);
             out_record_.channel_mask = component_.visibility.light_channel_mask;
             out_record_.flags = ComposeFlags(component_);
-            out_record_.reserved0 = 0U;
-            out_record_.reserved1 = 0U;
-            out_record_.reserved2 = 0U;
+            out_record_.shadow_view_begin = (std::numeric_limits<std::uint32_t>::max)();
+            out_record_.shadow_meta = 0U;
+            out_record_.shadow_namespace_id = 0U;
         }
     }
 

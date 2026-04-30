@@ -38,7 +38,63 @@ namespace {
     }
 }
 
+constexpr VkPipelineStageFlags2 k_graphics_only_stage_mask =
+    VK_PIPELINE_STAGE_2_VERTEX_INPUT_BIT |
+    VK_PIPELINE_STAGE_2_VERTEX_ATTRIBUTE_INPUT_BIT |
+    VK_PIPELINE_STAGE_2_INDEX_INPUT_BIT |
+    VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT |
+    VK_PIPELINE_STAGE_2_TESSELLATION_CONTROL_SHADER_BIT |
+    VK_PIPELINE_STAGE_2_TESSELLATION_EVALUATION_SHADER_BIT |
+    VK_PIPELINE_STAGE_2_GEOMETRY_SHADER_BIT |
+    VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT |
+    VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
+    VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT |
+    VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT |
+    VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT;
+
+constexpr VkPipelineStageFlags2 k_compute_only_stage_mask =
+    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+
 } // namespace
+
+bool UploadHost::HasUnsupportedStageForQueue(VkPipelineStageFlags2 stage_mask_,
+                                             VkQueueFlags queue_flags_) noexcept {
+    if (stage_mask_ == 0U || stage_mask_ == VK_PIPELINE_STAGE_2_NONE) {
+        return false;
+    }
+
+    const bool supports_graphics = (queue_flags_ & VK_QUEUE_GRAPHICS_BIT) != 0U;
+    const bool supports_compute = (queue_flags_ & VK_QUEUE_COMPUTE_BIT) != 0U;
+
+    if (!supports_graphics && (stage_mask_ & k_graphics_only_stage_mask) != 0U) {
+        return true;
+    }
+    if (!supports_compute && (stage_mask_ & k_compute_only_stage_mask) != 0U) {
+        return true;
+    }
+    if ((stage_mask_ & VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT) != 0U &&
+        !supports_graphics &&
+        !supports_compute) {
+        return true;
+    }
+    return false;
+}
+
+VkPipelineStageFlags2 UploadHost::SanitizeStageMaskForSubmitQueue(
+    VkPipelineStageFlags2 stage_mask_) const noexcept {
+    if (!HasUnsupportedStageForQueue(stage_mask_, submit_queue_flags)) {
+        return stage_mask_;
+    }
+    return VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+}
+
+VkAccessFlags2 UploadHost::SanitizeAccessMaskForStage(VkPipelineStageFlags2 stage_mask_,
+                                                      VkAccessFlags2 access_mask_) noexcept {
+    if (stage_mask_ == 0U || stage_mask_ == VK_PIPELINE_STAGE_2_NONE) {
+        return 0U;
+    }
+    return access_mask_;
+}
 
 void UploadHost::Initialize(VulkanContext& context_,
                             resource::GpuMemoryHost& gpu_memory_host_,
@@ -74,6 +130,24 @@ void UploadHost::Initialize(VulkanContext& context_,
     } else {
         throw std::runtime_error("UploadHost::Initialize cannot resolve a valid submit queue");
     }
+
+    if (!families.graphics.has_value()) {
+        throw std::runtime_error("UploadHost::Initialize requires graphics queue family");
+    }
+    graphics_queue_family_index = families.graphics.value();
+    cross_queue_submit = queue_family_index != graphics_queue_family_index;
+
+    uint32_t queue_family_count = 0U;
+    vkGetPhysicalDeviceQueueFamilyProperties(context_.PhysicalDevice(), &queue_family_count, nullptr);
+    if (queue_family_count == 0U || queue_family_index >= queue_family_count) {
+        throw std::runtime_error("UploadHost::Initialize failed to query queue family properties");
+    }
+    UploadMcVector<VkQueueFamilyProperties> queue_properties{};
+    queue_properties.resize(queue_family_count);
+    vkGetPhysicalDeviceQueueFamilyProperties(context_.PhysicalDevice(),
+                                             &queue_family_count,
+                                             queue_properties.data());
+    submit_queue_flags = queue_properties[queue_family_index].queueFlags;
 
     synchronization2_enabled = context_.EnabledVulkan13Features().synchronization2 == VK_TRUE;
     memory_host = &gpu_memory_host_;
@@ -115,6 +189,9 @@ void UploadHost::Shutdown(VulkanContext& context_) {
     memory_host = nullptr;
     submit_queue = VK_NULL_HANDLE;
     queue_family_index = 0U;
+    graphics_queue_family_index = 0U;
+    submit_queue_flags = 0U;
+    cross_queue_submit = false;
     synchronization2_enabled = false;
     initialized = false;
 }
@@ -285,10 +362,16 @@ void UploadHost::RecordMemoryBarrier2(uint32_t frame_index_, const VkMemoryBarri
         throw std::runtime_error("UploadHost::RecordMemoryBarrier2 requires active recording frame");
     }
 
+    VkMemoryBarrier2 barrier = barrier_;
+    barrier.srcStageMask = SanitizeStageMaskForSubmitQueue(barrier.srcStageMask);
+    barrier.dstStageMask = SanitizeStageMaskForSubmitQueue(barrier.dstStageMask);
+    barrier.srcAccessMask = SanitizeAccessMaskForStage(barrier.srcStageMask, barrier.srcAccessMask);
+    barrier.dstAccessMask = SanitizeAccessMaskForStage(barrier.dstStageMask, barrier.dstAccessMask);
+
     VkDependencyInfo dep{};
     dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
     dep.memoryBarrierCount = 1U;
-    dep.pMemoryBarriers = &barrier_;
+    dep.pMemoryBarriers = &barrier;
     dep.bufferMemoryBarrierCount = 0U;
     dep.pBufferMemoryBarriers = nullptr;
     dep.imageMemoryBarrierCount = 0U;
@@ -310,12 +393,18 @@ void UploadHost::RecordBufferBarrier2(uint32_t frame_index_, const VkBufferMemor
         throw std::runtime_error("UploadHost::RecordBufferBarrier2 requires active recording frame");
     }
 
+    VkBufferMemoryBarrier2 barrier = barrier_;
+    barrier.srcStageMask = SanitizeStageMaskForSubmitQueue(barrier.srcStageMask);
+    barrier.dstStageMask = SanitizeStageMaskForSubmitQueue(barrier.dstStageMask);
+    barrier.srcAccessMask = SanitizeAccessMaskForStage(barrier.srcStageMask, barrier.srcAccessMask);
+    barrier.dstAccessMask = SanitizeAccessMaskForStage(barrier.dstStageMask, barrier.dstAccessMask);
+
     VkDependencyInfo dep{};
     dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
     dep.memoryBarrierCount = 0U;
     dep.pMemoryBarriers = nullptr;
     dep.bufferMemoryBarrierCount = 1U;
-    dep.pBufferMemoryBarriers = &barrier_;
+    dep.pBufferMemoryBarriers = &barrier;
     dep.imageMemoryBarrierCount = 0U;
     dep.pImageMemoryBarriers = nullptr;
 
@@ -335,6 +424,12 @@ void UploadHost::RecordImageBarrier2(uint32_t frame_index_, const VkImageMemoryB
         throw std::runtime_error("UploadHost::RecordImageBarrier2 requires active recording frame");
     }
 
+    VkImageMemoryBarrier2 barrier = barrier_;
+    barrier.srcStageMask = SanitizeStageMaskForSubmitQueue(barrier.srcStageMask);
+    barrier.dstStageMask = SanitizeStageMaskForSubmitQueue(barrier.dstStageMask);
+    barrier.srcAccessMask = SanitizeAccessMaskForStage(barrier.srcStageMask, barrier.srcAccessMask);
+    barrier.dstAccessMask = SanitizeAccessMaskForStage(barrier.dstStageMask, barrier.dstAccessMask);
+
     VkDependencyInfo dep{};
     dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
     dep.memoryBarrierCount = 0U;
@@ -342,7 +437,7 @@ void UploadHost::RecordImageBarrier2(uint32_t frame_index_, const VkImageMemoryB
     dep.bufferMemoryBarrierCount = 0U;
     dep.pBufferMemoryBarriers = nullptr;
     dep.imageMemoryBarrierCount = 1U;
-    dep.pImageMemoryBarriers = &barrier_;
+    dep.pImageMemoryBarriers = &barrier;
 
     vkCmdPipelineBarrier2(slot.command_buffer, &dep);
     slot.recorded_work = true;
@@ -438,8 +533,20 @@ uint32_t UploadHost::QueueFamilyIndex() const noexcept {
     return queue_family_index;
 }
 
+uint32_t UploadHost::GraphicsQueueFamilyIndex() const noexcept {
+    return graphics_queue_family_index;
+}
+
 VkQueue UploadHost::SubmitQueue() const noexcept {
     return submit_queue;
+}
+
+VkQueueFlags UploadHost::SubmitQueueFlags() const noexcept {
+    return submit_queue_flags;
+}
+
+bool UploadHost::UsesCrossQueueSubmit() const noexcept {
+    return cross_queue_submit;
 }
 
 const UploadFrameStats& UploadHost::FrameStats(uint32_t frame_index_) const {

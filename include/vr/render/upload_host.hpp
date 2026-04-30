@@ -125,7 +125,10 @@ public:
     [[nodiscard]] bool IsInitialized() const noexcept;
     [[nodiscard]] uint32_t FramesInFlight() const noexcept;
     [[nodiscard]] uint32_t QueueFamilyIndex() const noexcept;
+    [[nodiscard]] uint32_t GraphicsQueueFamilyIndex() const noexcept;
     [[nodiscard]] VkQueue SubmitQueue() const noexcept;
+    [[nodiscard]] VkQueueFlags SubmitQueueFlags() const noexcept;
+    [[nodiscard]] bool UsesCrossQueueSubmit() const noexcept;
     [[nodiscard]] const UploadFrameStats& FrameStats(uint32_t frame_index_) const;
     [[nodiscard]] VkDeviceSize CapacityBytes() const noexcept;
 
@@ -156,6 +159,12 @@ private:
                                  const UploadFrameSlot& slot_,
                                  VkDeviceSize offset_,
                                  VkDeviceSize size_) const;
+    [[nodiscard]] VkPipelineStageFlags2 SanitizeStageMaskForSubmitQueue(
+        VkPipelineStageFlags2 stage_mask_) const noexcept;
+    static bool HasUnsupportedStageForQueue(VkPipelineStageFlags2 stage_mask_,
+                                            VkQueueFlags queue_flags_) noexcept;
+    static VkAccessFlags2 SanitizeAccessMaskForStage(VkPipelineStageFlags2 stage_mask_,
+                                                     VkAccessFlags2 access_mask_) noexcept;
 
 private:
     UploadMcVector<UploadFrameSlot> slots{};
@@ -163,6 +172,9 @@ private:
     resource::GpuMemoryHost* memory_host = nullptr;
     VkQueue submit_queue = VK_NULL_HANDLE;
     uint32_t queue_family_index = 0U;
+    uint32_t graphics_queue_family_index = 0U;
+    VkQueueFlags submit_queue_flags = 0U;
+    bool cross_queue_submit = false;
     bool synchronization2_enabled = false;
     bool initialized = false;
 };
