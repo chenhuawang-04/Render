@@ -122,6 +122,7 @@ set(VR_GENERATED_TEXT_SHADER_DIR "${VR_GENERATED_INCLUDE_DIR}/vr/text/generated"
 set(VR_GENERATED_GEOMETRY_SHADER_DIR "${VR_GENERATED_INCLUDE_DIR}/vr/geometry/generated")
 set(VR_GENERATED_SURFACE_SHADER_DIR "${VR_GENERATED_INCLUDE_DIR}/vr/surface/generated")
 set(VR_GENERATED_SHADOW_SHADER_DIR "${VR_GENERATED_INCLUDE_DIR}/vr/shadow/generated")
+set(VR_GENERATED_RENDER_SHADER_DIR "${VR_GENERATED_INCLUDE_DIR}/vr/render/generated")
 set(VR_GENERATED_SHADER_REFLECT_DIR "${VR_GENERATED_INCLUDE_DIR}/vr/shader_reflect")
 set(VR_GENERATED_SHADER_CONTRACT_DIR "${VR_GENERATED_INCLUDE_DIR}/vr/shader_contract")
 set(VR_SHADER_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/shaders")
@@ -189,6 +190,7 @@ function(vr_compile_shader_to_header input_file stage symbol_name output_header 
         COMMAND ${CMAKE_COMMAND} -E make_directory "${VR_GENERATED_GEOMETRY_SHADER_DIR}"
         COMMAND ${CMAKE_COMMAND} -E make_directory "${VR_GENERATED_SURFACE_SHADER_DIR}"
         COMMAND ${CMAKE_COMMAND} -E make_directory "${VR_GENERATED_SHADOW_SHADER_DIR}"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${VR_GENERATED_RENDER_SHADER_DIR}"
         COMMAND ${CMAKE_COMMAND} -E make_directory "${VR_GENERATED_SHADER_REFLECT_DIR}"
         COMMAND ${CMAKE_COMMAND} -E make_directory "${VR_GENERATED_SHADER_CONTRACT_DIR}"
         COMMAND "${GLSLANG_VALIDATOR_EXECUTABLE}" -V --target-env vulkan1.3 -S "${stage}" -e main
@@ -222,6 +224,8 @@ set(VR_SURFACE_3D_VERT_HEADER "${VR_GENERATED_SURFACE_SHADER_DIR}/surface_3d_ver
 set(VR_SURFACE_3D_FRAG_HEADER "${VR_GENERATED_SURFACE_SHADER_DIR}/surface_3d_frag_spv.hpp")
 set(VR_SHADOW_2D_VERT_HEADER "${VR_GENERATED_SHADOW_SHADER_DIR}/shadow_depth_2d_vert_spv.hpp")
 set(VR_SHADOW_3D_VERT_HEADER "${VR_GENERATED_SHADOW_SHADER_DIR}/shadow_depth_3d_vert_spv.hpp")
+set(VR_RENDER_TARGET_COMPOSITE_VERT_HEADER "${VR_GENERATED_RENDER_SHADER_DIR}/render_target_composite_vert_spv.hpp")
+set(VR_RENDER_TARGET_COMPOSITE_FRAG_HEADER "${VR_GENERATED_RENDER_SHADER_DIR}/render_target_composite_frag_spv.hpp")
 
 vr_compile_shader_to_header("${VR_SHADER_SOURCE_DIR}/text_2d.vert"
                             "vert"
@@ -293,6 +297,16 @@ vr_compile_shader_to_header("${VR_SHADER_SOURCE_DIR}/shadow_depth_2d.vert"
                             "k_shadow_depth_2d_vert_spv"
                             "${VR_SHADOW_2D_VERT_HEADER}"
                             "vr::shadow::generated")
+vr_compile_shader_to_header("${VR_SHADER_SOURCE_DIR}/render_target_composite.vert"
+                            "vert"
+                            "k_render_target_composite_vert_spv"
+                            "${VR_RENDER_TARGET_COMPOSITE_VERT_HEADER}"
+                            "vr::render::generated")
+vr_compile_shader_to_header("${VR_SHADER_SOURCE_DIR}/render_target_composite.frag"
+                            "frag"
+                            "k_render_target_composite_frag_spv"
+                            "${VR_RENDER_TARGET_COMPOSITE_FRAG_HEADER}"
+                            "vr::render::generated")
 
 add_custom_target(vr_generated_shaders
     DEPENDS
@@ -310,6 +324,8 @@ add_custom_target(vr_generated_shaders
         "${VR_SURFACE_3D_FRAG_HEADER}"
         "${VR_SHADOW_2D_VERT_HEADER}"
         "${VR_SHADOW_3D_VERT_HEADER}"
+        "${VR_RENDER_TARGET_COMPOSITE_VERT_HEADER}"
+        "${VR_RENDER_TARGET_COMPOSITE_FRAG_HEADER}"
         ${VR_SHADER_REFLECTION_OUTPUTS}
         ${VR_SHADER_CONTRACT_OUTPUTS}
 )
@@ -340,7 +356,9 @@ add_library(vulkan_init STATIC
     src/render/descriptor_host.cpp
     src/render/pipeline_host.cpp
     src/render/render_target_host.cpp
+    src/render/render_target_pass.cpp
     src/render/render_target_pool.cpp
+    src/render/render_target_composite_renderer.cpp
     src/text/freetype_host.cpp
     src/text/glyph_atlas_host.cpp
     src/text/glyph_upload_host.cpp
@@ -473,6 +491,15 @@ add_executable(sdl_text_3d_demo
 )
 
 target_link_libraries(sdl_text_3d_demo
+    PRIVATE
+        vulkan_platform_sdl
+)
+
+add_executable(sdl_offscreen_postprocess_demo
+    examples/sdl_offscreen_postprocess_demo.cpp
+)
+
+target_link_libraries(sdl_offscreen_postprocess_demo
     PRIVATE
         vulkan_platform_sdl
 )

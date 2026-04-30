@@ -15,6 +15,30 @@ namespace {
     return (aspect_mask_ & (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT)) != 0U;
 }
 
+[[nodiscard]] bool OwnedDescStructurallyEquals(const RenderTargetDesc& lhs_,
+                                               const RenderTargetDesc& rhs_) noexcept {
+    return lhs_.dimension == rhs_.dimension &&
+           lhs_.lifetime == rhs_.lifetime &&
+           lhs_.scale_mode == rhs_.scale_mode &&
+           lhs_.width == rhs_.width &&
+           lhs_.height == rhs_.height &&
+           lhs_.depth == rhs_.depth &&
+           lhs_.width_scale == rhs_.width_scale &&
+           lhs_.height_scale == rhs_.height_scale &&
+           lhs_.flags == rhs_.flags &&
+           lhs_.format == rhs_.format &&
+           lhs_.samples == rhs_.samples &&
+           lhs_.usage == rhs_.usage &&
+           lhs_.aspect == rhs_.aspect &&
+           lhs_.mip_levels == rhs_.mip_levels &&
+           lhs_.array_layers == rhs_.array_layers &&
+           lhs_.color_encoding == rhs_.color_encoding &&
+           lhs_.memory_policy == rhs_.memory_policy &&
+           lhs_.allow_uav == rhs_.allow_uav &&
+           lhs_.allow_alias == rhs_.allow_alias &&
+           lhs_.allow_history == rhs_.allow_history;
+}
+
 } // namespace
 
 void RenderTargetHost::Initialize(VulkanContext& context_,
@@ -133,6 +157,91 @@ RenderTargetHandle RenderTargetHost::CreatePersistentTarget(VulkanContext& conte
     ++stats.resource_revision;
     RefreshStats();
     return record.handle;
+}
+
+EnsureRenderTargetResult RenderTargetHost::EnsurePersistentTarget(
+    VulkanContext& context_,
+    RenderTargetHandle current_handle_,
+    const RenderTargetDesc& desc_,
+    VkExtent2D reference_extent_,
+    std::uint64_t last_submitted_value_,
+    std::uint64_t completed_submit_value_) {
+    if (!initialized || gpu_memory_host == nullptr) {
+        throw std::runtime_error("RenderTargetHost::EnsurePersistentTarget called before Initialize");
+    }
+
+    RenderTargetDesc normalized_desc = desc_;
+    ValidateOwnedDesc(normalized_desc);
+    CollectRetiredTargets(context_, completed_submit_value_);
+
+    EnsureRenderTargetResult result{};
+    TargetRecord* record = Resolve(current_handle_);
+    if (record == nullptr) {
+        result.handle = (normalized_desc.lifetime == RenderTargetLifetime::history)
+            ? CreateHistoryTarget(context_, normalized_desc, reference_extent_)
+            : CreatePersistentTarget(context_, normalized_desc, reference_extent_);
+        result.created = true;
+        result.revision_changed = true;
+        return result;
+    }
+
+    if (record->ownership != RenderTargetOwnership::owned) {
+        throw std::invalid_argument(
+            "RenderTargetHost::EnsurePersistentTarget requires an owned target handle");
+    }
+
+    const VkExtent3D desired_extent = ResolveExtent(normalized_desc, reference_extent_);
+    const bool requires_recreate =
+        !OwnedDescStructurallyEquals(record->desc, normalized_desc) ||
+        record->extent.width != desired_extent.width ||
+        record->extent.height != desired_extent.height ||
+        record->extent.depth != desired_extent.depth;
+
+    record->desc.debug_name = normalized_desc.debug_name;
+    result.handle = record->handle;
+
+    if (!requires_recreate) {
+        return result;
+    }
+
+    resource::ImageResource replacement_resource = resource::ImageHost::CreateImage(
+        context_,
+        BuildOwnedImageCreateInfo(context_, create_info_cache, normalized_desc, reference_extent_),
+        *gpu_memory_host);
+
+    RetiredTargetPayload payload{};
+    payload.owned_resource = std::move(record->owned_resource);
+    if (payload.owned_resource.image != VK_NULL_HANDLE) {
+        retired_targets.Retire(std::move(payload), last_submitted_value_);
+    }
+
+    record->desc = normalized_desc;
+    record->owned_resource = std::move(replacement_resource);
+    record->default_view_desc = RenderTargetViewDesc{
+        .view_type = DefaultViewType(normalized_desc.dimension, normalized_desc.array_layers),
+        .aspect = normalized_desc.aspect,
+        .base_mip_level = 0U,
+        .level_count = normalized_desc.mip_levels,
+        .base_array_layer = 0U,
+        .layer_count = normalized_desc.array_layers,
+    };
+    record->format = normalized_desc.format;
+    record->extent = record->owned_resource.extent;
+    record->samples = normalized_desc.samples;
+    record->usage = normalized_desc.usage;
+    record->aspect = normalized_desc.aspect;
+    record->state = RenderTargetStateKind::undefined;
+    if (record->resource_revision == (std::numeric_limits<std::uint32_t>::max)()) {
+        record->resource_revision = 1U;
+    } else {
+        ++record->resource_revision;
+    }
+    ++stats.resource_revision;
+    RefreshStats();
+
+    result.recreated = true;
+    result.revision_changed = true;
+    return result;
 }
 
 RenderTargetHandle RenderTargetHost::CreateHistoryTarget(VulkanContext& context_,
@@ -297,6 +406,7 @@ RenderTargetResolvedView RenderTargetHost::ResolveView(RenderTargetHandle handle
     resolved.samples = record->samples;
     resolved.usage = record->usage;
     resolved.aspect = record->aspect;
+    resolved.color_encoding = record->desc.color_encoding;
     resolved.lifetime = record->desc.lifetime;
     resolved.ownership = record->ownership;
     resolved.state = record->state;

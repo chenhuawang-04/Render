@@ -1,6 +1,7 @@
 #include "vr/text/text_renderer_2d.hpp"
 
 #include "vr/render/render_loop_host.hpp"
+#include "vr/render/render_target_pass.hpp"
 #include "vr/render/runtime_prepare_context.hpp"
 #include "vr/render/upload_host.hpp"
 #include "vr/resource/gpu_memory_host.hpp"
@@ -118,6 +119,10 @@ void TextRenderer2D::Initialize(const TextRenderer2DCreateInfo& create_info_) {
 }
 
 void TextRenderer2D::Shutdown(VulkanContext& context_) {
+    if (context_.Device() != VK_NULL_HANDLE) {
+        (void)vkDeviceWaitIdle(context_.Device());
+    }
+
     for (auto& frame_state : frame_states) {
         resource::BufferHost::DestroyBuffer(context_, frame_state.vertex_buffer);
         frame_state.vertex_buffer_capacity_bytes = 0U;
@@ -132,6 +137,7 @@ void TextRenderer2D::Shutdown(VulkanContext& context_) {
     frame_states.clear();
 
     image_initialized.clear();
+    output_target_config = {};
     gpu_instances.clear();
 
     runtime_scratch.glyph_quads.clear();
@@ -185,6 +191,15 @@ void TextRenderer2D::SetComponents(ecs::Text<ecs::Dim2>* components_,
                                    std::uint32_t component_count_) noexcept {
     components = components_;
     component_count = component_count_;
+}
+
+void TextRenderer2D::SetOutputTargetConfig(
+    const render::RenderTargetColorOutputConfig& output_target_config_) noexcept {
+    output_target_config = output_target_config_;
+}
+
+void TextRenderer2D::ResetOutputTargetConfig() noexcept {
+    output_target_config = {};
 }
 
 void TextRenderer2D::PrepareFrame(const render::RuntimePrepareContext& prepare_context_) {
@@ -323,11 +338,6 @@ void TextRenderer2D::Record(const render::FrameRecordContext& record_context_) {
         throw std::runtime_error("TextRenderer2D::Record received zero-sized swapchain extent");
     }
 
-    EnsurePipelineObjects(*context,
-                          *descriptor_host,
-                          *pipeline_host,
-                          record_context_.format);
-
     if (record_context_.image_index >= image_initialized.size()) {
         const std::size_t previous_size = image_initialized.size();
         image_initialized.resize(record_context_.image_index + 1U);
@@ -337,46 +347,31 @@ void TextRenderer2D::Record(const render::FrameRecordContext& record_context_) {
     }
     const bool has_previous_content = image_initialized[record_context_.image_index] != 0U;
 
-    RecordImageTransitionToColorAttachment(record_context_, has_previous_content);
+    const render::ResolvedColorRenderPass color_pass = render::BuildColorRenderPass(
+        record_context_,
+        output_target_config,
+        create_info_cache.clear_swapchain,
+        create_info_cache.clear_color,
+        has_previous_content);
+    EnsurePipelineObjects(*context,
+                          *descriptor_host,
+                          *pipeline_host,
+                          color_pass.target.format);
 
-    VkRenderingAttachmentInfo color_attachment{};
-    color_attachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-    color_attachment.imageView = record_context_.image_view;
-    color_attachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    color_attachment.resolveMode = VK_RESOLVE_MODE_NONE;
-    color_attachment.resolveImageView = VK_NULL_HANDLE;
-    color_attachment.resolveImageLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    color_attachment.loadOp = (create_info_cache.clear_swapchain || !has_previous_content)
-        ? VK_ATTACHMENT_LOAD_OP_CLEAR
-        : VK_ATTACHMENT_LOAD_OP_LOAD;
-    color_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    color_attachment.clearValue.color = create_info_cache.clear_color;
-
-    VkRenderingInfo rendering_info{};
-    rendering_info.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
-    rendering_info.renderArea.offset = {0, 0};
-    rendering_info.renderArea.extent = record_context_.extent;
-    rendering_info.layerCount = 1U;
-    rendering_info.viewMask = 0U;
-    rendering_info.colorAttachmentCount = 1U;
-    rendering_info.pColorAttachments = &color_attachment;
-    rendering_info.pDepthAttachment = nullptr;
-    rendering_info.pStencilAttachment = nullptr;
-
-    vkCmdBeginRendering(record_context_.command_buffer, &rendering_info);
+    vkCmdBeginRendering(record_context_.command_buffer, color_pass.rendering_info.VkInfoPtr());
 
     VkViewport viewport{};
     viewport.x = 0.0F;
     viewport.y = 0.0F;
-    viewport.width = static_cast<float>(record_context_.extent.width);
-    viewport.height = static_cast<float>(record_context_.extent.height);
+    viewport.width = static_cast<float>(color_pass.target.extent.width);
+    viewport.height = static_cast<float>(color_pass.target.extent.height);
     viewport.minDepth = 0.0F;
     viewport.maxDepth = 1.0F;
     vkCmdSetViewport(record_context_.command_buffer, 0U, 1U, &viewport);
 
     VkRect2D scissor{};
     scissor.offset = {0, 0};
-    scissor.extent = record_context_.extent;
+    scissor.extent = color_pass.target.extent;
     vkCmdSetScissor(record_context_.command_buffer, 0U, 1U, &scissor);
 
     const VkPipeline pipeline_handle = pipeline_host->GetGraphicsPipeline(graphics_pipeline_id);
@@ -386,8 +381,8 @@ void TextRenderer2D::Record(const render::FrameRecordContext& record_context_) {
                       pipeline_handle);
 
     PushConstants push_constants{};
-    push_constants.inv_viewport_x = 1.0F / static_cast<float>(record_context_.extent.width);
-    push_constants.inv_viewport_y = 1.0F / static_cast<float>(record_context_.extent.height);
+    push_constants.inv_viewport_x = 1.0F / static_cast<float>(color_pass.target.extent.width);
+    push_constants.inv_viewport_y = 1.0F / static_cast<float>(color_pass.target.extent.height);
     push_constants.depth = create_info_cache.depth;
     push_constants.sdf_smooth = create_info_cache.sdf_smooth;
     push_constants.bitmap_gamma = create_info_cache.bitmap_gamma;
@@ -456,7 +451,7 @@ void TextRenderer2D::Record(const render::FrameRecordContext& record_context_) {
     }
 
     vkCmdEndRendering(record_context_.command_buffer);
-    RecordImageTransitionToPresent(record_context_);
+    render::RecordEndColorPass(record_context_, output_target_config);
     image_initialized[record_context_.image_index] = 1U;
 }
 
@@ -900,69 +895,6 @@ VkDescriptorSet TextRenderer2D::EnsurePageDescriptorSet(VulkanContext& context_,
     frame_state.page_set_epochs[page_index_] = frame_state.page_set_epoch;
     ++stats.descriptor_set_update_count;
     return descriptor_set;
-}
-
-void TextRenderer2D::RecordImageTransitionToColorAttachment(
-    const render::FrameRecordContext& record_context_,
-    bool has_previous_content_) const {
-    VkImageMemoryBarrier barrier{};
-    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    barrier.srcAccessMask = has_previous_content_ ? VK_ACCESS_MEMORY_READ_BIT : 0U;
-    barrier.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-    barrier.oldLayout = has_previous_content_
-        ? VK_IMAGE_LAYOUT_PRESENT_SRC_KHR
-        : VK_IMAGE_LAYOUT_UNDEFINED;
-    barrier.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.image = record_context_.image;
-    barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    barrier.subresourceRange.baseMipLevel = 0U;
-    barrier.subresourceRange.levelCount = 1U;
-    barrier.subresourceRange.baseArrayLayer = 0U;
-    barrier.subresourceRange.layerCount = 1U;
-
-    vkCmdPipelineBarrier(record_context_.command_buffer,
-                         has_previous_content_
-                             ? VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT
-                             : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                         VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-                         0U,
-                         0U,
-                         nullptr,
-                         0U,
-                         nullptr,
-                         1U,
-                         &barrier);
-}
-
-void TextRenderer2D::RecordImageTransitionToPresent(
-    const render::FrameRecordContext& record_context_) const {
-    VkImageMemoryBarrier barrier{};
-    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    barrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-    barrier.dstAccessMask = 0U;
-    barrier.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    barrier.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.image = record_context_.image;
-    barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    barrier.subresourceRange.baseMipLevel = 0U;
-    barrier.subresourceRange.levelCount = 1U;
-    barrier.subresourceRange.baseArrayLayer = 0U;
-    barrier.subresourceRange.layerCount = 1U;
-
-    vkCmdPipelineBarrier(record_context_.command_buffer,
-                         VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-                         VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
-                         0U,
-                         0U,
-                         nullptr,
-                         0U,
-                         nullptr,
-                         1U,
-                         &barrier);
 }
 
 } // namespace vr::text

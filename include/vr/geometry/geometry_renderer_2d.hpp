@@ -5,6 +5,7 @@
 #include "vr/geometry/geometry_upload_host.hpp"
 #include "vr/render/appearance_prepare_bridge.hpp"
 #include "vr/render/pipeline_host.hpp"
+#include "vr/render/render_target_pass.hpp"
 
 #include <cstdint>
 
@@ -72,6 +73,8 @@ public:
     void SetAppearanceDirtyHint(const std::uint32_t* dirty_component_indices_,
                                 std::uint32_t dirty_component_count_) noexcept;
     void SetAppearanceCoordinator(render::AppearanceFrameCoordinator<ecs::Dim2>* appearance_frame_coordinator_) noexcept;
+    void SetOutputTargetConfig(const render::RenderTargetColorOutputConfig& output_target_config_) noexcept;
+    void ResetOutputTargetConfig() noexcept;
 
     void PrepareFrame(const render::RuntimePrepareContext& prepare_context_);
     void Record(const render::FrameRecordContext& record_context_);
@@ -104,10 +107,6 @@ private:
     void EnsurePipelineObjects(VulkanContext& context_,
                                render::PipelineHost& pipeline_host_,
                                VkFormat color_format_);
-    void RecordImageTransitionToColorAttachment(const render::FrameRecordContext& record_context_,
-                                                bool has_previous_content_) const;
-    void RecordImageTransitionToPresent(const render::FrameRecordContext& record_context_) const;
-
 private:
     GeometryRenderer2DCreateInfo create_info_cache{};
     GeometryRenderer2DStats stats{};
@@ -135,6 +134,7 @@ private:
 
     GeometryRenderer2DMcVector<std::uint8_t> image_initialized{};
     GeometryUploadRange primitive_range{};
+    render::RenderTargetColorOutputConfig output_target_config{};
 
     std::uint32_t active_frame_index = 0U;
     VkExtent2D swapchain_extent{};

@@ -3,6 +3,7 @@
 #include "vr/geometry/generated/geometry_2d_frag_spv.hpp"
 #include "vr/geometry/generated/geometry_2d_vert_spv.hpp"
 #include "vr/render/render_loop_host.hpp"
+#include "vr/render/render_target_pass.hpp"
 #include "vr/render/runtime_prepare_context.hpp"
 #include "vr/render/upload_host.hpp"
 #include "vr/vulkan_context.hpp"
@@ -30,6 +31,7 @@ void GeometryRenderer2D::Initialize(const GeometryRenderer2DCreateInfo& create_i
     pipeline_color_format = VK_FORMAT_UNDEFINED;
     image_initialized.clear();
     primitive_range = {};
+    output_target_config = {};
     runtime_stats = {};
     appearance_runtime_stats = {};
     appearance_link_stats = {};
@@ -64,6 +66,7 @@ void GeometryRenderer2D::Shutdown(VulkanContext& context_) {
 
     image_initialized.clear();
     primitive_range = {};
+    output_target_config = {};
     runtime_scratch.primitives.clear();
     runtime_scratch.draw_batches.clear();
     runtime_scratch.batch_scratch.visible_items.clear();
@@ -112,6 +115,15 @@ void GeometryRenderer2D::SetAppearanceCoordinator(
     render::AppearanceFrameCoordinator<ecs::Dim2>* appearance_frame_coordinator_) noexcept {
     appearance_prepare_bridge.SetCoordinator(appearance_frame_coordinator_);
     appearance_prepare_bridge.Reserve(appearance_component_count);
+}
+
+void GeometryRenderer2D::SetOutputTargetConfig(
+    const render::RenderTargetColorOutputConfig& output_target_config_) noexcept {
+    output_target_config = output_target_config_;
+}
+
+void GeometryRenderer2D::ResetOutputTargetConfig() noexcept {
+    output_target_config = {};
 }
 
 void GeometryRenderer2D::PrepareFrame(const render::RuntimePrepareContext& prepare_context_) {
@@ -216,45 +228,28 @@ void GeometryRenderer2D::Record(const render::FrameRecordContext& record_context
     }
     const bool has_previous_content = image_initialized[record_context_.image_index] != 0U;
 
-    RecordImageTransitionToColorAttachment(record_context_, has_previous_content);
-    EnsurePipelineObjects(*context, *pipeline_host, record_context_.format);
+    const render::ResolvedColorRenderPass color_pass = render::BuildColorRenderPass(
+        record_context_,
+        output_target_config,
+        create_info_cache.clear_swapchain,
+        create_info_cache.clear_color,
+        has_previous_content);
+    EnsurePipelineObjects(*context, *pipeline_host, color_pass.target.format);
 
-    VkRenderingAttachmentInfo color_attachment{};
-    color_attachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-    color_attachment.imageView = record_context_.image_view;
-    color_attachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    color_attachment.resolveMode = VK_RESOLVE_MODE_NONE;
-    color_attachment.resolveImageView = VK_NULL_HANDLE;
-    color_attachment.resolveImageLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    color_attachment.loadOp = (create_info_cache.clear_swapchain || !has_previous_content)
-        ? VK_ATTACHMENT_LOAD_OP_CLEAR
-        : VK_ATTACHMENT_LOAD_OP_LOAD;
-    color_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    color_attachment.clearValue.color = create_info_cache.clear_color;
-
-    VkRenderingInfo rendering_info{};
-    rendering_info.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
-    rendering_info.renderArea.offset = VkOffset2D{0, 0};
-    rendering_info.renderArea.extent = record_context_.extent;
-    rendering_info.layerCount = 1U;
-    rendering_info.colorAttachmentCount = 1U;
-    rendering_info.pColorAttachments = &color_attachment;
-    rendering_info.pDepthAttachment = nullptr;
-    rendering_info.pStencilAttachment = nullptr;
-    vkCmdBeginRendering(record_context_.command_buffer, &rendering_info);
+    vkCmdBeginRendering(record_context_.command_buffer, color_pass.rendering_info.VkInfoPtr());
 
     VkViewport viewport{};
     viewport.x = 0.0F;
     viewport.y = 0.0F;
-    viewport.width = static_cast<float>(record_context_.extent.width);
-    viewport.height = static_cast<float>(record_context_.extent.height);
+    viewport.width = static_cast<float>(color_pass.target.extent.width);
+    viewport.height = static_cast<float>(color_pass.target.extent.height);
     viewport.minDepth = 0.0F;
     viewport.maxDepth = 1.0F;
     vkCmdSetViewport(record_context_.command_buffer, 0U, 1U, &viewport);
 
     VkRect2D scissor{};
     scissor.offset = VkOffset2D{0, 0};
-    scissor.extent = record_context_.extent;
+    scissor.extent = color_pass.target.extent;
     vkCmdSetScissor(record_context_.command_buffer, 0U, 1U, &scissor);
 
     if (pipeline_id.IsValid()) {
@@ -263,13 +258,13 @@ void GeometryRenderer2D::Record(const render::FrameRecordContext& record_context
                           pipeline_host->GetGraphicsPipeline(pipeline_id));
 
         PushConstants push_constants{};
-        push_constants.viewport_width = static_cast<float>(record_context_.extent.width);
-        push_constants.viewport_height = static_cast<float>(record_context_.extent.height);
-        push_constants.inv_viewport_width_2x = (record_context_.extent.width > 0U)
-            ? (2.0F / static_cast<float>(record_context_.extent.width))
+        push_constants.viewport_width = static_cast<float>(color_pass.target.extent.width);
+        push_constants.viewport_height = static_cast<float>(color_pass.target.extent.height);
+        push_constants.inv_viewport_width_2x = (color_pass.target.extent.width > 0U)
+            ? (2.0F / static_cast<float>(color_pass.target.extent.width))
             : 0.0F;
-        push_constants.inv_viewport_height_2x = (record_context_.extent.height > 0U)
-            ? (2.0F / static_cast<float>(record_context_.extent.height))
+        push_constants.inv_viewport_height_2x = (color_pass.target.extent.height > 0U)
+            ? (2.0F / static_cast<float>(color_pass.target.extent.height))
             : 0.0F;
         push_constants.params = 0U;
         push_constants.params |= create_info_cache.input_positions_pixel_space ? 0x1U : 0U;
@@ -310,7 +305,7 @@ void GeometryRenderer2D::Record(const render::FrameRecordContext& record_context
     }
 
     vkCmdEndRendering(record_context_.command_buffer);
-    RecordImageTransitionToPresent(record_context_);
+    render::RecordEndColorPass(record_context_, output_target_config);
     image_initialized[record_context_.image_index] = 1U;
 }
 
@@ -452,65 +447,6 @@ void GeometryRenderer2D::EnsurePipelineObjects(VulkanContext& context_,
     desc.color_blend.attachments.push_back(blend);
 
     pipeline_id = pipeline_host_.RegisterGraphicsPipeline(context_, desc);
-}
-
-void GeometryRenderer2D::RecordImageTransitionToColorAttachment(const render::FrameRecordContext& record_context_,
-                                                                bool has_previous_content_) const {
-    VkImageMemoryBarrier barrier{};
-    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    barrier.srcAccessMask = has_previous_content_ ? VK_ACCESS_MEMORY_READ_BIT : 0U;
-    barrier.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-    barrier.oldLayout = has_previous_content_ ? VK_IMAGE_LAYOUT_PRESENT_SRC_KHR : VK_IMAGE_LAYOUT_UNDEFINED;
-    barrier.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.image = record_context_.image;
-    barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    barrier.subresourceRange.baseMipLevel = 0U;
-    barrier.subresourceRange.levelCount = 1U;
-    barrier.subresourceRange.baseArrayLayer = 0U;
-    barrier.subresourceRange.layerCount = 1U;
-
-    vkCmdPipelineBarrier(record_context_.command_buffer,
-                         has_previous_content_
-                             ? VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT
-                             : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                         VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-                         0U,
-                         0U,
-                         nullptr,
-                         0U,
-                         nullptr,
-                         1U,
-                         &barrier);
-}
-
-void GeometryRenderer2D::RecordImageTransitionToPresent(const render::FrameRecordContext& record_context_) const {
-    VkImageMemoryBarrier barrier{};
-    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    barrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-    barrier.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT;
-    barrier.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    barrier.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.image = record_context_.image;
-    barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    barrier.subresourceRange.baseMipLevel = 0U;
-    barrier.subresourceRange.levelCount = 1U;
-    barrier.subresourceRange.baseArrayLayer = 0U;
-    barrier.subresourceRange.layerCount = 1U;
-
-    vkCmdPipelineBarrier(record_context_.command_buffer,
-                         VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-                         VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
-                         0U,
-                         0U,
-                         nullptr,
-                         0U,
-                         nullptr,
-                         1U,
-                         &barrier);
 }
 
 } // namespace vr::geometry

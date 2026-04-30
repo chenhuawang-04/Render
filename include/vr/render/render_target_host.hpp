@@ -9,6 +9,7 @@
 
 #include <array>
 #include <cstdint>
+#include <utility>
 
 namespace vr::resource {
 class GpuMemoryHost;
@@ -35,10 +36,18 @@ struct RenderTargetResolvedView final {
     VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
     VkImageUsageFlags usage = 0U;
     VkImageAspectFlags aspect = 0U;
+    RenderTargetColorEncoding color_encoding = RenderTargetColorEncoding::linear;
     RenderTargetLifetime lifetime = RenderTargetLifetime::persistent;
     RenderTargetOwnership ownership = RenderTargetOwnership::owned;
     RenderTargetStateKind state = RenderTargetStateKind::undefined;
     std::uint32_t resource_revision = 0U;
+};
+
+struct EnsureRenderTargetResult final {
+    RenderTargetHandle handle{};
+    bool created = false;
+    bool recreated = false;
+    bool revision_changed = false;
 };
 
 struct RenderTargetHostStats final {
@@ -59,10 +68,75 @@ struct RenderTargetRenderingInfo final {
     std::array<VkRenderingAttachmentInfo, k_max_render_target_color_attachments> color_attachments{};
     VkRenderingAttachmentInfo depth_attachment{};
     VkRenderingAttachmentInfo stencil_attachment{};
-    VkRenderingInfo vk{};
+    mutable VkRenderingInfo vk{};
     std::uint32_t color_attachment_count = 0U;
     bool has_depth_attachment = false;
     bool has_stencil_attachment = false;
+
+    RenderTargetRenderingInfo() = default;
+
+    RenderTargetRenderingInfo(const RenderTargetRenderingInfo& other_) noexcept
+        : color_attachments(other_.color_attachments),
+          depth_attachment(other_.depth_attachment),
+          stencil_attachment(other_.stencil_attachment),
+          vk(other_.vk),
+          color_attachment_count(other_.color_attachment_count),
+          has_depth_attachment(other_.has_depth_attachment),
+          has_stencil_attachment(other_.has_stencil_attachment) {
+        RefreshPointers();
+    }
+
+    RenderTargetRenderingInfo(RenderTargetRenderingInfo&& other_) noexcept
+        : color_attachments(std::move(other_.color_attachments)),
+          depth_attachment(other_.depth_attachment),
+          stencil_attachment(other_.stencil_attachment),
+          vk(other_.vk),
+          color_attachment_count(other_.color_attachment_count),
+          has_depth_attachment(other_.has_depth_attachment),
+          has_stencil_attachment(other_.has_stencil_attachment) {
+        RefreshPointers();
+    }
+
+    RenderTargetRenderingInfo& operator=(const RenderTargetRenderingInfo& other_) noexcept {
+        if (this == &other_) {
+            return *this;
+        }
+        color_attachments = other_.color_attachments;
+        depth_attachment = other_.depth_attachment;
+        stencil_attachment = other_.stencil_attachment;
+        vk = other_.vk;
+        color_attachment_count = other_.color_attachment_count;
+        has_depth_attachment = other_.has_depth_attachment;
+        has_stencil_attachment = other_.has_stencil_attachment;
+        RefreshPointers();
+        return *this;
+    }
+
+    RenderTargetRenderingInfo& operator=(RenderTargetRenderingInfo&& other_) noexcept {
+        if (this == &other_) {
+            return *this;
+        }
+        color_attachments = std::move(other_.color_attachments);
+        depth_attachment = other_.depth_attachment;
+        stencil_attachment = other_.stencil_attachment;
+        vk = other_.vk;
+        color_attachment_count = other_.color_attachment_count;
+        has_depth_attachment = other_.has_depth_attachment;
+        has_stencil_attachment = other_.has_stencil_attachment;
+        RefreshPointers();
+        return *this;
+    }
+
+    void RefreshPointers() const noexcept {
+        vk.pColorAttachments = (color_attachment_count > 0U) ? color_attachments.data() : nullptr;
+        vk.pDepthAttachment = has_depth_attachment ? &depth_attachment : nullptr;
+        vk.pStencilAttachment = has_stencil_attachment ? &stencil_attachment : nullptr;
+    }
+
+    [[nodiscard]] const VkRenderingInfo* VkInfoPtr() const noexcept {
+        RefreshPointers();
+        return &vk;
+    }
 };
 
 class RenderTargetHost final {
@@ -106,6 +180,13 @@ public:
     [[nodiscard]] RenderTargetHandle CreatePersistentTarget(VulkanContext& context_,
                                                             const RenderTargetDesc& desc_,
                                                             VkExtent2D reference_extent_ = {});
+    [[nodiscard]] EnsureRenderTargetResult EnsurePersistentTarget(
+        VulkanContext& context_,
+        RenderTargetHandle current_handle_,
+        const RenderTargetDesc& desc_,
+        VkExtent2D reference_extent_,
+        std::uint64_t last_submitted_value_,
+        std::uint64_t completed_submit_value_);
 
     [[nodiscard]] RenderTargetHandle CreateHistoryTarget(VulkanContext& context_,
                                                          const RenderTargetDesc& desc_,

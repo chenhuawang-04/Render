@@ -11,6 +11,7 @@
 #include "vr/render/light_frame_coordinator.hpp"
 #include "vr/render/light_shadow_link_coordinator.hpp"
 #include "vr/render/pipeline_host.hpp"
+#include "vr/render/render_target_pass.hpp"
 #include "vr/render/shadow_atlas_binding_coordinator.hpp"
 #include "vr/render/shadow_frame_coordinator.hpp"
 #include "vr/resource/sampler_host.hpp"
@@ -129,6 +130,8 @@ public:
     void SetShadowAtlasBindingCoordinator(render::ShadowAtlasBindingCoordinator* shadow_atlas_binding_coordinator_) noexcept;
     void SetShadowFrameCoordinator(render::ShadowFrameCoordinator<ecs::Dim2>* shadow_frame_coordinator_) noexcept;
     void SetShadowAtlasHost(shadow::ShadowAtlasHost* shadow_atlas_host_) noexcept;
+    void SetOutputTargetConfig(const render::RenderTargetColorOutputConfig& output_target_config_) noexcept;
+    void ResetOutputTargetConfig() noexcept;
 
     void PrepareFrame(const render::RuntimePrepareContext& prepare_context_);
     void Record(const render::FrameRecordContext& record_context_);
@@ -239,10 +242,6 @@ private:
     [[nodiscard]] VkDescriptorSet AcquireTextureDescriptorSet(std::uint32_t frame_index_,
                                                               std::uint32_t image_id_);
 
-    void RecordImageTransitionToColorAttachment(const render::FrameRecordContext& record_context_,
-                                                bool has_previous_content_) const;
-    void RecordImageTransitionToPresent(const render::FrameRecordContext& record_context_) const;
-
 private:
     SurfaceRenderer2DCreateInfo create_info_cache{};
     SurfaceRenderer2DStats stats{};
@@ -289,6 +288,7 @@ private:
     resource::SamplerId shadow_sampler_id{};
 
     SurfaceRenderer2DMcVector<std::uint8_t> image_initialized{};
+    render::RenderTargetColorOutputConfig output_target_config{};
 
     std::uint32_t active_frame_index = 0U;
     VkExtent2D swapchain_extent{};

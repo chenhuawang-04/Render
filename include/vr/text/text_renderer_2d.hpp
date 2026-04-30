@@ -4,6 +4,7 @@
 #include "vr/ecs/system/text_runtime_system.hpp"
 #include "vr/render/descriptor_host.hpp"
 #include "vr/render/pipeline_host.hpp"
+#include "vr/render/render_target_pass.hpp"
 #include "vr/resource/buffer_host.hpp"
 #include "vr/text/glyph_upload_host.hpp"
 
@@ -68,6 +69,8 @@ public:
 
     void SetComponents(ecs::Text<ecs::Dim2>* components_,
                        std::uint32_t component_count_) noexcept;
+    void SetOutputTargetConfig(const render::RenderTargetColorOutputConfig& output_target_config_) noexcept;
+    void ResetOutputTargetConfig() noexcept;
 
     void PrepareFrame(const render::RuntimePrepareContext& prepare_context_);
     void Record(const render::FrameRecordContext& record_context_);
@@ -145,10 +148,6 @@ private:
                                                           std::uint32_t frame_index_,
                                                           std::uint32_t page_index_);
 
-    void RecordImageTransitionToColorAttachment(const render::FrameRecordContext& record_context_,
-                                                bool has_previous_content_) const;
-    void RecordImageTransitionToPresent(const render::FrameRecordContext& record_context_) const;
-
 private:
     TextRenderer2DCreateInfo create_info_cache{};
     TextRenderer2DStats stats{};
@@ -160,6 +159,7 @@ private:
     TextRenderer2DMcVector<GpuTextInstance> gpu_instances{};
     TextRenderer2DMcVector<PerFrameState> frame_states{};
     TextRenderer2DMcVector<std::uint8_t> image_initialized{};
+    render::RenderTargetColorOutputConfig output_target_config{};
 
     render::DescriptorSetLayoutId descriptor_layout_id{};
     render::PipelineLayoutId pipeline_layout_id{};
