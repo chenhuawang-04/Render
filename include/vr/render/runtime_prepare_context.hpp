@@ -8,6 +8,8 @@ namespace vr::render {
 class UploadHost;
 class DescriptorHost;
 class PipelineHost;
+class RenderTargetHost;
+class RenderTargetPool;
 } // namespace vr::render
 
 namespace vr::resource {
@@ -32,6 +34,8 @@ struct RuntimePrepareContext {
     UploadHost* upload_host = nullptr;
     DescriptorHost* descriptor_host = nullptr;
     PipelineHost* pipeline_host = nullptr;
+    RenderTargetHost* render_target_host = nullptr;
+    RenderTargetPool* render_target_pool = nullptr;
     resource::SamplerHost* sampler_host = nullptr;
     text::FreeTypeHost* freetype_host = nullptr;
     text::GlyphAtlasHost* glyph_atlas_host = nullptr;

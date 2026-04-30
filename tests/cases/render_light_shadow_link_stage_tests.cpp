@@ -47,12 +47,12 @@ VR_TEST_CASE(RenderLightShadowLinkStage_dim3_links_shadow_views_to_lights,
     VR_CHECK(result.namespace_drop_count == 0U);
     VR_CHECK(result.unmapped_light_count == 1U);
 
-    VR_CHECK(result.linked_light_records[0U].reserved0 == LinkStage::invalid_shadow_view_begin);
-    VR_CHECK(result.linked_light_records[1U].reserved0 == 5U);
-    VR_CHECK((result.linked_light_records[1U].reserved1 & 0xFFFFU) == 2U);
-    VR_CHECK(((result.linked_light_records[1U].reserved1 >> 16U) & 0xFFU) ==
+    VR_CHECK(result.linked_light_records[0U].shadow_view_begin == LinkStage::invalid_shadow_view_begin);
+    VR_CHECK(result.linked_light_records[1U].shadow_view_begin == 5U);
+    VR_CHECK((result.linked_light_records[1U].shadow_meta & 0xFFFFU) == 2U);
+    VR_CHECK(((result.linked_light_records[1U].shadow_meta >> 16U) & 0xFFU) ==
              static_cast<std::uint32_t>(vr::ecs::ShadowProjectionKind::spot));
-    VR_CHECK(result.linked_light_records[1U].reserved2 == 7U);
+    VR_CHECK(result.linked_light_records[1U].shadow_namespace_id == 7U);
 }
 
 VR_TEST_CASE(RenderLightShadowLinkStage_dim3_drops_namespace_mismatch,
@@ -100,9 +100,8 @@ VR_TEST_CASE(RenderLightShadowLinkStage_dim3_drops_namespace_mismatch,
     VR_CHECK(result.namespace_drop_count == 1U);
     VR_CHECK(result.unmapped_light_count == 1U);
     VR_REQUIRE(result.linked_light_records != nullptr);
-    VR_CHECK(result.linked_light_records[0U].reserved0 == 1U);
-    VR_CHECK(result.linked_light_records[1U].reserved0 == LinkStage::invalid_shadow_view_begin);
+    VR_CHECK(result.linked_light_records[0U].shadow_view_begin == 1U);
+    VR_CHECK(result.linked_light_records[1U].shadow_view_begin == LinkStage::invalid_shadow_view_begin);
 }
 
 } // namespace
-

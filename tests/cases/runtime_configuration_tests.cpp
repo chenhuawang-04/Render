@@ -32,6 +32,8 @@ VR_TEST_CASE(RuntimeConfig_modules_default_to_enabled, "unit;core;runtime") {
     VR_CHECK(modules.enable_upload_host);
     VR_CHECK(modules.enable_descriptor_host);
     VR_CHECK(modules.enable_pipeline_host);
+    VR_CHECK(modules.enable_render_target_host);
+    VR_CHECK(modules.enable_render_target_pool);
     VR_CHECK(modules.enable_sampler_host);
     VR_CHECK(modules.enable_freetype_host);
     VR_CHECK(modules.enable_glyph_atlas_host);
@@ -46,6 +48,8 @@ VR_TEST_CASE(RuntimeConfig_default_state_before_initialize_is_safe, "unit;core;r
     VR_CHECK(!runtime.HasUploadHost());
     VR_CHECK(!runtime.HasDescriptorHost());
     VR_CHECK(!runtime.HasPipelineHost());
+    VR_CHECK(!runtime.HasRenderTargetHost());
+    VR_CHECK(!runtime.HasRenderTargetPool());
     VR_CHECK(!runtime.HasSamplerHost());
     VR_CHECK(!runtime.HasFreeTypeHost());
     VR_CHECK(!runtime.HasGlyphAtlasHost());
@@ -55,6 +59,8 @@ VR_TEST_CASE(RuntimeConfig_default_state_before_initialize_is_safe, "unit;core;r
     VR_CHECK(config.modules.enable_upload_host);
     VR_CHECK(config.modules.enable_descriptor_host);
     VR_CHECK(config.modules.enable_pipeline_host);
+    VR_CHECK(config.modules.enable_render_target_host);
+    VR_CHECK(config.modules.enable_render_target_pool);
     VR_CHECK(config.modules.enable_sampler_host);
     VR_CHECK(config.modules.enable_freetype_host);
     VR_CHECK(config.modules.enable_glyph_atlas_host);
@@ -68,6 +74,8 @@ VR_TEST_CASE(RuntimeConfig_unavailable_modules_throw_before_initialize, "unit;co
     VR_CHECK(ThrowsAnyException([&]() { (void)runtime.Upload(); }));
     VR_CHECK(ThrowsAnyException([&]() { (void)runtime.Descriptor(); }));
     VR_CHECK(ThrowsAnyException([&]() { (void)runtime.Pipeline(); }));
+    VR_CHECK(ThrowsAnyException([&]() { (void)runtime.RenderTarget(); }));
+    VR_CHECK(ThrowsAnyException([&]() { (void)runtime.TargetPool(); }));
     VR_CHECK(ThrowsAnyException([&]() { (void)runtime.Sampler(); }));
     VR_CHECK(ThrowsAnyException([&]() { (void)runtime.FreeType(); }));
     VR_CHECK(ThrowsAnyException([&]() { (void)runtime.GlyphAtlas(); }));

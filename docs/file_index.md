@@ -1,6 +1,6 @@
 # VulkanRender_New 代码文件索引
 
-> 统计 (当前分支 `ecs_font_quality_optimization`): 约 90 个头文件, 28 个源文件, 14 个着色器, 9 个示例, 41 个测试文件, 17 个基准文件, 10 个文档, 3 个脚本, 1 个工具
+> 统计 (当前分支 `ecs_font_quality_optimization`): 约 90 个头文件, 28 个源文件, 14 个着色器 + 2 个 GLSL 头文件, 9 个示例, 41 个测试文件, 17 个基准文件, 11 个文档, 3 个脚本, 4 个工具, 1 个 CMake Presets
 
 ---
 
@@ -8,7 +8,8 @@
 
 | 文件 | 说明 |
 |------|------|
-| `CMakeLists.txt` | 顶层 CMake 构建脚本。定义项目、外部依赖 (Vulkan/SDL3/FreeType/MemoryCenter)、`vulkan_init` 静态库、`vulkan_platform_sdl` 接口库、所有 Demo 可执行文件、着色器编译管道、测试/基准子目录。 |
+| `CMakeLists.txt` | 顶层 CMake 构建脚本。定义项目、外部依赖 (Vulkan/SDL3/FreeType/MemoryCenter)、`vulkan_init` 静态库、`vulkan_platform_sdl` 接口库、所有 Demo 可执行文件、着色器编译管道 (含 SPIR-V 反射和合约检查)、测试/基准子目录。 |
+| `CMakePresets.json` | CMake 预设配置。定义跨平台的 configure/build/test presets，支持 VS/Clang/GCC 等生成器，统一开发环境配置。 |
 | `.gitignore` | Git 忽略规则：`build/`, CMake 产物, IDE 文件, bench 临时/快照文件。 |
 
 ---
@@ -294,6 +295,15 @@
 
 SPIR-V 编译产物嵌入到 `build/generated/vr/{text,geometry,surface}/generated/` 下。
 
+### 4.1 共享 GLSL 头文件 (`shaders/include/`)
+
+着色器代码复用模块，通过 `#include` 在多个着色器间共享通用函数。
+
+| 文件 | 说明 |
+|------|------|
+| `shaders/include/vr/common/math.glsl` | 通用数学函数。着色器间共享的数学工具函数 (矩阵变换、坐标转换)。 |
+| `shaders/include/vr/text/text_shading.glsl` | 文本着色函数。SDF 边缘平滑、轮廓、颜色混合等文本渲染通用逻辑。文本着色器 (text_2d, text_3d) 通过 `#include` 引用。 |
+
 ---
 
 ## 5. examples/ — 示例程序
@@ -452,6 +462,7 @@ SPIR-V 编译产物嵌入到 `build/generated/vr/{text,geometry,surface}/generat
 | `runtime_hardening_todo.md` | 运行时加固 TODO 列表。 |
 | `runtime_productization_progress_2026-04-29.md` | 运行时产品化进度记录。 |
 | `appearance_renderer_group_optimization_plan_2026-04-28.md` | Appearance 渲染器组优化计划。 |
+| `shader_development_plan_2026-04-29.md` | 着色器开发计划。着色器重构路线图、GLSL 合约检查、SPIR-V 反射工具链规划。 |
 
 ---
 
@@ -511,6 +522,9 @@ vr.types
 | 文件 | 说明 |
 |------|------|
 | `tools/spv_to_header.py` | SPIR-V 二进制 → C++ 头文件转换器。将 `glslangValidator` 编译产物嵌入 `const uint32_t[]` 数组。用于 CMake 着色器编译管道。 |
+| `tools/spv_reflect_to_json.py` | SPIR-V 反射工具。从 SPIR-V 二进制提取 Shader 接口信息 (Descriptor Set Layout、Push Constants、Entry Points) 并输出 JSON，用于着色器合约校验。 |
+| `tools/shader_contract_check.py` | 着色器合约检查工具。对比 C++ 端的 Descriptor/管线定义与 SPIR-V 反射输出，验证一致性，检测绑定冲突。 |
+| `tools/shader_contract_summary.py` | 着色器合约摘要工具。汇总所有着色器的合约信息，生成可读的接口报告。 |
 
 ---
 
@@ -520,11 +534,12 @@ vr.types
 |------|--------|
 | 公开头文件 (.hpp) | 90 |
 | 源文件 (.cpp) | 28 |
-| 着色器 (.vert/.frag) | 14 |
+| 着色器 (.vert/.frag) + GLSL 头文件 | 14 + 2 |
 | 示例文件 | 9 |
 | 测试用例 | 41 |
 | 基准测试用例 | 17 (含 4 support files) |
-| 文档 | 10 |
-| 脚本/工具 | 4 |
+| 文档 | 11 |
+| 脚本/工具 | 3 + 4 |
+| CMake Presets | 1 |
 | C++20 模块文件 (feature 分支) | 12 |
-| **总计** | **225+** |
+| **总计** | **230+** |

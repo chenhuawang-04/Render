@@ -338,6 +338,8 @@ RenderRuntime::Tick()
 
 所有着色器位于 `shaders/` 目录，通过 CMake 自定义命令编译为 SPIR-V 后嵌入 C++ 头文件。
 
+### 5.1 着色器源文件
+
 | 着色器 | 用途 |
 |--------|------|
 | `text_2d.vert/.frag` | 2D 文本渲染 (SDF + 图集采样) |
@@ -349,13 +351,33 @@ RenderRuntime::Tick()
 | `shadow_depth_2d.vert` | 2D 阴影深度 (遮挡物深度图) |
 | `shadow_depth_3d.vert` | 3D 阴影深度 (深度管线) |
 
-SPIR-V 编译产物嵌入到 `build/generated/vr/{text,geometry,surface}/generated/` 下。
+### 5.2 共享 GLSL 头文件 (`shaders/include/`)
+
+通过 `#include` 在着色器间共享通用函数，避免重复代码。
+
+| 文件 | 说明 |
+|------|------|
+| `shaders/include/vr/common/math.glsl` | 通用数学工具函数 (矩阵变换、坐标转换)。 |
+| `shaders/include/vr/text/text_shading.glsl` | 文本着色函数 (SDF 边缘平滑、轮廓、颜色混合)。被 `text_2d.frag` 和 `text_3d.frag` 引用。 |
+
+### 5.3 着色器工具链
+
+| 工具 | 说明 |
+|------|------|
+| `tools/spv_to_header.py` | SPIR-V 二进制 → C++ 头文件嵌入。 |
+| `tools/spv_reflect_to_json.py` | SPIR-V 反射 → JSON。提取 Descriptor Set Layout、Push Constants、Entry Points。 |
+| `tools/shader_contract_check.py` | 着色器合约检查。对比 C++ 端管线定义与 SPIR-V 反射输出，检测绑定冲突。 |
+| `tools/shader_contract_summary.py` | 着色器合约摘要报告生成。 |
 
 ---
 
 ## 6. 构建系统架构
 
-### 6.1 目标依赖图
+### 6.1 CMake 预设
+
+`CMakePresets.json` 定义跨平台的 configure/build/test presets，统一开发环境配置。支持 VS/Clang/GCC 等生成器、Debug/Release 构建类型、以及测试/基准构建选项的预配置。
+
+### 6.2 目标依赖图
 
 ```
 vulkan_init (STATIC lib)
@@ -372,7 +394,7 @@ Tests executable   → vulkan_platform_sdl
 Bench executable   → vulkan_platform_sdl + CrashTracer
 ```
 
-### 6.2 关键 CMake 选项
+### 6.3 关键 CMake 选项
 
 | 选项 | 默认 | 说明 |
 |------|------|------|
@@ -452,7 +474,8 @@ vr.types
 4. **哈希去重**: `PipelineHost`/`DescriptorHost`/`SamplerHost` 均使用基于哈希的缓存去重。
 5. **排序键**: 64 位复合排序键统一 2D (layer) 和 3D (depth bin) 的绘制顺序控制。
 6. **增量更新**: 3D Geometry Runtime 支持仅更新变换矩阵的快速路径，通过 `world_revision` 追踪。
-7. **跨队列上传**: `UploadHost` 支持使用 Transfer Queue 异步上传，通过 Semaphore 与 Graphics Queue 同步。
-8. **BackendTag 编译期多态**: 平台后端通过标签分发，易于扩展新窗口系统。
-9. **帧协调器模式**: Appearance/Light/Shadow 使用独立的帧协调器 (Frame Coordinator) 进行每帧数据编排，每套协调器有自己的 Prepare Stage 和特定的数据流程。
-10. **C++20 模块**: `feature/cpp20-modules` 分支已迁移所有 10 个核心库为 `.cppm` 接口单元。使用 `vr_module_fwd.hpp` 统一全局片段以实现零重复。`vr.ecs` 模块通过模板声明模式避免了与 `vr.text` 的循环依赖。
+7. **跨队列上传与同步重构**: `UploadHost` 支持 Transfer Queue 异步上传，通过 Semaphore 与 Graphics Queue 同步。各子系统的 upload host 均通过统一的 `UploadHost` 接口完成 staging→GPU 传输，实现上传同步的集中管理。
+8. **着色器合约校验**: 通过 `spv_reflect_to_json.py` 反射 SPIR-V 接口信息，`shader_contract_check.py` 与 C++ 端管线定义交叉验证，确保 Descriptor Set Layout 和 Push Constant 的一致性。
+9. **BackendTag 编译期多态**: 平台后端通过标签分发，易于扩展新窗口系统。
+10. **帧协调器模式**: Appearance/Light/Shadow 使用独立的帧协调器 (Frame Coordinator) 进行每帧数据编排，每套协调器有自己的 Prepare Stage 和特定的数据流程。
+11. **C++20 模块**: `feature/cpp20-modules` 分支已迁移所有 10 个核心库为 `.cppm` 接口单元。使用 `vr_module_fwd.hpp` 统一全局片段以实现零重复。`vr.ecs` 模块通过模板声明模式避免了与 `vr.text` 的循环依赖。

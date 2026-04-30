@@ -3,6 +3,8 @@
 #include "vr/platform/render_host.hpp"
 #include "vr/render/descriptor_host.hpp"
 #include "vr/render/pipeline_host.hpp"
+#include "vr/render/render_target_host.hpp"
+#include "vr/render/render_target_pool.hpp"
 #include "vr/render/render_loop_host.hpp"
 #include "vr/render/runtime_prepare_context.hpp"
 #include "vr/render/upload_host.hpp"
@@ -25,6 +27,8 @@ struct RuntimeModulesCreateInfo {
     bool enable_upload_host = true;
     bool enable_descriptor_host = true;
     bool enable_pipeline_host = true;
+    bool enable_render_target_host = true;
+    bool enable_render_target_pool = true;
     bool enable_sampler_host = true;
     bool enable_freetype_host = true;
     bool enable_glyph_atlas_host = true;
@@ -64,6 +68,8 @@ public:
         UploadHostCreateInfo upload{};
         DescriptorHostCreateInfo descriptor{};
         PipelineHostCreateInfo pipeline{};
+        RenderTargetHostCreateInfo render_target{};
+        RenderTargetPoolCreateInfo render_target_pool{};
         resource::SamplerHostCreateInfo sampler{};
         text::FreeTypeHostCreateInfo freetype{};
         text::GlyphAtlasCreateInfo glyph_atlas{};
@@ -142,6 +148,22 @@ public:
                 pipeline_initialized = true;
             }
 
+            if (create_info_cache.modules.enable_render_target_host) {
+                render_target_host.Initialize(platform_host.Context(),
+                                              gpu_memory_host,
+                                              create_info_cache.render_target);
+                render_target_initialized = true;
+            }
+
+            if (create_info_cache.modules.enable_render_target_pool) {
+                if (!render_target_initialized) {
+                    throw std::runtime_error(
+                        "RenderRuntimeHost::Initialize requires RenderTargetHost when render_target_pool is enabled");
+                }
+                render_target_pool.Initialize(create_info_cache.render_target_pool);
+                render_target_pool_initialized = true;
+            }
+
             if (create_info_cache.modules.enable_upload_host) {
                 UploadHostCreateInfo upload_info = create_info_cache.upload;
                 upload_info.frames_in_flight = frames_in_flight_v;
@@ -190,6 +212,15 @@ public:
             if (glyph_upload_initialized) {
                 glyph_upload_host.Shutdown(platform_host.Context());
                 glyph_upload_initialized = false;
+            }
+            if (render_target_pool_initialized) {
+                render_target_pool.Shutdown();
+                render_target_pool_initialized = false;
+            }
+            if (render_target_initialized) {
+                InvalidateSwapchainRenderTargets(0U, 0U);
+                render_target_host.Shutdown(platform_host.Context());
+                render_target_initialized = false;
             }
             if (upload_initialized) {
                 upload_host.Shutdown(platform_host.Context());
@@ -244,6 +275,22 @@ public:
         if (glyph_upload_initialized) {
             glyph_upload_host.Shutdown(platform_host.Context());
             glyph_upload_initialized = false;
+        }
+
+        if (render_target_pool_initialized) {
+            render_target_pool.Shutdown();
+            render_target_pool_initialized = false;
+        }
+
+        if (render_target_initialized) {
+            const std::uint64_t last_submitted_value =
+                loop_initialized ? render_loop.Sync().LastSubmittedValue() : 0U;
+            const std::uint64_t completed_submit_value =
+                loop_initialized ? render_loop.Sync().CompletedSubmitValue() : 0U;
+            InvalidateSwapchainRenderTargets(last_submitted_value,
+                                             completed_submit_value);
+            render_target_host.Shutdown(platform_host.Context());
+            render_target_initialized = false;
         }
 
         if (upload_initialized) {
@@ -333,6 +380,16 @@ public:
             upload_host.BeginFrame(platform_host.Context(), frame_index);
         }
 
+        if (render_target_initialized) {
+            render_target_host.BeginFrame(platform_host.Context(),
+                                          render_loop.Sync().CompletedSubmitValue());
+        }
+
+        if (render_target_pool_initialized) {
+            render_target_pool.BeginFrame(frame_index,
+                                          render_loop.Sync().CompletedSubmitValue());
+        }
+
         if constexpr (RuntimeFramePreparer<RecorderT>) {
             RuntimePrepareContext prepare_context{};
             prepare_context.context = &platform_host.Context();
@@ -343,6 +400,8 @@ public:
             prepare_context.upload_host = upload_initialized ? &upload_host : nullptr;
             prepare_context.descriptor_host = descriptor_initialized ? &descriptor_host : nullptr;
             prepare_context.pipeline_host = pipeline_initialized ? &pipeline_host : nullptr;
+            prepare_context.render_target_host = render_target_initialized ? &render_target_host : nullptr;
+            prepare_context.render_target_pool = render_target_pool_initialized ? &render_target_pool : nullptr;
             prepare_context.sampler_host = sampler_initialized ? &sampler_host : nullptr;
             prepare_context.freetype_host = freetype_initialized ? &freetype_host : nullptr;
             prepare_context.glyph_atlas_host = glyph_atlas_initialized ? &glyph_atlas_host : nullptr;
@@ -383,12 +442,23 @@ public:
             }
         }
 
+        RuntimeRecordAdapter<RecorderT> record_adapter{
+            *this,
+            recorder_,
+            render_loop.Sync().LastSubmittedValue(),
+            render_loop.Sync().CompletedSubmitValue()
+        };
         result.render = render_loop.Tick(platform_host.Context(),
                                          platform_host.SurfaceHost(),
                                          swapchain,
-                                         recorder_,
+                                         record_adapter,
                                          extra_wait_ptr,
                                          extra_wait_count);
+
+        if (render_target_pool_initialized) {
+            render_target_pool.EndFrame(frame_index,
+                                        render_loop.Sync().LastSubmittedValue());
+        }
 
         if (pipeline_initialized && create_info_cache.pipeline_warmup.compile_after_render) {
             result.compiled_pipeline_count += pipeline_host.ProcessPendingCompiles(
@@ -420,6 +490,14 @@ public:
 
     [[nodiscard]] bool HasPipelineHost() const noexcept {
         return pipeline_initialized;
+    }
+
+    [[nodiscard]] bool HasRenderTargetHost() const noexcept {
+        return render_target_initialized;
+    }
+
+    [[nodiscard]] bool HasRenderTargetPool() const noexcept {
+        return render_target_pool_initialized;
     }
 
     [[nodiscard]] bool HasSamplerHost() const noexcept {
@@ -518,6 +596,20 @@ public:
         return pipeline_host;
     }
 
+    [[nodiscard]] RenderTargetHost& RenderTarget() {
+        if (!render_target_initialized) {
+            throw std::runtime_error("RenderRuntimeHost::RenderTarget requested but host is not initialized");
+        }
+        return render_target_host;
+    }
+
+    [[nodiscard]] RenderTargetPool& TargetPool() {
+        if (!render_target_pool_initialized) {
+            throw std::runtime_error("RenderRuntimeHost::RenderTargetPool requested but pool is not initialized");
+        }
+        return render_target_pool;
+    }
+
     [[nodiscard]] resource::SamplerHost& Sampler() {
         if (!sampler_initialized) {
             throw std::runtime_error("RenderRuntimeHost::Sampler requested but host is not initialized");
@@ -575,6 +667,88 @@ public:
     }
 
 private:
+    template<typename RecorderT>
+    class RuntimeRecordAdapter final {
+    public:
+        RuntimeRecordAdapter(RenderRuntimeHost& runtime_,
+                             RecorderT& recorder_,
+                             std::uint64_t last_submitted_value_,
+                             std::uint64_t completed_submit_value_) noexcept
+            : runtime(runtime_),
+              recorder(recorder_),
+              last_submitted_value(last_submitted_value_),
+              completed_submit_value(completed_submit_value_) {}
+
+        void Record(const FrameRecordContext& record_context_) {
+            FrameRecordContext augmented = record_context_;
+            runtime.EnsureSwapchainRenderTargets(last_submitted_value, completed_submit_value);
+            augmented.render_target_host = runtime.render_target_initialized ? &runtime.render_target_host : nullptr;
+            augmented.swapchain_target_handle = runtime.SwapchainRenderTargetHandle(record_context_.image_index);
+
+            if constexpr (FrameContextRecorder<RecorderT>) {
+                recorder.Record(augmented);
+            } else {
+                recorder.Record(augmented.command_buffer,
+                                augmented.frame_index,
+                                augmented.image_index,
+                                augmented.extent,
+                                augmented.format,
+                                augmented.image,
+                                augmented.image_view);
+            }
+        }
+
+        void OnSwapchainRecreated(std::uint32_t image_count_,
+                                  VkExtent2D extent_,
+                                  VkFormat format_,
+                                  std::uint64_t last_submitted_value_,
+                                  std::uint64_t completed_submit_value_) {
+            runtime.InvalidateSwapchainRenderTargets(last_submitted_value_, completed_submit_value_);
+
+            if constexpr (requires(RecorderT& recorder__,
+                                   std::uint32_t image_count__,
+                                   VkExtent2D extent__,
+                                   VkFormat format__,
+                                   std::uint64_t last_submitted_value__,
+                                   std::uint64_t completed_submit_value__) {
+                              recorder__.OnSwapchainRecreated(image_count__,
+                                                              extent__,
+                                                              format__,
+                                                              last_submitted_value__,
+                                                              completed_submit_value__);
+                          }) {
+                recorder.OnSwapchainRecreated(image_count_,
+                                              extent_,
+                                              format_,
+                                              last_submitted_value_,
+                                              completed_submit_value_);
+            } else if constexpr (requires(RecorderT& recorder__,
+                                          std::uint32_t image_count__,
+                                          VkExtent2D extent__,
+                                          VkFormat format__) {
+                                     recorder__.OnSwapchainRecreated(image_count__, extent__, format__);
+                                 }) {
+                recorder.OnSwapchainRecreated(image_count_, extent_, format_);
+            } else if constexpr (requires(RecorderT& recorder__,
+                                          std::uint32_t image_count__,
+                                          VkExtent2D extent__) {
+                                     recorder__.OnSwapchainRecreated(image_count__, extent__);
+                                 }) {
+                recorder.OnSwapchainRecreated(image_count_, extent_);
+            } else if constexpr (requires(RecorderT& recorder__, std::uint32_t image_count__) {
+                                     recorder__.OnSwapchainRecreated(image_count__);
+                                 }) {
+                recorder.OnSwapchainRecreated(image_count_);
+            }
+        }
+
+    private:
+        RenderRuntimeHost& runtime;
+        RecorderT& recorder;
+        std::uint64_t last_submitted_value = 0U;
+        std::uint64_t completed_submit_value = 0U;
+    };
+
     static void ThrowVk(const char* stage_, VkResult result_) {
         std::ostringstream oss;
         oss << stage_ << " failed: VkResult(" << static_cast<int>(result_) << ")";
@@ -657,6 +831,76 @@ private:
         result_.pending_compute_compile_count = pipeline_host.PendingComputeCompileCount();
     }
 
+    void InvalidateSwapchainRenderTargets(std::uint64_t last_submitted_value_,
+                                          std::uint64_t completed_submit_value_) {
+        if (!render_target_initialized) {
+            swapchain_render_target_handles.clear();
+            swapchain_render_target_generation = 0U;
+            return;
+        }
+
+        for (auto& handle : swapchain_render_target_handles) {
+            if (IsValidRenderTargetHandle(handle)) {
+                (void)render_target_host.DestroyTarget(platform_host.Context(),
+                                                       handle,
+                                                       last_submitted_value_,
+                                                       completed_submit_value_);
+            }
+            handle = invalid_render_target_handle;
+        }
+        swapchain_render_target_handles.clear();
+        swapchain_render_target_generation = 0U;
+    }
+
+    void EnsureSwapchainRenderTargets(std::uint64_t last_submitted_value_,
+                                      std::uint64_t completed_submit_value_) {
+        if (!render_target_initialized || !swapchain.IsValid()) {
+            return;
+        }
+
+        const std::uint64_t generation = swapchain.Generation();
+        const std::uint32_t image_count = swapchain.ImageCount();
+        if (swapchain_render_target_generation == generation &&
+            swapchain_render_target_handles.size() == image_count) {
+            return;
+        }
+
+        InvalidateSwapchainRenderTargets(last_submitted_value_, completed_submit_value_);
+        swapchain_render_target_handles.reserve(image_count);
+
+        ImportedRenderTargetDesc desc{};
+        desc.debug_name = "SwapchainImportedTarget";
+        desc.ownership = RenderTargetOwnership::imported_image_imported_view;
+        desc.dimension = RenderTargetDimension::image_2d;
+        desc.format = swapchain.Format();
+        desc.extent = VkExtent3D{swapchain.Extent().width, swapchain.Extent().height, 1U};
+        desc.samples = VK_SAMPLE_COUNT_1_BIT;
+        desc.usage = create_info_cache.render_loop.swapchain.image_usage;
+        desc.aspect = VK_IMAGE_ASPECT_COLOR_BIT;
+        desc.mip_levels = 1U;
+        desc.array_layers = 1U;
+        desc.color_encoding =
+            (create_info_cache.render_loop.swapchain.preferred_color_space == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR)
+                ? RenderTargetColorEncoding::srgb
+                : RenderTargetColorEncoding::linear;
+        desc.initial_state = RenderTargetStateKind::undefined;
+
+        for (std::uint32_t image_index = 0U; image_index < image_count; ++image_index) {
+            desc.image = swapchain.Image(image_index);
+            desc.image_view = swapchain.ImageView(image_index);
+            swapchain_render_target_handles.push_back(render_target_host.ImportTarget(platform_host.Context(), desc));
+        }
+
+        swapchain_render_target_generation = generation;
+    }
+
+    [[nodiscard]] RenderTargetHandle SwapchainRenderTargetHandle(std::uint32_t image_index_) const noexcept {
+        if (image_index_ >= swapchain_render_target_handles.size()) {
+            return invalid_render_target_handle;
+        }
+        return swapchain_render_target_handles[image_index_];
+    }
+
 private:
     PlatformHostType platform_host{};
     SwapchainType swapchain{};
@@ -666,18 +910,24 @@ private:
     UploadHost upload_host{};
     DescriptorHost descriptor_host{};
     PipelineHost pipeline_host{};
+    RenderTargetHost render_target_host{};
+    RenderTargetPool render_target_pool{};
     resource::SamplerHost sampler_host{};
     text::FreeTypeHost freetype_host{};
     text::GlyphAtlasHost glyph_atlas_host{};
     text::GlyphUploadHost glyph_upload_host{};
 
     vr::McVector<VkSemaphore> upload_complete_semaphores{};
+    vr::McVector<RenderTargetHandle> swapchain_render_target_handles{};
 
     CreateInfo create_info_cache{};
+    std::uint64_t swapchain_render_target_generation = 0U;
     bool gpu_memory_initialized = false;
     bool upload_initialized = false;
     bool descriptor_initialized = false;
     bool pipeline_initialized = false;
+    bool render_target_initialized = false;
+    bool render_target_pool_initialized = false;
     bool sampler_initialized = false;
     bool freetype_initialized = false;
     bool glyph_atlas_initialized = false;

@@ -2,6 +2,7 @@
 
 #include "vr/render/frame_command_host.hpp"
 #include "vr/render/frame_retire_host.hpp"
+#include "vr/render/render_target_types.hpp"
 #include "vr/render/frame_sync_host.hpp"
 #include "vr/render/swapchain_host.hpp"
 #include "vr/vulkan_context.hpp"
@@ -13,6 +14,8 @@
 
 namespace vr::render {
 
+class RenderTargetHost;
+
 struct FrameRecordContext {
     VkCommandBuffer command_buffer = VK_NULL_HANDLE;
     uint32_t frame_index = 0U;
@@ -21,6 +24,8 @@ struct FrameRecordContext {
     VkFormat format = VK_FORMAT_UNDEFINED;
     VkImage image = VK_NULL_HANDLE;
     VkImageView image_view = VK_NULL_HANDLE;
+    RenderTargetHost* render_target_host = nullptr;
+    RenderTargetHandle swapchain_target_handle{};
 };
 
 template<typename RecorderT>

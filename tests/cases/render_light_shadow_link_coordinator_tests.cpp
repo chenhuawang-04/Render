@@ -47,7 +47,7 @@ VR_TEST_CASE(RenderLightShadowLinkCoordinator3D_prepare_reuse_same_signature,
     VR_CHECK(result1.cache_reused);
     VR_REQUIRE(result1.link_result.linked_light_records != nullptr);
     VR_CHECK(result1.link_result.linked_light_count == 1U);
-    VR_CHECK(result1.link_result.linked_light_records[0U].reserved0 == 8U);
+    VR_CHECK(result1.link_result.linked_light_records[0U].shadow_view_begin == 8U);
 
     const auto& stats = coordinator.Stats();
     VR_CHECK(stats.build_count == 1U);
@@ -139,7 +139,7 @@ VR_TEST_CASE(RenderLightShadowLinkCoordinator3D_incremental_light_patch_updates_
     const auto result0 = coordinator.Prepare(prepare_info);
     VR_CHECK(!result0.cache_reused);
     VR_REQUIRE(result0.link_result.linked_light_records != nullptr);
-    VR_CHECK(result0.link_result.linked_light_records[1U].reserved0 == 13U);
+    VR_CHECK(result0.link_result.linked_light_records[1U].shadow_view_begin == 13U);
 
     light_records[1U].intensity = 77.0F;
     const std::uint32_t updated_indices[] = {1U};
@@ -154,9 +154,9 @@ VR_TEST_CASE(RenderLightShadowLinkCoordinator3D_incremental_light_patch_updates_
     VR_CHECK(!result1.cache_reused);
     VR_REQUIRE(result1.link_result.linked_light_records != nullptr);
     VR_CHECK(result1.link_result.linked_light_records[1U].intensity == 77.0F);
-    VR_CHECK(result1.link_result.linked_light_records[1U].reserved0 == 13U);
-    VR_CHECK(result1.link_result.linked_light_records[1U].reserved1 != 0U);
-    VR_CHECK(result1.link_result.linked_light_records[1U].reserved2 == 7U);
+    VR_CHECK(result1.link_result.linked_light_records[1U].shadow_view_begin == 13U);
+    VR_CHECK(result1.link_result.linked_light_records[1U].shadow_meta != 0U);
+    VR_CHECK(result1.link_result.linked_light_records[1U].shadow_namespace_id == 7U);
 
     const auto& stats = coordinator.Stats();
     VR_CHECK(stats.build_count == 1U);

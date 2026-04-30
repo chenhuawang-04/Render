@@ -339,6 +339,8 @@ add_library(vulkan_init STATIC
     src/render/upload_host.cpp
     src/render/descriptor_host.cpp
     src/render/pipeline_host.cpp
+    src/render/render_target_host.cpp
+    src/render/render_target_pool.cpp
     src/text/freetype_host.cpp
     src/text/glyph_atlas_host.cpp
     src/text/glyph_upload_host.cpp
