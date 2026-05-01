@@ -10,6 +10,38 @@
 
 namespace {
 
+struct FakeColorRenderer {
+    vr::render::RenderTargetColorOutputConfig color_output{};
+    bool color_set = false;
+    bool color_reset = false;
+
+    void SetOutputTargetConfig(const vr::render::RenderTargetColorOutputConfig& color_output_config_) noexcept {
+        color_output = color_output_config_;
+        color_set = true;
+    }
+
+    void ResetOutputTargetConfig() noexcept {
+        color_output = {};
+        color_reset = true;
+    }
+};
+
+struct FakeDepthRenderer final : FakeColorRenderer {
+    vr::render::RenderTargetDepthOutputConfig depth_output{};
+    bool depth_set = false;
+    bool depth_reset = false;
+
+    void SetDepthTargetConfig(const vr::render::RenderTargetDepthOutputConfig& depth_output_config_) noexcept {
+        depth_output = depth_output_config_;
+        depth_set = true;
+    }
+
+    void ResetDepthTargetConfig() noexcept {
+        depth_output = {};
+        depth_reset = true;
+    }
+};
+
 VR_TEST_CASE(RenderTargetTypes_handle_and_range_are_trivial, "unit;core;render_target") {
     VR_CHECK(std::is_standard_layout_v<vr::render::RenderTargetHandle>);
     VR_CHECK(std::is_standard_layout_v<vr::render::RenderTargetSubresourceRange>);
@@ -97,6 +129,31 @@ VR_TEST_CASE(SceneRenderTargetSet_defaults_match_render_target_v1_contract, "uni
 
     target_set.Reset();
     VR_CHECK(!target_set.IsReady());
+}
+
+VR_TEST_CASE(SceneRenderTargetSet_not_ready_configuration_resets_renderer_bindings,
+             "unit;core;render_target") {
+    vr::render::SceneRenderTargetSet target_set{};
+    target_set.Initialize({});
+
+    FakeDepthRenderer renderer{};
+    const bool configured =
+        target_set.ConfigureSceneRenderer(renderer, vr::render::SceneRenderPassRole::single);
+
+    VR_CHECK(!configured);
+    VR_CHECK(!renderer.color_set);
+    VR_CHECK(!renderer.depth_set);
+    VR_CHECK(renderer.color_reset);
+    VR_CHECK(renderer.depth_reset);
+}
+
+VR_TEST_CASE(SceneRenderTargetSet_bind_scene_renderer_preserves_role,
+             "unit;core;render_target") {
+    FakeColorRenderer renderer{};
+    const auto binding =
+        vr::render::BindSceneRenderer(renderer, vr::render::SceneRenderPassRole::middle);
+    VR_CHECK(binding.renderer == &renderer);
+    VR_CHECK(binding.pass_role == vr::render::SceneRenderPassRole::middle);
 }
 
 } // namespace

@@ -122,14 +122,11 @@ struct Geometry3DOffscreenRecorder final {
         scene_targets.Initialize(create_info);
     }
 
-    void ConfigureTargets() {
-        scene_targets.ConfigureSceneRenderer(geometry_renderer, vr::render::SceneRenderPassRole::single);
-        scene_targets.ConfigureCompositeRenderer(composite_renderer);
-    }
-
     void PrepareFrame(const vr::render::RuntimePrepareContext& prepare_context_) {
-        scene_targets.PrepareFrame(prepare_context_);
-        ConfigureTargets();
+        (void)scene_targets.PrepareFrameAndConfigure(
+            prepare_context_,
+            &composite_renderer,
+            vr::render::BindSceneRenderer(geometry_renderer, vr::render::SceneRenderPassRole::single));
         geometry_renderer.PrepareFrame(prepare_context_);
         composite_renderer.PrepareFrame(prepare_context_);
     }
@@ -154,13 +151,15 @@ struct Geometry3DOffscreenRecorder final {
         if (runtime == nullptr) {
             return;
         }
-        scene_targets.OnSwapchainRecreated(runtime->Context(),
-                                           runtime->RenderTarget(),
-                                           runtime->HasRenderTargetPool() ? &runtime->TargetPool() : nullptr,
-                                           extent_,
-                                           last_submitted_value_,
-                                           completed_submit_value_);
-        ConfigureTargets();
+        (void)scene_targets.OnSwapchainRecreatedAndConfigure(
+            runtime->Context(),
+            runtime->RenderTarget(),
+            runtime->HasRenderTargetPool() ? &runtime->TargetPool() : nullptr,
+            extent_,
+            last_submitted_value_,
+            completed_submit_value_,
+            &composite_renderer,
+            vr::render::BindSceneRenderer(geometry_renderer, vr::render::SceneRenderPassRole::single));
     }
 };
 

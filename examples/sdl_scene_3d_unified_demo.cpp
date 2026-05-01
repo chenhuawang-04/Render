@@ -1,4 +1,3 @@
-#include "support/test_framework.hpp"
 #include "vr/ecs/system/bounds_system.hpp"
 #include "vr/ecs/system/camera_system.hpp"
 #include "vr/ecs/system/geometry_system.hpp"
@@ -20,12 +19,14 @@
 
 #include <SDL3/SDL.h>
 
-#include <algorithm>
 #include <array>
-#include <cctype>
+#include <cmath>
+#include <cstdlib>
 #include <cstdint>
 #include <cstdio>
 #include <filesystem>
+#include <iostream>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 
@@ -46,50 +47,12 @@ using TransformSystem3D = vr::ecs::TransformSystem<vr::ecs::Dim3>;
 using BoundsSystem3D = vr::ecs::BoundsSystem<vr::ecs::Dim3>;
 using CameraSystem3D = vr::ecs::CameraSystem<vr::ecs::Dim3>;
 
-[[nodiscard]] std::string ToLower(std::string_view value_) {
-    std::string lowered{};
-    lowered.reserve(value_.size());
-    for (const unsigned char ch : value_) {
-        lowered.push_back(static_cast<char>(std::tolower(ch)));
-    }
-    return lowered;
-}
-
-[[nodiscard]] bool ContainsCaseInsensitive(std::string_view text_,
-                                           std::string_view needle_) {
-    const std::string lowered_text = ToLower(text_);
-    const std::string lowered_needle = ToLower(needle_);
-    return lowered_text.find(lowered_needle) != std::string::npos;
-}
-
-[[nodiscard]] bool IsEnvironmentSkipError(std::string_view message_) {
-    constexpr std::array<std::string_view, 17U> patterns{
-        "sdl_initsubsystem",
-        "sdl_createwindow",
-        "sdl_vulkan_getinstanceextensions",
-        "sdl_vulkan_createsurface",
-        "vkcreateinstance",
-        "vkenumeratephysicaldevices",
-        "no vulkan physical devices found",
-        "no suitable vulkan physical device found",
-        "missing required instance extension",
-        "vkcreatedevice",
-        "vkgetphysicaldevicesurfacesupportkhr",
-        "vkgetphysicaldevicesurfaceformatskhr",
-        "vkgetphysicaldevicesurfacepresentmodeskhr",
-        "dynamicrendering",
-        "synchronization2",
-        "ft_new_face",
-        "freetypehost::registerface"
-    };
-
-    for (const auto pattern : patterns) {
-        if (ContainsCaseInsensitive(message_, pattern)) {
-            return true;
-        }
-    }
-    return false;
-}
+constexpr float k_pi = 3.14159265358979323846F;
+constexpr std::uint32_t k_geometry_material_id = 1101U;
+constexpr std::uint32_t k_geometry_image_id = 2101U;
+constexpr std::uint32_t k_surface_image_id = 3101U;
+constexpr std::uint32_t k_text_font_id = 1U;
+constexpr std::uint32_t k_text_material_id = 4101U;
 
 [[nodiscard]] constexpr std::uint32_t PackRgba8(std::uint8_t r_,
                                                 std::uint8_t g_,
@@ -131,82 +94,95 @@ void FillGradientTexture(std::uint32_t* pixels_,
                              static_cast<float>(std::max(width_, 1U) - 1U);
             const float fy = static_cast<float>(y) /
                              static_cast<float>(std::max(height_, 1U) - 1U);
-            const std::uint8_t r = static_cast<std::uint8_t>(45.0F + 185.0F * fx);
-            const std::uint8_t g = static_cast<std::uint8_t>(55.0F + 150.0F * (1.0F - fy));
+            const std::uint8_t r = static_cast<std::uint8_t>(55.0F + 170.0F * fx);
+            const std::uint8_t g = static_cast<std::uint8_t>(65.0F + 120.0F * (1.0F - fy));
             const std::uint8_t b = static_cast<std::uint8_t>(110.0F + 120.0F * fy);
             pixels_[index] = PackRgba8(r, g, b, 255U);
         }
     }
 }
 
-[[nodiscard]] std::string FindTestFontPath() {
+[[nodiscard]] std::string PickDemoFontPath() {
     namespace fs = std::filesystem;
 
-    constexpr std::array<const char*, 6U> candidate_paths{
+    constexpr std::array<const char*, 8U> candidates{
         "C:/Windows/Fonts/segoeui.ttf",
         "C:/Windows/Fonts/arial.ttf",
         "C:/Windows/Fonts/consola.ttf",
         "C:/Windows/Fonts/tahoma.ttf",
         "C:/Windows/Fonts/calibri.ttf",
-        "C:/Windows/Fonts/msyh.ttc"
+        "C:/Windows/Fonts/verdana.ttf",
+        "C:/Windows/Fonts/msyh.ttc",
+        "C:/Windows/Fonts/simhei.ttf"
     };
 
-    for (const char* path : candidate_paths) {
-        const fs::path candidate(path);
-        if (fs::exists(candidate) && fs::is_regular_file(candidate)) {
-            return candidate.string();
+    for (const char* candidate : candidates) {
+        const fs::path font_path(candidate);
+        if (fs::exists(font_path) && fs::is_regular_file(font_path)) {
+            return font_path.string();
         }
     }
     return {};
 }
 
-void InitializeGeometryComponent(Geometry3D& component_,
-                                 std::uint32_t geometry_id_,
-                                 std::uint32_t material_id_,
-                                 vr::ecs::Rgba8 albedo_) {
+void InitializeGeometryComponent(Geometry3D& component_) {
     GeometrySystem3D::Initialize(component_);
-    GeometrySystem3D::SetRuntimeRoute(component_, geometry_id_, material_id_, 0U);
+    GeometrySystem3D::SetRuntimeRoute(component_, 1U, k_geometry_material_id, 0U);
     GeometrySystem3D::SetBounds(component_,
                                 vr::ecs::Float3{.x = -0.5F, .y = -0.5F, .z = -0.05F},
                                 vr::ecs::Float3{.x = 0.5F, .y = 0.5F, .z = 0.05F});
     component_.style.depth_test = 1U;
     component_.style.depth_write = 1U;
     component_.style.shading_model = vr::ecs::Geometry3DShadingModel::lit;
-    component_.style.albedo_color = albedo_;
+    component_.style.albedo_color = vr::ecs::Rgba8{236U, 214U, 178U, 255U};
     component_.mesh.submesh_index = 0U;
     component_.mesh.lod_index = 0U;
     component_.mesh.flags = 0U;
+    component_.runtime.route.depth_bin = 24U;
+    GeometrySystem3D::RebuildSortKey(component_);
 }
 
-void InitializeSurface3DComponent(Surface3D& component_,
-                                  std::uint32_t texture_id_,
-                                  std::uint32_t sampler_id_,
-                                  std::uint16_t depth_bin_,
-                                  vr::ecs::Rgba8 tint_color_) {
+void InitializeSurfaceComponent(Surface3D& component_,
+                                std::uint32_t sampler_id_) {
     SurfaceSystem3D::Initialize(component_);
-    SurfaceSystem3D::SetTextureRoute(component_, texture_id_, sampler_id_, 0U, 0U);
-    SurfaceSystem3D::SetDepthBin(component_, depth_bin_);
+    SurfaceSystem3D::SetTextureRoute(component_, k_surface_image_id, sampler_id_, 0U, 0U);
+    SurfaceSystem3D::SetDepthBin(component_, 40U);
     SurfaceSystem3D::SetDepthTest(component_, true);
     SurfaceSystem3D::SetDepthWrite(component_, false);
     SurfaceSystem3D::SetDoubleSided(component_, true);
-    SurfaceSystem3D::SetTintColor(component_, tint_color_);
-    SurfaceSystem3D::SetOpacity(component_, 0.92F);
+    SurfaceSystem3D::SetTintColor(component_, vr::ecs::Rgba8{225U, 238U, 255U, 232U});
+    SurfaceSystem3D::SetOpacity(component_, 0.94F);
+    SurfaceSystem3D::SetUvTransform(component_, 1.05F, 1.05F, -0.03F, -0.02F);
 }
 
-void InitializeText3DComponent(Text3D& component_,
-                               std::uint32_t font_id_,
-                               std::uint32_t material_id_,
-                               std::string_view text_) {
+void InitializeTextComponent(Text3D& component_,
+                             std::string_view text_) {
     TextSystem3D::Initialize(component_);
-    TextSystem3D::SetRuntimeRoute(component_, font_id_, material_id_, 0U, 0U);
-    TextSystem3D::SetColor(component_, vr::ecs::Rgba8{245U, 248U, 255U, 255U});
+    TextSystem3D::SetRuntimeRoute(component_, k_text_font_id, k_text_material_id, 0U, 0U);
+    TextSystem3D::SetColor(component_, vr::ecs::Rgba8{248U, 250U, 255U, 255U});
     TextSystem3D::SetOutlineEnabled(component_, true);
     TextSystem3D::SetOutlineWidthPx(component_, 1U);
-    TextSystem3D::SetOutlineColor(component_, vr::ecs::Rgba8{15U, 18U, 26U, 255U});
+    TextSystem3D::SetOutlineColor(component_, vr::ecs::Rgba8{18U, 22U, 32U, 255U});
     TextSystem3D::SetBillboard(component_, false);
-    TextSystem3D::SetWorldSize(component_, 0.42F);
+    TextSystem3D::SetDepthTest(component_, true);
     TextSystem3D::SetDepthWrite(component_, false);
+    TextSystem3D::SetWorldSize(component_, 0.42F);
+    TextSystem3D::SetDepthBin(component_, 52U);
     (void)TextSystem3D::SetText(component_, text_);
+}
+
+[[nodiscard]] std::uint32_t ParseMaxFrames(int argc_,
+                                           char** argv_) {
+    if (argc_ <= 1 || argv_ == nullptr) {
+        return 0U;
+    }
+    for (int index = 1; index + 1 < argc_; ++index) {
+        if (std::string_view(argv_[index]) != "--frames") {
+            continue;
+        }
+        return static_cast<std::uint32_t>(std::strtoul(argv_[index + 1], nullptr, 10));
+    }
+    return 0U;
 }
 
 struct UnifiedScene3DRecorder final {
@@ -219,8 +195,8 @@ struct UnifiedScene3DRecorder final {
 
     void InitializeSceneTargets() {
         vr::render::SceneRenderTargetSetCreateInfo create_info{};
-        create_info.color_debug_name = "RuntimeUnified3DSceneColor";
-        create_info.depth_debug_name = "RuntimeUnified3DSceneDepth";
+        create_info.color_debug_name = "UnifiedScene3DColor";
+        create_info.depth_debug_name = "UnifiedScene3DDepth";
         create_info.enable_depth = true;
         create_info.color_lifetime = vr::render::RenderTargetLifetime::transient;
         create_info.depth_lifetime = vr::render::RenderTargetLifetime::transient;
@@ -287,12 +263,17 @@ struct UnifiedScene3DRecorder final {
     }
 };
 
-VR_TEST_CASE(RuntimeIntegration_unified_scene_3d_offscreen_composite_smoke,
-             "integration;gpu;sdl;runtime;render_target;scene3d") {
-    const std::string font_path = FindTestFontPath();
+} // namespace
+
+int main(int argc_,
+         char** argv_) {
+    const std::string font_path = PickDemoFontPath();
     if (font_path.empty()) {
-        VR_SKIP("No usable system font found for unified runtime 3D scene integration test.");
+        std::cerr << "sdl_scene_3d_unified_demo failed: no usable system font found.\n";
+        return 1;
     }
+
+    const std::uint32_t max_frames = ParseMaxFrames(argc_, argv_);
 
     Runtime runtime{};
     vr::geometry::GeometryResourceHost geometry_resource_host{};
@@ -339,16 +320,16 @@ VR_TEST_CASE(RuntimeIntegration_unified_scene_3d_offscreen_composite_smoke,
 
     try {
         Runtime::CreateInfo create_info{};
-        create_info.platform.window.title = "vr_tests_runtime_unified_scene_3d";
-        create_info.platform.window.width = 800;
-        create_info.platform.window.height = 450;
+        create_info.platform.window.title = "Vulkan SDL3 Unified 3D Scene Demo";
+        create_info.platform.window.width = 1280;
+        create_info.platform.window.height = 720;
         create_info.platform.window.resizable = true;
         create_info.platform.window.high_pixel_density = true;
-        create_info.platform.instance.enable_validation = false;
+        create_info.platform.instance.enable_validation = true;
         create_info.platform.device.required_vulkan13_features.dynamicRendering = VK_TRUE;
         create_info.platform.device.required_vulkan13_features.synchronization2 = VK_TRUE;
-        create_info.render_loop.swapchain.enable_vsync = false;
-        create_info.render_loop.swapchain.preferred_image_count = 2U;
+        create_info.render_loop.swapchain.enable_vsync = true;
+        create_info.render_loop.swapchain.preferred_image_count = 3U;
         create_info.render_loop.commands.initial_primary_per_frame = 2U;
         create_info.render_loop.commands.primary_growth_chunk = 2U;
         create_info.poll_events_each_tick = true;
@@ -417,7 +398,7 @@ VR_TEST_CASE(RuntimeIntegration_unified_scene_3d_offscreen_composite_smoke,
                                           mesh_upload_info);
 
         vr::geometry::GeometryImageUploadInfo geometry_image_upload{};
-        geometry_image_upload.image_id = 101U;
+        geometry_image_upload.image_id = k_geometry_image_id;
         geometry_image_upload.pixels = geometry_pixels.data();
         geometry_image_upload.width = texture_width;
         geometry_image_upload.height = texture_height;
@@ -434,7 +415,7 @@ VR_TEST_CASE(RuntimeIntegration_unified_scene_3d_offscreen_composite_smoke,
                                         geometry_image_upload);
 
         vr::surface::SurfaceImageUploadInfo surface_image_upload{};
-        surface_image_upload.image_id = 6101U;
+        surface_image_upload.image_id = k_surface_image_id;
         surface_image_upload.pixels = surface_pixels.data();
         surface_image_upload.width = texture_width;
         surface_image_upload.height = texture_height;
@@ -450,7 +431,8 @@ VR_TEST_CASE(RuntimeIntegration_unified_scene_3d_offscreen_composite_smoke,
                                        0U,
                                        surface_image_upload);
 
-        const auto upload_end = runtime.Upload().EndFrameAndSubmit(runtime.Context(), 0U);
+        const vr::render::UploadEndFrameResult upload_end =
+            runtime.Upload().EndFrameAndSubmit(runtime.Context(), 0U);
         if (upload_end.submitted) {
             runtime.Upload().WaitFrame(runtime.Context(), 0U);
         }
@@ -459,8 +441,8 @@ VR_TEST_CASE(RuntimeIntegration_unified_scene_3d_offscreen_composite_smoke,
         surface_image_host.BeginFrame(runtime.Context(), 0U);
 
         vr::geometry::GeometryMaterialDesc geometry_material{};
-        geometry_material.material_id = 11U;
-        geometry_material.image_id = 101U;
+        geometry_material.material_id = k_geometry_material_id;
+        geometry_material.image_id = k_geometry_image_id;
         geometry_material.uv_scale_u = 1.0F;
         geometry_material.uv_scale_v = 1.0F;
         geometry_material_host.UpsertMaterial(geometry_material);
@@ -483,22 +465,16 @@ VR_TEST_CASE(RuntimeIntegration_unified_scene_3d_offscreen_composite_smoke,
         face_create_info.file_path = font_path;
         face_create_info.pixel_height = 32U;
         const vr::text::FontFaceId base_face_id = runtime.FreeType().RegisterFace(face_create_info);
-        runtime.GlyphAtlas().MapFont(1U, base_face_id);
+        runtime.GlyphAtlas().MapFont(k_text_font_id, base_face_id);
 
         Geometry3D geometry_component{};
-        InitializeGeometryComponent(geometry_component, 1U, 11U, vr::ecs::Rgba8{235U, 214U, 170U, 255U});
-        geometry_component.runtime.route.depth_bin = 24U;
-        GeometrySystem3D::RebuildSortKey(geometry_component);
+        InitializeGeometryComponent(geometry_component);
 
         Surface3D surface_component{};
-        InitializeSurface3DComponent(surface_component,
-                                     6101U,
-                                     surface_sampler_id.value,
-                                     40U,
-                                     vr::ecs::Rgba8{220U, 240U, 255U, 230U});
+        InitializeSurfaceComponent(surface_component, surface_sampler_id.value);
 
         Text3D text_component{};
-        InitializeText3DComponent(text_component, 1U, 3U, "Unified Scene 3D");
+        InitializeTextComponent(text_component, "Unified Scene 3D");
 
         Transform3D geometry_transform{};
         Transform3D surface_transform{};
@@ -507,24 +483,17 @@ VR_TEST_CASE(RuntimeIntegration_unified_scene_3d_offscreen_composite_smoke,
         TransformSystem3D::Initialize(surface_transform);
         TransformSystem3D::Initialize(text_transform);
         TransformSystem3D::SetLocalPosition(geometry_transform,
-                                            vr::ecs::Float3{.x = -1.15F, .y = 0.05F, .z = 0.15F});
+                                            vr::ecs::Float3{.x = -1.15F, .y = 0.10F, .z = 0.12F});
         TransformSystem3D::SetLocalScale(geometry_transform,
-                                         vr::ecs::Float3{.x = 1.85F, .y = 1.85F, .z = 1.0F});
+                                         vr::ecs::Float3{.x = 1.90F, .y = 1.90F, .z = 1.0F});
         TransformSystem3D::SetLocalPosition(surface_transform,
-                                            vr::ecs::Float3{.x = 1.05F, .y = -0.10F, .z = -0.20F});
+                                            vr::ecs::Float3{.x = 1.05F, .y = -0.12F, .z = -0.20F});
         TransformSystem3D::SetLocalScale(surface_transform,
-                                         vr::ecs::Float3{.x = 1.65F, .y = 1.65F, .z = 1.0F});
+                                         vr::ecs::Float3{.x = 1.70F, .y = 1.70F, .z = 1.0F});
         TransformSystem3D::SetLocalPosition(text_transform,
-                                            vr::ecs::Float3{.x = -1.8F, .y = 1.0F, .z = -0.10F});
+                                            vr::ecs::Float3{.x = -1.90F, .y = 1.05F, .z = -0.08F});
         TransformSystem3D::SetLocalScale(text_transform,
                                          vr::ecs::Float3{.x = 1.0F, .y = 1.0F, .z = 1.0F});
-
-        std::array<Transform3D, 3U> shared_transforms{geometry_transform, surface_transform, text_transform};
-        TransformSystem3D::UpdateHierarchy(shared_transforms.data(),
-                                           static_cast<std::uint32_t>(shared_transforms.size()));
-        geometry_transform = shared_transforms[0U];
-        surface_transform = shared_transforms[1U];
-        text_transform = shared_transforms[2U];
 
         Bounds3D geometry_bounds{};
         Bounds3D surface_bounds{};
@@ -540,7 +509,15 @@ VR_TEST_CASE(RuntimeIntegration_unified_scene_3d_offscreen_composite_smoke,
                                               vr::ecs::Float3{.x = 0.85F, .y = 0.85F, .z = 0.05F});
         BoundsSystem3D::SetLocalCenterExtents(text_bounds,
                                               vr::ecs::Float3{.x = 0.0F, .y = 0.0F, .z = 0.0F},
-                                              vr::ecs::Float3{.x = 2.4F, .y = 0.55F, .z = 0.12F});
+                                              vr::ecs::Float3{.x = 2.8F, .y = 0.6F, .z = 0.12F});
+
+        std::array<Transform3D, 3U> shared_transforms{geometry_transform, surface_transform, text_transform};
+        TransformSystem3D::UpdateHierarchy(shared_transforms.data(),
+                                           static_cast<std::uint32_t>(shared_transforms.size()));
+        geometry_transform = shared_transforms[0U];
+        surface_transform = shared_transforms[1U];
+        text_transform = shared_transforms[2U];
+
         std::array<Bounds3D, 3U> bounds_batch{geometry_bounds, surface_bounds, text_bounds};
         (void)BoundsSystem3D::UpdateAligned(bounds_batch.data(),
                                             shared_transforms.data(),
@@ -554,7 +531,7 @@ VR_TEST_CASE(RuntimeIntegration_unified_scene_3d_offscreen_composite_smoke,
         CameraSystem3D::SetProjectionMode(camera, vr::ecs::CameraProjectionMode::perspective);
         CameraSystem3D::SetVerticalFovRadians(camera, 60.0F * 0.01745329251994329577F);
         CameraSystem3D::SetNearFar(camera, 0.05F, 256.0F);
-        CameraSystem3D::SetAspectRatio(camera, 800.0F / 450.0F);
+        CameraSystem3D::SetAspectRatio(camera, 1280.0F / 720.0F);
 
         Transform3D camera_transform{};
         TransformSystem3D::Initialize(camera_transform);
@@ -622,42 +599,49 @@ VR_TEST_CASE(RuntimeIntegration_unified_scene_3d_offscreen_composite_smoke,
 
         vr::render::RenderTargetCompositeRendererCreateInfo composite_create_info{};
         composite_create_info.clear_swapchain = true;
+        composite_create_info.clear_color = {{0.02F, 0.025F, 0.04F, 1.0F}};
         composite_create_info.enable_reinhard_tonemap = true;
         composite_create_info.exposure = 1.0F;
         composite_create_info.apply_manual_gamma = false;
         recorder.composite_renderer.Initialize(composite_create_info);
         composite_renderer_initialized = true;
 
-        std::uint32_t submitted_frames = 0U;
-        std::uint32_t max_geometry_draw_calls = 0U;
-        std::uint32_t max_surface_draw_calls = 0U;
-        std::uint32_t max_text_draw_calls = 0U;
-        std::uint32_t max_composite_draw_calls = 0U;
-        std::uint32_t max_text_instances = 0U;
-        std::uint32_t max_surface_instances = 0U;
-        std::uint32_t max_geometry_instances = 0U;
+        std::cout << "sdl_scene_3d_unified_demo running (geometry + surface + text share transient scene target). Close window to exit.\n";
 
-        constexpr std::uint32_t max_ticks = 16U;
-        for (std::uint32_t tick_index = 0U;
-             tick_index < max_ticks && runtime.IsRunning();
-             ++tick_index) {
-            const float t = static_cast<float>(tick_index);
+        std::uint64_t fps_window_begin_ticks = SDL_GetTicks();
+        std::uint32_t fps_window_frame_count = 0U;
+        std::uint64_t frame_index = 0U;
+
+        while (runtime.IsRunning()) {
+            const std::uint64_t now_ticks = SDL_GetTicks();
+            const float time_seconds = static_cast<float>(now_ticks) * 0.001F;
+
+            const VkExtent2D extent = runtime.Swapchain().Extent();
+            if (extent.width > 0U && extent.height > 0U) {
+                CameraSystem3D::SetAspectRatio(camera,
+                                               static_cast<float>(extent.width) /
+                                                   static_cast<float>(extent.height));
+            }
+
             TransformSystem3D::SetLocalRotationEulerXyz(geometry_transform,
                                                         0.0F,
-                                                        0.22F * t,
-                                                        0.12F * std::sin(t * 0.35F));
+                                                        0.35F * time_seconds,
+                                                        0.18F * std::sin(time_seconds * 0.70F));
             TransformSystem3D::SetLocalRotationEulerXyz(surface_transform,
-                                                        0.0F,
-                                                        -0.18F * t,
+                                                        0.10F * std::sin(time_seconds * 0.65F),
+                                                        -0.42F * time_seconds,
                                                         0.0F);
             TransformSystem3D::SetLocalRotationEulerXyz(text_transform,
                                                         0.0F,
                                                         0.0F,
-                                                        0.10F * std::sin(t * 0.20F));
+                                                        0.12F * std::sin(time_seconds * 1.30F));
 
-            char frame_text[64]{};
-            std::snprintf(frame_text, sizeof(frame_text), "Unified Scene %u", tick_index);
-            (void)TextSystem3D::SetText(text_component, frame_text);
+            char runtime_text[96]{};
+            std::snprintf(runtime_text,
+                          sizeof(runtime_text),
+                          "Unified Scene | Frame:%llu",
+                          static_cast<unsigned long long>(frame_index));
+            (void)TextSystem3D::SetText(text_component, runtime_text);
 
             shared_transforms = {geometry_transform, surface_transform, text_transform};
             TransformSystem3D::UpdateHierarchy(shared_transforms.data(),
@@ -676,41 +660,42 @@ VR_TEST_CASE(RuntimeIntegration_unified_scene_3d_offscreen_composite_smoke,
             CameraSystem3D::Update(camera, camera_transform);
 
             const Runtime::RuntimeTickResult tick_result = runtime.Tick(recorder);
-            if (tick_result.render.code == vr::render::TickCode::Submitted ||
-                tick_result.render.code == vr::render::TickCode::RecreateRequested) {
-                ++submitted_frames;
+            (void)tick_result;
+            ++fps_window_frame_count;
+            ++frame_index;
+
+            if (max_frames > 0U && frame_index >= max_frames) {
+                break;
             }
 
-            const auto geometry_stats = recorder.geometry_renderer.Stats();
-            const auto surface_stats = recorder.surface_renderer.Stats();
-            const auto text_stats = recorder.text_renderer.Stats();
-            const auto composite_stats = recorder.composite_renderer.Stats();
-
-            max_geometry_draw_calls = std::max(max_geometry_draw_calls, geometry_stats.draw_call_count);
-            max_surface_draw_calls = std::max(max_surface_draw_calls, surface_stats.draw_call_count);
-            max_text_draw_calls = std::max(max_text_draw_calls, text_stats.draw_call_count);
-            max_composite_draw_calls = std::max(max_composite_draw_calls, composite_stats.draw_call_count);
-            max_geometry_instances = std::max(max_geometry_instances, geometry_stats.instance_count);
-            max_surface_instances = std::max(max_surface_instances, surface_stats.instance_count);
-            max_text_instances = std::max(max_text_instances, text_stats.instance_count);
-            SDL_Delay(1U);
+            const std::uint64_t fps_window_elapsed = now_ticks - fps_window_begin_ticks;
+            if (fps_window_elapsed >= 1000U) {
+                const float fps = (fps_window_elapsed > 0U)
+                    ? (1000.0F * static_cast<float>(fps_window_frame_count) /
+                       static_cast<float>(fps_window_elapsed))
+                    : 0.0F;
+                const auto geometry_stats = recorder.geometry_renderer.Stats();
+                const auto surface_stats = recorder.surface_renderer.Stats();
+                const auto text_stats = recorder.text_renderer.Stats();
+                const auto composite_stats = recorder.composite_renderer.Stats();
+                const auto pool_stats = runtime.TargetPool().Stats();
+                std::cout << "FPS:" << fps
+                          << " Frame:" << frame_index
+                          << " | G Draw:" << geometry_stats.draw_call_count
+                          << " Inst:" << geometry_stats.instance_count
+                          << " | S Draw:" << surface_stats.draw_call_count
+                          << " Inst:" << surface_stats.instance_count
+                          << " | T Draw:" << text_stats.draw_call_count
+                          << " Inst:" << text_stats.instance_count
+                          << " | Comp Draw:" << composite_stats.draw_call_count
+                          << " DSU:" << composite_stats.descriptor_set_update_count
+                          << " | Pool Acquire:" << pool_stats.acquire_count
+                          << " Reuse:" << pool_stats.reuse_hit_count
+                          << '\n';
+                fps_window_begin_ticks = now_ticks;
+                fps_window_frame_count = 0U;
+            }
         }
-
-        VR_REQUIRE(submitted_frames > 0U);
-        VR_CHECK(max_geometry_draw_calls > 0U);
-        VR_CHECK(max_surface_draw_calls > 0U);
-        VR_CHECK(max_text_draw_calls > 0U);
-        VR_CHECK(max_composite_draw_calls > 0U);
-        VR_CHECK(max_geometry_instances > 0U);
-        VR_CHECK(max_surface_instances > 0U);
-        VR_CHECK(max_text_instances > 0U);
-        VR_CHECK(runtime.TargetPool().Stats().acquire_count > 0U);
-        VR_CHECK(runtime.TargetPool().Stats().reuse_hit_count > 0U);
-        VR_CHECK(runtime.RenderTarget().ResolveView(recorder.scene_targets.ColorTarget()).state ==
-                 vr::render::RenderTargetStateKind::shader_read);
-        VR_CHECK(runtime.RenderTarget().ResolveView(recorder.scene_targets.DepthTarget()).state ==
-                 vr::render::RenderTargetStateKind::depth_attachment);
-        VR_CHECK(runtime.GlyphUpload().Stats().uploaded_rect_count > 0U);
 
         recorder.composite_renderer.Shutdown(runtime.Context());
         composite_renderer_initialized = false;
@@ -735,6 +720,8 @@ VR_TEST_CASE(RuntimeIntegration_unified_scene_3d_offscreen_composite_smoke,
         runtime.Shutdown();
         runtime_initialized = false;
     } catch (const std::exception& exception_) {
+        std::cerr << "sdl_scene_3d_unified_demo failed: " << exception_.what() << '\n';
+
         if (composite_renderer_initialized && runtime_initialized && runtime.IsInitialized()) {
             recorder.composite_renderer.Shutdown(runtime.Context());
             composite_renderer_initialized = false;
@@ -779,12 +766,8 @@ VR_TEST_CASE(RuntimeIntegration_unified_scene_3d_offscreen_composite_smoke,
             runtime.Shutdown();
             runtime_initialized = false;
         }
-
-        if (IsEnvironmentSkipError(exception_.what())) {
-            VR_SKIP(exception_.what());
-        }
-        throw;
+        return 1;
     }
-}
 
-} // namespace
+    return 0;
+}

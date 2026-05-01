@@ -45,6 +45,19 @@ enum class SceneRenderPassRole : std::uint8_t {
     last = 3U
 };
 
+template<typename RendererT>
+struct SceneRendererBinding final {
+    RendererT* renderer = nullptr;
+    SceneRenderPassRole pass_role = SceneRenderPassRole::single;
+};
+
+template<typename RendererT>
+[[nodiscard]] constexpr SceneRendererBinding<RendererT> BindSceneRenderer(
+    RendererT& renderer_,
+    SceneRenderPassRole pass_role_) noexcept {
+    return SceneRendererBinding<RendererT>{.renderer = &renderer_, .pass_role = pass_role_};
+}
+
 class SceneRenderTargetSet final {
 public:
     SceneRenderTargetSet() = default;
@@ -59,37 +72,41 @@ public:
     void Initialize(const SceneRenderTargetSetCreateInfo& create_info_ = {}) noexcept;
     void Reset() noexcept;
 
-    void EnsureForSwapchain(VulkanContext& context_,
-                            RenderTargetHost& render_target_host_,
-                            VkExtent2D swapchain_extent_,
-                            std::uint64_t last_submitted_value_,
-                            std::uint64_t completed_submit_value_);
-    void PrepareFrame(const RuntimePrepareContext& prepare_context_);
-    void OnSwapchainRecreated(VulkanContext& context_,
-                              RenderTargetHost& render_target_host_,
-                              RenderTargetPool* render_target_pool_,
-                              VkExtent2D swapchain_extent_,
-                              std::uint64_t last_submitted_value_,
-                              std::uint64_t completed_submit_value_);
+    [[nodiscard]] bool EnsureForSwapchain(VulkanContext& context_,
+                                          RenderTargetHost& render_target_host_,
+                                          VkExtent2D swapchain_extent_,
+                                          std::uint64_t last_submitted_value_,
+                                          std::uint64_t completed_submit_value_);
+    [[nodiscard]] bool PrepareFrame(const RuntimePrepareContext& prepare_context_);
+    [[nodiscard]] bool OnSwapchainRecreated(VulkanContext& context_,
+                                            RenderTargetHost& render_target_host_,
+                                            RenderTargetPool* render_target_pool_,
+                                            VkExtent2D swapchain_extent_,
+                                            std::uint64_t last_submitted_value_,
+                                            std::uint64_t completed_submit_value_);
 
     [[nodiscard]] RenderTargetColorOutputConfig BuildColorOutputConfig(bool clear_target_,
                                                                        bool final_pass_) const;
     [[nodiscard]] RenderTargetDepthOutputConfig BuildDepthOutputConfig(bool clear_target_) const;
 
     template<typename RendererT>
-    void ConfigureSceneRenderer(RendererT& renderer_,
-                                SceneRenderPassRole pass_role_) const {
+    [[nodiscard]] bool ConfigureSceneRenderer(RendererT& renderer_,
+                                              SceneRenderPassRole pass_role_) const {
         const bool clear_target = pass_role_ == SceneRenderPassRole::single ||
                                   pass_role_ == SceneRenderPassRole::first;
         const bool final_pass = pass_role_ == SceneRenderPassRole::single ||
                                 pass_role_ == SceneRenderPassRole::last;
-        ConfigureSceneRenderer(renderer_, clear_target, final_pass);
+        return ConfigureSceneRenderer(renderer_, clear_target, final_pass);
     }
 
     template<typename RendererT>
-    void ConfigureSceneRenderer(RendererT& renderer_,
-                                bool clear_target_,
-                                bool final_pass_) const {
+    [[nodiscard]] bool ConfigureSceneRenderer(RendererT& renderer_,
+                                              bool clear_target_,
+                                              bool final_pass_) const {
+        if (!IsReady()) {
+            ResetSceneRenderer(renderer_);
+            return false;
+        }
         renderer_.SetOutputTargetConfig(BuildColorOutputConfig(clear_target_, final_pass_));
         if (create_info_cache.enable_depth) {
             if constexpr (supports_depth_target_config<RendererT>) {
@@ -99,6 +116,7 @@ public:
                     "SceneRenderTargetSet depth target requested for renderer without depth target support");
             }
         }
+        return true;
     }
 
     template<typename RendererT>
@@ -111,8 +129,42 @@ public:
         }
     }
 
-    void ConfigureCompositeRenderer(RenderTargetCompositeRenderer& composite_renderer_) const noexcept;
+    [[nodiscard]] bool ConfigureCompositeRenderer(RenderTargetCompositeRenderer& composite_renderer_) const noexcept;
     void ResetCompositeRenderer(RenderTargetCompositeRenderer& composite_renderer_) const noexcept;
+
+    template<typename... BindingTs>
+    [[nodiscard]] bool PrepareFrameAndConfigure(const RuntimePrepareContext& prepare_context_,
+                                                RenderTargetCompositeRenderer* composite_renderer_,
+                                                const BindingTs&... bindings_) {
+        const bool ready = PrepareFrame(prepare_context_);
+        ConfigureBindings(bindings_...);
+        if (composite_renderer_ != nullptr) {
+            (void)ConfigureCompositeRenderer(*composite_renderer_);
+        }
+        return ready;
+    }
+
+    template<typename... BindingTs>
+    [[nodiscard]] bool OnSwapchainRecreatedAndConfigure(VulkanContext& context_,
+                                                        RenderTargetHost& render_target_host_,
+                                                        RenderTargetPool* render_target_pool_,
+                                                        VkExtent2D swapchain_extent_,
+                                                        std::uint64_t last_submitted_value_,
+                                                        std::uint64_t completed_submit_value_,
+                                                        RenderTargetCompositeRenderer* composite_renderer_,
+                                                        const BindingTs&... bindings_) {
+        const bool ready = OnSwapchainRecreated(context_,
+                                                render_target_host_,
+                                                render_target_pool_,
+                                                swapchain_extent_,
+                                                last_submitted_value_,
+                                                completed_submit_value_);
+        ConfigureBindings(bindings_...);
+        if (composite_renderer_ != nullptr) {
+            (void)ConfigureCompositeRenderer(*composite_renderer_);
+        }
+        return ready;
+    }
 
     [[nodiscard]] bool IsReady() const noexcept;
     [[nodiscard]] bool HasDepthTarget() const noexcept;
@@ -123,6 +175,10 @@ public:
     [[nodiscard]] const SceneRenderTargetSetCreateInfo& CreateInfo() const noexcept;
 
 private:
+    [[nodiscard]] bool SupportsSwapchainRelativeExtent() const noexcept;
+    [[nodiscard]] static bool HasNonZeroExtent(VkExtent2D extent_) noexcept;
+    void InvalidateCurrentFrameTargets() noexcept;
+
     template<typename RendererT>
     static constexpr bool supports_depth_target_config =
         requires(RendererT& renderer_,
@@ -130,6 +186,19 @@ private:
             renderer_.SetDepthTargetConfig(depth_output_config_);
             renderer_.ResetDepthTargetConfig();
         };
+
+    template<typename BindingT>
+    void ConfigureBinding(const BindingT& binding_) const {
+        if (binding_.renderer == nullptr) {
+            throw std::invalid_argument("SceneRenderTargetSet binding requires non-null renderer");
+        }
+        (void)ConfigureSceneRenderer(*binding_.renderer, binding_.pass_role);
+    }
+
+    template<typename... BindingTs>
+    void ConfigureBindings(const BindingTs&... bindings_) const {
+        (ConfigureBinding(bindings_), ...);
+    }
 
     [[nodiscard]] static VkFormat ResolveColorFormat(VulkanContext& context_,
                                                      VkFormat requested_format_);
@@ -146,6 +215,7 @@ private:
     RenderTargetHandle depth_target{};
     VkFormat color_format = VK_FORMAT_UNDEFINED;
     VkFormat depth_format = VK_FORMAT_UNDEFINED;
+    bool frame_ready = false;
     bool initialized = false;
 };
 

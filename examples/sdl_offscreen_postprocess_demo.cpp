@@ -210,16 +210,13 @@ struct OffscreenPostProcessRecorder final {
         scene_targets.Initialize(create_info);
     }
 
-    void ConfigurePassTargets() {
-        geometry_renderer.SetOutputTargetConfig(scene_targets.BuildColorOutputConfig(true, false));
-        surface_renderer.SetOutputTargetConfig(scene_targets.BuildColorOutputConfig(false, false));
-        text_renderer.SetOutputTargetConfig(scene_targets.BuildColorOutputConfig(false, true));
-        scene_targets.ConfigureCompositeRenderer(composite_renderer);
-    }
-
     void PrepareFrame(const vr::render::RuntimePrepareContext& prepare_context_) {
-        scene_targets.PrepareFrame(prepare_context_);
-        ConfigurePassTargets();
+        (void)scene_targets.PrepareFrameAndConfigure(
+            prepare_context_,
+            &composite_renderer,
+            vr::render::BindSceneRenderer(geometry_renderer, vr::render::SceneRenderPassRole::first),
+            vr::render::BindSceneRenderer(surface_renderer, vr::render::SceneRenderPassRole::middle),
+            vr::render::BindSceneRenderer(text_renderer, vr::render::SceneRenderPassRole::last));
         geometry_renderer.PrepareFrame(prepare_context_);
         surface_renderer.PrepareFrame(prepare_context_);
         text_renderer.PrepareFrame(prepare_context_);
@@ -255,13 +252,17 @@ struct OffscreenPostProcessRecorder final {
             return;
         }
 
-        scene_targets.OnSwapchainRecreated(runtime->Context(),
-                                           runtime->RenderTarget(),
-                                           runtime->HasRenderTargetPool() ? &runtime->TargetPool() : nullptr,
-                                           extent_,
-                                           last_submitted_value_,
-                                           completed_submit_value_);
-        ConfigurePassTargets();
+        (void)scene_targets.OnSwapchainRecreatedAndConfigure(
+            runtime->Context(),
+            runtime->RenderTarget(),
+            runtime->HasRenderTargetPool() ? &runtime->TargetPool() : nullptr,
+            extent_,
+            last_submitted_value_,
+            completed_submit_value_,
+            &composite_renderer,
+            vr::render::BindSceneRenderer(geometry_renderer, vr::render::SceneRenderPassRole::first),
+            vr::render::BindSceneRenderer(surface_renderer, vr::render::SceneRenderPassRole::middle),
+            vr::render::BindSceneRenderer(text_renderer, vr::render::SceneRenderPassRole::last));
     }
 };
 

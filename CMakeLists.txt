@@ -496,6 +496,15 @@ target_link_libraries(sdl_text_3d_demo
         vulkan_platform_sdl
 )
 
+add_executable(sdl_scene_3d_unified_demo
+    examples/sdl_scene_3d_unified_demo.cpp
+)
+
+target_link_libraries(sdl_scene_3d_unified_demo
+    PRIVATE
+        vulkan_platform_sdl
+)
+
 add_executable(sdl_offscreen_postprocess_demo
     examples/sdl_offscreen_postprocess_demo.cpp
 )

@@ -68,6 +68,7 @@ void SceneRenderTargetSet::Initialize(const SceneRenderTargetSetCreateInfo& crea
     depth_target = {};
     color_format = VK_FORMAT_UNDEFINED;
     depth_format = VK_FORMAT_UNDEFINED;
+    frame_ready = false;
     initialized = true;
 }
 
@@ -77,16 +78,21 @@ void SceneRenderTargetSet::Reset() noexcept {
     depth_target = {};
     color_format = VK_FORMAT_UNDEFINED;
     depth_format = VK_FORMAT_UNDEFINED;
+    frame_ready = false;
     initialized = false;
 }
 
-void SceneRenderTargetSet::EnsureForSwapchain(VulkanContext& context_,
+bool SceneRenderTargetSet::EnsureForSwapchain(VulkanContext& context_,
                                               RenderTargetHost& render_target_host_,
                                               VkExtent2D swapchain_extent_,
                                               std::uint64_t last_submitted_value_,
                                               std::uint64_t completed_submit_value_) {
     if (!initialized) {
         throw std::runtime_error("SceneRenderTargetSet::EnsureForSwapchain called before Initialize");
+    }
+    if (SupportsSwapchainRelativeExtent() && !HasNonZeroExtent(swapchain_extent_)) {
+        InvalidateCurrentFrameTargets();
+        return false;
     }
 
     ValidateSceneLifetime(create_info_cache.color_lifetime, "color");
@@ -111,7 +117,8 @@ void SceneRenderTargetSet::EnsureForSwapchain(VulkanContext& context_,
     if (!create_info_cache.enable_depth) {
         depth_target = {};
         depth_format = VK_FORMAT_UNDEFINED;
-        return;
+        frame_ready = IsValidRenderTargetHandle(color_target);
+        return frame_ready;
     }
 
     ValidateSceneLifetime(create_info_cache.depth_lifetime, "depth");
@@ -132,24 +139,29 @@ void SceneRenderTargetSet::EnsureForSwapchain(VulkanContext& context_,
     } else {
         depth_target = {};
     }
+
+    frame_ready = IsValidRenderTargetHandle(color_target) &&
+                  (!create_info_cache.enable_depth || IsValidRenderTargetHandle(depth_target));
+    return frame_ready;
 }
 
-void SceneRenderTargetSet::PrepareFrame(const RuntimePrepareContext& prepare_context_) {
+bool SceneRenderTargetSet::PrepareFrame(const RuntimePrepareContext& prepare_context_) {
     if (!initialized) {
         throw std::runtime_error("SceneRenderTargetSet::PrepareFrame called before Initialize");
     }
     if (prepare_context_.context == nullptr || prepare_context_.render_target_host == nullptr) {
         throw std::runtime_error("SceneRenderTargetSet::PrepareFrame requires render target runtime context");
     }
-    if (prepare_context_.swapchain_extent.width == 0U || prepare_context_.swapchain_extent.height == 0U) {
-        throw std::runtime_error("SceneRenderTargetSet::PrepareFrame requires non-zero swapchain extent");
+    if (SupportsSwapchainRelativeExtent() && !HasNonZeroExtent(prepare_context_.swapchain_extent)) {
+        InvalidateCurrentFrameTargets();
+        return false;
     }
 
-    EnsureForSwapchain(*prepare_context_.context,
-                       *prepare_context_.render_target_host,
-                       prepare_context_.swapchain_extent,
-                       prepare_context_.last_submitted_value,
-                       prepare_context_.completed_submit_value);
+    (void)EnsureForSwapchain(*prepare_context_.context,
+                             *prepare_context_.render_target_host,
+                             prepare_context_.swapchain_extent,
+                             prepare_context_.last_submitted_value,
+                             prepare_context_.completed_submit_value);
 
     if (prepare_context_.render_target_pool != nullptr) {
         AcquireTransientTargets(*prepare_context_.context,
@@ -163,19 +175,26 @@ void SceneRenderTargetSet::PrepareFrame(const RuntimePrepareContext& prepare_con
             throw std::runtime_error("SceneRenderTargetSet transient targets require RenderTargetPool");
         }
     }
+    frame_ready = IsValidRenderTargetHandle(color_target) &&
+                  (!create_info_cache.enable_depth || IsValidRenderTargetHandle(depth_target));
+    return frame_ready;
 }
 
-void SceneRenderTargetSet::OnSwapchainRecreated(VulkanContext& context_,
+bool SceneRenderTargetSet::OnSwapchainRecreated(VulkanContext& context_,
                                                 RenderTargetHost& render_target_host_,
                                                 RenderTargetPool* render_target_pool_,
                                                 VkExtent2D swapchain_extent_,
                                                 std::uint64_t last_submitted_value_,
                                                 std::uint64_t completed_submit_value_) {
-    EnsureForSwapchain(context_,
-                       render_target_host_,
-                       swapchain_extent_,
-                       last_submitted_value_,
-                       completed_submit_value_);
+    if (SupportsSwapchainRelativeExtent() && !HasNonZeroExtent(swapchain_extent_)) {
+        InvalidateCurrentFrameTargets();
+        return false;
+    }
+    (void)EnsureForSwapchain(context_,
+                             render_target_host_,
+                             swapchain_extent_,
+                             last_submitted_value_,
+                             completed_submit_value_);
     if (render_target_pool_ != nullptr) {
         AcquireTransientTargets(context_,
                                 render_target_host_,
@@ -186,6 +205,9 @@ void SceneRenderTargetSet::OnSwapchainRecreated(VulkanContext& context_,
                 create_info_cache.depth_lifetime == RenderTargetLifetime::transient)) {
         throw std::runtime_error("SceneRenderTargetSet transient targets require RenderTargetPool during recreate");
     }
+    frame_ready = IsValidRenderTargetHandle(color_target) &&
+                  (!create_info_cache.enable_depth || IsValidRenderTargetHandle(depth_target));
+    return frame_ready;
 }
 
 void SceneRenderTargetSet::AcquireTransientTargets(VulkanContext& context_,
@@ -225,11 +247,13 @@ void SceneRenderTargetSet::AcquireTransientTargets(VulkanContext& context_,
             swapchain_extent_);
         depth_target = depth_result.handle;
     }
+    frame_ready = IsValidRenderTargetHandle(color_target) &&
+                  (!create_info_cache.enable_depth || IsValidRenderTargetHandle(depth_target));
 }
 
 RenderTargetColorOutputConfig SceneRenderTargetSet::BuildColorOutputConfig(bool clear_target_,
                                                                            bool final_pass_) const {
-    if (!initialized || !IsValidRenderTargetHandle(color_target)) {
+    if (!IsReady()) {
         throw std::runtime_error("SceneRenderTargetSet::BuildColorOutputConfig requires ready color target");
     }
 
@@ -248,7 +272,7 @@ RenderTargetColorOutputConfig SceneRenderTargetSet::BuildColorOutputConfig(bool 
 }
 
 RenderTargetDepthOutputConfig SceneRenderTargetSet::BuildDepthOutputConfig(bool clear_target_) const {
-    if (!initialized || !create_info_cache.enable_depth || !IsValidRenderTargetHandle(depth_target)) {
+    if (!IsReady() || !create_info_cache.enable_depth || !IsValidRenderTargetHandle(depth_target)) {
         throw std::runtime_error("SceneRenderTargetSet::BuildDepthOutputConfig requires ready depth target");
     }
 
@@ -267,14 +291,15 @@ RenderTargetDepthOutputConfig SceneRenderTargetSet::BuildDepthOutputConfig(bool 
     return output;
 }
 
-void SceneRenderTargetSet::ConfigureCompositeRenderer(RenderTargetCompositeRenderer& composite_renderer_) const noexcept {
-    if (!initialized || !IsValidRenderTargetHandle(color_target)) {
+bool SceneRenderTargetSet::ConfigureCompositeRenderer(RenderTargetCompositeRenderer& composite_renderer_) const noexcept {
+    if (!IsReady()) {
         composite_renderer_.ClearSourceTarget();
         composite_renderer_.ResetOutputTargetConfig();
-        return;
+        return false;
     }
     composite_renderer_.SetSourceTarget(color_target, create_info_cache.color_final_state);
     composite_renderer_.ResetOutputTargetConfig();
+    return true;
 }
 
 void SceneRenderTargetSet::ResetCompositeRenderer(RenderTargetCompositeRenderer& composite_renderer_) const noexcept {
@@ -284,12 +309,13 @@ void SceneRenderTargetSet::ResetCompositeRenderer(RenderTargetCompositeRenderer&
 
 bool SceneRenderTargetSet::IsReady() const noexcept {
     return initialized &&
+           frame_ready &&
            IsValidRenderTargetHandle(color_target) &&
            (!create_info_cache.enable_depth || IsValidRenderTargetHandle(depth_target));
 }
 
 bool SceneRenderTargetSet::HasDepthTarget() const noexcept {
-    return create_info_cache.enable_depth && IsValidRenderTargetHandle(depth_target);
+    return IsReady() && create_info_cache.enable_depth && IsValidRenderTargetHandle(depth_target);
 }
 
 RenderTargetHandle SceneRenderTargetSet::ColorTarget() const noexcept {
@@ -310,6 +336,25 @@ VkFormat SceneRenderTargetSet::DepthFormat() const noexcept {
 
 const SceneRenderTargetSetCreateInfo& SceneRenderTargetSet::CreateInfo() const noexcept {
     return create_info_cache;
+}
+
+bool SceneRenderTargetSet::SupportsSwapchainRelativeExtent() const noexcept {
+    return create_info_cache.scale_mode == RenderTargetScaleMode::swapchain_relative;
+}
+
+bool SceneRenderTargetSet::HasNonZeroExtent(VkExtent2D extent_) noexcept {
+    return extent_.width > 0U && extent_.height > 0U;
+}
+
+void SceneRenderTargetSet::InvalidateCurrentFrameTargets() noexcept {
+    if (create_info_cache.color_lifetime == RenderTargetLifetime::transient) {
+        color_target = {};
+    }
+    if (create_info_cache.enable_depth &&
+        create_info_cache.depth_lifetime == RenderTargetLifetime::transient) {
+        depth_target = {};
+    }
+    frame_ready = false;
 }
 
 VkFormat SceneRenderTargetSet::ResolveColorFormat(VulkanContext& context_,
