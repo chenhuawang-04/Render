@@ -1,8 +1,10 @@
 #include "support/test_framework.hpp"
 #include "vr/render/render_pass_preset.hpp"
+#include "vr/render/render_target_pass.hpp"
 #include "vr/render/render_target_desc.hpp"
 #include "vr/render/render_target_host.hpp"
 #include "vr/render/render_target_types.hpp"
+#include "vr/render/scene_render_target_set.hpp"
 
 #include <type_traits>
 
@@ -44,6 +46,12 @@ VR_TEST_CASE(RenderTargetTypes_pipeline_signature_and_attachment_defaults_are_st
     VR_CHECK(attachment.store_op == VK_ATTACHMENT_STORE_OP_STORE);
     VR_CHECK(attachment.expected_state == vr::render::RenderTargetStateKind::color_attachment);
     VR_CHECK(!attachment.use_resolve);
+
+    vr::render::RenderTargetDepthOutputConfig depth_output{};
+    VR_CHECK(depth_output.final_state == vr::render::RenderTargetStateKind::depth_attachment);
+    VR_CHECK(depth_output.load_op == VK_ATTACHMENT_LOAD_OP_LOAD);
+    VR_CHECK(depth_output.store_op == VK_ATTACHMENT_STORE_OP_STORE);
+    VR_CHECK(depth_output.clear_depth_stencil.depth == 1.0F);
 }
 
 VR_TEST_CASE(RenderTargetTypes_state_mapping_matches_v1_contract, "unit;core;render_target") {
@@ -69,6 +77,26 @@ VR_TEST_CASE(RenderTargetTypes_state_mapping_matches_v1_contract, "unit;core;ren
         vr::render::RenderTargetStateKind::present_src,
         VK_IMAGE_ASPECT_COLOR_BIT);
     VR_CHECK(present_state.layout == VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+}
+
+VR_TEST_CASE(SceneRenderTargetSet_defaults_match_render_target_v1_contract, "unit;core;render_target") {
+    vr::render::SceneRenderTargetSetCreateInfo create_info{};
+    VR_CHECK(create_info.enable_depth);
+    VR_CHECK(create_info.scale_mode == vr::render::RenderTargetScaleMode::swapchain_relative);
+    VR_CHECK(create_info.color_final_state == vr::render::RenderTargetStateKind::shader_read);
+    VR_CHECK(create_info.depth_final_state == vr::render::RenderTargetStateKind::depth_attachment);
+    VR_CHECK(create_info.samples == VK_SAMPLE_COUNT_1_BIT);
+
+    vr::render::SceneRenderTargetSet target_set{};
+    target_set.Initialize(create_info);
+    VR_CHECK(!target_set.IsReady());
+    VR_CHECK(!target_set.HasDepthTarget());
+    VR_CHECK(target_set.ColorFormat() == VK_FORMAT_UNDEFINED);
+    VR_CHECK(target_set.DepthFormat() == VK_FORMAT_UNDEFINED);
+    VR_CHECK(target_set.CreateInfo().enable_depth);
+
+    target_set.Reset();
+    VR_CHECK(!target_set.IsReady());
 }
 
 } // namespace

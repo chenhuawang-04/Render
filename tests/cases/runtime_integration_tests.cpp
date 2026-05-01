@@ -1,4 +1,5 @@
 #include "support/test_framework.hpp"
+#include "vr/render/render_target_desc.hpp"
 #include "vr/render/render_runtime_host.hpp"
 
 #include <SDL3/SDL.h>
@@ -159,6 +160,87 @@ private:
     vr::McVector<std::uint8_t> image_initialized{};
 };
 
+[[nodiscard]] VkFormat SelectTransientColorFormat(vr::VulkanContext& context_) {
+    constexpr std::array<VkFormat, 3U> candidates{
+        VK_FORMAT_R8G8B8A8_UNORM,
+        VK_FORMAT_B8G8R8A8_UNORM,
+        VK_FORMAT_R16G16B16A16_SFLOAT
+    };
+    for (const VkFormat candidate : candidates) {
+        VkFormatProperties properties{};
+        vkGetPhysicalDeviceFormatProperties(context_.PhysicalDevice(), candidate, &properties);
+        constexpr VkFormatFeatureFlags required =
+            VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT;
+        if ((properties.optimalTilingFeatures & required) == required) {
+            return candidate;
+        }
+    }
+    return VK_FORMAT_UNDEFINED;
+}
+
+class TransientPoolRecorder final {
+public:
+    void PrepareFrame(const vr::render::RuntimePrepareContext& prepare_context_) {
+        if (prepare_context_.render_target_pool == nullptr ||
+            prepare_context_.render_target_host == nullptr ||
+            prepare_context_.context == nullptr) {
+            return;
+        }
+
+        if (selected_format == VK_FORMAT_UNDEFINED) {
+            selected_format = SelectTransientColorFormat(*prepare_context_.context);
+            if (selected_format == VK_FORMAT_UNDEFINED) {
+                return;
+            }
+        }
+
+        vr::render::RenderTargetDesc desc{};
+        desc.debug_name = "TransientPoolRecorderColor";
+        desc.dimension = vr::render::RenderTargetDimension::image_2d;
+        desc.lifetime = vr::render::RenderTargetLifetime::transient;
+        desc.scale_mode = vr::render::RenderTargetScaleMode::absolute;
+        desc.width = 96U;
+        desc.height = 64U;
+        desc.depth = 1U;
+        desc.format = selected_format;
+        desc.samples = VK_SAMPLE_COUNT_1_BIT;
+        desc.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        desc.aspect = VK_IMAGE_ASPECT_COLOR_BIT;
+        desc.color_encoding = vr::render::RenderTargetColorEncoding::linear;
+
+        const auto acquire_result = prepare_context_.render_target_pool->AcquireTransientTarget(
+            *prepare_context_.context,
+            *prepare_context_.render_target_host,
+            desc);
+        acquired_handles.push_back(acquire_result.handle);
+        reused_count += acquire_result.reused ? 1U : 0U;
+        created_count += acquire_result.created ? 1U : 0U;
+    }
+
+    void Record(const vr::render::FrameRecordContext& record_context_) {
+        clear_recorder.Record(record_context_);
+    }
+
+    [[nodiscard]] std::uint32_t ReusedCount() const noexcept {
+        return reused_count;
+    }
+
+    [[nodiscard]] std::uint32_t CreatedCount() const noexcept {
+        return created_count;
+    }
+
+    [[nodiscard]] std::uint32_t AcquiredCount() const noexcept {
+        return static_cast<std::uint32_t>(acquired_handles.size());
+    }
+
+private:
+    ClearToPresentRecorder clear_recorder{};
+    vr::McVector<vr::render::RenderTargetHandle> acquired_handles{};
+    VkFormat selected_format = VK_FORMAT_UNDEFINED;
+    std::uint32_t reused_count = 0U;
+    std::uint32_t created_count = 0U;
+};
+
 VR_TEST_CASE(RuntimeIntegration_initialize_tick_shutdown_smoke, "integration;gpu;sdl;runtime") {
     Runtime runtime{};
     Runtime::CreateInfo create_info{};
@@ -202,6 +284,55 @@ VR_TEST_CASE(RuntimeIntegration_initialize_tick_shutdown_smoke, "integration;gpu
     runtime.Shutdown();
     VR_CHECK(!runtime.IsInitialized());
     VR_CHECK(submitted_frames > 0U);
+}
+
+VR_TEST_CASE(RuntimeIntegration_render_target_pool_reuses_transient_targets, "integration;gpu;sdl;runtime;render_target") {
+    Runtime runtime{};
+    Runtime::CreateInfo create_info{};
+    create_info.platform.window.title = "vr_tests_runtime_transient_pool";
+    create_info.platform.window.width = 320;
+    create_info.platform.window.height = 240;
+    create_info.platform.window.resizable = false;
+    create_info.platform.window.high_pixel_density = false;
+    create_info.platform.instance.enable_validation = false;
+    create_info.render_loop.swapchain.enable_vsync = false;
+    create_info.render_loop.swapchain.preferred_image_count = 2U;
+    create_info.poll_events_each_tick = true;
+
+    TransientPoolRecorder recorder{};
+    try {
+        runtime.Initialize(create_info);
+    } catch (const std::exception& exception_) {
+        if (IsEnvironmentSkipError(exception_.what())) {
+            VR_SKIP(exception_.what());
+        }
+        throw;
+    }
+
+    VR_REQUIRE(runtime.HasRenderTargetHost());
+    VR_REQUIRE(runtime.HasRenderTargetPool());
+
+    std::uint32_t submitted_frames = 0U;
+    constexpr std::uint32_t max_ticks = 10U;
+    for (std::uint32_t tick_index = 0U;
+         tick_index < max_ticks && runtime.IsRunning();
+         ++tick_index) {
+        const Runtime::RuntimeTickResult tick_result = runtime.Tick(recorder);
+        if (tick_result.render.code == vr::render::TickCode::Submitted ||
+            tick_result.render.code == vr::render::TickCode::RecreateRequested) {
+            ++submitted_frames;
+        }
+        SDL_Delay(1U);
+    }
+
+    const auto pool_stats = runtime.TargetPool().Stats();
+    runtime.Shutdown();
+
+    VR_CHECK(submitted_frames > 0U);
+    VR_CHECK(recorder.AcquiredCount() > 0U);
+    VR_CHECK(recorder.CreatedCount() > 0U);
+    VR_CHECK(recorder.ReusedCount() > 0U);
+    VR_CHECK(pool_stats.bucket_count >= 1U);
 }
 
 } // namespace

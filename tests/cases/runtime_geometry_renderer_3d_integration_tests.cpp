@@ -6,6 +6,7 @@
 #include "vr/geometry/geometry_image_host.hpp"
 #include "vr/geometry/geometry_material_host.hpp"
 #include "vr/geometry/geometry_renderer_3d.hpp"
+#include "vr/render/render_target_format_utils.hpp"
 #include "vr/render/render_runtime_host.hpp"
 
 #include <SDL3/SDL.h>
@@ -28,6 +29,15 @@ using Transform3D = vr::ecs::Transform<vr::ecs::Dim3>;
 using TransformSystem3D = vr::ecs::TransformSystem<vr::ecs::Dim3>;
 using Camera3D = vr::ecs::Camera<vr::ecs::Dim3>;
 using CameraSystem3D = vr::ecs::CameraSystem<vr::ecs::Dim3>;
+
+[[nodiscard]] VkFormat ResolveDepthTargetFormat(vr::VulkanContext& context_) {
+    constexpr std::array<VkFormat, 3U> candidates{
+        VK_FORMAT_D32_SFLOAT,
+        VK_FORMAT_D24_UNORM_S8_UINT,
+        VK_FORMAT_D32_SFLOAT_S8_UINT
+    };
+    return vr::render::ResolveFirstSupportedDepthStencilFormat(context_, candidates);
+}
 
 [[nodiscard]] std::string ToLower(std::string_view value_) {
     std::string lowered{};
@@ -330,6 +340,31 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_end_to_end_smoke, "integrat
         geometry_renderer_initialized = true;
         geometry_renderer.SetHosts(&geometry_resource_host, &geometry_upload_host);
         geometry_renderer.SetMaterialHosts(&geometry_material_host, &geometry_image_host);
+        const VkFormat external_depth_format = ResolveDepthTargetFormat(runtime.Context());
+        vr::render::RenderTargetDesc external_depth_desc{};
+        external_depth_desc.debug_name = "RuntimeGeometry3DExternalDepth";
+        external_depth_desc.dimension = vr::render::RenderTargetDimension::image_2d;
+        external_depth_desc.lifetime = vr::render::RenderTargetLifetime::persistent;
+        external_depth_desc.scale_mode = vr::render::RenderTargetScaleMode::absolute;
+        external_depth_desc.width = runtime.Swapchain().Extent().width;
+        external_depth_desc.height = runtime.Swapchain().Extent().height;
+        external_depth_desc.depth = 1U;
+        external_depth_desc.format = external_depth_format;
+        external_depth_desc.samples = VK_SAMPLE_COUNT_1_BIT;
+        external_depth_desc.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+        external_depth_desc.aspect = vr::render::DepthStencilAspectMask(external_depth_format);
+        const vr::render::RenderTargetHandle external_depth_target =
+            runtime.RenderTarget().CreatePersistentTarget(runtime.Context(),
+                                                          external_depth_desc,
+                                                          runtime.Swapchain().Extent());
+        vr::render::RenderTargetDepthOutputConfig depth_output_config{};
+        depth_output_config.depth_target = external_depth_target;
+        depth_output_config.final_state = vr::render::RenderTargetStateKind::depth_attachment;
+        depth_output_config.use_explicit_load_op = true;
+        depth_output_config.load_op = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        depth_output_config.store_op = VK_ATTACHMENT_STORE_OP_STORE;
+        depth_output_config.clear_depth_stencil = VkClearDepthStencilValue{1.0F, 0U};
+        geometry_renderer.SetDepthTargetConfig(depth_output_config);
         geometry_renderer.SetSceneData(geometry_components.data(),
                                        transforms.data(),
                                        static_cast<std::uint32_t>(geometry_components.size()),
@@ -409,6 +444,7 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_end_to_end_smoke, "integrat
         VR_CHECK(geometry_upload_host.Stats().upload_count > 0U);
         VR_CHECK(geometry_image_host.Stats().image_count >= 2U);
         VR_CHECK(geometry_material_host.Stats().material_count >= 2U);
+        VR_CHECK(runtime.RenderTarget().ResolveView(external_depth_target).format == external_depth_format);
 
         geometry_renderer.Shutdown(runtime.Context());
         geometry_renderer_initialized = false;

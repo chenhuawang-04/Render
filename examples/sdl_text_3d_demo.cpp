@@ -2,13 +2,16 @@
 #include "vr/ecs/system/camera_system.hpp"
 #include "vr/ecs/system/text_system.hpp"
 #include "vr/ecs/system/transform_system.hpp"
+#include "vr/render/render_target_composite_renderer.hpp"
 #include "vr/render/render_runtime_host.hpp"
+#include "vr/render/scene_render_target_set.hpp"
 #include "vr/text/text_renderer_3d.hpp"
 
 #include <SDL3/SDL.h>
 
 #include <array>
 #include <cmath>
+#include <cstdlib>
 #include <cstdint>
 #include <cstdio>
 #include <filesystem>
@@ -137,10 +140,82 @@ void InitializeTransform(Transform3D& transform_,
     TransformSystem3D::SetLocalScale(transform_, scale_);
 }
 
+[[nodiscard]] std::uint32_t ParseMaxFrames(int argc_,
+                                           char** argv_) {
+    if (argc_ <= 1 || argv_ == nullptr) {
+        return 0U;
+    }
+
+    for (int index = 1; index + 1 < argc_; ++index) {
+        if (std::string_view(argv_[index]) != "--frames") {
+            continue;
+        }
+        return static_cast<std::uint32_t>(std::strtoul(argv_[index + 1], nullptr, 10));
+    }
+    return 0U;
+}
+
+struct Text3DOffscreenRecorder final {
+    Runtime* runtime = nullptr;
+    vr::text::TextRenderer3D text_renderer{};
+    vr::render::RenderTargetCompositeRenderer composite_renderer{};
+    vr::render::SceneRenderTargetSet scene_targets{};
+
+    void InitializeSceneTargets() {
+        vr::render::SceneRenderTargetSetCreateInfo create_info{};
+        create_info.color_debug_name = "Text3DSceneColor";
+        create_info.depth_debug_name = "Text3DSceneDepth";
+        create_info.enable_depth = true;
+        create_info.clear_color = VkClearColorValue{{0.07F, 0.08F, 0.11F, 1.0F}};
+        scene_targets.Initialize(create_info);
+    }
+
+    void ConfigureTargets() {
+        scene_targets.ConfigureSceneRenderer(text_renderer, true, true);
+        scene_targets.ConfigureCompositeRenderer(composite_renderer);
+    }
+
+    void PrepareFrame(const vr::render::RuntimePrepareContext& prepare_context_) {
+        text_renderer.PrepareFrame(prepare_context_);
+        composite_renderer.PrepareFrame(prepare_context_);
+    }
+
+    void Record(const vr::render::FrameRecordContext& record_context_) {
+        text_renderer.Record(record_context_);
+        composite_renderer.Record(record_context_);
+    }
+
+    void OnSwapchainRecreated(std::uint32_t image_count_,
+                              VkExtent2D extent_,
+                              VkFormat format_,
+                              std::uint64_t last_submitted_value_,
+                              std::uint64_t completed_submit_value_) {
+        text_renderer.OnSwapchainRecreated(image_count_,
+                                           extent_,
+                                           format_,
+                                           last_submitted_value_,
+                                           completed_submit_value_);
+        composite_renderer.OnSwapchainRecreated(image_count_, extent_, format_);
+
+        if (runtime == nullptr) {
+            return;
+        }
+
+        scene_targets.EnsureForSwapchain(runtime->Context(),
+                                         runtime->RenderTarget(),
+                                         extent_,
+                                         last_submitted_value_,
+                                         completed_submit_value_);
+        ConfigureTargets();
+    }
+};
+
 } // namespace
 
-int main() {
+int main(int argc_,
+         char** argv_) {
     try {
+        const std::uint32_t max_frames = ParseMaxFrames(argc_, argv_);
         const DemoFontPaths fonts = PickDemoFonts();
         if (fonts.primary.empty()) {
             throw std::runtime_error("No usable system font found (tried common Windows font paths).");
@@ -411,7 +486,9 @@ int main() {
         CameraSystem3D::MarkViewDirty(camera);
         CameraSystem3D::Update(camera, camera_transform);
 
-        vr::text::TextRenderer3D text_renderer{};
+        Text3DOffscreenRecorder recorder{};
+        recorder.runtime = &runtime;
+        recorder.InitializeSceneTargets();
         vr::text::TextRenderer3DCreateInfo text_renderer_create_info{};
         text_renderer_create_info.runtime_build.pixel_size_quantization = 1.0F;
         text_renderer_create_info.runtime_build.enable_kerning = true;
@@ -425,15 +502,23 @@ int main() {
         text_renderer_create_info.clear_depth_value = 1.0F;
         text_renderer_create_info.bitmap_gamma = 1.0F;
         text_renderer_create_info.bitmap_edge_sharpness = 1.12F;
-        text_renderer_create_info.clear_swapchain = true;
+        text_renderer_create_info.clear_swapchain = false;
         text_renderer_create_info.clear_color = {{0.07F, 0.08F, 0.11F, 1.0F}};
-        text_renderer.Initialize(text_renderer_create_info);
-        text_renderer.SetSceneData(components.data(),
-                                   transforms.data(),
-                                   static_cast<std::uint32_t>(components.size()),
-                                   &camera,
-                                   &camera_transform,
-                                   bounds.data());
+        recorder.text_renderer.Initialize(text_renderer_create_info);
+        recorder.text_renderer.SetSceneData(components.data(),
+                                            transforms.data(),
+                                            static_cast<std::uint32_t>(components.size()),
+                                            &camera,
+                                            &camera_transform,
+                                            bounds.data());
+
+        vr::render::RenderTargetCompositeRendererCreateInfo composite_create_info{};
+        composite_create_info.clear_swapchain = true;
+        composite_create_info.clear_color = {{0.02F, 0.025F, 0.04F, 1.0F}};
+        composite_create_info.enable_reinhard_tonemap = true;
+        composite_create_info.exposure = 1.0F;
+        composite_create_info.apply_manual_gamma = false;
+        recorder.composite_renderer.Initialize(composite_create_info);
 
         const std::string primary_name = FileNameOnly(fonts.primary);
         const std::string secondary_name = FileNameOnly(fonts.secondary);
@@ -540,7 +625,7 @@ int main() {
                           secondary_name.c_str());
             (void)TextSystem3D::SetText(components[runtime_modes], mode_text);
 
-            const Runtime::RuntimeTickResult tick_result = runtime.Tick(text_renderer);
+            const Runtime::RuntimeTickResult tick_result = runtime.Tick(recorder);
             (void)tick_result;
 
             ++fps_window_frame_count;
@@ -553,11 +638,11 @@ int main() {
                 fps_window_frame_count = 0U;
             }
 
-            const vr::text::TextRenderer3DStats stats = text_renderer.Stats();
+            const vr::text::TextRenderer3DStats stats = recorder.text_renderer.Stats();
             char stats_text[240]{};
             std::snprintf(stats_text,
                           sizeof(stats_text),
-                          "FPS: %.1f Frame:%llu Draw:%u Batch:%u Inst:%u DT:%u DW:%u C:%u/%u",
+                          "FPS: %.1f Frame:%llu Draw:%u Batch:%u Inst:%u DT:%u DW:%u C:%u/%u Comp:%u",
                           fps,
                           static_cast<unsigned long long>(frame_counter),
                           stats.draw_call_count,
@@ -566,14 +651,19 @@ int main() {
                           stats.depth_test_batch_count,
                           stats.depth_write_batch_count,
                           stats.culling_visible_count,
-                          stats.culling_input_count);
+                          stats.culling_input_count,
+                          recorder.composite_renderer.Stats().draw_call_count);
             (void)TextSystem3D::SetText(components[runtime_stats], stats_text);
 
             SDL_Delay(8U);
             ++frame_counter;
+            if (max_frames > 0U && frame_counter >= max_frames) {
+                break;
+            }
         }
 
-        text_renderer.Shutdown(runtime.Context());
+        recorder.composite_renderer.Shutdown(runtime.Context());
+        recorder.text_renderer.Shutdown(runtime.Context());
         runtime.Shutdown();
         return 0;
     } catch (const std::exception& exception_) {

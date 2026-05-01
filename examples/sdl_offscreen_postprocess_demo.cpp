@@ -7,6 +7,7 @@
 #include "vr/geometry/geometry_upload_host.hpp"
 #include "vr/render/render_runtime_host.hpp"
 #include "vr/render/render_target_composite_renderer.hpp"
+#include "vr/render/scene_render_target_set.hpp"
 #include "vr/surface/surface_image_host.hpp"
 #include "vr/surface/surface_renderer_2d.hpp"
 #include "vr/surface/surface_upload_host.hpp"
@@ -191,69 +192,28 @@ void InitializeTextComponent(Text2D& component_,
     (void)TextSystem2D::SetText(component_, text_);
 }
 
-[[nodiscard]] bool IsColorTargetFormatSupported(vr::VulkanContext& context_,
-                                                VkFormat format_) {
-    VkFormatProperties properties{};
-    vkGetPhysicalDeviceFormatProperties(context_.PhysicalDevice(), format_, &properties);
-    const VkFormatFeatureFlags required = VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT |
-                                          VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT;
-    return (properties.optimalTilingFeatures & required) == required;
-}
-
-[[nodiscard]] VkFormat ResolveOffscreenColorFormat(vr::VulkanContext& context_) {
-    constexpr std::array<VkFormat, 4U> candidates{
-        VK_FORMAT_R16G16B16A16_SFLOAT,
-        VK_FORMAT_R16G16B16A16_UNORM,
-        VK_FORMAT_B8G8R8A8_UNORM,
-        VK_FORMAT_R8G8B8A8_UNORM
-    };
-    for (VkFormat candidate : candidates) {
-        if (IsColorTargetFormatSupported(context_, candidate)) {
-            return candidate;
-        }
-    }
-    throw std::runtime_error("No usable offscreen color format found for sampled color attachment target");
-}
-
 struct OffscreenPostProcessRecorder final {
     Runtime* runtime = nullptr;
     vr::geometry::GeometryRenderer2D geometry_renderer{};
     vr::surface::SurfaceRenderer2D surface_renderer{};
     vr::text::TextRenderer2D text_renderer{};
     vr::render::RenderTargetCompositeRenderer composite_renderer{};
-    vr::render::RenderTargetHandle scene_color_target{};
-    VkFormat scene_color_format = VK_FORMAT_UNDEFINED;
+    vr::render::SceneRenderTargetSet scene_targets{};
+
+    void InitializeSceneTargets() {
+        vr::render::SceneRenderTargetSetCreateInfo create_info{};
+        create_info.color_debug_name = "OffscreenSceneColor";
+        create_info.enable_depth = false;
+        create_info.additional_color_usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+        create_info.clear_color = VkClearColorValue{{0.025F, 0.030F, 0.060F, 1.0F}};
+        scene_targets.Initialize(create_info);
+    }
 
     void ConfigurePassTargets() {
-        vr::render::RenderTargetColorOutputConfig geometry_output{};
-        geometry_output.color_target = scene_color_target;
-        geometry_output.final_state = vr::render::RenderTargetStateKind::color_attachment;
-        geometry_output.use_explicit_load_op = true;
-        geometry_output.load_op = VK_ATTACHMENT_LOAD_OP_CLEAR;
-        geometry_output.store_op = VK_ATTACHMENT_STORE_OP_STORE;
-        geometry_output.clear_color = VkClearColorValue{{0.025F, 0.030F, 0.060F, 1.0F}};
-        geometry_renderer.SetOutputTargetConfig(geometry_output);
-
-        vr::render::RenderTargetColorOutputConfig surface_output{};
-        surface_output.color_target = scene_color_target;
-        surface_output.final_state = vr::render::RenderTargetStateKind::color_attachment;
-        surface_output.use_explicit_load_op = true;
-        surface_output.load_op = VK_ATTACHMENT_LOAD_OP_LOAD;
-        surface_output.store_op = VK_ATTACHMENT_STORE_OP_STORE;
-        surface_renderer.SetOutputTargetConfig(surface_output);
-
-        vr::render::RenderTargetColorOutputConfig text_output{};
-        text_output.color_target = scene_color_target;
-        text_output.final_state = vr::render::RenderTargetStateKind::shader_read;
-        text_output.use_explicit_load_op = true;
-        text_output.load_op = VK_ATTACHMENT_LOAD_OP_LOAD;
-        text_output.store_op = VK_ATTACHMENT_STORE_OP_STORE;
-        text_renderer.SetOutputTargetConfig(text_output);
-
-        composite_renderer.ClearSourceTarget();
-        composite_renderer.SetSourceTarget(scene_color_target,
-                                           vr::render::RenderTargetStateKind::shader_read);
-        composite_renderer.ResetOutputTargetConfig();
+        geometry_renderer.SetOutputTargetConfig(scene_targets.BuildColorOutputConfig(true, false));
+        surface_renderer.SetOutputTargetConfig(scene_targets.BuildColorOutputConfig(false, false));
+        text_renderer.SetOutputTargetConfig(scene_targets.BuildColorOutputConfig(false, true));
+        scene_targets.ConfigureCompositeRenderer(composite_renderer);
     }
 
     void PrepareFrame(const vr::render::RuntimePrepareContext& prepare_context_) {
@@ -292,36 +252,11 @@ struct OffscreenPostProcessRecorder final {
             return;
         }
 
-        if (scene_color_format == VK_FORMAT_UNDEFINED) {
-            scene_color_format = ResolveOffscreenColorFormat(runtime->Context());
-        }
-
-        vr::render::RenderTargetDesc scene_color_desc{};
-        scene_color_desc.debug_name = "OffscreenSceneColor";
-        scene_color_desc.dimension = vr::render::RenderTargetDimension::image_2d;
-        scene_color_desc.lifetime = vr::render::RenderTargetLifetime::persistent;
-        scene_color_desc.scale_mode = vr::render::RenderTargetScaleMode::swapchain_relative;
-        scene_color_desc.width = 1U;
-        scene_color_desc.height = 1U;
-        scene_color_desc.depth = 1U;
-        scene_color_desc.width_scale = 1.0F;
-        scene_color_desc.height_scale = 1.0F;
-        scene_color_desc.format = scene_color_format;
-        scene_color_desc.samples = VK_SAMPLE_COUNT_1_BIT;
-        scene_color_desc.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
-                                 VK_IMAGE_USAGE_SAMPLED_BIT |
-                                 VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
-        scene_color_desc.aspect = VK_IMAGE_ASPECT_COLOR_BIT;
-        scene_color_desc.color_encoding = vr::render::RenderTargetColorEncoding::linear;
-
-        const auto ensure_result = runtime->RenderTarget().EnsurePersistentTarget(
-            runtime->Context(),
-            scene_color_target,
-            scene_color_desc,
-            extent_,
-            last_submitted_value_,
-            completed_submit_value_);
-        scene_color_target = ensure_result.handle;
+        scene_targets.EnsureForSwapchain(runtime->Context(),
+                                         runtime->RenderTarget(),
+                                         extent_,
+                                         last_submitted_value_,
+                                         completed_submit_value_);
         ConfigurePassTargets();
     }
 };
@@ -365,6 +300,7 @@ int main(int argc_, char** argv_) {
         runtime.Initialize(create_info);
 
         recorder.runtime = &runtime;
+        recorder.InitializeSceneTargets();
 
         vr::surface::SurfaceUploadHostCreateInfo surface_upload_create_info{};
         surface_upload_create_info.frames_in_flight = 2U;

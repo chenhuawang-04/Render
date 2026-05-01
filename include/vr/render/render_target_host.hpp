@@ -180,6 +180,9 @@ public:
     [[nodiscard]] RenderTargetHandle CreatePersistentTarget(VulkanContext& context_,
                                                             const RenderTargetDesc& desc_,
                                                             VkExtent2D reference_extent_ = {});
+    [[nodiscard]] RenderTargetHandle CreateTransientTarget(VulkanContext& context_,
+                                                           const RenderTargetDesc& desc_,
+                                                           VkExtent2D reference_extent_ = {});
     [[nodiscard]] EnsureRenderTargetResult EnsurePersistentTarget(
         VulkanContext& context_,
         RenderTargetHandle current_handle_,
@@ -261,6 +264,9 @@ private:
                                                                              const RenderTargetHostCreateInfo& host_create_info_,
                                                                              const RenderTargetDesc& desc_,
                                                                              VkExtent2D reference_extent_);
+    [[nodiscard]] RenderTargetHandle CreateOwnedTarget(VulkanContext& context_,
+                                                       const RenderTargetDesc& desc_,
+                                                       VkExtent2D reference_extent_);
     static void ValidateOwnedDesc(const RenderTargetDesc& desc_);
     static void ValidateImportedDesc(const ImportedRenderTargetDesc& desc_);
 

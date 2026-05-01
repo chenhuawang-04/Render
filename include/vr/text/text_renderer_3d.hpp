@@ -6,6 +6,7 @@
 #include "vr/ecs/system/text_render_3d_system.hpp"
 #include "vr/render/descriptor_host.hpp"
 #include "vr/render/pipeline_host.hpp"
+#include "vr/render/render_target_pass.hpp"
 #include "vr/resource/buffer_host.hpp"
 #include "vr/resource/image_host.hpp"
 #include "vr/text/glyph_upload_host.hpp"
@@ -92,6 +93,10 @@ public:
                       ecs::Camera<ecs::Dim3>* camera_component_,
                       ecs::Transform<ecs::Dim3>* camera_transform_,
                       ecs::Bounds<ecs::Dim3>* bounds_components_ = nullptr) noexcept;
+    void SetOutputTargetConfig(const render::RenderTargetColorOutputConfig& output_target_config_) noexcept;
+    void ResetOutputTargetConfig() noexcept;
+    void SetDepthTargetConfig(const render::RenderTargetDepthOutputConfig& depth_output_target_config_) noexcept;
+    void ResetDepthTargetConfig() noexcept;
 
     void PrepareFrame(const render::RuntimePrepareContext& prepare_context_);
     void Record(const render::FrameRecordContext& record_context_);
@@ -250,6 +255,8 @@ private:
     std::uint32_t active_frame_index = 0U;
     VkExtent2D swapchain_extent{};
     VkFormat swapchain_format = VK_FORMAT_UNDEFINED;
+    render::RenderTargetColorOutputConfig output_target_config{};
+    render::RenderTargetDepthOutputConfig depth_output_target_config{};
 
     ecs::TextRuntimeBuildStats cached_runtime_stats{};
     ecs::TextRender3DBuildStats cached_render_stats{};

@@ -110,12 +110,27 @@ void RenderTargetHost::BeginFrame(VulkanContext& context_,
 RenderTargetHandle RenderTargetHost::CreatePersistentTarget(VulkanContext& context_,
                                                             const RenderTargetDesc& desc_,
                                                             VkExtent2D reference_extent_) {
+    RenderTargetDesc normalized_desc = desc_;
+    normalized_desc.lifetime = RenderTargetLifetime::persistent;
+    return CreateOwnedTarget(context_, normalized_desc, reference_extent_);
+}
+
+RenderTargetHandle RenderTargetHost::CreateTransientTarget(VulkanContext& context_,
+                                                           const RenderTargetDesc& desc_,
+                                                           VkExtent2D reference_extent_) {
+    RenderTargetDesc normalized_desc = desc_;
+    normalized_desc.lifetime = RenderTargetLifetime::transient;
+    return CreateOwnedTarget(context_, normalized_desc, reference_extent_);
+}
+
+RenderTargetHandle RenderTargetHost::CreateOwnedTarget(VulkanContext& context_,
+                                                       const RenderTargetDesc& desc_,
+                                                       VkExtent2D reference_extent_) {
     if (!initialized || gpu_memory_host == nullptr) {
-        throw std::runtime_error("RenderTargetHost::CreatePersistentTarget called before Initialize");
+        throw std::runtime_error("RenderTargetHost::CreateOwnedTarget called before Initialize");
     }
 
-    RenderTargetDesc normalized_desc = desc_;
-    ValidateOwnedDesc(normalized_desc);
+    ValidateOwnedDesc(desc_);
 
     const std::uint32_t slot_index = AllocateSlot();
     TargetRecord& record = targets[slot_index];
@@ -126,25 +141,25 @@ RenderTargetHandle RenderTargetHost::CreatePersistentTarget(VulkanContext& conte
             .index = slot_index,
             .generation = generations[slot_index],
         };
-        record.desc = normalized_desc;
+        record.desc = desc_;
         record.ownership = RenderTargetOwnership::owned;
         record.owned_resource = resource::ImageHost::CreateImage(
             context_,
-            BuildOwnedImageCreateInfo(context_, create_info_cache, normalized_desc, reference_extent_),
+            BuildOwnedImageCreateInfo(context_, create_info_cache, desc_, reference_extent_),
             *gpu_memory_host);
         record.default_view_desc = RenderTargetViewDesc{
-            .view_type = DefaultViewType(normalized_desc.dimension, normalized_desc.array_layers),
-            .aspect = normalized_desc.aspect,
+            .view_type = DefaultViewType(desc_.dimension, desc_.array_layers),
+            .aspect = desc_.aspect,
             .base_mip_level = 0U,
-            .level_count = normalized_desc.mip_levels,
+            .level_count = desc_.mip_levels,
             .base_array_layer = 0U,
-            .layer_count = normalized_desc.array_layers,
+            .layer_count = desc_.array_layers,
         };
-        record.format = normalized_desc.format;
+        record.format = desc_.format;
         record.extent = record.owned_resource.extent;
-        record.samples = normalized_desc.samples;
-        record.usage = normalized_desc.usage;
-        record.aspect = normalized_desc.aspect;
+        record.samples = desc_.samples;
+        record.usage = desc_.usage;
+        record.aspect = desc_.aspect;
         record.state = RenderTargetStateKind::undefined;
         record.resource_revision = 1U;
         record.active = true;
@@ -171,6 +186,11 @@ EnsureRenderTargetResult RenderTargetHost::EnsurePersistentTarget(
     }
 
     RenderTargetDesc normalized_desc = desc_;
+    if (normalized_desc.lifetime == RenderTargetLifetime::transient ||
+        normalized_desc.lifetime == RenderTargetLifetime::imported) {
+        throw std::invalid_argument(
+            "RenderTargetHost::EnsurePersistentTarget requires persistent/history desc");
+    }
     ValidateOwnedDesc(normalized_desc);
     CollectRetiredTargets(context_, completed_submit_value_);
 
@@ -249,7 +269,7 @@ RenderTargetHandle RenderTargetHost::CreateHistoryTarget(VulkanContext& context_
                                                          VkExtent2D reference_extent_) {
     RenderTargetDesc normalized_desc = desc_;
     normalized_desc.lifetime = RenderTargetLifetime::history;
-    return CreatePersistentTarget(context_, normalized_desc, reference_extent_);
+    return CreateOwnedTarget(context_, normalized_desc, reference_extent_);
 }
 
 RenderTargetHandle RenderTargetHost::ImportTarget(VulkanContext& context_,
@@ -970,10 +990,9 @@ resource::ImageCreateInfo RenderTargetHost::BuildOwnedImageCreateInfo(
 }
 
 void RenderTargetHost::ValidateOwnedDesc(const RenderTargetDesc& desc_) {
-    if (desc_.lifetime == RenderTargetLifetime::imported ||
-        desc_.lifetime == RenderTargetLifetime::transient) {
+    if (desc_.lifetime == RenderTargetLifetime::imported) {
         throw std::invalid_argument(
-            "RenderTargetHost::CreatePersistentTarget only accepts persistent/history owned desc");
+            "RenderTargetHost owned desc cannot use imported lifetime");
     }
     if (desc_.format == VK_FORMAT_UNDEFINED) {
         throw std::invalid_argument("RenderTargetHost owned desc requires valid format");

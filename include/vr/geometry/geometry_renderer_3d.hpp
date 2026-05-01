@@ -16,6 +16,7 @@
 #include "vr/render/light_frame_coordinator.hpp"
 #include "vr/render/light_shadow_link_coordinator.hpp"
 #include "vr/render/pipeline_host.hpp"
+#include "vr/render/render_target_pass.hpp"
 #include "vr/render/shadow_atlas_binding_coordinator.hpp"
 #include "vr/render/shadow_frame_coordinator.hpp"
 #include "vr/resource/sampler_host.hpp"
@@ -155,6 +156,10 @@ public:
     void SetShadowAtlasBindingCoordinator(render::ShadowAtlasBindingCoordinator* shadow_atlas_binding_coordinator_) noexcept;
     void SetShadowFrameCoordinator(render::ShadowFrameCoordinator<ecs::Dim3>* shadow_frame_coordinator_) noexcept;
     void SetShadowAtlasHost(shadow::ShadowAtlasHost* shadow_atlas_host_) noexcept;
+    void SetOutputTargetConfig(const render::RenderTargetColorOutputConfig& output_target_config_) noexcept;
+    void ResetOutputTargetConfig() noexcept;
+    void SetDepthTargetConfig(const render::RenderTargetDepthOutputConfig& depth_output_target_config_) noexcept;
+    void ResetDepthTargetConfig() noexcept;
 
     void PrepareFrame(const render::RuntimePrepareContext& prepare_context_);
     void Record(const render::FrameRecordContext& record_context_);
@@ -429,6 +434,8 @@ private:
     std::uint32_t active_frame_index = 0U;
     VkExtent2D swapchain_extent{};
     VkFormat swapchain_format = VK_FORMAT_UNDEFINED;
+    render::RenderTargetColorOutputConfig output_target_config{};
+    render::RenderTargetDepthOutputConfig depth_output_target_config{};
     GeometryUploadRange instance_range{};
 
     std::uint64_t last_submitted_value_seen = 0U;

@@ -214,6 +214,12 @@ public:
                 glyph_upload_initialized = false;
             }
             if (render_target_pool_initialized) {
+                if (render_target_initialized) {
+                    render_target_pool.InvalidateAll(platform_host.Context(),
+                                                    render_target_host,
+                                                    0U,
+                                                    0U);
+                }
                 render_target_pool.Shutdown();
                 render_target_pool_initialized = false;
             }
@@ -278,6 +284,16 @@ public:
         }
 
         if (render_target_pool_initialized) {
+            if (render_target_initialized) {
+                const std::uint64_t last_submitted_value =
+                    loop_initialized ? render_loop.Sync().LastSubmittedValue() : 0U;
+                const std::uint64_t completed_submit_value =
+                    loop_initialized ? render_loop.Sync().CompletedSubmitValue() : 0U;
+                render_target_pool.InvalidateAll(platform_host.Context(),
+                                                render_target_host,
+                                                last_submitted_value,
+                                                completed_submit_value);
+            }
             render_target_pool.Shutdown();
             render_target_pool_initialized = false;
         }
@@ -704,6 +720,12 @@ private:
                                   std::uint64_t last_submitted_value_,
                                   std::uint64_t completed_submit_value_) {
             runtime.InvalidateSwapchainRenderTargets(last_submitted_value_, completed_submit_value_);
+            if (runtime.render_target_pool_initialized && runtime.render_target_initialized) {
+                runtime.render_target_pool.InvalidateAll(runtime.platform_host.Context(),
+                                                        runtime.render_target_host,
+                                                        last_submitted_value_,
+                                                        completed_submit_value_);
+            }
 
             if constexpr (requires(RecorderT& recorder__,
                                    std::uint32_t image_count__,

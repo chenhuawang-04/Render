@@ -146,6 +146,8 @@ void SurfaceRenderer3D::Initialize(const SurfaceRenderer3DCreateInfo& create_inf
     fallback_texture = {};
     fallback_sampler_id = {};
     fallback_texture_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    output_target_config = {};
+    depth_output_target_config = {};
     image_initialized.clear();
     appearance_runtime_stats = {};
     appearance_link_stats = {};
@@ -244,6 +246,8 @@ void SurfaceRenderer3D::Shutdown(VulkanContext& context_) {
     descriptor_buffer_write_scratch.clear();
     descriptor_texel_write_scratch.clear();
     fallback_texture_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    output_target_config = {};
+    depth_output_target_config = {};
     image_initialized.clear();
     last_upload_result = {};
     stats = {};
@@ -314,6 +318,24 @@ void SurfaceRenderer3D::SetAppearanceCoordinator(
     render::AppearanceFrameCoordinator<ecs::Dim3>* appearance_frame_coordinator_) noexcept {
     appearance_prepare_bridge.SetCoordinator(appearance_frame_coordinator_);
     appearance_prepare_bridge.Reserve(appearance_component_count);
+}
+
+void SurfaceRenderer3D::SetOutputTargetConfig(
+    const render::RenderTargetColorOutputConfig& output_target_config_) noexcept {
+    output_target_config = output_target_config_;
+}
+
+void SurfaceRenderer3D::ResetOutputTargetConfig() noexcept {
+    output_target_config = {};
+}
+
+void SurfaceRenderer3D::SetDepthTargetConfig(
+    const render::RenderTargetDepthOutputConfig& depth_output_target_config_) noexcept {
+    depth_output_target_config = depth_output_target_config_;
+}
+
+void SurfaceRenderer3D::ResetDepthTargetConfig() noexcept {
+    depth_output_target_config = {};
 }
 
 void SurfaceRenderer3D::PrepareFrame(const render::RuntimePrepareContext& prepare_context_) {
@@ -464,13 +486,8 @@ void SurfaceRenderer3D::Record(const render::FrameRecordContext& record_context_
         gpu_memory_host == nullptr) {
         throw std::runtime_error("SurfaceRenderer3D::Record called before PrepareFrame");
     }
-    if (record_context_.command_buffer == VK_NULL_HANDLE ||
-        record_context_.image == VK_NULL_HANDLE ||
-        record_context_.image_view == VK_NULL_HANDLE) {
-        throw std::runtime_error("SurfaceRenderer3D::Record requires valid frame context image handles");
-    }
-    if (record_context_.extent.width == 0U || record_context_.extent.height == 0U) {
-        throw std::runtime_error("SurfaceRenderer3D::Record received zero-sized swapchain extent");
+    if (record_context_.command_buffer == VK_NULL_HANDLE) {
+        throw std::runtime_error("SurfaceRenderer3D::Record requires valid command buffer");
     }
 
     if (record_context_.image_index >= image_initialized.size()) {
@@ -480,90 +497,122 @@ void SurfaceRenderer3D::Record(const render::FrameRecordContext& record_context_
             image_initialized[i] = 0U;
         }
     }
-    const bool has_previous_content = image_initialized[record_context_.image_index] != 0U;
+    bool has_previous_content = image_initialized[record_context_.image_index] != 0U;
+    if (record_context_.render_target_host != nullptr) {
+        const render::ResolvedColorRenderTarget resolved_color_target =
+            render::ResolveColorRenderTarget(record_context_, output_target_config);
+        if (resolved_color_target.using_render_target_host &&
+            IsValidRenderTargetHandle(resolved_color_target.handle)) {
+            const render::RenderTargetResolvedView color_view =
+                record_context_.render_target_host->ResolveView(resolved_color_target.handle);
+            has_previous_content = color_view.state != render::RenderTargetStateKind::undefined;
+        }
+    }
+    const render::ResolvedColorRenderTarget resolved_color_target =
+        render::ResolveColorRenderTarget(record_context_, output_target_config);
+    const VkExtent2D render_extent = resolved_color_target.extent;
+    if (render_extent.width == 0U || render_extent.height == 0U) {
+        throw std::runtime_error("SurfaceRenderer3D::Record resolved zero-sized render extent");
+    }
 
-    RecordImageTransitionToColorAttachment(record_context_, has_previous_content);
-
-    const resource::ImageResource* depth_resource = nullptr;
-    bool depth_initialized = false;
+    bool using_external_depth_target = false;
     VkFormat active_depth_format = VK_FORMAT_UNDEFINED;
+    bool has_previous_depth_content = false;
+    if (create_info_cache.enable_depth &&
+        record_context_.render_target_host != nullptr &&
+        record_context_.render_target_host->IsValid(depth_output_target_config.depth_target)) {
+        const render::RenderTargetResolvedView depth_view =
+            record_context_.render_target_host->ResolveView(depth_output_target_config.depth_target);
+        if (depth_view.image_view == VK_NULL_HANDLE) {
+            throw std::runtime_error("SurfaceRenderer3D::Record external depth target has null view");
+        }
+        has_previous_depth_content = depth_view.state != render::RenderTargetStateKind::undefined;
+    }
+
+    render::ResolvedColorRenderPass color_pass{};
     if (create_info_cache.enable_depth) {
-        const std::uint32_t required_image_count = static_cast<std::uint32_t>(std::max<std::size_t>(
-            image_initialized.size(),
-            static_cast<std::size_t>(record_context_.image_index + 1U)));
-        EnsureDepthResources(*context, required_image_count, record_context_.extent);
-        if (record_context_.image_index >= depth_images.size()) {
-            throw std::runtime_error("SurfaceRenderer3D::Record depth image index out of range");
+        if (record_context_.render_target_host != nullptr &&
+            record_context_.render_target_host->IsValid(depth_output_target_config.depth_target)) {
+            render::RenderTargetDepthOutputConfig effective_depth_output_config = depth_output_target_config;
+            if (!effective_depth_output_config.use_explicit_load_op && create_info_cache.clear_depth) {
+                effective_depth_output_config.use_explicit_load_op = true;
+                effective_depth_output_config.load_op = VK_ATTACHMENT_LOAD_OP_CLEAR;
+            }
+            color_pass = render::BuildColorDepthRenderPass(record_context_,
+                                                           output_target_config,
+                                                           effective_depth_output_config,
+                                                           create_info_cache.clear_swapchain,
+                                                           create_info_cache.clear_color,
+                                                           has_previous_content,
+                                                           has_previous_depth_content);
+            active_depth_format = color_pass.depth_target.format;
+            using_external_depth_target = true;
+        } else {
+            color_pass = render::BuildColorRenderPass(record_context_,
+                                                      output_target_config,
+                                                      create_info_cache.clear_swapchain,
+                                                      create_info_cache.clear_color,
+                                                      has_previous_content);
+            const std::uint32_t required_image_count = static_cast<std::uint32_t>(std::max<std::size_t>(
+                image_initialized.size(),
+                static_cast<std::size_t>(record_context_.image_index + 1U)));
+            EnsureDepthResources(*context, required_image_count, render_extent);
+            if (record_context_.image_index >= depth_images.size()) {
+                throw std::runtime_error("SurfaceRenderer3D::Record depth image index out of range");
+            }
+            const resource::ImageResource& depth_resource = depth_images[record_context_.image_index];
+            if (depth_resource.image == VK_NULL_HANDLE || depth_resource.default_view == VK_NULL_HANDLE) {
+                throw std::runtime_error("SurfaceRenderer3D::Record depth resource is invalid");
+            }
+            const bool depth_initialized = depth_image_initialized[record_context_.image_index] != 0U;
+            RecordDepthTransitionToAttachment(record_context_.command_buffer,
+                                              depth_resource,
+                                              depth_initialized);
+            color_pass.rendering_info.depth_attachment = {};
+            color_pass.rendering_info.depth_attachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+            color_pass.rendering_info.depth_attachment.imageView = depth_resource.default_view;
+            color_pass.rendering_info.depth_attachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+            color_pass.rendering_info.depth_attachment.resolveMode = VK_RESOLVE_MODE_NONE;
+            color_pass.rendering_info.depth_attachment.resolveImageView = VK_NULL_HANDLE;
+            color_pass.rendering_info.depth_attachment.resolveImageLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            color_pass.rendering_info.depth_attachment.loadOp = (create_info_cache.clear_depth || !depth_initialized)
+                ? VK_ATTACHMENT_LOAD_OP_CLEAR
+                : VK_ATTACHMENT_LOAD_OP_LOAD;
+            color_pass.rendering_info.depth_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+            color_pass.rendering_info.depth_attachment.clearValue.depthStencil.depth =
+                create_info_cache.clear_depth_value;
+            color_pass.rendering_info.depth_attachment.clearValue.depthStencil.stencil =
+                create_info_cache.clear_stencil_value;
+            color_pass.rendering_info.has_depth_attachment = true;
+            active_depth_format = depth_format;
         }
-        depth_resource = &depth_images[record_context_.image_index];
-        if (depth_resource->image == VK_NULL_HANDLE || depth_resource->default_view == VK_NULL_HANDLE) {
-            throw std::runtime_error("SurfaceRenderer3D::Record depth resource is invalid");
-        }
-        depth_initialized = depth_image_initialized[record_context_.image_index] != 0U;
-        RecordDepthTransitionToAttachment(record_context_.command_buffer,
-                                          *depth_resource,
-                                          depth_initialized);
-        active_depth_format = depth_format;
+    } else {
+        color_pass = render::BuildColorRenderPass(record_context_,
+                                                  output_target_config,
+                                                  create_info_cache.clear_swapchain,
+                                                  create_info_cache.clear_color,
+                                                  has_previous_content);
     }
 
     EnsurePipelineObjects(*context,
                           *descriptor_host,
                           *pipeline_host,
-                          record_context_.format,
+                          color_pass.target.format,
                           active_depth_format);
-
-    VkRenderingAttachmentInfo color_attachment{};
-    color_attachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-    color_attachment.imageView = record_context_.image_view;
-    color_attachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    color_attachment.resolveMode = VK_RESOLVE_MODE_NONE;
-    color_attachment.resolveImageView = VK_NULL_HANDLE;
-    color_attachment.resolveImageLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    color_attachment.loadOp = (create_info_cache.clear_swapchain || !has_previous_content)
-        ? VK_ATTACHMENT_LOAD_OP_CLEAR
-        : VK_ATTACHMENT_LOAD_OP_LOAD;
-    color_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    color_attachment.clearValue.color = create_info_cache.clear_color;
-
-    VkRenderingAttachmentInfo depth_attachment{};
-    if (depth_resource != nullptr) {
-        depth_attachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-        depth_attachment.imageView = depth_resource->default_view;
-        depth_attachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
-        depth_attachment.resolveMode = VK_RESOLVE_MODE_NONE;
-        depth_attachment.resolveImageView = VK_NULL_HANDLE;
-        depth_attachment.resolveImageLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        depth_attachment.loadOp = (create_info_cache.clear_depth || !depth_initialized)
-            ? VK_ATTACHMENT_LOAD_OP_CLEAR
-            : VK_ATTACHMENT_LOAD_OP_LOAD;
-        depth_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-        depth_attachment.clearValue.depthStencil.depth = create_info_cache.clear_depth_value;
-        depth_attachment.clearValue.depthStencil.stencil = create_info_cache.clear_stencil_value;
-    }
-
-    VkRenderingInfo rendering_info{};
-    rendering_info.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
-    rendering_info.renderArea.offset = VkOffset2D{0, 0};
-    rendering_info.renderArea.extent = record_context_.extent;
-    rendering_info.layerCount = 1U;
-    rendering_info.colorAttachmentCount = 1U;
-    rendering_info.pColorAttachments = &color_attachment;
-    rendering_info.pDepthAttachment = (depth_resource != nullptr) ? &depth_attachment : nullptr;
-    rendering_info.pStencilAttachment = nullptr;
-    vkCmdBeginRendering(record_context_.command_buffer, &rendering_info);
+    vkCmdBeginRendering(record_context_.command_buffer, color_pass.rendering_info.VkInfoPtr());
 
     VkViewport viewport{};
     viewport.x = 0.0F;
     viewport.y = 0.0F;
-    viewport.width = static_cast<float>(record_context_.extent.width);
-    viewport.height = static_cast<float>(record_context_.extent.height);
+    viewport.width = static_cast<float>(render_extent.width);
+    viewport.height = static_cast<float>(render_extent.height);
     viewport.minDepth = 0.0F;
     viewport.maxDepth = 1.0F;
     vkCmdSetViewport(record_context_.command_buffer, 0U, 1U, &viewport);
 
     VkRect2D scissor{};
     scissor.offset = VkOffset2D{0, 0};
-    scissor.extent = record_context_.extent;
+    scissor.extent = render_extent;
     vkCmdSetScissor(record_context_.command_buffer, 0U, 1U, &scissor);
 
     if (last_upload_result.upload.buffer != VK_NULL_HANDLE &&
@@ -595,7 +644,7 @@ void SurfaceRenderer3D::Record(const render::FrameRecordContext& record_context_
                 continue;
             }
 
-            const PipelineMode mode = ResolvePipelineMode(batch.params, create_info_cache.enable_depth);
+            const PipelineMode mode = ResolvePipelineMode(batch.params, active_depth_format != VK_FORMAT_UNDEFINED);
             const CullMode cull_mode = ResolveCullMode(batch.params);
             const render::GraphicsPipelineId pipeline_id =
                 pipeline_ids[PipelineModeIndex(mode)][CullModeIndex(cull_mode)];
@@ -649,10 +698,16 @@ void SurfaceRenderer3D::Record(const render::FrameRecordContext& record_context_
     }
 
     vkCmdEndRendering(record_context_.command_buffer);
-    RecordImageTransitionToPresent(record_context_);
+    if (using_external_depth_target) {
+        render::RecordEndColorDepthPass(record_context_, output_target_config, depth_output_target_config);
+    } else {
+        render::RecordEndColorPass(record_context_, output_target_config);
+    }
 
     image_initialized[record_context_.image_index] = 1U;
-    if (create_info_cache.enable_depth && record_context_.image_index < depth_image_initialized.size()) {
+    if (create_info_cache.enable_depth &&
+        !using_external_depth_target &&
+        record_context_.image_index < depth_image_initialized.size()) {
         depth_image_initialized[record_context_.image_index] = 1U;
     }
 }

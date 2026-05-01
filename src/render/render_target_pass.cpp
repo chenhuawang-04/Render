@@ -17,6 +17,16 @@ namespace {
         : VK_ATTACHMENT_LOAD_OP_LOAD;
 }
 
+[[nodiscard]] VkAttachmentLoadOp ResolveDepthLoadOp(const RenderTargetDepthOutputConfig& output_config_,
+                                                    bool has_previous_content_) noexcept {
+    if (output_config_.use_explicit_load_op) {
+        return output_config_.load_op;
+    }
+    return has_previous_content_
+        ? VK_ATTACHMENT_LOAD_OP_LOAD
+        : VK_ATTACHMENT_LOAD_OP_CLEAR;
+}
+
 void RecordLegacySwapchainTransitionToColorAttachment(const FrameRecordContext& record_context_,
                                                       bool has_previous_content_) {
     VkImageMemoryBarrier barrier{};
@@ -118,6 +128,27 @@ ResolvedColorRenderTarget ResolveColorRenderTarget(const FrameRecordContext& rec
     return resolved;
 }
 
+ResolvedDepthRenderTarget ResolveDepthRenderTarget(const FrameRecordContext& record_context_,
+                                                   const RenderTargetDepthOutputConfig& output_config_) {
+    ResolvedDepthRenderTarget resolved{};
+    RenderTargetHost* render_target_host = record_context_.render_target_host;
+
+    if (render_target_host == nullptr || !IsValidRenderTargetHandle(output_config_.depth_target)) {
+        throw std::runtime_error(
+            "ResolveDepthRenderTarget requires explicit depth_target and render_target_host");
+    }
+
+    const RenderTargetResolvedView resolved_view =
+        render_target_host->ResolveView(output_config_.depth_target);
+    resolved.handle = output_config_.depth_target;
+    resolved.extent = VkExtent2D{resolved_view.extent.width, resolved_view.extent.height};
+    resolved.format = resolved_view.format;
+    resolved.image = resolved_view.image;
+    resolved.image_view = resolved_view.image_view;
+    resolved.using_render_target_host = true;
+    return resolved;
+}
+
 ResolvedColorRenderPass BuildColorRenderPass(const FrameRecordContext& record_context_,
                                              const RenderTargetColorOutputConfig& output_config_,
                                              bool default_clear_target_,
@@ -199,6 +230,73 @@ ResolvedColorRenderPass BuildColorRenderPass(const FrameRecordContext& record_co
     return pass;
 }
 
+ResolvedColorRenderPass BuildColorDepthRenderPass(const FrameRecordContext& record_context_,
+                                                  const RenderTargetColorOutputConfig& color_output_config_,
+                                                  const RenderTargetDepthOutputConfig& depth_output_config_,
+                                                  bool default_clear_color_target_,
+                                                  const VkClearColorValue& default_clear_color_,
+                                                  bool has_previous_color_content_,
+                                                  bool has_previous_depth_content_) {
+    ResolvedColorRenderPass pass{};
+    pass.target = ResolveColorRenderTarget(record_context_, color_output_config_);
+    pass.depth_target = ResolveDepthRenderTarget(record_context_, depth_output_config_);
+    pass.has_depth_target = true;
+    pass.effective_load_op = ResolveLoadOp(color_output_config_,
+                                           default_clear_color_target_,
+                                           has_previous_color_content_);
+    pass.effective_depth_load_op = ResolveDepthLoadOp(depth_output_config_,
+                                                      has_previous_depth_content_);
+
+    if (!pass.target.using_render_target_host || !pass.depth_target.using_render_target_host) {
+        throw std::runtime_error(
+            "BuildColorDepthRenderPass currently requires render_target_host-managed targets");
+    }
+    if (pass.target.extent.width != pass.depth_target.extent.width ||
+        pass.target.extent.height != pass.depth_target.extent.height) {
+        throw std::runtime_error("BuildColorDepthRenderPass requires matching color/depth extents");
+    }
+
+    AttachmentRef color_attachment{};
+    color_attachment.target = pass.target.handle;
+    color_attachment.load_op = pass.effective_load_op;
+    color_attachment.store_op = color_output_config_.store_op;
+    color_attachment.clear_value.color = color_output_config_.use_explicit_load_op
+        ? color_output_config_.clear_color
+        : default_clear_color_;
+    color_attachment.expected_state = RenderTargetStateKind::color_attachment;
+    if (pass.effective_load_op == VK_ATTACHMENT_LOAD_OP_CLEAR && color_output_config_.use_explicit_load_op) {
+        color_attachment.clear_value.color = color_output_config_.clear_color;
+    }
+
+    AttachmentRef depth_attachment{};
+    depth_attachment.target = pass.depth_target.handle;
+    depth_attachment.load_op = pass.effective_depth_load_op;
+    depth_attachment.store_op = depth_output_config_.store_op;
+    depth_attachment.stencil_load_op = depth_output_config_.stencil_load_op;
+    depth_attachment.stencil_store_op = depth_output_config_.stencil_store_op;
+    depth_attachment.clear_value.depthStencil = depth_output_config_.clear_depth_stencil;
+    depth_attachment.expected_state = RenderTargetStateKind::depth_attachment;
+
+    record_context_.render_target_host->RecordTransitionsForRendering(
+        record_context_.command_buffer,
+        &color_attachment,
+        1U,
+        &depth_attachment,
+        nullptr);
+
+    VkRect2D render_area{};
+    render_area.offset = VkOffset2D{0, 0};
+    render_area.extent = pass.target.extent;
+    pass.rendering_info = record_context_.render_target_host->BuildRenderingInfo(
+        render_area,
+        1U,
+        &color_attachment,
+        1U,
+        &depth_attachment,
+        nullptr);
+    return pass;
+}
+
 void RecordEndColorPass(const FrameRecordContext& record_context_,
                         const RenderTargetColorOutputConfig& output_config_) {
     const ResolvedColorRenderTarget target = ResolveColorRenderTarget(record_context_, output_config_);
@@ -215,6 +313,19 @@ void RecordEndColorPass(const FrameRecordContext& record_context_,
     if (target.present_after_pass) {
         RecordLegacySwapchainTransitionToPresent(record_context_);
     }
+}
+
+void RecordEndColorDepthPass(const FrameRecordContext& record_context_,
+                             const RenderTargetColorOutputConfig& color_output_config_,
+                             const RenderTargetDepthOutputConfig& depth_output_config_) {
+    RecordEndColorPass(record_context_, color_output_config_);
+    if (record_context_.render_target_host == nullptr ||
+        !IsValidRenderTargetHandle(depth_output_config_.depth_target)) {
+        return;
+    }
+    record_context_.render_target_host->RecordTransition(record_context_.command_buffer,
+                                                         depth_output_config_.depth_target,
+                                                         depth_output_config_.final_state);
 }
 
 } // namespace vr::render

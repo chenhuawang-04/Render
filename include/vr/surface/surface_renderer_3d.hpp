@@ -9,6 +9,7 @@
 #include "vr/render/appearance_prepare_bridge.hpp"
 #include "vr/render/descriptor_host.hpp"
 #include "vr/render/pipeline_host.hpp"
+#include "vr/render/render_target_pass.hpp"
 #include "vr/resource/image_host.hpp"
 #include "vr/resource/sampler_host.hpp"
 #include "vr/surface/surface_image_host.hpp"
@@ -115,6 +116,10 @@ public:
     void SetAppearanceDirtyHint(const std::uint32_t* dirty_component_indices_,
                                 std::uint32_t dirty_component_count_) noexcept;
     void SetAppearanceCoordinator(render::AppearanceFrameCoordinator<ecs::Dim3>* appearance_frame_coordinator_) noexcept;
+    void SetOutputTargetConfig(const render::RenderTargetColorOutputConfig& output_target_config_) noexcept;
+    void ResetOutputTargetConfig() noexcept;
+    void SetDepthTargetConfig(const render::RenderTargetDepthOutputConfig& depth_output_target_config_) noexcept;
+    void ResetDepthTargetConfig() noexcept;
 
     void PrepareFrame(const render::RuntimePrepareContext& prepare_context_);
     void Record(const render::FrameRecordContext& record_context_);
@@ -269,6 +274,8 @@ private:
     std::uint32_t active_frame_index = 0U;
     VkExtent2D swapchain_extent{};
     VkFormat swapchain_format = VK_FORMAT_UNDEFINED;
+    render::RenderTargetColorOutputConfig output_target_config{};
+    render::RenderTargetDepthOutputConfig depth_output_target_config{};
     std::uint64_t last_submitted_value_seen = 0U;
     std::uint64_t completed_submit_value_seen = 0U;
 

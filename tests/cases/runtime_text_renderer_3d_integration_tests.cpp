@@ -3,6 +3,7 @@
 #include "vr/ecs/system/camera_system.hpp"
 #include "vr/ecs/system/text_system.hpp"
 #include "vr/ecs/system/transform_system.hpp"
+#include "vr/render/render_target_format_utils.hpp"
 #include "vr/render/render_runtime_host.hpp"
 #include "vr/text/text_renderer_3d.hpp"
 
@@ -28,6 +29,15 @@ using Bounds3D = vr::ecs::Bounds<vr::ecs::Dim3>;
 using BoundsSystem3D = vr::ecs::BoundsSystem<vr::ecs::Dim3>;
 using Camera3D = vr::ecs::Camera<vr::ecs::Dim3>;
 using CameraSystem3D = vr::ecs::CameraSystem<vr::ecs::Dim3>;
+
+[[nodiscard]] VkFormat ResolveDepthTargetFormat(vr::VulkanContext& context_) {
+    constexpr std::array<VkFormat, 3U> candidates{
+        VK_FORMAT_D32_SFLOAT,
+        VK_FORMAT_D24_UNORM_S8_UINT,
+        VK_FORMAT_D32_SFLOAT_S8_UINT
+    };
+    return vr::render::ResolveFirstSupportedDepthStencilFormat(context_, candidates);
+}
 
 [[nodiscard]] std::string FindTestFontPath() {
     namespace fs = std::filesystem;
@@ -233,6 +243,31 @@ VR_TEST_CASE(RuntimeIntegration_text_renderer_3d_end_to_end_smoke, "integration;
         text_renderer_create_info.clear_swapchain = true;
         text_renderer.Initialize(text_renderer_create_info);
         renderer_initialized = true;
+        const VkFormat external_depth_format = ResolveDepthTargetFormat(runtime.Context());
+        vr::render::RenderTargetDesc external_depth_desc{};
+        external_depth_desc.debug_name = "RuntimeText3DExternalDepth";
+        external_depth_desc.dimension = vr::render::RenderTargetDimension::image_2d;
+        external_depth_desc.lifetime = vr::render::RenderTargetLifetime::persistent;
+        external_depth_desc.scale_mode = vr::render::RenderTargetScaleMode::absolute;
+        external_depth_desc.width = runtime.Swapchain().Extent().width;
+        external_depth_desc.height = runtime.Swapchain().Extent().height;
+        external_depth_desc.depth = 1U;
+        external_depth_desc.format = external_depth_format;
+        external_depth_desc.samples = VK_SAMPLE_COUNT_1_BIT;
+        external_depth_desc.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+        external_depth_desc.aspect = vr::render::DepthStencilAspectMask(external_depth_format);
+        const vr::render::RenderTargetHandle external_depth_target =
+            runtime.RenderTarget().CreatePersistentTarget(runtime.Context(),
+                                                          external_depth_desc,
+                                                          runtime.Swapchain().Extent());
+        vr::render::RenderTargetDepthOutputConfig depth_output_config{};
+        depth_output_config.depth_target = external_depth_target;
+        depth_output_config.final_state = vr::render::RenderTargetStateKind::depth_attachment;
+        depth_output_config.use_explicit_load_op = true;
+        depth_output_config.load_op = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        depth_output_config.store_op = VK_ATTACHMENT_STORE_OP_STORE;
+        depth_output_config.clear_depth_stencil = VkClearDepthStencilValue{1.0F, 0U};
+        text_renderer.SetDepthTargetConfig(depth_output_config);
         text_renderer.SetSceneData(text_components.data(),
                                    text_transforms.data(),
                                    static_cast<std::uint32_t>(text_components.size()),
@@ -302,6 +337,7 @@ VR_TEST_CASE(RuntimeIntegration_text_renderer_3d_end_to_end_smoke, "integration;
         VR_CHECK(max_culling_input_count == static_cast<std::uint32_t>(text_components.size()));
         VR_CHECK(max_culling_visible_count > 0U);
         VR_CHECK(runtime.GlyphUpload().Stats().uploaded_rect_count > 0U);
+        VR_CHECK(runtime.RenderTarget().ResolveView(external_depth_target).format == external_depth_format);
 
         text_renderer.Shutdown(runtime.Context());
         renderer_initialized = false;

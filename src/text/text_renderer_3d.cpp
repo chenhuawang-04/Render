@@ -216,6 +216,8 @@ void TextRenderer3D::Initialize(const TextRenderer3DCreateInfo& create_info_) {
     for (auto& pipeline_id : graphics_pipeline_ids) {
         pipeline_id = {};
     }
+    output_target_config = {};
+    depth_output_target_config = {};
     pipeline_depth_format = VK_FORMAT_UNDEFINED;
     depth_format = VK_FORMAT_UNDEFINED;
     depth_images.clear();
@@ -272,6 +274,8 @@ void TextRenderer3D::Shutdown(VulkanContext& context_) {
     for (auto& pipeline_id : graphics_pipeline_ids) {
         pipeline_id = {};
     }
+    output_target_config = {};
+    depth_output_target_config = {};
     pipeline_color_format = VK_FORMAT_UNDEFINED;
     pipeline_depth_format = VK_FORMAT_UNDEFINED;
     depth_format = VK_FORMAT_UNDEFINED;
@@ -337,6 +341,24 @@ void TextRenderer3D::SetSceneData(ecs::Text<ecs::Dim3>* text_components_,
     if (component_count_ > 0U) {
         ecs::CullingSystem<ecs::Dim3>::Reserve(culling_scratch, component_count_);
     }
+}
+
+void TextRenderer3D::SetOutputTargetConfig(
+    const render::RenderTargetColorOutputConfig& output_target_config_) noexcept {
+    output_target_config = output_target_config_;
+}
+
+void TextRenderer3D::ResetOutputTargetConfig() noexcept {
+    output_target_config = {};
+}
+
+void TextRenderer3D::SetDepthTargetConfig(
+    const render::RenderTargetDepthOutputConfig& depth_output_target_config_) noexcept {
+    depth_output_target_config = depth_output_target_config_;
+}
+
+void TextRenderer3D::ResetDepthTargetConfig() noexcept {
+    depth_output_target_config = {};
 }
 
 void TextRenderer3D::PrepareFrame(const render::RuntimePrepareContext& prepare_context_) {
@@ -580,13 +602,8 @@ void TextRenderer3D::Record(const render::FrameRecordContext& record_context_) {
     if (context == nullptr || descriptor_host == nullptr || pipeline_host == nullptr || glyph_upload_host == nullptr) {
         throw std::runtime_error("TextRenderer3D::Record called before PrepareFrame");
     }
-    if (record_context_.command_buffer == VK_NULL_HANDLE ||
-        record_context_.image == VK_NULL_HANDLE ||
-        record_context_.image_view == VK_NULL_HANDLE) {
-        throw std::runtime_error("TextRenderer3D::Record requires valid frame context image handles");
-    }
-    if (record_context_.extent.width == 0U || record_context_.extent.height == 0U) {
-        throw std::runtime_error("TextRenderer3D::Record received zero-sized swapchain extent");
+    if (record_context_.command_buffer == VK_NULL_HANDLE) {
+        throw std::runtime_error("TextRenderer3D::Record requires valid command buffer");
     }
 
     if (record_context_.image_index >= image_initialized.size()) {
@@ -596,101 +613,141 @@ void TextRenderer3D::Record(const render::FrameRecordContext& record_context_) {
             image_initialized[i] = 0U;
         }
     }
-    const bool has_previous_content = image_initialized[record_context_.image_index] != 0U;
+    bool has_previous_content = image_initialized[record_context_.image_index] != 0U;
+    if (record_context_.render_target_host != nullptr) {
+        const render::ResolvedColorRenderTarget resolved_color_target =
+            render::ResolveColorRenderTarget(record_context_, output_target_config);
+        if (resolved_color_target.using_render_target_host &&
+            IsValidRenderTargetHandle(resolved_color_target.handle)) {
+            const render::RenderTargetResolvedView color_view =
+                record_context_.render_target_host->ResolveView(resolved_color_target.handle);
+            has_previous_content = color_view.state != render::RenderTargetStateKind::undefined;
+        }
+    }
+    const render::ResolvedColorRenderTarget resolved_color_target =
+        render::ResolveColorRenderTarget(record_context_, output_target_config);
+    const VkExtent2D render_extent = resolved_color_target.extent;
+    if (render_extent.width == 0U || render_extent.height == 0U) {
+        throw std::runtime_error("TextRenderer3D::Record resolved zero-sized render extent");
+    }
 
     const bool depth_enabled = create_info_cache.enable_depth;
-    if (depth_enabled && depth_format == VK_FORMAT_UNDEFINED) {
-        depth_format = ResolveDepthFormat(*context, create_info_cache.preferred_depth_format);
+    bool using_external_depth_target = false;
+    VkFormat active_depth_format = VK_FORMAT_UNDEFINED;
+    bool use_depth_attachment = false;
+    bool has_previous_depth_content = false;
+
+    if (depth_enabled &&
+        record_context_.render_target_host != nullptr &&
+        record_context_.render_target_host->IsValid(depth_output_target_config.depth_target)) {
+        const render::RenderTargetResolvedView depth_view =
+            record_context_.render_target_host->ResolveView(depth_output_target_config.depth_target);
+        if (depth_view.image_view == VK_NULL_HANDLE) {
+            throw std::runtime_error("TextRenderer3D::Record external depth target has null view");
+        }
+        has_previous_depth_content = depth_view.state != render::RenderTargetStateKind::undefined;
     }
 
-    if (depth_enabled) {
+    render::ResolvedColorRenderPass color_pass{};
+
+    if (depth_enabled &&
+        record_context_.render_target_host != nullptr &&
+        record_context_.render_target_host->IsValid(depth_output_target_config.depth_target)) {
+        render::RenderTargetDepthOutputConfig effective_depth_output_config = depth_output_target_config;
+        if (!effective_depth_output_config.use_explicit_load_op && create_info_cache.clear_depth) {
+            effective_depth_output_config.use_explicit_load_op = true;
+            effective_depth_output_config.load_op = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        }
+        color_pass = render::BuildColorDepthRenderPass(record_context_,
+                                                       output_target_config,
+                                                       effective_depth_output_config,
+                                                       create_info_cache.clear_swapchain,
+                                                       create_info_cache.clear_color,
+                                                       has_previous_content,
+                                                       has_previous_depth_content);
+        use_depth_attachment = true;
+        using_external_depth_target = true;
+        active_depth_format = color_pass.depth_target.format;
+    } else if (depth_enabled) {
+        color_pass = render::BuildColorRenderPass(record_context_,
+                                                  output_target_config,
+                                                  create_info_cache.clear_swapchain,
+                                                  create_info_cache.clear_color,
+                                                  has_previous_content);
+        if (depth_format == VK_FORMAT_UNDEFINED) {
+            depth_format = ResolveDepthFormat(*context, create_info_cache.preferred_depth_format);
+        }
+
         EnsureDepthResources(*context,
                              static_cast<std::uint32_t>(image_initialized.size()),
-                             record_context_.extent);
-    }
+                             render_extent);
 
-    const bool use_depth_attachment =
-        depth_enabled &&
-        depth_format != VK_FORMAT_UNDEFINED &&
-        record_context_.image_index < depth_images.size() &&
-        depth_images[record_context_.image_index].default_view != VK_NULL_HANDLE;
+        use_depth_attachment =
+            depth_format != VK_FORMAT_UNDEFINED &&
+            record_context_.image_index < depth_images.size() &&
+            depth_images[record_context_.image_index].default_view != VK_NULL_HANDLE;
+
+        if (use_depth_attachment) {
+            if (record_context_.image_index >= depth_image_initialized.size()) {
+                const std::size_t previous_size = depth_image_initialized.size();
+                depth_image_initialized.resize(record_context_.image_index + 1U);
+                for (std::size_t i = previous_size; i < depth_image_initialized.size(); ++i) {
+                    depth_image_initialized[i] = 0U;
+                }
+            }
+
+            const bool depth_initialized = depth_image_initialized[record_context_.image_index] != 0U;
+            RecordDepthTransitionToAttachment(record_context_.command_buffer,
+                                              depth_images[record_context_.image_index],
+                                              depth_initialized);
+            color_pass.rendering_info.depth_attachment = {};
+            color_pass.rendering_info.depth_attachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+            color_pass.rendering_info.depth_attachment.imageView =
+                depth_images[record_context_.image_index].default_view;
+            color_pass.rendering_info.depth_attachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+            color_pass.rendering_info.depth_attachment.resolveMode = VK_RESOLVE_MODE_NONE;
+            color_pass.rendering_info.depth_attachment.resolveImageView = VK_NULL_HANDLE;
+            color_pass.rendering_info.depth_attachment.resolveImageLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            color_pass.rendering_info.depth_attachment.loadOp =
+                (create_info_cache.clear_depth || !depth_initialized)
+                    ? VK_ATTACHMENT_LOAD_OP_CLEAR
+                    : VK_ATTACHMENT_LOAD_OP_LOAD;
+            color_pass.rendering_info.depth_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+            color_pass.rendering_info.depth_attachment.clearValue.depthStencil.depth =
+                create_info_cache.clear_depth_value;
+            color_pass.rendering_info.depth_attachment.clearValue.depthStencil.stencil =
+                create_info_cache.clear_stencil_value;
+            color_pass.rendering_info.has_depth_attachment = true;
+            active_depth_format = depth_format;
+        }
+    } else {
+        color_pass = render::BuildColorRenderPass(record_context_,
+                                                  output_target_config,
+                                                  create_info_cache.clear_swapchain,
+                                                  create_info_cache.clear_color,
+                                                  has_previous_content);
+    }
 
     EnsurePipelineObjects(*context,
                           *descriptor_host,
                           *pipeline_host,
-                          record_context_.format,
-                          use_depth_attachment ? depth_format : VK_FORMAT_UNDEFINED);
+                          color_pass.target.format,
+                          use_depth_attachment ? active_depth_format : VK_FORMAT_UNDEFINED);
 
-    RecordImageTransitionToColorAttachment(record_context_, has_previous_content);
-
-    if (use_depth_attachment) {
-        if (record_context_.image_index >= depth_image_initialized.size()) {
-            const std::size_t previous_size = depth_image_initialized.size();
-            depth_image_initialized.resize(record_context_.image_index + 1U);
-            for (std::size_t i = previous_size; i < depth_image_initialized.size(); ++i) {
-                depth_image_initialized[i] = 0U;
-            }
-        }
-
-        RecordDepthTransitionToAttachment(record_context_.command_buffer,
-                                          depth_images[record_context_.image_index],
-                                          depth_image_initialized[record_context_.image_index] != 0U);
-    }
-
-    VkRenderingAttachmentInfo color_attachment{};
-    color_attachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-    color_attachment.imageView = record_context_.image_view;
-    color_attachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    color_attachment.resolveMode = VK_RESOLVE_MODE_NONE;
-    color_attachment.resolveImageView = VK_NULL_HANDLE;
-    color_attachment.resolveImageLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    color_attachment.loadOp = (create_info_cache.clear_swapchain || !has_previous_content)
-        ? VK_ATTACHMENT_LOAD_OP_CLEAR
-        : VK_ATTACHMENT_LOAD_OP_LOAD;
-    color_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    color_attachment.clearValue.color = create_info_cache.clear_color;
-
-    VkRenderingAttachmentInfo depth_attachment{};
-    if (use_depth_attachment) {
-        depth_attachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-        depth_attachment.imageView = depth_images[record_context_.image_index].default_view;
-        depth_attachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
-        depth_attachment.resolveMode = VK_RESOLVE_MODE_NONE;
-        depth_attachment.resolveImageView = VK_NULL_HANDLE;
-        depth_attachment.resolveImageLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        depth_attachment.loadOp = create_info_cache.clear_depth
-            ? VK_ATTACHMENT_LOAD_OP_CLEAR
-            : VK_ATTACHMENT_LOAD_OP_LOAD;
-        depth_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-        depth_attachment.clearValue.depthStencil.depth = create_info_cache.clear_depth_value;
-        depth_attachment.clearValue.depthStencil.stencil = create_info_cache.clear_stencil_value;
-    }
-
-    VkRenderingInfo rendering_info{};
-    rendering_info.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
-    rendering_info.renderArea.offset = {0, 0};
-    rendering_info.renderArea.extent = record_context_.extent;
-    rendering_info.layerCount = 1U;
-    rendering_info.viewMask = 0U;
-    rendering_info.colorAttachmentCount = 1U;
-    rendering_info.pColorAttachments = &color_attachment;
-    rendering_info.pDepthAttachment = use_depth_attachment ? &depth_attachment : nullptr;
-    rendering_info.pStencilAttachment = nullptr;
-
-    vkCmdBeginRendering(record_context_.command_buffer, &rendering_info);
+    vkCmdBeginRendering(record_context_.command_buffer, color_pass.rendering_info.VkInfoPtr());
 
     VkViewport viewport{};
     viewport.x = 0.0F;
     viewport.y = 0.0F;
-    viewport.width = static_cast<float>(record_context_.extent.width);
-    viewport.height = static_cast<float>(record_context_.extent.height);
+    viewport.width = static_cast<float>(render_extent.width);
+    viewport.height = static_cast<float>(render_extent.height);
     viewport.minDepth = 0.0F;
     viewport.maxDepth = 1.0F;
     vkCmdSetViewport(record_context_.command_buffer, 0U, 1U, &viewport);
 
     VkRect2D scissor{};
     scissor.offset = {0, 0};
-    scissor.extent = record_context_.extent;
+    scissor.extent = render_extent;
     vkCmdSetScissor(record_context_.command_buffer, 0U, 1U, &scissor);
 
     const VkPipelineLayout pipeline_layout = pipeline_host->GetPipelineLayout(pipeline_layout_id);
@@ -748,8 +805,8 @@ void TextRenderer3D::Record(const render::FrameRecordContext& record_context_) {
                 const render::GraphicsPipelineId pipeline_id =
                     EnsureGraphicsPipelineForMode(*context,
                                                   *pipeline_host,
-                                                  record_context_.format,
-                                                  use_depth_attachment ? depth_format : VK_FORMAT_UNDEFINED,
+                                                  color_pass.target.format,
+                                                  use_depth_attachment ? active_depth_format : VK_FORMAT_UNDEFINED,
                                                   mode);
                 if (!pipeline_id.IsValid()) {
                     ++stats.skipped_draw_batch_count;
@@ -791,9 +848,15 @@ void TextRenderer3D::Record(const render::FrameRecordContext& record_context_) {
     }
 
     vkCmdEndRendering(record_context_.command_buffer);
-    RecordImageTransitionToPresent(record_context_);
+    if (using_external_depth_target) {
+        render::RecordEndColorDepthPass(record_context_, output_target_config, depth_output_target_config);
+    } else {
+        render::RecordEndColorPass(record_context_, output_target_config);
+    }
     image_initialized[record_context_.image_index] = 1U;
-    if (use_depth_attachment && record_context_.image_index < depth_image_initialized.size()) {
+    if (use_depth_attachment &&
+        !using_external_depth_target &&
+        record_context_.image_index < depth_image_initialized.size()) {
         depth_image_initialized[record_context_.image_index] = 1U;
     }
 }

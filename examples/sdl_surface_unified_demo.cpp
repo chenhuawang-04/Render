@@ -2,7 +2,9 @@
 #include "vr/ecs/system/camera_system.hpp"
 #include "vr/ecs/system/surface_system.hpp"
 #include "vr/ecs/system/transform_system.hpp"
+#include "vr/render/render_target_composite_renderer.hpp"
 #include "vr/render/render_runtime_host.hpp"
+#include "vr/render/scene_render_target_set.hpp"
 #include "vr/surface/surface_image_host.hpp"
 #include "vr/surface/surface_renderer_2d.hpp"
 #include "vr/surface/surface_renderer_3d.hpp"
@@ -12,6 +14,7 @@
 
 #include <array>
 #include <cmath>
+#include <cstdlib>
 #include <cstdint>
 #include <iostream>
 #include <stdexcept>
@@ -141,17 +144,58 @@ void InitializeSurface3DComponent(Surface3D& component_,
     SurfaceSystem3D::SetOpacity(component_, opacity_);
 }
 
+[[nodiscard]] std::uint32_t ParseMaxFrames(int argc_,
+                                           char** argv_) {
+    if (argc_ <= 1 || argv_ == nullptr) {
+        return 0U;
+    }
+
+    for (int index = 1; index + 1 < argc_; ++index) {
+        if (std::string_view(argv_[index]) != "--frames") {
+            continue;
+        }
+        return static_cast<std::uint32_t>(std::strtoul(argv_[index + 1], nullptr, 10));
+    }
+    return 0U;
+}
+
 struct SurfaceUnifiedRecorder final {
+    Runtime* runtime = nullptr;
     vr::surface::SurfaceRenderer3D renderer_3d{};
+    vr::render::RenderTargetCompositeRenderer composite_renderer{};
     vr::surface::SurfaceRenderer2D renderer_2d{};
+    vr::render::SceneRenderTargetSet scene_targets{};
+
+    void InitializeSceneTargets() {
+        vr::render::SceneRenderTargetSetCreateInfo create_info{};
+        create_info.color_debug_name = "SurfaceUnifiedSceneColor";
+        create_info.depth_debug_name = "SurfaceUnifiedSceneDepth";
+        create_info.enable_depth = true;
+        create_info.clear_color = VkClearColorValue{{0.06F, 0.07F, 0.11F, 1.0F}};
+        scene_targets.Initialize(create_info);
+    }
+
+    void ConfigureTargets() {
+        scene_targets.ConfigureSceneRenderer(renderer_3d, true, true);
+        scene_targets.ConfigureCompositeRenderer(composite_renderer);
+
+        vr::render::RenderTargetColorOutputConfig overlay_output{};
+        overlay_output.final_state = vr::render::RenderTargetStateKind::present_src;
+        overlay_output.use_explicit_load_op = true;
+        overlay_output.load_op = VK_ATTACHMENT_LOAD_OP_LOAD;
+        overlay_output.store_op = VK_ATTACHMENT_STORE_OP_STORE;
+        renderer_2d.SetOutputTargetConfig(overlay_output);
+    }
 
     void PrepareFrame(const vr::render::RuntimePrepareContext& prepare_context_) {
         renderer_3d.PrepareFrame(prepare_context_);
+        composite_renderer.PrepareFrame(prepare_context_);
         renderer_2d.PrepareFrame(prepare_context_);
     }
 
     void Record(const vr::render::FrameRecordContext& record_context_) {
         renderer_3d.Record(record_context_);
+        composite_renderer.Record(record_context_);
         renderer_2d.Record(record_context_);
     }
 
@@ -165,26 +209,41 @@ struct SurfaceUnifiedRecorder final {
                                          format_,
                                          last_submitted_value_,
                                          completed_submit_value_);
+        composite_renderer.OnSwapchainRecreated(image_count_, extent_, format_);
         renderer_2d.OnSwapchainRecreated(image_count_,
                                          extent_,
                                          format_,
                                          last_submitted_value_,
                                          completed_submit_value_);
+
+        if (runtime == nullptr) {
+            return;
+        }
+
+        scene_targets.EnsureForSwapchain(runtime->Context(),
+                                         runtime->RenderTarget(),
+                                         extent_,
+                                         last_submitted_value_,
+                                         completed_submit_value_);
+        ConfigureTargets();
     }
 };
 
 } // namespace
 
-int main() {
+int main(int argc_,
+         char** argv_) {
     Runtime runtime{};
     vr::surface::SurfaceUploadHost surface_upload_host{};
     vr::surface::SurfaceImageHost surface_image_host{};
     SurfaceUnifiedRecorder recorder{};
+    const std::uint32_t max_frames = ParseMaxFrames(argc_, argv_);
 
     bool runtime_initialized = false;
     bool upload_host_initialized = false;
     bool image_host_initialized = false;
     bool renderer_3d_initialized = false;
+    bool composite_renderer_initialized = false;
     bool renderer_2d_initialized = false;
 
     try {
@@ -204,6 +263,8 @@ int main() {
         create_info.poll_events_each_tick = true;
         runtime.Initialize(create_info);
         runtime_initialized = true;
+        recorder.runtime = &runtime;
+        recorder.InitializeSceneTargets();
 
         vr::surface::SurfaceUploadHostCreateInfo upload_create_info{};
         upload_create_info.frames_in_flight = 2U;
@@ -389,7 +450,7 @@ int main() {
         renderer_3d_create_info.reserve_instance_count = 256U;
         renderer_3d_create_info.enable_depth = true;
         renderer_3d_create_info.clear_depth = true;
-        renderer_3d_create_info.clear_swapchain = true;
+        renderer_3d_create_info.clear_swapchain = false;
         renderer_3d_create_info.clear_color = {{0.06F, 0.07F, 0.11F, 1.0F}};
         recorder.renderer_3d.Initialize(renderer_3d_create_info);
         renderer_3d_initialized = true;
@@ -400,6 +461,14 @@ int main() {
                                           &camera,
                                           &camera_transform,
                                           surface_3d_bounds.data());
+
+        vr::render::RenderTargetCompositeRendererCreateInfo composite_create_info{};
+        composite_create_info.clear_swapchain = true;
+        composite_create_info.enable_reinhard_tonemap = true;
+        composite_create_info.exposure = 1.0F;
+        composite_create_info.apply_manual_gamma = false;
+        recorder.composite_renderer.Initialize(composite_create_info);
+        composite_renderer_initialized = true;
 
         vr::surface::SurfaceRenderer2DCreateInfo renderer_2d_create_info{};
         renderer_2d_create_info.reserve_component_count =
@@ -415,7 +484,7 @@ int main() {
                                           surface_2d_transforms.data(),
                                           static_cast<std::uint32_t>(surface_2d_components.size()));
 
-        std::cout << "sdl_surface_unified_demo running (3D texture + 2D sprite/image). Close window to exit.\n";
+        std::cout << "sdl_surface_unified_demo running (3D surface offscreen + composite + 2D overlay). Close window to exit.\n";
 
         std::uint64_t fps_window_begin_ticks = SDL_GetTicks();
         std::uint32_t fps_window_frame_count = 0U;
@@ -472,6 +541,8 @@ int main() {
                           << " Batch:" << stats_3d.draw_batch_count
                           << " DSB:" << stats_3d.descriptor_set_bind_count
                           << " DSU:" << stats_3d.descriptor_set_update_count
+                          << " | Comp Draw:" << recorder.composite_renderer.Stats().draw_call_count
+                          << " DSU:" << recorder.composite_renderer.Stats().descriptor_set_update_count
                           << " | 2D Draw:" << stats_2d.draw_call_count
                           << " Batch:" << stats_2d.draw_batch_count
                           << " DSB:" << stats_2d.descriptor_set_bind_count
@@ -480,10 +551,16 @@ int main() {
                 fps_window_begin_ticks = now_ticks;
                 fps_window_frame_count = 0U;
             }
+
+            if (max_frames > 0U && frame_index >= max_frames) {
+                break;
+            }
         }
 
         recorder.renderer_2d.Shutdown(runtime.Context());
         renderer_2d_initialized = false;
+        recorder.composite_renderer.Shutdown(runtime.Context());
+        composite_renderer_initialized = false;
         recorder.renderer_3d.Shutdown(runtime.Context());
         renderer_3d_initialized = false;
         surface_image_host.Shutdown(runtime.Context());
@@ -498,6 +575,10 @@ int main() {
         if (renderer_2d_initialized && runtime_initialized && runtime.IsInitialized()) {
             recorder.renderer_2d.Shutdown(runtime.Context());
             renderer_2d_initialized = false;
+        }
+        if (composite_renderer_initialized && runtime_initialized && runtime.IsInitialized()) {
+            recorder.composite_renderer.Shutdown(runtime.Context());
+            composite_renderer_initialized = false;
         }
         if (renderer_3d_initialized && runtime_initialized && runtime.IsInitialized()) {
             recorder.renderer_3d.Shutdown(runtime.Context());

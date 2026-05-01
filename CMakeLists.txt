@@ -359,6 +359,7 @@ add_library(vulkan_init STATIC
     src/render/render_target_pass.cpp
     src/render/render_target_pool.cpp
     src/render/render_target_composite_renderer.cpp
+    src/render/scene_render_target_set.cpp
     src/text/freetype_host.cpp
     src/text/glyph_atlas_host.cpp
     src/text/glyph_upload_host.cpp
