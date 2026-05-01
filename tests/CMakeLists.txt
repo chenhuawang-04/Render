@@ -61,6 +61,7 @@ add_executable(${VR_TEST_TARGET}
     cases/runtime_surface_renderer_3d_integration_tests.cpp
     cases/runtime_geometry_renderer_2d_integration_tests.cpp
     cases/runtime_geometry_renderer_3d_integration_tests.cpp
+    cases/runtime_scene_3d_unified_integration_tests.cpp
 )
 
 target_link_libraries(${VR_TEST_TARGET}

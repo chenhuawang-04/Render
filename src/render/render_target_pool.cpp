@@ -153,6 +153,8 @@ void RenderTargetPool::InvalidateAll(VulkanContext& context_,
         return;
     }
 
+    const bool was_frame_open = frame_open;
+
     for (auto& target : targets) {
         if (!target.active || !IsValidRenderTargetHandle(target.handle)) {
             continue;
@@ -171,7 +173,7 @@ void RenderTargetPool::InvalidateAll(VulkanContext& context_,
     }
     buckets.clear();
     targets.clear();
-    frame_open = false;
+    frame_open = was_frame_open;
     completed_submit_value_seen = completed_submit_value_;
     RefreshStats();
 }

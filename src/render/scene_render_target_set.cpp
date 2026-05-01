@@ -1,17 +1,29 @@
 #include "vr/render/scene_render_target_set.hpp"
 
+#include <string>
 #include <stdexcept>
 
 namespace vr::render {
 
 namespace {
 
+void ValidateSceneLifetime(RenderTargetLifetime lifetime_,
+                           const char* label_) {
+    if (lifetime_ == RenderTargetLifetime::persistent ||
+        lifetime_ == RenderTargetLifetime::transient) {
+        return;
+    }
+    throw std::invalid_argument(std::string("SceneRenderTargetSet only supports persistent/transient ") +
+                                label_ +
+                                " targets in v1");
+}
+
 [[nodiscard]] RenderTargetDesc BuildColorDesc(const SceneRenderTargetSetCreateInfo& create_info_,
                                               VkFormat color_format_) {
     RenderTargetDesc desc{};
     desc.debug_name = create_info_.color_debug_name;
     desc.dimension = RenderTargetDimension::image_2d;
-    desc.lifetime = RenderTargetLifetime::persistent;
+    desc.lifetime = create_info_.color_lifetime;
     desc.scale_mode = create_info_.scale_mode;
     desc.width = create_info_.width;
     desc.height = create_info_.height;
@@ -33,7 +45,7 @@ namespace {
     RenderTargetDesc desc{};
     desc.debug_name = create_info_.depth_debug_name;
     desc.dimension = RenderTargetDimension::image_2d;
-    desc.lifetime = RenderTargetLifetime::persistent;
+    desc.lifetime = create_info_.depth_lifetime;
     desc.scale_mode = create_info_.scale_mode;
     desc.width = create_info_.width;
     desc.height = create_info_.height;
@@ -77,17 +89,122 @@ void SceneRenderTargetSet::EnsureForSwapchain(VulkanContext& context_,
         throw std::runtime_error("SceneRenderTargetSet::EnsureForSwapchain called before Initialize");
     }
 
+    ValidateSceneLifetime(create_info_cache.color_lifetime, "color");
+
     if (color_format == VK_FORMAT_UNDEFINED) {
         color_format = ResolveColorFormat(context_, create_info_cache.color_format);
     }
 
-    const auto color_result = render_target_host_.EnsurePersistentTarget(context_,
-                                                                         color_target,
-                                                                         BuildColorDesc(create_info_cache, color_format),
-                                                                         swapchain_extent_,
-                                                                         last_submitted_value_,
-                                                                         completed_submit_value_);
-    color_target = color_result.handle;
+    const RenderTargetDesc color_desc = BuildColorDesc(create_info_cache, color_format);
+    if (color_desc.lifetime == RenderTargetLifetime::persistent) {
+        const auto color_result = render_target_host_.EnsurePersistentTarget(context_,
+                                                                             color_target,
+                                                                             color_desc,
+                                                                             swapchain_extent_,
+                                                                             last_submitted_value_,
+                                                                             completed_submit_value_);
+        color_target = color_result.handle;
+    } else {
+        color_target = {};
+    }
+
+    if (!create_info_cache.enable_depth) {
+        depth_target = {};
+        depth_format = VK_FORMAT_UNDEFINED;
+        return;
+    }
+
+    ValidateSceneLifetime(create_info_cache.depth_lifetime, "depth");
+
+    if (depth_format == VK_FORMAT_UNDEFINED) {
+        depth_format = ResolveDepthFormat(context_, create_info_cache.depth_format);
+    }
+
+    const RenderTargetDesc depth_desc = BuildDepthDesc(create_info_cache, depth_format);
+    if (depth_desc.lifetime == RenderTargetLifetime::persistent) {
+        const auto depth_result = render_target_host_.EnsurePersistentTarget(context_,
+                                                                             depth_target,
+                                                                             depth_desc,
+                                                                             swapchain_extent_,
+                                                                             last_submitted_value_,
+                                                                             completed_submit_value_);
+        depth_target = depth_result.handle;
+    } else {
+        depth_target = {};
+    }
+}
+
+void SceneRenderTargetSet::PrepareFrame(const RuntimePrepareContext& prepare_context_) {
+    if (!initialized) {
+        throw std::runtime_error("SceneRenderTargetSet::PrepareFrame called before Initialize");
+    }
+    if (prepare_context_.context == nullptr || prepare_context_.render_target_host == nullptr) {
+        throw std::runtime_error("SceneRenderTargetSet::PrepareFrame requires render target runtime context");
+    }
+    if (prepare_context_.swapchain_extent.width == 0U || prepare_context_.swapchain_extent.height == 0U) {
+        throw std::runtime_error("SceneRenderTargetSet::PrepareFrame requires non-zero swapchain extent");
+    }
+
+    EnsureForSwapchain(*prepare_context_.context,
+                       *prepare_context_.render_target_host,
+                       prepare_context_.swapchain_extent,
+                       prepare_context_.last_submitted_value,
+                       prepare_context_.completed_submit_value);
+
+    if (prepare_context_.render_target_pool != nullptr) {
+        AcquireTransientTargets(*prepare_context_.context,
+                                *prepare_context_.render_target_host,
+                                *prepare_context_.render_target_pool,
+                                prepare_context_.swapchain_extent);
+    } else {
+        if (create_info_cache.color_lifetime == RenderTargetLifetime::transient ||
+            (create_info_cache.enable_depth &&
+             create_info_cache.depth_lifetime == RenderTargetLifetime::transient)) {
+            throw std::runtime_error("SceneRenderTargetSet transient targets require RenderTargetPool");
+        }
+    }
+}
+
+void SceneRenderTargetSet::OnSwapchainRecreated(VulkanContext& context_,
+                                                RenderTargetHost& render_target_host_,
+                                                RenderTargetPool* render_target_pool_,
+                                                VkExtent2D swapchain_extent_,
+                                                std::uint64_t last_submitted_value_,
+                                                std::uint64_t completed_submit_value_) {
+    EnsureForSwapchain(context_,
+                       render_target_host_,
+                       swapchain_extent_,
+                       last_submitted_value_,
+                       completed_submit_value_);
+    if (render_target_pool_ != nullptr) {
+        AcquireTransientTargets(context_,
+                                render_target_host_,
+                                *render_target_pool_,
+                                swapchain_extent_);
+    } else if (create_info_cache.color_lifetime == RenderTargetLifetime::transient ||
+               (create_info_cache.enable_depth &&
+                create_info_cache.depth_lifetime == RenderTargetLifetime::transient)) {
+        throw std::runtime_error("SceneRenderTargetSet transient targets require RenderTargetPool during recreate");
+    }
+}
+
+void SceneRenderTargetSet::AcquireTransientTargets(VulkanContext& context_,
+                                                   RenderTargetHost& render_target_host_,
+                                                   RenderTargetPool& render_target_pool_,
+                                                   VkExtent2D swapchain_extent_) {
+    if (color_format == VK_FORMAT_UNDEFINED) {
+        color_format = ResolveColorFormat(context_, create_info_cache.color_format);
+    }
+
+    const RenderTargetDesc color_desc = BuildColorDesc(create_info_cache, color_format);
+    if (color_desc.lifetime == RenderTargetLifetime::transient) {
+        const auto color_result = render_target_pool_.AcquireTransientTarget(
+            context_,
+            render_target_host_,
+            color_desc,
+            swapchain_extent_);
+        color_target = color_result.handle;
+    }
 
     if (!create_info_cache.enable_depth) {
         depth_target = {};
@@ -99,13 +216,15 @@ void SceneRenderTargetSet::EnsureForSwapchain(VulkanContext& context_,
         depth_format = ResolveDepthFormat(context_, create_info_cache.depth_format);
     }
 
-    const auto depth_result = render_target_host_.EnsurePersistentTarget(context_,
-                                                                         depth_target,
-                                                                         BuildDepthDesc(create_info_cache, depth_format),
-                                                                         swapchain_extent_,
-                                                                         last_submitted_value_,
-                                                                         completed_submit_value_);
-    depth_target = depth_result.handle;
+    const RenderTargetDesc depth_desc = BuildDepthDesc(create_info_cache, depth_format);
+    if (depth_desc.lifetime == RenderTargetLifetime::transient) {
+        const auto depth_result = render_target_pool_.AcquireTransientTarget(
+            context_,
+            render_target_host_,
+            depth_desc,
+            swapchain_extent_);
+        depth_target = depth_result.handle;
+    }
 }
 
 RenderTargetColorOutputConfig SceneRenderTargetSet::BuildColorOutputConfig(bool clear_target_,

@@ -166,16 +166,20 @@ struct Text3DOffscreenRecorder final {
         create_info.color_debug_name = "Text3DSceneColor";
         create_info.depth_debug_name = "Text3DSceneDepth";
         create_info.enable_depth = true;
+        create_info.color_lifetime = vr::render::RenderTargetLifetime::transient;
+        create_info.depth_lifetime = vr::render::RenderTargetLifetime::transient;
         create_info.clear_color = VkClearColorValue{{0.07F, 0.08F, 0.11F, 1.0F}};
         scene_targets.Initialize(create_info);
     }
 
     void ConfigureTargets() {
-        scene_targets.ConfigureSceneRenderer(text_renderer, true, true);
+        scene_targets.ConfigureSceneRenderer(text_renderer, vr::render::SceneRenderPassRole::single);
         scene_targets.ConfigureCompositeRenderer(composite_renderer);
     }
 
     void PrepareFrame(const vr::render::RuntimePrepareContext& prepare_context_) {
+        scene_targets.PrepareFrame(prepare_context_);
+        ConfigureTargets();
         text_renderer.PrepareFrame(prepare_context_);
         composite_renderer.PrepareFrame(prepare_context_);
     }
@@ -201,11 +205,12 @@ struct Text3DOffscreenRecorder final {
             return;
         }
 
-        scene_targets.EnsureForSwapchain(runtime->Context(),
-                                         runtime->RenderTarget(),
-                                         extent_,
-                                         last_submitted_value_,
-                                         completed_submit_value_);
+        scene_targets.OnSwapchainRecreated(runtime->Context(),
+                                           runtime->RenderTarget(),
+                                           runtime->HasRenderTargetPool() ? &runtime->TargetPool() : nullptr,
+                                           extent_,
+                                           last_submitted_value_,
+                                           completed_submit_value_);
         ConfigureTargets();
     }
 };

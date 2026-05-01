@@ -149,16 +149,20 @@ struct Surface3DOffscreenRecorder final {
         create_info.color_debug_name = "RuntimeSurface3DSceneColor";
         create_info.depth_debug_name = "RuntimeSurface3DSceneDepth";
         create_info.enable_depth = true;
+        create_info.color_lifetime = vr::render::RenderTargetLifetime::transient;
+        create_info.depth_lifetime = vr::render::RenderTargetLifetime::transient;
         create_info.clear_color = VkClearColorValue{{0.05F, 0.07F, 0.10F, 1.0F}};
         scene_targets.Initialize(create_info);
     }
 
     void ConfigureTargets() {
-        scene_targets.ConfigureSceneRenderer(surface_renderer, true, true);
+        scene_targets.ConfigureSceneRenderer(surface_renderer, vr::render::SceneRenderPassRole::single);
         scene_targets.ConfigureCompositeRenderer(composite_renderer);
     }
 
     void PrepareFrame(const vr::render::RuntimePrepareContext& prepare_context_) {
+        scene_targets.PrepareFrame(prepare_context_);
+        ConfigureTargets();
         surface_renderer.PrepareFrame(prepare_context_);
         composite_renderer.PrepareFrame(prepare_context_);
     }
@@ -183,11 +187,12 @@ struct Surface3DOffscreenRecorder final {
         if (runtime == nullptr) {
             return;
         }
-        scene_targets.EnsureForSwapchain(runtime->Context(),
-                                         runtime->RenderTarget(),
-                                         extent_,
-                                         last_submitted_value_,
-                                         completed_submit_value_);
+        scene_targets.OnSwapchainRecreated(runtime->Context(),
+                                           runtime->RenderTarget(),
+                                           runtime->HasRenderTargetPool() ? &runtime->TargetPool() : nullptr,
+                                           extent_,
+                                           last_submitted_value_,
+                                           completed_submit_value_);
         ConfigureTargets();
     }
 };
@@ -459,6 +464,8 @@ VR_TEST_CASE(RuntimeIntegration_surface_renderer_3d_offscreen_composite_smoke,
         VR_CHECK(runtime.RenderTarget().ResolveView(recorder.scene_targets.DepthTarget()).state ==
                  vr::render::RenderTargetStateKind::depth_attachment);
         VR_CHECK(surface_image_host.Stats().image_count >= 2U);
+        VR_CHECK(runtime.TargetPool().Stats().acquire_count > 0U);
+        VR_CHECK(runtime.TargetPool().Stats().reuse_hit_count > 0U);
 
         recorder.composite_renderer.Shutdown(runtime.Context());
         composite_renderer_initialized = false;

@@ -30,6 +30,8 @@ struct RuntimePrepareContext {
     std::uint32_t frame_index = 0U;
     std::uint64_t last_submitted_value = 0U;
     std::uint64_t completed_submit_value = 0U;
+    VkExtent2D swapchain_extent{};
+    VkFormat swapchain_format = VK_FORMAT_UNDEFINED;
     resource::GpuMemoryHost* gpu_memory_host = nullptr;
     UploadHost* upload_host = nullptr;
     DescriptorHost* descriptor_host = nullptr;

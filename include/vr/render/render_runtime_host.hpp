@@ -412,6 +412,8 @@ public:
             prepare_context.frame_index = frame_index;
             prepare_context.last_submitted_value = render_loop.Sync().LastSubmittedValue();
             prepare_context.completed_submit_value = render_loop.Sync().CompletedSubmitValue();
+            prepare_context.swapchain_extent = swapchain.Extent();
+            prepare_context.swapchain_format = swapchain.Format();
             prepare_context.gpu_memory_host = &gpu_memory_host;
             prepare_context.upload_host = upload_initialized ? &upload_host : nullptr;
             prepare_context.descriptor_host = descriptor_initialized ? &descriptor_host : nullptr;

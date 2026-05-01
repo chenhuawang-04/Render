@@ -204,6 +204,7 @@ struct OffscreenPostProcessRecorder final {
         vr::render::SceneRenderTargetSetCreateInfo create_info{};
         create_info.color_debug_name = "OffscreenSceneColor";
         create_info.enable_depth = false;
+        create_info.color_lifetime = vr::render::RenderTargetLifetime::transient;
         create_info.additional_color_usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
         create_info.clear_color = VkClearColorValue{{0.025F, 0.030F, 0.060F, 1.0F}};
         scene_targets.Initialize(create_info);
@@ -217,6 +218,8 @@ struct OffscreenPostProcessRecorder final {
     }
 
     void PrepareFrame(const vr::render::RuntimePrepareContext& prepare_context_) {
+        scene_targets.PrepareFrame(prepare_context_);
+        ConfigurePassTargets();
         geometry_renderer.PrepareFrame(prepare_context_);
         surface_renderer.PrepareFrame(prepare_context_);
         text_renderer.PrepareFrame(prepare_context_);
@@ -252,11 +255,12 @@ struct OffscreenPostProcessRecorder final {
             return;
         }
 
-        scene_targets.EnsureForSwapchain(runtime->Context(),
-                                         runtime->RenderTarget(),
-                                         extent_,
-                                         last_submitted_value_,
-                                         completed_submit_value_);
+        scene_targets.OnSwapchainRecreated(runtime->Context(),
+                                           runtime->RenderTarget(),
+                                           runtime->HasRenderTargetPool() ? &runtime->TargetPool() : nullptr,
+                                           extent_,
+                                           last_submitted_value_,
+                                           completed_submit_value_);
         ConfigurePassTargets();
     }
 };

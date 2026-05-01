@@ -4,6 +4,8 @@
 #include "vr/render/render_target_format_utils.hpp"
 #include "vr/render/render_target_host.hpp"
 #include "vr/render/render_target_pass.hpp"
+#include "vr/render/render_target_pool.hpp"
+#include "vr/render/runtime_prepare_context.hpp"
 
 #include <array>
 #include <cstdint>
@@ -26,12 +28,21 @@ struct SceneRenderTargetSetCreateInfo final {
     VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
     VkImageUsageFlags additional_color_usage = 0U;
     VkImageUsageFlags additional_depth_usage = 0U;
+    RenderTargetLifetime color_lifetime = RenderTargetLifetime::persistent;
+    RenderTargetLifetime depth_lifetime = RenderTargetLifetime::persistent;
     RenderTargetColorEncoding color_encoding = RenderTargetColorEncoding::linear;
     RenderTargetStateKind color_final_state = RenderTargetStateKind::shader_read;
     RenderTargetStateKind depth_final_state = RenderTargetStateKind::depth_attachment;
     VkClearColorValue clear_color = {{0.02F, 0.02F, 0.03F, 1.0F}};
     float clear_depth_value = 1.0F;
     std::uint32_t clear_stencil_value = 0U;
+};
+
+enum class SceneRenderPassRole : std::uint8_t {
+    single = 0U,
+    first = 1U,
+    middle = 2U,
+    last = 3U
 };
 
 class SceneRenderTargetSet final {
@@ -53,10 +64,27 @@ public:
                             VkExtent2D swapchain_extent_,
                             std::uint64_t last_submitted_value_,
                             std::uint64_t completed_submit_value_);
+    void PrepareFrame(const RuntimePrepareContext& prepare_context_);
+    void OnSwapchainRecreated(VulkanContext& context_,
+                              RenderTargetHost& render_target_host_,
+                              RenderTargetPool* render_target_pool_,
+                              VkExtent2D swapchain_extent_,
+                              std::uint64_t last_submitted_value_,
+                              std::uint64_t completed_submit_value_);
 
     [[nodiscard]] RenderTargetColorOutputConfig BuildColorOutputConfig(bool clear_target_,
                                                                        bool final_pass_) const;
     [[nodiscard]] RenderTargetDepthOutputConfig BuildDepthOutputConfig(bool clear_target_) const;
+
+    template<typename RendererT>
+    void ConfigureSceneRenderer(RendererT& renderer_,
+                                SceneRenderPassRole pass_role_) const {
+        const bool clear_target = pass_role_ == SceneRenderPassRole::single ||
+                                  pass_role_ == SceneRenderPassRole::first;
+        const bool final_pass = pass_role_ == SceneRenderPassRole::single ||
+                                pass_role_ == SceneRenderPassRole::last;
+        ConfigureSceneRenderer(renderer_, clear_target, final_pass);
+    }
 
     template<typename RendererT>
     void ConfigureSceneRenderer(RendererT& renderer_,
@@ -107,6 +135,10 @@ private:
                                                      VkFormat requested_format_);
     [[nodiscard]] static VkFormat ResolveDepthFormat(VulkanContext& context_,
                                                      VkFormat requested_format_);
+    void AcquireTransientTargets(VulkanContext& context_,
+                                 RenderTargetHost& render_target_host_,
+                                 RenderTargetPool& render_target_pool_,
+                                 VkExtent2D swapchain_extent_);
 
 private:
     SceneRenderTargetSetCreateInfo create_info_cache{};

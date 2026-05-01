@@ -964,7 +964,7 @@ void GeometryRenderer3D::Record(const render::FrameRecordContext& record_context
             if (pipeline_layout != VK_NULL_HANDLE && active_material_id != batch.material_id) {
                 vkCmdPushConstants(record_context_.command_buffer,
                                    pipeline_layout,
-                                   VK_SHADER_STAGE_FRAGMENT_BIT,
+                                   VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                                    static_cast<std::uint32_t>(offsetof(PushConstants, material)),
                                    sizeof(MaterialPushConstants),
                                    &material_push_constants);

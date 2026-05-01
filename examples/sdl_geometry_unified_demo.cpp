@@ -9,15 +9,19 @@
 #include "vr/geometry/geometry_renderer_3d.hpp"
 #include "vr/geometry/geometry_resource_host.hpp"
 #include "vr/geometry/geometry_upload_host.hpp"
+#include "vr/render/render_target_composite_renderer.hpp"
 #include "vr/render/render_runtime_host.hpp"
+#include "vr/render/scene_render_target_set.hpp"
 
 #include <SDL3/SDL.h>
 
 #include <array>
 #include <cmath>
+#include <cstdlib>
 #include <cstdint>
 #include <iostream>
 #include <stdexcept>
+#include <string_view>
 
 namespace {
 
@@ -34,16 +38,46 @@ using TransformSystem3D = vr::ecs::TransformSystem<vr::ecs::Dim3>;
 using CameraSystem3D = vr::ecs::CameraSystem<vr::ecs::Dim3>;
 
 struct GeometryUnifiedRecorder final {
+    Runtime* runtime = nullptr;
     vr::geometry::GeometryRenderer3D renderer_3d{};
+    vr::render::RenderTargetCompositeRenderer composite_renderer{};
     vr::geometry::GeometryRenderer2D renderer_2d{};
+    vr::render::SceneRenderTargetSet scene_targets{};
+
+    void InitializeSceneTargets() {
+        vr::render::SceneRenderTargetSetCreateInfo create_info{};
+        create_info.color_debug_name = "GeometryUnifiedSceneColor";
+        create_info.depth_debug_name = "GeometryUnifiedSceneDepth";
+        create_info.enable_depth = true;
+        create_info.color_lifetime = vr::render::RenderTargetLifetime::transient;
+        create_info.depth_lifetime = vr::render::RenderTargetLifetime::transient;
+        create_info.clear_color = VkClearColorValue{{0.06F, 0.07F, 0.11F, 1.0F}};
+        scene_targets.Initialize(create_info);
+    }
+
+    void ConfigureTargets() {
+        scene_targets.ConfigureSceneRenderer(renderer_3d, vr::render::SceneRenderPassRole::single);
+        scene_targets.ConfigureCompositeRenderer(composite_renderer);
+
+        vr::render::RenderTargetColorOutputConfig overlay_output{};
+        overlay_output.final_state = vr::render::RenderTargetStateKind::present_src;
+        overlay_output.use_explicit_load_op = true;
+        overlay_output.load_op = VK_ATTACHMENT_LOAD_OP_LOAD;
+        overlay_output.store_op = VK_ATTACHMENT_STORE_OP_STORE;
+        renderer_2d.SetOutputTargetConfig(overlay_output);
+    }
 
     void PrepareFrame(const vr::render::RuntimePrepareContext& prepare_context_) {
+        scene_targets.PrepareFrame(prepare_context_);
+        ConfigureTargets();
         renderer_3d.PrepareFrame(prepare_context_);
+        composite_renderer.PrepareFrame(prepare_context_);
         renderer_2d.PrepareFrame(prepare_context_);
     }
 
     void Record(const vr::render::FrameRecordContext& record_context_) {
         renderer_3d.Record(record_context_);
+        composite_renderer.Record(record_context_);
         renderer_2d.Record(record_context_);
     }
 
@@ -57,11 +91,23 @@ struct GeometryUnifiedRecorder final {
                                          format_,
                                          last_submitted_value_,
                                          completed_submit_value_);
+        composite_renderer.OnSwapchainRecreated(image_count_, extent_, format_);
         renderer_2d.OnSwapchainRecreated(image_count_,
                                          extent_,
                                          format_,
                                          last_submitted_value_,
                                          completed_submit_value_);
+
+        if (runtime == nullptr) {
+            return;
+        }
+        scene_targets.OnSwapchainRecreated(runtime->Context(),
+                                           runtime->RenderTarget(),
+                                           runtime->HasRenderTargetPool() ? &runtime->TargetPool() : nullptr,
+                                           extent_,
+                                           last_submitted_value_,
+                                           completed_submit_value_);
+        ConfigureTargets();
     }
 };
 
@@ -136,15 +182,32 @@ void InitializeCurvePath(Geometry2D& component_,
                                             560.0F);
 }
 
+[[nodiscard]] std::uint32_t ParseMaxFrames(int argc_,
+                                           char** argv_) {
+    if (argc_ <= 1 || argv_ == nullptr) {
+        return 0U;
+    }
+
+    for (int index = 1; index + 1 < argc_; ++index) {
+        if (std::string_view(argv_[index]) != "--frames") {
+            continue;
+        }
+        return static_cast<std::uint32_t>(std::strtoul(argv_[index + 1], nullptr, 10));
+    }
+    return 0U;
+}
+
 } // namespace
 
-int main() {
+int main(int argc_,
+         char** argv_) {
     Runtime runtime{};
     vr::geometry::GeometryResourceHost geometry_resource_host{};
     vr::geometry::GeometryUploadHost geometry_upload_host{};
     vr::geometry::GeometryImageHost geometry_image_host{};
     vr::geometry::GeometryMaterialHost geometry_material_host{};
     GeometryUnifiedRecorder recorder{};
+    const std::uint32_t max_frames = ParseMaxFrames(argc_, argv_);
 
     bool runtime_initialized = false;
     bool geometry_resource_host_initialized = false;
@@ -152,6 +215,7 @@ int main() {
     bool geometry_image_host_initialized = false;
     bool geometry_material_host_initialized = false;
     bool renderer_3d_initialized = false;
+    bool composite_renderer_initialized = false;
     bool renderer_2d_initialized = false;
 
     try {
@@ -171,6 +235,9 @@ int main() {
         create_info.poll_events_each_tick = true;
         runtime.Initialize(create_info);
         runtime_initialized = true;
+
+        recorder.runtime = &runtime;
+        recorder.InitializeSceneTargets();
 
         vr::geometry::GeometryResourceHostCreateInfo resource_create_info{};
         resource_create_info.reserve_mesh_count = 64U;
@@ -378,7 +445,7 @@ int main() {
         renderer_3d_create_info.reserve_material_set_count = 64U;
         renderer_3d_create_info.enable_depth = true;
         renderer_3d_create_info.clear_depth = true;
-        renderer_3d_create_info.clear_swapchain = true;
+        renderer_3d_create_info.clear_swapchain = false;
         renderer_3d_create_info.clear_color = {{0.06F, 0.07F, 0.11F, 1.0F}};
         renderer_3d_create_info.directional_light_x = 0.45F;
         renderer_3d_create_info.directional_light_y = -0.95F;
@@ -394,6 +461,14 @@ int main() {
                                           &camera,
                                           &camera_transform);
 
+        vr::render::RenderTargetCompositeRendererCreateInfo composite_create_info{};
+        composite_create_info.clear_swapchain = true;
+        composite_create_info.enable_reinhard_tonemap = true;
+        composite_create_info.exposure = 1.0F;
+        composite_create_info.apply_manual_gamma = false;
+        recorder.composite_renderer.Initialize(composite_create_info);
+        composite_renderer_initialized = true;
+
         vr::geometry::GeometryRenderer2DCreateInfo renderer_2d_create_info{};
         renderer_2d_create_info.reserve_component_count =
             static_cast<std::uint32_t>(geometry_2d_components.size());
@@ -407,7 +482,7 @@ int main() {
         recorder.renderer_2d.SetSceneData(geometry_2d_components.data(),
                                           static_cast<std::uint32_t>(geometry_2d_components.size()));
 
-        std::cout << "sdl_geometry_unified_demo running (3D + 2D). Close window to exit.\n";
+        std::cout << "sdl_geometry_unified_demo running (3D geometry offscreen + composite + 2D overlay). Close window to exit.\n";
 
         std::uint64_t fps_window_begin_ticks = SDL_GetTicks();
         std::uint32_t fps_window_frame_count = 0U;
@@ -445,6 +520,10 @@ int main() {
             ++fps_window_frame_count;
             ++frame_index;
 
+            if (max_frames > 0U && frame_index >= max_frames) {
+                break;
+            }
+
             const std::uint64_t fps_window_elapsed = now_ticks - fps_window_begin_ticks;
             if (fps_window_elapsed >= 1000U) {
                 const float fps = (fps_window_elapsed > 0U)
@@ -452,14 +531,21 @@ int main() {
                        static_cast<float>(fps_window_elapsed))
                     : 0.0F;
                 const vr::geometry::GeometryRenderer3DStats stats_3d = recorder.renderer_3d.Stats();
+                const vr::render::RenderTargetCompositeRendererStats composite_stats =
+                    recorder.composite_renderer.Stats();
                 const vr::geometry::GeometryRenderer2DStats stats_2d = recorder.renderer_2d.Stats();
+                const vr::render::RenderTargetPoolStats pool_stats = runtime.TargetPool().Stats();
                 std::cout << "FPS: " << fps
                           << " | Frame:" << frame_index
                           << " | 3D Draw:" << stats_3d.draw_call_count
                           << " Batch:" << stats_3d.draw_batch_count
                           << " MatSet:" << stats_3d.material_set_count
+                          << " | Comp Draw:" << composite_stats.draw_call_count
+                          << " DSU:" << composite_stats.descriptor_set_update_count
                           << " | 2D Draw:" << stats_2d.draw_call_count
                           << " Prim:" << stats_2d.primitive_count
+                          << " | Pool Acquire:" << pool_stats.acquire_count
+                          << " Reuse:" << pool_stats.reuse_hit_count
                           << '\n';
                 fps_window_begin_ticks = now_ticks;
                 fps_window_frame_count = 0U;
@@ -468,6 +554,8 @@ int main() {
 
         recorder.renderer_2d.Shutdown(runtime.Context());
         renderer_2d_initialized = false;
+        recorder.composite_renderer.Shutdown(runtime.Context());
+        composite_renderer_initialized = false;
         recorder.renderer_3d.Shutdown(runtime.Context());
         renderer_3d_initialized = false;
         geometry_material_host.Shutdown();
@@ -486,6 +574,10 @@ int main() {
         if (renderer_2d_initialized && runtime_initialized && runtime.IsInitialized()) {
             recorder.renderer_2d.Shutdown(runtime.Context());
             renderer_2d_initialized = false;
+        }
+        if (composite_renderer_initialized && runtime_initialized && runtime.IsInitialized()) {
+            recorder.composite_renderer.Shutdown(runtime.Context());
+            composite_renderer_initialized = false;
         }
         if (renderer_3d_initialized && runtime_initialized && runtime.IsInitialized()) {
             recorder.renderer_3d.Shutdown(runtime.Context());
