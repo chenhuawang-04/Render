@@ -226,6 +226,9 @@ set(VR_SHADOW_2D_VERT_HEADER "${VR_GENERATED_SHADOW_SHADER_DIR}/shadow_depth_2d_
 set(VR_SHADOW_3D_VERT_HEADER "${VR_GENERATED_SHADOW_SHADER_DIR}/shadow_depth_3d_vert_spv.hpp")
 set(VR_RENDER_TARGET_COMPOSITE_VERT_HEADER "${VR_GENERATED_RENDER_SHADER_DIR}/render_target_composite_vert_spv.hpp")
 set(VR_RENDER_TARGET_COMPOSITE_FRAG_HEADER "${VR_GENERATED_RENDER_SHADER_DIR}/render_target_composite_frag_spv.hpp")
+set(VR_RENDER_TARGET_BLOOM_PREFILTER_FRAG_HEADER "${VR_GENERATED_RENDER_SHADER_DIR}/render_target_bloom_prefilter_frag_spv.hpp")
+set(VR_RENDER_TARGET_BLOOM_BLUR_FRAG_HEADER "${VR_GENERATED_RENDER_SHADER_DIR}/render_target_bloom_blur_frag_spv.hpp")
+set(VR_RENDER_TARGET_BLOOM_COMBINE_FRAG_HEADER "${VR_GENERATED_RENDER_SHADER_DIR}/render_target_bloom_combine_frag_spv.hpp")
 
 vr_compile_shader_to_header("${VR_SHADER_SOURCE_DIR}/text_2d.vert"
                             "vert"
@@ -307,6 +310,21 @@ vr_compile_shader_to_header("${VR_SHADER_SOURCE_DIR}/render_target_composite.fra
                             "k_render_target_composite_frag_spv"
                             "${VR_RENDER_TARGET_COMPOSITE_FRAG_HEADER}"
                             "vr::render::generated")
+vr_compile_shader_to_header("${VR_SHADER_SOURCE_DIR}/render_target_bloom_prefilter.frag"
+                            "frag"
+                            "k_render_target_bloom_prefilter_frag_spv"
+                            "${VR_RENDER_TARGET_BLOOM_PREFILTER_FRAG_HEADER}"
+                            "vr::render::generated")
+vr_compile_shader_to_header("${VR_SHADER_SOURCE_DIR}/render_target_bloom_blur.frag"
+                            "frag"
+                            "k_render_target_bloom_blur_frag_spv"
+                            "${VR_RENDER_TARGET_BLOOM_BLUR_FRAG_HEADER}"
+                            "vr::render::generated")
+vr_compile_shader_to_header("${VR_SHADER_SOURCE_DIR}/render_target_bloom_combine.frag"
+                            "frag"
+                            "k_render_target_bloom_combine_frag_spv"
+                            "${VR_RENDER_TARGET_BLOOM_COMBINE_FRAG_HEADER}"
+                            "vr::render::generated")
 
 add_custom_target(vr_generated_shaders
     DEPENDS
@@ -326,6 +344,9 @@ add_custom_target(vr_generated_shaders
         "${VR_SHADOW_3D_VERT_HEADER}"
         "${VR_RENDER_TARGET_COMPOSITE_VERT_HEADER}"
         "${VR_RENDER_TARGET_COMPOSITE_FRAG_HEADER}"
+        "${VR_RENDER_TARGET_BLOOM_PREFILTER_FRAG_HEADER}"
+        "${VR_RENDER_TARGET_BLOOM_BLUR_FRAG_HEADER}"
+        "${VR_RENDER_TARGET_BLOOM_COMBINE_FRAG_HEADER}"
         ${VR_SHADER_REFLECTION_OUTPUTS}
         ${VR_SHADER_CONTRACT_OUTPUTS}
 )
@@ -359,6 +380,7 @@ add_library(vulkan_init STATIC
     src/render/render_target_pass.cpp
     src/render/render_target_pool.cpp
     src/render/render_target_composite_renderer.cpp
+    src/render/render_target_bloom_renderer.cpp
     src/render/scene_render_target_set.cpp
     src/text/freetype_host.cpp
     src/text/glyph_atlas_host.cpp

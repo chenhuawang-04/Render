@@ -92,11 +92,21 @@ public:
     template<typename RendererT>
     [[nodiscard]] bool ConfigureSceneRenderer(RendererT& renderer_,
                                               SceneRenderPassRole pass_role_) const {
-        const bool clear_target = pass_role_ == SceneRenderPassRole::single ||
-                                  pass_role_ == SceneRenderPassRole::first;
-        const bool final_pass = pass_role_ == SceneRenderPassRole::single ||
-                                pass_role_ == SceneRenderPassRole::last;
-        return ConfigureSceneRenderer(renderer_, clear_target, final_pass);
+        if (!IsReady()) {
+            ResetSceneRenderer(renderer_);
+            return false;
+        }
+        const std::size_t pass_role_index = PassRoleIndex(pass_role_);
+        renderer_.SetOutputTargetConfig(cached_color_outputs[pass_role_index]);
+        if (create_info_cache.enable_depth) {
+            if constexpr (supports_depth_target_config<RendererT>) {
+                renderer_.SetDepthTargetConfig(cached_depth_outputs[pass_role_index]);
+            } else {
+                throw std::runtime_error(
+                    "SceneRenderTargetSet depth target requested for renderer without depth target support");
+            }
+        }
+        return true;
     }
 
     template<typename RendererT>
@@ -126,6 +136,63 @@ public:
             if constexpr (supports_depth_target_config<RendererT>) {
                 renderer_.ResetDepthTargetConfig();
             }
+        }
+    }
+
+    template<typename ConsumerT>
+    [[nodiscard]] bool ConfigureSceneConsumer(ConsumerT& consumer_) const noexcept
+        requires(
+            requires(ConsumerT& candidate_) {
+                candidate_.SetSceneSourceTarget(RenderTargetHandle{}, RenderTargetStateKind::shader_read);
+                candidate_.ClearSceneSourceTarget();
+            } ||
+            requires(ConsumerT& candidate_) {
+                candidate_.SetSourceTarget(RenderTargetHandle{}, RenderTargetStateKind::shader_read);
+                candidate_.ClearSourceTarget();
+            }) {
+        if (!IsReady()) {
+            ResetSceneConsumer(consumer_);
+            return false;
+        }
+        if constexpr (requires(ConsumerT& candidate_) {
+                          candidate_.SetSceneSourceTarget(RenderTargetHandle{}, RenderTargetStateKind::shader_read);
+                          candidate_.ClearSceneSourceTarget();
+                      }) {
+            consumer_.SetSceneSourceTarget(color_target, create_info_cache.color_final_state);
+        } else {
+            consumer_.SetSourceTarget(color_target, create_info_cache.color_final_state);
+        }
+        if constexpr (requires(ConsumerT& candidate_) {
+                          candidate_.ResetOutputTargetConfig();
+                      }) {
+            consumer_.ResetOutputTargetConfig();
+        }
+        return true;
+    }
+
+    template<typename ConsumerT>
+    void ResetSceneConsumer(ConsumerT& consumer_) const noexcept
+        requires(
+            requires(ConsumerT& candidate_) {
+                candidate_.SetSceneSourceTarget(RenderTargetHandle{}, RenderTargetStateKind::shader_read);
+                candidate_.ClearSceneSourceTarget();
+            } ||
+            requires(ConsumerT& candidate_) {
+                candidate_.SetSourceTarget(RenderTargetHandle{}, RenderTargetStateKind::shader_read);
+                candidate_.ClearSourceTarget();
+            }) {
+        if constexpr (requires(ConsumerT& candidate_) {
+                          candidate_.SetSceneSourceTarget(RenderTargetHandle{}, RenderTargetStateKind::shader_read);
+                          candidate_.ClearSceneSourceTarget();
+                      }) {
+            consumer_.ClearSceneSourceTarget();
+        } else {
+            consumer_.ClearSourceTarget();
+        }
+        if constexpr (requires(ConsumerT& candidate_) {
+                          candidate_.ResetOutputTargetConfig();
+                      }) {
+            consumer_.ResetOutputTargetConfig();
         }
     }
 
@@ -175,9 +242,15 @@ public:
     [[nodiscard]] const SceneRenderTargetSetCreateInfo& CreateInfo() const noexcept;
 
 private:
+    static constexpr std::size_t scene_render_pass_role_count = 4U;
+
     [[nodiscard]] bool SupportsSwapchainRelativeExtent() const noexcept;
     [[nodiscard]] static bool HasNonZeroExtent(VkExtent2D extent_) noexcept;
+    [[nodiscard]] static constexpr std::size_t PassRoleIndex(SceneRenderPassRole pass_role_) noexcept {
+        return static_cast<std::size_t>(pass_role_);
+    }
     void InvalidateCurrentFrameTargets() noexcept;
+    void RebuildCachedOutputConfigs() noexcept;
 
     template<typename RendererT>
     static constexpr bool supports_depth_target_config =
@@ -215,6 +288,8 @@ private:
     RenderTargetHandle depth_target{};
     VkFormat color_format = VK_FORMAT_UNDEFINED;
     VkFormat depth_format = VK_FORMAT_UNDEFINED;
+    std::array<RenderTargetColorOutputConfig, scene_render_pass_role_count> cached_color_outputs{};
+    std::array<RenderTargetDepthOutputConfig, scene_render_pass_role_count> cached_depth_outputs{};
     bool frame_ready = false;
     bool initialized = false;
 };

@@ -42,6 +42,32 @@ struct FakeDepthRenderer final : FakeColorRenderer {
     }
 };
 
+struct FakeSceneConsumer final {
+    vr::render::RenderTargetHandle source_target{};
+    vr::render::RenderTargetStateKind expected_state = vr::render::RenderTargetStateKind::undefined;
+    bool source_set = false;
+    bool source_cleared = false;
+    bool output_reset = false;
+
+    void SetSceneSourceTarget(vr::render::RenderTargetHandle source_target_,
+                              vr::render::RenderTargetStateKind expected_state_) noexcept {
+        source_target = source_target_;
+        expected_state = expected_state_;
+        source_set = true;
+        source_cleared = false;
+    }
+
+    void ClearSceneSourceTarget() noexcept {
+        source_target = {};
+        expected_state = vr::render::RenderTargetStateKind::undefined;
+        source_cleared = true;
+    }
+
+    void ResetOutputTargetConfig() noexcept {
+        output_reset = true;
+    }
+};
+
 VR_TEST_CASE(RenderTargetTypes_handle_and_range_are_trivial, "unit;core;render_target") {
     VR_CHECK(std::is_standard_layout_v<vr::render::RenderTargetHandle>);
     VR_CHECK(std::is_standard_layout_v<vr::render::RenderTargetSubresourceRange>);
@@ -154,6 +180,20 @@ VR_TEST_CASE(SceneRenderTargetSet_bind_scene_renderer_preserves_role,
         vr::render::BindSceneRenderer(renderer, vr::render::SceneRenderPassRole::middle);
     VR_CHECK(binding.renderer == &renderer);
     VR_CHECK(binding.pass_role == vr::render::SceneRenderPassRole::middle);
+}
+
+VR_TEST_CASE(SceneRenderTargetSet_not_ready_scene_consumer_resets_source_binding,
+             "unit;core;render_target") {
+    vr::render::SceneRenderTargetSet target_set{};
+    target_set.Initialize({});
+
+    FakeSceneConsumer consumer{};
+    const bool configured = target_set.ConfigureSceneConsumer(consumer);
+
+    VR_CHECK(!configured);
+    VR_CHECK(!consumer.source_set);
+    VR_CHECK(consumer.source_cleared);
+    VR_CHECK(consumer.output_reset);
 }
 
 } // namespace

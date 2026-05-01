@@ -9,7 +9,7 @@
 #include "vr/geometry/geometry_renderer_3d.hpp"
 #include "vr/geometry/geometry_resource_host.hpp"
 #include "vr/geometry/geometry_upload_host.hpp"
-#include "vr/render/render_target_composite_renderer.hpp"
+#include "vr/render/render_target_bloom_renderer.hpp"
 #include "vr/render/render_runtime_host.hpp"
 #include "vr/render/scene_render_target_set.hpp"
 #include "vr/surface/surface_image_host.hpp"
@@ -190,7 +190,7 @@ struct UnifiedScene3DRecorder final {
     vr::geometry::GeometryRenderer3D geometry_renderer{};
     vr::surface::SurfaceRenderer3D surface_renderer{};
     vr::text::TextRenderer3D text_renderer{};
-    vr::render::RenderTargetCompositeRenderer composite_renderer{};
+    vr::render::RenderTargetBloomRenderer bloom_renderer{};
     vr::render::SceneRenderTargetSet scene_targets{};
 
     void InitializeSceneTargets() {
@@ -207,21 +207,22 @@ struct UnifiedScene3DRecorder final {
     void PrepareFrame(const vr::render::RuntimePrepareContext& prepare_context_) {
         (void)scene_targets.PrepareFrameAndConfigure(
             prepare_context_,
-            &composite_renderer,
+            nullptr,
             vr::render::BindSceneRenderer(geometry_renderer, vr::render::SceneRenderPassRole::first),
             vr::render::BindSceneRenderer(surface_renderer, vr::render::SceneRenderPassRole::middle),
             vr::render::BindSceneRenderer(text_renderer, vr::render::SceneRenderPassRole::last));
+        (void)scene_targets.ConfigureSceneConsumer(bloom_renderer);
         geometry_renderer.PrepareFrame(prepare_context_);
         surface_renderer.PrepareFrame(prepare_context_);
         text_renderer.PrepareFrame(prepare_context_);
-        composite_renderer.PrepareFrame(prepare_context_);
+        bloom_renderer.PrepareFrame(prepare_context_);
     }
 
     void Record(const vr::render::FrameRecordContext& record_context_) {
         geometry_renderer.Record(record_context_);
         surface_renderer.Record(record_context_);
         text_renderer.Record(record_context_);
-        composite_renderer.Record(record_context_);
+        bloom_renderer.Record(record_context_);
     }
 
     void OnSwapchainRecreated(std::uint32_t image_count_,
@@ -244,7 +245,7 @@ struct UnifiedScene3DRecorder final {
                                            format_,
                                            last_submitted_value_,
                                            completed_submit_value_);
-        composite_renderer.OnSwapchainRecreated(image_count_, extent_, format_);
+        bloom_renderer.OnSwapchainRecreated(image_count_, extent_, format_);
 
         if (runtime == nullptr) {
             return;
@@ -256,10 +257,11 @@ struct UnifiedScene3DRecorder final {
             extent_,
             last_submitted_value_,
             completed_submit_value_,
-            &composite_renderer,
+            nullptr,
             vr::render::BindSceneRenderer(geometry_renderer, vr::render::SceneRenderPassRole::first),
             vr::render::BindSceneRenderer(surface_renderer, vr::render::SceneRenderPassRole::middle),
             vr::render::BindSceneRenderer(text_renderer, vr::render::SceneRenderPassRole::last));
+        (void)scene_targets.ConfigureSceneConsumer(bloom_renderer);
     }
 };
 
@@ -294,7 +296,7 @@ int main(int argc_,
     bool geometry_renderer_initialized = false;
     bool surface_renderer_initialized = false;
     bool text_renderer_initialized = false;
-    bool composite_renderer_initialized = false;
+    bool bloom_renderer_initialized = false;
 
     constexpr std::uint32_t texture_width = 64U;
     constexpr std::uint32_t texture_height = 64U;
@@ -597,16 +599,21 @@ int main(int argc_,
                                             &camera_transform,
                                             &text_bounds);
 
-        vr::render::RenderTargetCompositeRendererCreateInfo composite_create_info{};
-        composite_create_info.clear_swapchain = true;
-        composite_create_info.clear_color = {{0.02F, 0.025F, 0.04F, 1.0F}};
-        composite_create_info.enable_reinhard_tonemap = true;
-        composite_create_info.exposure = 1.0F;
-        composite_create_info.apply_manual_gamma = false;
-        recorder.composite_renderer.Initialize(composite_create_info);
-        composite_renderer_initialized = true;
+        vr::render::RenderTargetBloomRendererCreateInfo bloom_create_info{};
+        bloom_create_info.clear_swapchain = true;
+        bloom_create_info.clear_color = {{0.02F, 0.025F, 0.04F, 1.0F}};
+        bloom_create_info.enable_reinhard_tonemap = true;
+        bloom_create_info.exposure = 1.0F;
+        bloom_create_info.apply_manual_gamma = false;
+        bloom_create_info.bloom_threshold = 0.70F;
+        bloom_create_info.bloom_knee = 0.45F;
+        bloom_create_info.bloom_intensity = 0.95F;
+        bloom_create_info.blur_filter_scale = 1.10F;
+        bloom_create_info.downsample_scale = 0.5F;
+        recorder.bloom_renderer.Initialize(bloom_create_info);
+        bloom_renderer_initialized = true;
 
-        std::cout << "sdl_scene_3d_unified_demo running (geometry + surface + text share transient scene target). Close window to exit.\n";
+        std::cout << "sdl_scene_3d_unified_demo running (geometry + surface + text share transient scene target + bloom post stack). Close window to exit.\n";
 
         std::uint64_t fps_window_begin_ticks = SDL_GetTicks();
         std::uint32_t fps_window_frame_count = 0U;
@@ -677,7 +684,7 @@ int main(int argc_,
                 const auto geometry_stats = recorder.geometry_renderer.Stats();
                 const auto surface_stats = recorder.surface_renderer.Stats();
                 const auto text_stats = recorder.text_renderer.Stats();
-                const auto composite_stats = recorder.composite_renderer.Stats();
+                const auto bloom_stats = recorder.bloom_renderer.Stats();
                 const auto pool_stats = runtime.TargetPool().Stats();
                 std::cout << "FPS:" << fps
                           << " Frame:" << frame_index
@@ -687,8 +694,10 @@ int main(int argc_,
                           << " Inst:" << surface_stats.instance_count
                           << " | T Draw:" << text_stats.draw_call_count
                           << " Inst:" << text_stats.instance_count
-                          << " | Comp Draw:" << composite_stats.draw_call_count
-                          << " DSU:" << composite_stats.descriptor_set_update_count
+                          << " | Bloom P:" << bloom_stats.prefilter_draw_call_count
+                          << " B:" << bloom_stats.blur_draw_call_count
+                          << " C:" << bloom_stats.combine_draw_call_count
+                          << " DSU:" << bloom_stats.descriptor_set_update_count
                           << " | Pool Acquire:" << pool_stats.acquire_count
                           << " Reuse:" << pool_stats.reuse_hit_count
                           << '\n';
@@ -697,8 +706,8 @@ int main(int argc_,
             }
         }
 
-        recorder.composite_renderer.Shutdown(runtime.Context());
-        composite_renderer_initialized = false;
+        recorder.bloom_renderer.Shutdown(runtime.Context());
+        bloom_renderer_initialized = false;
         recorder.text_renderer.Shutdown(runtime.Context());
         text_renderer_initialized = false;
         recorder.surface_renderer.Shutdown(runtime.Context());
@@ -722,9 +731,9 @@ int main(int argc_,
     } catch (const std::exception& exception_) {
         std::cerr << "sdl_scene_3d_unified_demo failed: " << exception_.what() << '\n';
 
-        if (composite_renderer_initialized && runtime_initialized && runtime.IsInitialized()) {
-            recorder.composite_renderer.Shutdown(runtime.Context());
-            composite_renderer_initialized = false;
+        if (bloom_renderer_initialized && runtime_initialized && runtime.IsInitialized()) {
+            recorder.bloom_renderer.Shutdown(runtime.Context());
+            bloom_renderer_initialized = false;
         }
         if (text_renderer_initialized && runtime_initialized && runtime.IsInitialized()) {
             recorder.text_renderer.Shutdown(runtime.Context());

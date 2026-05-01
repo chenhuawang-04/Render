@@ -68,6 +68,8 @@ void SceneRenderTargetSet::Initialize(const SceneRenderTargetSetCreateInfo& crea
     depth_target = {};
     color_format = VK_FORMAT_UNDEFINED;
     depth_format = VK_FORMAT_UNDEFINED;
+    cached_color_outputs = {};
+    cached_depth_outputs = {};
     frame_ready = false;
     initialized = true;
 }
@@ -78,6 +80,8 @@ void SceneRenderTargetSet::Reset() noexcept {
     depth_target = {};
     color_format = VK_FORMAT_UNDEFINED;
     depth_format = VK_FORMAT_UNDEFINED;
+    cached_color_outputs = {};
+    cached_depth_outputs = {};
     frame_ready = false;
     initialized = false;
 }
@@ -118,6 +122,12 @@ bool SceneRenderTargetSet::EnsureForSwapchain(VulkanContext& context_,
         depth_target = {};
         depth_format = VK_FORMAT_UNDEFINED;
         frame_ready = IsValidRenderTargetHandle(color_target);
+        if (frame_ready) {
+            RebuildCachedOutputConfigs();
+        } else {
+            cached_color_outputs = {};
+            cached_depth_outputs = {};
+        }
         return frame_ready;
     }
 
@@ -142,6 +152,12 @@ bool SceneRenderTargetSet::EnsureForSwapchain(VulkanContext& context_,
 
     frame_ready = IsValidRenderTargetHandle(color_target) &&
                   (!create_info_cache.enable_depth || IsValidRenderTargetHandle(depth_target));
+    if (frame_ready) {
+        RebuildCachedOutputConfigs();
+    } else {
+        cached_color_outputs = {};
+        cached_depth_outputs = {};
+    }
     return frame_ready;
 }
 
@@ -177,6 +193,12 @@ bool SceneRenderTargetSet::PrepareFrame(const RuntimePrepareContext& prepare_con
     }
     frame_ready = IsValidRenderTargetHandle(color_target) &&
                   (!create_info_cache.enable_depth || IsValidRenderTargetHandle(depth_target));
+    if (frame_ready) {
+        RebuildCachedOutputConfigs();
+    } else {
+        cached_color_outputs = {};
+        cached_depth_outputs = {};
+    }
     return frame_ready;
 }
 
@@ -249,6 +271,12 @@ void SceneRenderTargetSet::AcquireTransientTargets(VulkanContext& context_,
     }
     frame_ready = IsValidRenderTargetHandle(color_target) &&
                   (!create_info_cache.enable_depth || IsValidRenderTargetHandle(depth_target));
+    if (frame_ready) {
+        RebuildCachedOutputConfigs();
+    } else {
+        cached_color_outputs = {};
+        cached_depth_outputs = {};
+    }
 }
 
 RenderTargetColorOutputConfig SceneRenderTargetSet::BuildColorOutputConfig(bool clear_target_,
@@ -354,7 +382,62 @@ void SceneRenderTargetSet::InvalidateCurrentFrameTargets() noexcept {
         create_info_cache.depth_lifetime == RenderTargetLifetime::transient) {
         depth_target = {};
     }
+    cached_color_outputs = {};
+    cached_depth_outputs = {};
     frame_ready = false;
+}
+
+void SceneRenderTargetSet::RebuildCachedOutputConfigs() noexcept {
+    cached_color_outputs = {};
+    cached_depth_outputs = {};
+
+    const auto fill_color = [this](SceneRenderPassRole pass_role_,
+                                   bool clear_target_,
+                                   bool final_pass_) {
+        RenderTargetColorOutputConfig output{};
+        output.color_target = color_target;
+        output.final_state = final_pass_
+            ? create_info_cache.color_final_state
+            : RenderTargetStateKind::color_attachment;
+        output.use_explicit_load_op = true;
+        output.load_op = clear_target_
+            ? VK_ATTACHMENT_LOAD_OP_CLEAR
+            : VK_ATTACHMENT_LOAD_OP_LOAD;
+        output.store_op = VK_ATTACHMENT_STORE_OP_STORE;
+        output.clear_color = create_info_cache.clear_color;
+        cached_color_outputs[PassRoleIndex(pass_role_)] = output;
+    };
+
+    fill_color(SceneRenderPassRole::single, true, true);
+    fill_color(SceneRenderPassRole::first, true, false);
+    fill_color(SceneRenderPassRole::middle, false, false);
+    fill_color(SceneRenderPassRole::last, false, true);
+
+    if (!create_info_cache.enable_depth || !IsValidRenderTargetHandle(depth_target)) {
+        return;
+    }
+
+    const auto fill_depth = [this](SceneRenderPassRole pass_role_,
+                                   bool clear_target_) {
+        RenderTargetDepthOutputConfig output{};
+        output.depth_target = depth_target;
+        output.final_state = create_info_cache.depth_final_state;
+        output.use_explicit_load_op = true;
+        output.load_op = clear_target_
+            ? VK_ATTACHMENT_LOAD_OP_CLEAR
+            : VK_ATTACHMENT_LOAD_OP_LOAD;
+        output.store_op = VK_ATTACHMENT_STORE_OP_STORE;
+        output.clear_depth_stencil = VkClearDepthStencilValue{
+            create_info_cache.clear_depth_value,
+            create_info_cache.clear_stencil_value
+        };
+        cached_depth_outputs[PassRoleIndex(pass_role_)] = output;
+    };
+
+    fill_depth(SceneRenderPassRole::single, true);
+    fill_depth(SceneRenderPassRole::first, true);
+    fill_depth(SceneRenderPassRole::middle, false);
+    fill_depth(SceneRenderPassRole::last, false);
 }
 
 VkFormat SceneRenderTargetSet::ResolveColorFormat(VulkanContext& context_,
