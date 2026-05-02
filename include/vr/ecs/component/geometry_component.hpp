@@ -76,11 +76,14 @@ struct GeometryMeshRoute final {
 struct GeometryRuntimeRoute final {
     std::uint64_t sort_key;
     std::uint32_t geometry_id;
+    // Authoring/base material route. Linked appearance overrides are stored separately so unlink can
+    // restore this value without back-filling state.
     std::uint32_t material_id;
     std::uint32_t batch_tag;
     std::uint32_t user_data;
     AppearanceHandle appearance_handle;
     std::uint32_t appearance_pipeline_bucket;
+    // Effective material override contributed by a linked appearance handle when present.
     std::uint32_t appearance_resource_bucket;
     std::uint16_t depth_bin;
     std::uint8_t visible;

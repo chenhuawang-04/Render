@@ -183,4 +183,39 @@ VR_TEST_CASE(EcsSurfaceSystem_appearance_handle_mutation_serial_monotonic,
     VR_CHECK(serial_after_runtime_link_changed_handle > serial_after_runtime_link_same_handle);
 }
 
+VR_TEST_CASE(EcsSurfaceSystem_appearance_link_preserves_base_material_and_unlink_restores_effective_route,
+             "unit;core;ecs;surface") {
+    using Surface3D = vr::ecs::Surface<vr::ecs::Dim3>;
+    using SurfaceSystem3D = vr::ecs::SurfaceSystem<vr::ecs::Dim3>;
+
+    Surface3D surface{};
+    SurfaceSystem3D::Initialize(surface);
+    SurfaceSystem3D::SetTextureRoute(surface, 301U, 4U, 0U, 0U);
+    SurfaceSystem3D::SetMaterialId(surface, 55U);
+    SurfaceSystem3D::SetDepthBin(surface, 9U);
+
+    const vr::ecs::AppearanceHandle handle{.index = 6U, .generation = 1U};
+    const bool linked = SurfaceSystem3D::SetAppearanceRuntimeLink(surface,
+                                                                  handle,
+                                                                  0ULL,
+                                                                  0x02000000ULL,
+                                                                  900ULL);
+    VR_CHECK(linked);
+    VR_CHECK(surface.runtime.route.material_id == 55U);
+    VR_CHECK(surface.runtime.route.appearance_resource_bucket == 900U);
+    VR_CHECK(vr::ecs::ResolveEffectiveMaterialId(surface.runtime.route) == 900U);
+    VR_CHECK(SurfaceSystem3D::ExtractMaterialBucket(surface.runtime.route.sort_key) == 900U);
+
+    SurfaceSystem3D::SetMaterialId(surface, 61U);
+    VR_CHECK(surface.runtime.route.material_id == 61U);
+    VR_CHECK(vr::ecs::ResolveEffectiveMaterialId(surface.runtime.route) == 900U);
+    VR_CHECK(SurfaceSystem3D::ExtractMaterialBucket(surface.runtime.route.sort_key) == 900U);
+
+    SurfaceSystem3D::ClearAppearanceHandle(surface);
+    VR_CHECK(surface.runtime.route.material_id == 61U);
+    VR_CHECK(surface.runtime.route.appearance_resource_bucket == 0U);
+    VR_CHECK(vr::ecs::ResolveEffectiveMaterialId(surface.runtime.route) == 61U);
+    VR_CHECK(SurfaceSystem3D::ExtractMaterialBucket(surface.runtime.route.sort_key) == 61U);
+}
+
 } // namespace

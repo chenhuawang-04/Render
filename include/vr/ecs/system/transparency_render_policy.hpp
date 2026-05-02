@@ -170,6 +170,8 @@ inline constexpr std::uint32_t surface3d_runtime_blend_shift = 11U;
 
 template<typename RouteT>
 [[nodiscard]] constexpr std::uint32_t ResolveEffectiveMaterialId(const RouteT& route_) noexcept {
+    // Keep the authoring/base material route intact and layer linked appearance resources on top.
+    // This lets clear/unlink fall back to the original material without storing restoration state.
     const bool has_linked_appearance =
         route_.appearance_handle.index != invalid_appearance_index &&
         route_.appearance_handle.generation != 0U;

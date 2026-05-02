@@ -453,4 +453,32 @@ VR_TEST_CASE(EcsSurfaceRuntimeSystem_dim3_visibility_signature_drives_cache_key,
     VR_CHECK(stats2.visible_set_signature_from_hint);
 }
 
+VR_TEST_CASE(EcsSurfaceRuntimeSystem_dim3_linked_appearance_uses_effective_material_id,
+             "unit;core;ecs;surface;runtime") {
+    using Surface3D = vr::ecs::Surface<vr::ecs::Dim3>;
+    using SurfaceSystem3D = vr::ecs::SurfaceSystem<vr::ecs::Dim3>;
+    using RuntimeSystem3D = vr::ecs::SurfaceRuntimeSystem<vr::ecs::Dim3>;
+    using Transform3D = vr::ecs::Transform<vr::ecs::Dim3>;
+    using TransformSystem3D = vr::ecs::TransformSystem<vr::ecs::Dim3>;
+
+    Surface3D surface{};
+    SurfaceSystem3D::Initialize(surface);
+    SurfaceSystem3D::SetTextureRoute(surface, 111U, 3U, 0U, 0U);
+    SurfaceSystem3D::SetMaterialId(surface, 19U);
+    surface.runtime.route.appearance_handle = vr::ecs::AppearanceHandle{.index = 2U, .generation = 1U};
+    surface.runtime.route.appearance_resource_bucket = 650U;
+
+    Transform3D transform{};
+    TransformSystem3D::Initialize(transform);
+    TransformSystem3D::SetLocalPosition(transform, vr::ecs::Float3{.x = 0.0F, .y = 0.0F, .z = 2.0F});
+    TransformSystem3D::UpdateHierarchy(&transform, 1U);
+
+    vr::ecs::Surface3DRuntimeScratch scratch{};
+    const auto stats = RuntimeSystem3D::Build(&surface, &transform, 1U, scratch, {});
+    VR_REQUIRE(stats.emitted_instance_count == 1U);
+    VR_REQUIRE(!scratch.instances.empty());
+    VR_CHECK(surface.runtime.route.material_id == 19U);
+    VR_CHECK(scratch.instances[0U].material_id == 650U);
+}
+
 } // namespace

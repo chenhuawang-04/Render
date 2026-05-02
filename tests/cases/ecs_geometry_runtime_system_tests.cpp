@@ -340,6 +340,35 @@ VR_TEST_CASE(EcsGeometryRuntimeSystem_dim3_updates_transform_without_rebuild, "u
     VR_CHECK(stats2.transform_rewritten_instance_count == 0U);
 }
 
+VR_TEST_CASE(EcsGeometryRuntimeSystem_dim3_linked_appearance_uses_effective_material_id,
+             "unit;core;ecs;geometry;runtime") {
+    using Geometry3D = vr::ecs::Geometry<vr::ecs::Dim3>;
+    using MeshSystem = vr::ecs::GeometryMeshSystem;
+    using GeometrySystem3D = vr::ecs::GeometrySystem<vr::ecs::Dim3>;
+    using RuntimeSystem3D = vr::ecs::GeometryRuntimeSystem<vr::ecs::Dim3>;
+    using Transform3D = vr::ecs::Transform<vr::ecs::Dim3>;
+    using TransformSystem3D = vr::ecs::TransformSystem<vr::ecs::Dim3>;
+
+    Geometry3D component{};
+    MeshSystem::Initialize(component);
+    MeshSystem::SetMeshRoute(component, 77U, 0U, 0U);
+    GeometrySystem3D::SetMaterialId(component, 11U);
+    component.runtime.route.appearance_handle = vr::ecs::AppearanceHandle{.index = 4U, .generation = 1U};
+    component.runtime.route.appearance_resource_bucket = 901U;
+
+    Transform3D transform{};
+    TransformSystem3D::Initialize(transform);
+    TransformSystem3D::SetLocalPosition(transform, vr::ecs::Float3{.x = 0.0F, .y = 0.0F, .z = 1.0F});
+    TransformSystem3D::UpdateHierarchy(&transform, 1U);
+
+    vr::ecs::Geometry3DRuntimeScratch scratch{};
+    const auto stats = RuntimeSystem3D::Build(&component, &transform, 1U, scratch, {});
+    VR_REQUIRE(stats.emitted_instance_count == 1U);
+    VR_REQUIRE(!scratch.instances.empty());
+    VR_CHECK(component.runtime.route.material_id == 11U);
+    VR_CHECK(scratch.instances[0U].material_id == 901U);
+}
+
 VR_TEST_CASE(EcsGeometryRuntimeSystem_dim3_transform_dirty_hint_updates_single_instance,
              "unit;core;ecs;geometry;runtime") {
     using Geometry3D = vr::ecs::Geometry<vr::ecs::Dim3>;

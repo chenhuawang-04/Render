@@ -175,4 +175,39 @@ VR_TEST_CASE(EcsGeometrySystem_appearance_handle_mutation_serial_monotonic,
     VR_CHECK(serial_after_runtime_link_changed_handle > serial_after_runtime_link_same_handle);
 }
 
+VR_TEST_CASE(EcsGeometrySystem_appearance_link_preserves_base_material_and_unlink_restores_effective_route,
+             "unit;core;ecs;geometry") {
+    using Geometry3D = vr::ecs::Geometry<vr::ecs::Dim3>;
+    using GeometrySystem3D = vr::ecs::GeometrySystem<vr::ecs::Dim3>;
+
+    Geometry3D geometry{};
+    GeometrySystem3D::Initialize(geometry);
+    GeometrySystem3D::SetGeometryId(geometry, 41U);
+    GeometrySystem3D::SetMaterialId(geometry, 77U);
+    GeometrySystem3D::SetDepthBin(geometry, 3U);
+
+    const vr::ecs::AppearanceHandle handle{.index = 8U, .generation = 2U};
+    const bool linked = GeometrySystem3D::SetAppearanceRuntimeLink(geometry,
+                                                                   handle,
+                                                                   0ULL,
+                                                                   0x02000000ULL,
+                                                                   1234ULL);
+    VR_CHECK(linked);
+    VR_CHECK(geometry.runtime.route.material_id == 77U);
+    VR_CHECK(geometry.runtime.route.appearance_resource_bucket == 1234U);
+    VR_CHECK(vr::ecs::ResolveEffectiveMaterialId(geometry.runtime.route) == 1234U);
+    VR_CHECK(GeometrySystem3D::ExtractMaterialBucket(geometry.runtime.route.sort_key) == (1234U & 0xFFFFU));
+
+    GeometrySystem3D::SetMaterialId(geometry, 91U);
+    VR_CHECK(geometry.runtime.route.material_id == 91U);
+    VR_CHECK(vr::ecs::ResolveEffectiveMaterialId(geometry.runtime.route) == 1234U);
+    VR_CHECK(GeometrySystem3D::ExtractMaterialBucket(geometry.runtime.route.sort_key) == (1234U & 0xFFFFU));
+
+    GeometrySystem3D::ClearAppearanceHandle(geometry);
+    VR_CHECK(geometry.runtime.route.material_id == 91U);
+    VR_CHECK(geometry.runtime.route.appearance_resource_bucket == 0U);
+    VR_CHECK(vr::ecs::ResolveEffectiveMaterialId(geometry.runtime.route) == 91U);
+    VR_CHECK(GeometrySystem3D::ExtractMaterialBucket(geometry.runtime.route.sort_key) == 91U);
+}
+
 } // namespace
