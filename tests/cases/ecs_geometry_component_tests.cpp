@@ -116,6 +116,25 @@ VR_TEST_CASE(EcsGeometryMeshSystem_route_style_and_bounds, "unit;core;ecs;geomet
     VR_CHECK(GeometrySystem3D::IsVisibleForBatch(geometry));
 }
 
+VR_TEST_CASE(EcsGeometrySystem_dim3_transparent_sort_reverses_depth_minor_bucket,
+             "unit;core;ecs;geometry") {
+    using Geometry3D = vr::ecs::Geometry<vr::ecs::Dim3>;
+    using GeometrySystem3D = vr::ecs::GeometrySystem<vr::ecs::Dim3>;
+
+    Geometry3D geometry{};
+    GeometrySystem3D::Initialize(geometry);
+    GeometrySystem3D::SetGeometryId(geometry, 5U);
+    GeometrySystem3D::SetMaterialId(geometry, 9U);
+    GeometrySystem3D::SetDepthBin(geometry, 33U);
+    GeometrySystem3D::SetRenderPassHint(geometry, vr::ecs::GeometryRenderPassHint::transparent);
+
+    const std::uint64_t sort_key = GeometrySystem3D::SortKey(geometry);
+    VR_CHECK(GeometrySystem3D::ExtractPassBucket(sort_key) ==
+             static_cast<std::uint32_t>(vr::ecs::GeometryRenderPassHint::transparent));
+    VR_CHECK(GeometrySystem3D::ExtractMinorBucket(sort_key) ==
+             static_cast<std::uint32_t>((std::numeric_limits<std::uint16_t>::max)() - 33U));
+}
+
 VR_TEST_CASE(EcsGeometrySystem_appearance_handle_mutation_serial_monotonic,
              "unit;core;ecs;geometry") {
     using Geometry3D = vr::ecs::Geometry<vr::ecs::Dim3>;

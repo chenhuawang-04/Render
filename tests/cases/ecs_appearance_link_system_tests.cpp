@@ -3,6 +3,7 @@
 #include "vr/ecs/system/appearance_runtime_system.hpp"
 
 #include <cstdint>
+#include <limits>
 
 namespace {
 
@@ -27,6 +28,8 @@ VR_TEST_CASE(EcsAppearanceLinkSystem_dim3_geometry_link_updates_runtime_route,
         AppearanceSystem3D::SetBindingLayoutId(appearance_components[i], 7U);
         AppearanceSystem3D::SetSamplerStateId(appearance_components[i], 3U);
     }
+    AppearanceSystem3D::SetBlendMode(appearance_components[0U], vr::ecs::AppearanceBlendMode::alpha);
+    AppearanceSystem3D::SetAlphaMode(appearance_components[0U], vr::ecs::AppearanceAlphaMode::blend);
 
     vr::ecs::AppearanceRuntimeScratch<vr::ecs::Dim3> appearance_scratch{};
     (void)AppearanceRuntimeSystem3D::Build(appearance_components.data(),
@@ -39,6 +42,7 @@ VR_TEST_CASE(EcsAppearanceLinkSystem_dim3_geometry_link_updates_runtime_route,
         GeometrySystem3D::Initialize(geometry_components[i]);
         GeometrySystem3D::SetGeometryId(geometry_components[i], 11U + i);
     }
+    GeometrySystem3D::SetDepthBin(geometry_components[0U], 17U);
 
     GeometrySystem3D::SetAppearanceHandle(geometry_components[0U],
                                           appearance_components[0U].runtime.gpu_record_handle);
@@ -72,7 +76,7 @@ VR_TEST_CASE(EcsAppearanceLinkSystem_dim3_geometry_link_updates_runtime_route,
              appearance_components[0U].runtime.gpu_record_handle.index);
     VR_CHECK(linked_geometry.runtime.route.appearance_handle.generation ==
              appearance_components[0U].runtime.gpu_record_handle.generation);
-    VR_CHECK(linked_geometry.runtime.route.sort_key ==
+    VR_CHECK(linked_geometry.runtime.route.sort_key !=
              appearance_components[0U].runtime.sort_key);
     VR_CHECK(linked_geometry.runtime.route.appearance_pipeline_bucket ==
              static_cast<std::uint32_t>(appearance_components[0U].runtime.pipeline_key));
@@ -80,6 +84,13 @@ VR_TEST_CASE(EcsAppearanceLinkSystem_dim3_geometry_link_updates_runtime_route,
              static_cast<std::uint32_t>(appearance_components[0U].runtime.resource_key));
     VR_CHECK(linked_geometry.runtime.route.material_id ==
              static_cast<std::uint32_t>(appearance_components[0U].runtime.resource_key));
+    VR_CHECK(GeometrySystem3D::ExtractGeometryBucket(linked_geometry.runtime.route.sort_key) == 11U);
+    VR_CHECK(GeometrySystem3D::ExtractMaterialBucket(linked_geometry.runtime.route.sort_key) ==
+             (static_cast<std::uint32_t>(appearance_components[0U].runtime.resource_key) & 0xFFFFU));
+    VR_CHECK(GeometrySystem3D::ExtractPassBucket(linked_geometry.runtime.route.sort_key) ==
+             static_cast<std::uint32_t>(vr::ecs::GeometryRenderPassHint::transparent));
+    VR_CHECK(GeometrySystem3D::ExtractMinorBucket(linked_geometry.runtime.route.sort_key) ==
+             static_cast<std::uint32_t>((std::numeric_limits<std::uint16_t>::max)() - 17U));
 }
 
 VR_TEST_CASE(EcsAppearanceLinkSystem_dim2_surface_link_dirty_indices_path,
@@ -111,6 +122,7 @@ VR_TEST_CASE(EcsAppearanceLinkSystem_dim2_surface_link_dirty_indices_path,
         SurfaceSystem2D::Initialize(surface_components[i]);
         SurfaceSystem2D::SetImageId(surface_components[i], 1000U + i, 1U);
     }
+    SurfaceSystem2D::SetRenderPassHint(surface_components[0U], vr::ecs::SurfaceRenderPassHint::opaque);
 
     SurfaceSystem2D::SetAppearanceHandle(surface_components[0U],
                                          appearance_components[0U].runtime.gpu_record_handle);
@@ -137,13 +149,17 @@ VR_TEST_CASE(EcsAppearanceLinkSystem_dim2_surface_link_dirty_indices_path,
     VR_CHECK(stats.out_of_range_component_index_count == 1U);
 
     const Surface2D& linked_surface = surface_components[0U];
-    VR_CHECK(linked_surface.runtime.route.sort_key ==
+    VR_CHECK(linked_surface.runtime.route.sort_key !=
              appearance_components[0U].runtime.sort_key);
     VR_CHECK(linked_surface.runtime.route.appearance_pipeline_bucket ==
              static_cast<std::uint32_t>(appearance_components[0U].runtime.pipeline_key));
     VR_CHECK(linked_surface.runtime.route.appearance_resource_bucket ==
              static_cast<std::uint32_t>(appearance_components[0U].runtime.resource_key));
+    VR_CHECK(SurfaceSystem2D::ExtractPassBucket(linked_surface.runtime.route.sort_key) ==
+             static_cast<std::uint32_t>(vr::ecs::SurfaceRenderPassHint::transparent));
+    VR_CHECK(SurfaceSystem2D::ExtractMaterialBucket(linked_surface.runtime.route.sort_key) ==
+             (static_cast<std::uint32_t>(appearance_components[0U].runtime.resource_key) & 0xFFFFU));
+    VR_CHECK(SurfaceSystem2D::ExtractSurfaceBucket(linked_surface.runtime.route.sort_key) == 1000U);
 }
 
 } // namespace
-

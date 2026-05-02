@@ -1,7 +1,9 @@
 #include "vr/geometry/geometry_renderer_3d.hpp"
 
+#include "vr/ecs/system/transparency_render_policy.hpp"
 #include "vr/geometry/generated/geometry_3d_frag_spv.hpp"
 #include "vr/geometry/generated/geometry_3d_vert_spv.hpp"
+#include "vr/render/color_blend_state.hpp"
 #include "vr/render/render_loop_host.hpp"
 #include "vr/render/runtime_prepare_context.hpp"
 #include "vr/render/upload_host.hpp"
@@ -72,6 +74,10 @@ std::size_t GeometryRenderer3D::TopologyModeIndex(TopologyMode mode_) noexcept {
 }
 
 std::size_t GeometryRenderer3D::CullModeIndex(CullMode mode_) noexcept {
+    return static_cast<std::size_t>(mode_);
+}
+
+std::size_t GeometryRenderer3D::BlendModeIndex(BlendMode mode_) noexcept {
     return static_cast<std::size_t>(mode_);
 }
 
@@ -152,6 +158,27 @@ GeometryRenderer3D::CullMode GeometryRenderer3D::ResolveCullMode(const ecs::Geom
     return double_sided ? CullMode::none : CullMode::back;
 }
 
+GeometryRenderer3D::BlendMode GeometryRenderer3D::ResolveBlendMode(
+    const ecs::Geometry3DDrawBatch& batch_) noexcept {
+    switch (ecs::DecodeRuntimeBlendPresetBits(batch_.params,
+                                              ecs::geometry_runtime_blend_shift)) {
+    case ecs::RuntimeBlendPreset::alpha:
+        return BlendMode::alpha;
+    case ecs::RuntimeBlendPreset::additive:
+        return BlendMode::additive;
+    case ecs::RuntimeBlendPreset::multiply:
+        return BlendMode::multiply;
+    case ecs::RuntimeBlendPreset::premultiplied_alpha:
+        return BlendMode::premultiplied_alpha;
+    case ecs::RuntimeBlendPreset::screen:
+        return BlendMode::screen;
+    case ecs::RuntimeBlendPreset::opaque:
+    default:
+        break;
+    }
+    return BlendMode::opaque;
+}
+
 void GeometryRenderer3D::Initialize(const GeometryRenderer3DCreateInfo& create_info_) {
     create_info_cache = create_info_;
     if (create_info_cache.reserve_component_count > 0U ||
@@ -173,10 +200,12 @@ void GeometryRenderer3D::Initialize(const GeometryRenderer3DCreateInfo& create_i
     pipeline_layout_id = {};
     shader_vertex_id = {};
     shader_fragment_id = {};
-    for (auto& mode_pipelines : pipeline_ids) {
-        for (auto& topology_pipelines : mode_pipelines) {
-            for (auto& pipeline_id : topology_pipelines) {
-                pipeline_id = {};
+    for (auto& blend_pipelines : pipeline_ids) {
+        for (auto& mode_pipelines : blend_pipelines) {
+            for (auto& topology_pipelines : mode_pipelines) {
+                for (auto& pipeline_id : topology_pipelines) {
+                    pipeline_id = {};
+                }
             }
         }
     }
@@ -265,10 +294,12 @@ void GeometryRenderer3D::Shutdown(VulkanContext& context_) {
     pipeline_layout_id = {};
     shader_vertex_id = {};
     shader_fragment_id = {};
-    for (auto& mode_pipelines : pipeline_ids) {
-        for (auto& topology_pipelines : mode_pipelines) {
-            for (auto& pipeline_id : topology_pipelines) {
-                pipeline_id = {};
+    for (auto& blend_pipelines : pipeline_ids) {
+        for (auto& mode_pipelines : blend_pipelines) {
+            for (auto& topology_pipelines : mode_pipelines) {
+                for (auto& pipeline_id : topology_pipelines) {
+                    pipeline_id = {};
+                }
             }
         }
     }
@@ -906,6 +937,7 @@ void GeometryRenderer3D::Record(const render::FrameRecordContext& record_context
                 continue;
             }
 
+            const BlendMode blend_mode = ResolveBlendMode(batch);
             const PipelineMode mode = ResolvePipelineMode(batch, use_depth_attachment);
             const TopologyMode topology_mode = ResolveTopologyMode(mesh->topology, batch);
             const CullMode cull_mode = ResolveCullMode(batch);
@@ -913,6 +945,7 @@ void GeometryRenderer3D::Record(const render::FrameRecordContext& record_context
                                                                                   *pipeline_host,
                                                                                   color_pass.target.format,
                                                                                   use_depth_attachment ? active_depth_format : VK_FORMAT_UNDEFINED,
+                                                                                  blend_mode,
                                                                                   mode,
                                                                                   topology_mode,
                                                                                   cull_mode);
@@ -1704,10 +1737,12 @@ void GeometryRenderer3D::EnsurePipelineObjects(VulkanContext& context_,
     if (pipeline_color_format != color_format_ || pipeline_depth_format != depth_format_) {
         pipeline_color_format = color_format_;
         pipeline_depth_format = depth_format_;
-        for (auto& mode_pipelines : pipeline_ids) {
-            for (auto& topology_pipelines : mode_pipelines) {
-                for (auto& pipeline_id : topology_pipelines) {
-                    pipeline_id = {};
+        for (auto& blend_pipelines : pipeline_ids) {
+            for (auto& mode_pipelines : blend_pipelines) {
+                for (auto& topology_pipelines : mode_pipelines) {
+                    for (auto& pipeline_id : topology_pipelines) {
+                        pipeline_id = {};
+                    }
                 }
             }
         }
@@ -1718,23 +1753,28 @@ render::GraphicsPipelineId GeometryRenderer3D::EnsurePipelineForMode(VulkanConte
                                                                      render::PipelineHost& pipeline_host_,
                                                                      VkFormat color_format_,
                                                                      VkFormat depth_format_,
+                                                                     BlendMode blend_mode_,
                                                                      PipelineMode mode_,
                                                                      TopologyMode topology_mode_,
                                                                      CullMode cull_mode_) {
+    const std::size_t blend_index = BlendModeIndex(blend_mode_);
     const std::size_t mode_index = PipelineModeIndex(mode_);
     const std::size_t topology_index = TopologyModeIndex(topology_mode_);
     const std::size_t cull_index = CullModeIndex(cull_mode_);
-    if (mode_index >= pipeline_ids.size()) {
+    if (blend_index >= pipeline_ids.size()) {
+        throw std::out_of_range("GeometryRenderer3D blend mode out of range");
+    }
+    if (mode_index >= pipeline_ids[blend_index].size()) {
         throw std::out_of_range("GeometryRenderer3D pipeline mode out of range");
     }
-    if (topology_index >= pipeline_ids[mode_index].size()) {
+    if (topology_index >= pipeline_ids[blend_index][mode_index].size()) {
         throw std::out_of_range("GeometryRenderer3D topology mode out of range");
     }
-    if (cull_index >= pipeline_ids[mode_index][topology_index].size()) {
+    if (cull_index >= pipeline_ids[blend_index][mode_index][topology_index].size()) {
         throw std::out_of_range("GeometryRenderer3D cull mode out of range");
     }
-    if (pipeline_ids[mode_index][topology_index][cull_index].IsValid()) {
-        return pipeline_ids[mode_index][topology_index][cull_index];
+    if (pipeline_ids[blend_index][mode_index][topology_index][cull_index].IsValid()) {
+        return pipeline_ids[blend_index][mode_index][topology_index][cull_index];
     }
 
     const bool depth_test = mode_ == PipelineMode::depth_read || mode_ == PipelineMode::depth_read_write;
@@ -1814,22 +1854,35 @@ render::GraphicsPipelineId GeometryRenderer3D::EnsurePipelineForMode(VulkanConte
     desc.depth_stencil.depth_write_enable = depth_write;
     desc.depth_stencil.depth_compare_op = VK_COMPARE_OP_LESS_OR_EQUAL;
 
-    VkPipelineColorBlendAttachmentState blend{};
-    blend.blendEnable = VK_TRUE;
-    blend.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
-    blend.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-    blend.colorBlendOp = VK_BLEND_OP_ADD;
-    blend.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
-    blend.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-    blend.alphaBlendOp = VK_BLEND_OP_ADD;
-    blend.colorWriteMask = VK_COLOR_COMPONENT_R_BIT |
-                           VK_COLOR_COMPONENT_G_BIT |
-                           VK_COLOR_COMPONENT_B_BIT |
-                           VK_COLOR_COMPONENT_A_BIT;
+    render::ColorBlendPreset blend_preset = render::ColorBlendPreset::disabled;
+    switch (blend_mode_) {
+    case BlendMode::opaque:
+        blend_preset = render::ColorBlendPreset::disabled;
+        break;
+    case BlendMode::alpha:
+        blend_preset = render::ColorBlendPreset::alpha;
+        break;
+    case BlendMode::additive:
+        blend_preset = render::ColorBlendPreset::additive;
+        break;
+    case BlendMode::multiply:
+        blend_preset = render::ColorBlendPreset::multiply;
+        break;
+    case BlendMode::premultiplied_alpha:
+        blend_preset = render::ColorBlendPreset::premultiplied_alpha;
+        break;
+    case BlendMode::screen:
+        blend_preset = render::ColorBlendPreset::screen;
+        break;
+    default:
+        break;
+    }
+    const VkPipelineColorBlendAttachmentState blend =
+        render::BuildColorBlendAttachment(blend_preset);
     desc.color_blend.attachments.push_back(blend);
 
     const render::GraphicsPipelineId pipeline_id = pipeline_host_.RegisterGraphicsPipeline(context_, desc);
-    pipeline_ids[mode_index][topology_index][cull_index] = pipeline_id;
+    pipeline_ids[blend_index][mode_index][topology_index][cull_index] = pipeline_id;
     return pipeline_id;
 }
 
@@ -1837,50 +1890,52 @@ void GeometryRenderer3D::PrewarmCommonPipelines(VulkanContext& context_,
                                                 render::PipelineHost& pipeline_host_,
                                                 VkFormat color_format_,
                                                 VkFormat depth_format_) {
-    auto warm_variant = [&](PipelineMode mode_, TopologyMode topology_, CullMode cull_) {
+    auto warm_variant = [&](BlendMode blend_mode_, PipelineMode mode_, TopologyMode topology_, CullMode cull_) {
         if (mode_ != PipelineMode::no_depth && depth_format_ == VK_FORMAT_UNDEFINED) {
             return;
         }
+        const std::size_t blend_index = BlendModeIndex(blend_mode_);
         const std::size_t mode_index = PipelineModeIndex(mode_);
         const std::size_t topology_index = TopologyModeIndex(topology_);
         const std::size_t cull_index = CullModeIndex(cull_);
-        if (pipeline_ids[mode_index][topology_index][cull_index].IsValid()) {
+        if (pipeline_ids[blend_index][mode_index][topology_index][cull_index].IsValid()) {
             return;
         }
         (void)EnsurePipelineForMode(context_,
                                     pipeline_host_,
                                     color_format_,
                                     depth_format_,
+                                    blend_mode_,
                                     mode_,
                                     topology_,
                                     cull_);
         ++stats.prewarmed_pipeline_count;
     };
 
-    warm_variant(PipelineMode::no_depth, TopologyMode::triangles, CullMode::back);
+    warm_variant(BlendMode::opaque, PipelineMode::no_depth, TopologyMode::triangles, CullMode::back);
     if (create_info_cache.enable_depth) {
-        warm_variant(PipelineMode::depth_read_write, TopologyMode::triangles, CullMode::back);
+        warm_variant(BlendMode::opaque, PipelineMode::depth_read_write, TopologyMode::triangles, CullMode::back);
         if (create_info_cache.prewarm_depth_read_variant) {
-            warm_variant(PipelineMode::depth_read, TopologyMode::triangles, CullMode::back);
+            warm_variant(BlendMode::opaque, PipelineMode::depth_read, TopologyMode::triangles, CullMode::back);
         }
     }
 
     if (create_info_cache.prewarm_double_sided_variant) {
-        warm_variant(PipelineMode::no_depth, TopologyMode::triangles, CullMode::none);
+        warm_variant(BlendMode::opaque, PipelineMode::no_depth, TopologyMode::triangles, CullMode::none);
         if (create_info_cache.enable_depth) {
-            warm_variant(PipelineMode::depth_read_write, TopologyMode::triangles, CullMode::none);
+            warm_variant(BlendMode::opaque, PipelineMode::depth_read_write, TopologyMode::triangles, CullMode::none);
             if (create_info_cache.prewarm_depth_read_variant) {
-                warm_variant(PipelineMode::depth_read, TopologyMode::triangles, CullMode::none);
+                warm_variant(BlendMode::opaque, PipelineMode::depth_read, TopologyMode::triangles, CullMode::none);
             }
         }
     }
 
     if (create_info_cache.prewarm_line_and_point_variants) {
-        warm_variant(PipelineMode::no_depth, TopologyMode::lines, CullMode::none);
-        warm_variant(PipelineMode::no_depth, TopologyMode::points, CullMode::none);
+        warm_variant(BlendMode::opaque, PipelineMode::no_depth, TopologyMode::lines, CullMode::none);
+        warm_variant(BlendMode::opaque, PipelineMode::no_depth, TopologyMode::points, CullMode::none);
         if (create_info_cache.enable_depth) {
-            warm_variant(PipelineMode::depth_read, TopologyMode::lines, CullMode::none);
-            warm_variant(PipelineMode::depth_read, TopologyMode::points, CullMode::none);
+            warm_variant(BlendMode::opaque, PipelineMode::depth_read, TopologyMode::lines, CullMode::none);
+            warm_variant(BlendMode::opaque, PipelineMode::depth_read, TopologyMode::points, CullMode::none);
         }
     }
 }
@@ -1902,17 +1957,21 @@ void GeometryRenderer3D::CompileRequiredPipelinesForCurrentFrame(VulkanContext& 
         if (mesh == nullptr) {
             continue;
         }
+        const BlendMode blend_mode = ResolveBlendMode(batch);
         const PipelineMode mode = ResolvePipelineMode(batch, use_depth);
         const TopologyMode topology = ResolveTopologyMode(mesh->topology, batch);
         const CullMode cull = ResolveCullMode(batch);
+        const std::size_t blend_index = BlendModeIndex(blend_mode);
         const std::size_t mode_index = PipelineModeIndex(mode);
         const std::size_t topology_index = TopologyModeIndex(topology);
         const std::size_t cull_index = CullModeIndex(cull);
-        const bool already_compiled = pipeline_ids[mode_index][topology_index][cull_index].IsValid();
+        const bool already_compiled =
+            pipeline_ids[blend_index][mode_index][topology_index][cull_index].IsValid();
         (void)EnsurePipelineForMode(context_,
                                     pipeline_host_,
                                     color_format_,
                                     depth_format_,
+                                    blend_mode,
                                     mode,
                                     topology,
                                     cull);

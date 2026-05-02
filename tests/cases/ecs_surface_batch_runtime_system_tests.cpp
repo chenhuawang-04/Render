@@ -1,4 +1,6 @@
 #include "support/test_framework.hpp"
+#include "vr/ecs/system/appearance_runtime_system.hpp"
+#include "vr/ecs/system/appearance_system.hpp"
 #include "vr/ecs/system/surface_batch_system.hpp"
 #include "vr/ecs/system/surface_runtime_system.hpp"
 #include "vr/ecs/system/surface_system.hpp"
@@ -254,6 +256,54 @@ VR_TEST_CASE(EcsSurfaceRuntimeSystem_dim2_build_and_transform_update, "unit;core
     VR_CHECK(!stats2.transform_only_update);
     VR_CHECK(stats2.transform_rewritten_instance_count == 0U);
     VR_CHECK(stats2.cache_epoch == epoch0);
+}
+
+VR_TEST_CASE(EcsSurfaceRuntimeSystem_dim2_linked_appearance_overrides_effective_blend,
+             "unit;core;ecs;surface;runtime") {
+    using Appearance2D = vr::ecs::Appearance<vr::ecs::Dim2>;
+    using AppearanceSystem2D = vr::ecs::AppearanceSystem<vr::ecs::Dim2>;
+    using AppearanceRuntimeSystem2D = vr::ecs::AppearanceRuntimeSystem<vr::ecs::Dim2>;
+    using Surface2D = vr::ecs::Surface<vr::ecs::Dim2>;
+    using SurfaceSystem2D = vr::ecs::SurfaceSystem<vr::ecs::Dim2>;
+    using RuntimeSystem2D = vr::ecs::SurfaceRuntimeSystem<vr::ecs::Dim2>;
+    using Transform2D = vr::ecs::Transform<vr::ecs::Dim2>;
+    using TransformSystem2D = vr::ecs::TransformSystem<vr::ecs::Dim2>;
+
+    Appearance2D appearance{};
+    AppearanceSystem2D::Initialize(appearance);
+    AppearanceSystem2D::SetTextureBaseId(appearance, 21U);
+    AppearanceSystem2D::SetBindingLayoutId(appearance, 2U);
+    AppearanceSystem2D::SetSamplerStateId(appearance, 7U);
+    AppearanceSystem2D::SetBlendMode(appearance, vr::ecs::AppearanceBlendMode::premultiplied);
+    AppearanceSystem2D::SetAlphaMode(appearance, vr::ecs::AppearanceAlphaMode::blend);
+
+    vr::ecs::AppearanceRuntimeScratch<vr::ecs::Dim2> appearance_scratch{};
+    (void)AppearanceRuntimeSystem2D::Build(&appearance, 1U, appearance_scratch);
+
+    Surface2D surface{};
+    Transform2D transform{};
+    SurfaceSystem2D::Initialize(surface);
+    TransformSystem2D::Initialize(transform);
+    SurfaceSystem2D::SetImageId(surface, 41U, 3U);
+    SurfaceSystem2D::SetMaterialId(surface, 7U);
+    SurfaceSystem2D::SetBlendMode(surface, vr::ecs::Surface2DBlendMode::additive);
+    SurfaceSystem2D::SetPremultipliedAlpha(surface, false);
+    surface.runtime.route.appearance_handle = appearance.runtime.gpu_record_handle;
+    surface.runtime.route.appearance_pipeline_bucket =
+        static_cast<std::uint32_t>(appearance.runtime.pipeline_key);
+
+    TransformSystem2D::UpdateHierarchy(&transform, 1U);
+
+    vr::ecs::Surface2DRuntimeScratch scratch{};
+    const auto stats = RuntimeSystem2D::Build(&surface, &transform, 1U, scratch, {});
+
+    VR_REQUIRE(stats.emitted_instance_count == 1U);
+    VR_REQUIRE(!scratch.instances.empty());
+    const std::uint32_t params = scratch.instances[0U].params;
+    VR_CHECK(vr::ecs::DecodeRuntimeBlendPresetBits(params, vr::ecs::surface2d_runtime_blend_shift) ==
+             vr::ecs::RuntimeBlendPreset::premultiplied_alpha);
+    VR_CHECK((params & 0x10U) != 0U);
+    VR_CHECK((params & 0x3U) == 0U);
 }
 
 VR_TEST_CASE(EcsSurfaceRuntimeSystem_dim3_transform_dirty_hint_path, "unit;core;ecs;surface;runtime") {

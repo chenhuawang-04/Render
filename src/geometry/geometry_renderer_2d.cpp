@@ -2,6 +2,8 @@
 
 #include "vr/geometry/generated/geometry_2d_frag_spv.hpp"
 #include "vr/geometry/generated/geometry_2d_vert_spv.hpp"
+#include "vr/ecs/system/transparency_render_policy.hpp"
+#include "vr/render/color_blend_state.hpp"
 #include "vr/render/render_loop_host.hpp"
 #include "vr/render/render_target_pass.hpp"
 #include "vr/render/runtime_prepare_context.hpp"
@@ -15,6 +17,24 @@
 
 namespace vr::geometry {
 
+std::size_t GeometryRenderer2D::BlendModeIndex(BlendMode mode_) noexcept {
+    return static_cast<std::size_t>(mode_);
+}
+
+GeometryRenderer2D::BlendMode GeometryRenderer2D::ResolveBlendModeFromBatchParams(
+    std::uint32_t params_) noexcept {
+    switch (ecs::DecodeRuntimeBlendPresetBits(params_, ecs::geometry2d_runtime_blend_shift)) {
+    case ecs::RuntimeBlendPreset::opaque: return BlendMode::opaque;
+    case ecs::RuntimeBlendPreset::alpha: return BlendMode::alpha;
+    case ecs::RuntimeBlendPreset::additive: return BlendMode::additive;
+    case ecs::RuntimeBlendPreset::multiply: return BlendMode::multiply;
+    case ecs::RuntimeBlendPreset::premultiplied_alpha: return BlendMode::premultiplied_alpha;
+    case ecs::RuntimeBlendPreset::screen: return BlendMode::screen;
+    default: break;
+    }
+    return BlendMode::alpha;
+}
+
 void GeometryRenderer2D::Initialize(const GeometryRenderer2DCreateInfo& create_info_) {
     create_info_cache = create_info_;
     if (create_info_cache.reserve_component_count > 0U ||
@@ -27,7 +47,9 @@ void GeometryRenderer2D::Initialize(const GeometryRenderer2DCreateInfo& create_i
     pipeline_layout_id = {};
     shader_vertex_id = {};
     shader_fragment_id = {};
-    pipeline_id = {};
+    for (auto& pipeline_id : pipeline_ids) {
+        pipeline_id = {};
+    }
     pipeline_color_format = VK_FORMAT_UNDEFINED;
     image_initialized.clear();
     primitive_range = {};
@@ -61,7 +83,9 @@ void GeometryRenderer2D::Shutdown(VulkanContext& context_) {
     pipeline_layout_id = {};
     shader_vertex_id = {};
     shader_fragment_id = {};
-    pipeline_id = {};
+    for (auto& pipeline_id : pipeline_ids) {
+        pipeline_id = {};
+    }
     pipeline_color_format = VK_FORMAT_UNDEFINED;
 
     image_initialized.clear();
@@ -252,11 +276,8 @@ void GeometryRenderer2D::Record(const render::FrameRecordContext& record_context
     scissor.extent = color_pass.target.extent;
     vkCmdSetScissor(record_context_.command_buffer, 0U, 1U, &scissor);
 
-    if (pipeline_id.IsValid()) {
-        vkCmdBindPipeline(record_context_.command_buffer,
-                          VK_PIPELINE_BIND_POINT_GRAPHICS,
-                          pipeline_host->GetGraphicsPipeline(pipeline_id));
-
+    if (primitive_range.buffer != VK_NULL_HANDLE &&
+        !runtime_scratch.draw_batches.empty()) {
         PushConstants push_constants{};
         push_constants.viewport_width = static_cast<float>(color_pass.target.extent.width);
         push_constants.viewport_height = static_cast<float>(color_pass.target.extent.height);
@@ -280,8 +301,7 @@ void GeometryRenderer2D::Record(const render::FrameRecordContext& record_context
                            &push_constants);
     }
 
-    if (pipeline_id.IsValid() &&
-        primitive_range.buffer != VK_NULL_HANDLE &&
+    if (primitive_range.buffer != VK_NULL_HANDLE &&
         !runtime_scratch.draw_batches.empty()) {
         vkCmdBindVertexBuffers(record_context_.command_buffer,
                                0U,
@@ -289,10 +309,28 @@ void GeometryRenderer2D::Record(const render::FrameRecordContext& record_context
                                &primitive_range.buffer,
                                &primitive_range.offset);
 
+        render::GraphicsPipelineId current_pipeline_id{};
         for (const ecs::Geometry2DDrawBatch& batch : runtime_scratch.draw_batches) {
             if (batch.primitive_count == 0U) {
                 ++stats.skipped_batch_count;
                 continue;
+            }
+
+            const BlendMode blend_mode = ResolveBlendModeFromBatchParams(batch.params);
+            const render::GraphicsPipelineId pipeline_id = EnsurePipelineForBlendMode(
+                *context,
+                *pipeline_host,
+                color_pass.target.format,
+                blend_mode);
+            if (!pipeline_id.IsValid()) {
+                ++stats.skipped_batch_count;
+                continue;
+            }
+            if (!current_pipeline_id.IsValid() || current_pipeline_id.value != pipeline_id.value) {
+                vkCmdBindPipeline(record_context_.command_buffer,
+                                  VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                  pipeline_host->GetGraphicsPipeline(pipeline_id));
+                current_pipeline_id = pipeline_id;
             }
 
             vkCmdDraw(record_context_.command_buffer,
@@ -375,10 +413,20 @@ void GeometryRenderer2D::EnsurePipelineObjects(VulkanContext& context_,
 
     if (pipeline_color_format != color_format_) {
         pipeline_color_format = color_format_;
-        pipeline_id = {};
+        for (auto& pipeline_id : pipeline_ids) {
+            pipeline_id = {};
+        }
     }
-    if (pipeline_id.IsValid()) {
-        return;
+}
+
+render::GraphicsPipelineId GeometryRenderer2D::EnsurePipelineForBlendMode(
+    VulkanContext& context_,
+    render::PipelineHost& pipeline_host_,
+    VkFormat color_format_,
+    BlendMode blend_mode_) {
+    const std::size_t pipeline_index = BlendModeIndex(blend_mode_);
+    if (pipeline_ids[pipeline_index].IsValid()) {
+        return pipeline_ids[pipeline_index];
     }
 
     render::GraphicsPipelineDesc desc{};
@@ -432,21 +480,36 @@ void GeometryRenderer2D::EnsurePipelineObjects(VulkanContext& context_,
     desc.depth_stencil.depth_test_enable = false;
     desc.depth_stencil.depth_write_enable = false;
 
-    VkPipelineColorBlendAttachmentState blend{};
-    blend.blendEnable = VK_TRUE;
-    blend.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
-    blend.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-    blend.colorBlendOp = VK_BLEND_OP_ADD;
-    blend.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
-    blend.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-    blend.alphaBlendOp = VK_BLEND_OP_ADD;
-    blend.colorWriteMask = VK_COLOR_COMPONENT_R_BIT |
-                           VK_COLOR_COMPONENT_G_BIT |
-                           VK_COLOR_COMPONENT_B_BIT |
-                           VK_COLOR_COMPONENT_A_BIT;
+    render::ColorBlendPreset blend_preset = render::ColorBlendPreset::alpha;
+    switch (blend_mode_) {
+    case BlendMode::opaque:
+        blend_preset = render::ColorBlendPreset::disabled;
+        break;
+    case BlendMode::alpha:
+        blend_preset = render::ColorBlendPreset::alpha;
+        break;
+    case BlendMode::additive:
+        blend_preset = render::ColorBlendPreset::additive;
+        break;
+    case BlendMode::multiply:
+        blend_preset = render::ColorBlendPreset::multiply;
+        break;
+    case BlendMode::premultiplied_alpha:
+        blend_preset = render::ColorBlendPreset::premultiplied_alpha;
+        break;
+    case BlendMode::screen:
+        blend_preset = render::ColorBlendPreset::screen;
+        break;
+    default:
+        blend_preset = render::ColorBlendPreset::alpha;
+        break;
+    }
+    const VkPipelineColorBlendAttachmentState blend =
+        render::BuildColorBlendAttachment(blend_preset);
     desc.color_blend.attachments.push_back(blend);
 
-    pipeline_id = pipeline_host_.RegisterGraphicsPipeline(context_, desc);
+    pipeline_ids[pipeline_index] = pipeline_host_.RegisterGraphicsPipeline(context_, desc);
+    return pipeline_ids[pipeline_index];
 }
 
 } // namespace vr::geometry

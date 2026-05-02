@@ -276,6 +276,16 @@ private:
         count = 2U
     };
 
+    enum class BlendMode : std::uint8_t {
+        opaque = 0U,
+        alpha = 1U,
+        additive = 2U,
+        multiply = 3U,
+        premultiplied_alpha = 4U,
+        screen = 5U,
+        count = 6U
+    };
+
     struct RetiredDepthImage final {
         resource::ImageResource resource{};
         std::uint64_t retire_value = 0U;
@@ -305,6 +315,7 @@ private:
     [[nodiscard]] static std::size_t PipelineModeIndex(PipelineMode mode_) noexcept;
     [[nodiscard]] static std::size_t TopologyModeIndex(TopologyMode mode_) noexcept;
     [[nodiscard]] static std::size_t CullModeIndex(CullMode mode_) noexcept;
+    [[nodiscard]] static std::size_t BlendModeIndex(BlendMode mode_) noexcept;
     [[nodiscard]] static std::size_t LowerBoundMaterialSetIndex(
         const GeometryRenderer3DMcVector<MaterialSetEntry>& entries_,
         std::uint32_t material_id_) noexcept;
@@ -316,6 +327,7 @@ private:
     [[nodiscard]] static TopologyMode ResolveTopologyMode(VkPrimitiveTopology mesh_topology_,
                                                           const ecs::Geometry3DDrawBatch& batch_) noexcept;
     [[nodiscard]] static CullMode ResolveCullMode(const ecs::Geometry3DDrawBatch& batch_) noexcept;
+    [[nodiscard]] static BlendMode ResolveBlendMode(const ecs::Geometry3DDrawBatch& batch_) noexcept;
 
     void EnsurePipelineObjects(VulkanContext& context_,
                                render::PipelineHost& pipeline_host_,
@@ -325,6 +337,7 @@ private:
                                                                    render::PipelineHost& pipeline_host_,
                                                                    VkFormat color_format_,
                                                                    VkFormat depth_format_,
+                                                                   BlendMode blend_mode_,
                                                                    PipelineMode mode_,
                                                                    TopologyMode topology_mode_,
                                                                    CullMode cull_mode_);
@@ -406,10 +419,11 @@ private:
     render::PipelineLayoutId pipeline_layout_id{};
     render::ShaderModuleId shader_vertex_id{};
     render::ShaderModuleId shader_fragment_id{};
-    std::array<std::array<std::array<render::GraphicsPipelineId,
-                                     static_cast<std::size_t>(CullMode::count)>,
-                          static_cast<std::size_t>(TopologyMode::count)>,
-               static_cast<std::size_t>(PipelineMode::count)> pipeline_ids{};
+    std::array<std::array<std::array<std::array<render::GraphicsPipelineId,
+                                                static_cast<std::size_t>(CullMode::count)>,
+                                     static_cast<std::size_t>(TopologyMode::count)>,
+                          static_cast<std::size_t>(PipelineMode::count)>,
+               static_cast<std::size_t>(BlendMode::count)> pipeline_ids{};
     VkFormat pipeline_color_format = VK_FORMAT_UNDEFINED;
     VkFormat pipeline_depth_format = VK_FORMAT_UNDEFINED;
 

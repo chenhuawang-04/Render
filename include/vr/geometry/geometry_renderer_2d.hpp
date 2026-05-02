@@ -7,6 +7,8 @@
 #include "vr/render/pipeline_host.hpp"
 #include "vr/render/render_target_pass.hpp"
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
 
 namespace vr {
@@ -91,6 +93,16 @@ public:
     [[nodiscard]] const GeometryRenderer2DStats& Stats() const noexcept;
 
 private:
+    enum class BlendMode : std::uint8_t {
+        opaque = 0U,
+        alpha = 1U,
+        additive = 2U,
+        multiply = 3U,
+        premultiplied_alpha = 4U,
+        screen = 5U,
+        count = 6U
+    };
+
     struct PushConstants final {
         float viewport_width;
         float viewport_height;
@@ -104,9 +116,16 @@ private:
 
     static_assert(sizeof(PushConstants) == 32U);
 
+    [[nodiscard]] static std::size_t BlendModeIndex(BlendMode mode_) noexcept;
+    [[nodiscard]] static BlendMode ResolveBlendModeFromBatchParams(std::uint32_t params_) noexcept;
     void EnsurePipelineObjects(VulkanContext& context_,
                                render::PipelineHost& pipeline_host_,
                                VkFormat color_format_);
+    [[nodiscard]] render::GraphicsPipelineId EnsurePipelineForBlendMode(
+        VulkanContext& context_,
+        render::PipelineHost& pipeline_host_,
+        VkFormat color_format_,
+        BlendMode blend_mode_);
 private:
     GeometryRenderer2DCreateInfo create_info_cache{};
     GeometryRenderer2DStats stats{};
@@ -129,7 +148,7 @@ private:
     render::PipelineLayoutId pipeline_layout_id{};
     render::ShaderModuleId shader_vertex_id{};
     render::ShaderModuleId shader_fragment_id{};
-    render::GraphicsPipelineId pipeline_id{};
+    std::array<render::GraphicsPipelineId, static_cast<std::size_t>(BlendMode::count)> pipeline_ids{};
     VkFormat pipeline_color_format = VK_FORMAT_UNDEFINED;
 
     GeometryRenderer2DMcVector<std::uint8_t> image_initialized{};

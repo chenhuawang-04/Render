@@ -107,4 +107,49 @@ VR_TEST_CASE(EcsAppearanceRuntimeSystem_dim3_incremental_dirty_update, "unit;cor
     VR_CHECK(components[1U].runtime.pipeline_key == pipeline_key_before);
 }
 
+VR_TEST_CASE(EcsAppearanceRuntimeSystem_auto_sort_policy_uses_transparency_defaults,
+             "unit;core;ecs;appearance;runtime") {
+    using Appearance2D = vr::ecs::Appearance<vr::ecs::Dim2>;
+    using AppearanceSystem2D = vr::ecs::AppearanceSystem<vr::ecs::Dim2>;
+    using RuntimeSystem2D = vr::ecs::AppearanceRuntimeSystem<vr::ecs::Dim2>;
+
+    Appearance2D component{};
+    AppearanceSystem2D::Initialize(component);
+    AppearanceSystem2D::SetTextureBaseId(component, 9U);
+    AppearanceSystem2D::SetBindingLayoutId(component, 1U);
+    AppearanceSystem2D::SetSamplerStateId(component, 2U);
+
+    vr::ecs::AppearanceRuntimeScratch<vr::ecs::Dim2> scratch{};
+    const vr::ecs::AppearanceRuntimeBuildStats stats =
+        RuntimeSystem2D::Build(&component, 1U, scratch);
+
+    VR_CHECK(stats.updated_key_count == 1U);
+    VR_CHECK(RuntimeSystem2D::ExtractSortQueue(component.runtime.sort_key) == 2U);
+    VR_CHECK(RuntimeSystem2D::ExtractSortPipelineBucket(component.runtime.sort_key) ==
+             vr::ecs::FoldPipelineSortBucket(component.runtime.pipeline_key));
+}
+
+VR_TEST_CASE(EcsAppearanceRuntimeSystem_alpha_mode_blend_falls_back_to_alpha_runtime_blend,
+             "unit;core;ecs;appearance;runtime") {
+    using Appearance2D = vr::ecs::Appearance<vr::ecs::Dim2>;
+    using AppearanceSystem2D = vr::ecs::AppearanceSystem<vr::ecs::Dim2>;
+    using RuntimeSystem2D = vr::ecs::AppearanceRuntimeSystem<vr::ecs::Dim2>;
+
+    Appearance2D component{};
+    AppearanceSystem2D::Initialize(component);
+    AppearanceSystem2D::SetTextureBaseId(component, 11U);
+    AppearanceSystem2D::SetBindingLayoutId(component, 3U);
+    AppearanceSystem2D::SetSamplerStateId(component, 5U);
+    AppearanceSystem2D::SetBlendMode(component, vr::ecs::AppearanceBlendMode::opaque);
+    AppearanceSystem2D::SetAlphaMode(component, vr::ecs::AppearanceAlphaMode::blend);
+
+    vr::ecs::AppearanceRuntimeScratch<vr::ecs::Dim2> scratch{};
+    const auto stats = RuntimeSystem2D::Build(&component, 1U, scratch);
+
+    VR_CHECK(stats.updated_key_count == 1U);
+    VR_CHECK(vr::ecs::ResolveRuntimeBlendPreset(
+                 static_cast<std::uint32_t>(component.runtime.pipeline_key)) ==
+             vr::ecs::RuntimeBlendPreset::alpha);
+}
+
 } // namespace

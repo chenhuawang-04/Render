@@ -1,4 +1,6 @@
 #include "support/test_framework.hpp"
+#include "vr/ecs/system/appearance_runtime_system.hpp"
+#include "vr/ecs/system/appearance_system.hpp"
 #include "vr/ecs/system/geometry_mesh_system.hpp"
 #include "vr/ecs/system/geometry_path_system.hpp"
 #include "vr/ecs/system/geometry_runtime_system.hpp"
@@ -146,6 +148,62 @@ VR_TEST_CASE(EcsGeometryRuntimeSystem_dim2_respects_primitive_limit, "unit;core;
     const auto stats = RuntimeSystem2D::Build(&component, 1U, scratch, config);
     VR_CHECK(stats.emitted_primitive_count == 5U);
     VR_CHECK(stats.truncated_component_count == 1U);
+}
+
+VR_TEST_CASE(EcsGeometryRuntimeSystem_dim2_linked_appearance_encodes_effective_blend,
+             "unit;core;ecs;geometry;runtime") {
+    using Appearance2D = vr::ecs::Appearance<vr::ecs::Dim2>;
+    using AppearanceSystem2D = vr::ecs::AppearanceSystem<vr::ecs::Dim2>;
+    using AppearanceRuntimeSystem2D = vr::ecs::AppearanceRuntimeSystem<vr::ecs::Dim2>;
+    using Geometry2D = vr::ecs::Geometry<vr::ecs::Dim2>;
+    using PathSystem = vr::ecs::GeometryPathSystem;
+    using GeometrySystem2D = vr::ecs::GeometrySystem<vr::ecs::Dim2>;
+    using RuntimeSystem2D = vr::ecs::GeometryRuntimeSystem<vr::ecs::Dim2>;
+
+    Appearance2D appearance{};
+    AppearanceSystem2D::Initialize(appearance);
+    AppearanceSystem2D::SetTextureBaseId(appearance, 9U);
+    AppearanceSystem2D::SetBindingLayoutId(appearance, 1U);
+    AppearanceSystem2D::SetSamplerStateId(appearance, 2U);
+    AppearanceSystem2D::SetBlendMode(appearance, vr::ecs::AppearanceBlendMode::opaque);
+    AppearanceSystem2D::SetAlphaMode(appearance, vr::ecs::AppearanceAlphaMode::opaque);
+
+    vr::ecs::AppearanceRuntimeScratch<vr::ecs::Dim2> appearance_scratch{};
+    (void)AppearanceRuntimeSystem2D::Build(&appearance, 1U, appearance_scratch);
+
+    std::array<Geometry2D, 2U> components{};
+    for (auto& component : components) {
+        PathSystem::Initialize(component);
+        VR_REQUIRE(PathSystem::AppendMoveTo(component, 0.0F, 0.0F));
+        VR_REQUIRE(PathSystem::AppendLineTo(component, 1.0F, 0.0F));
+        GeometrySystem2D::SetRuntimeRoute(component, 2U, 7U, 1U);
+    }
+
+    components[1U].runtime.route.appearance_handle = appearance.runtime.gpu_record_handle;
+    components[1U].runtime.route.appearance_pipeline_bucket =
+        static_cast<std::uint32_t>(appearance.runtime.pipeline_key);
+
+    vr::ecs::Geometry2DRuntimeScratch scratch{};
+    const auto stats = RuntimeSystem2D::Build(components.data(),
+                                              static_cast<std::uint32_t>(components.size()),
+                                              scratch,
+                                              {});
+
+    VR_REQUIRE(stats.emitted_batch_count == 2U);
+    VR_REQUIRE(scratch.draw_batches.size() == 2U);
+    std::uint32_t alpha_batch_count = 0U;
+    std::uint32_t opaque_batch_count = 0U;
+    for (const auto& batch : scratch.draw_batches) {
+        const auto preset = vr::ecs::DecodeRuntimeBlendPresetBits(batch.params,
+                                                                  vr::ecs::geometry2d_runtime_blend_shift);
+        if (preset == vr::ecs::RuntimeBlendPreset::alpha) {
+            ++alpha_batch_count;
+        } else if (preset == vr::ecs::RuntimeBlendPreset::opaque) {
+            ++opaque_batch_count;
+        }
+    }
+    VR_CHECK(alpha_batch_count == 1U);
+    VR_CHECK(opaque_batch_count == 1U);
 }
 
 VR_TEST_CASE(EcsGeometryRuntimeSystem_dim3_builds_instances_and_batches, "unit;core;ecs;geometry;runtime") {

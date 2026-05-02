@@ -5,6 +5,7 @@
 #include "vr/ecs/system/geometry_batch_system.hpp"
 #include "vr/ecs/system/geometry_path_system.hpp"
 #include "vr/ecs/system/spatial_math.hpp"
+#include "vr/ecs/system/transparency_render_policy.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -442,12 +443,19 @@ private:
     }
 
     [[nodiscard]] static std::uint32_t PackStyleParams(const GeometryType& component_) noexcept {
+        RuntimeBlendPreset blend_preset = RuntimeBlendPreset::alpha;
+        if (component_.runtime.route.appearance_handle.index != invalid_appearance_handle.index &&
+            component_.runtime.route.appearance_handle.generation != 0U) {
+            blend_preset = ResolveRuntimeBlendPreset(component_.runtime.route.appearance_pipeline_bucket);
+        }
+
         std::uint32_t params = 0U;
         params |= (component_.style.antialiasing != 0U) ? 0x1U : 0U;
         params |= (static_cast<std::uint32_t>(component_.style.topology) & 0x3U) << 1U;
         params |= (static_cast<std::uint32_t>(component_.style.fill_rule) & 0x1U) << 3U;
         params |= (static_cast<std::uint32_t>(component_.style.line_join) & 0x3U) << 4U;
         params |= (static_cast<std::uint32_t>(component_.style.line_cap) & 0x3U) << 6U;
+        params |= EncodeRuntimeBlendPresetBits(blend_preset, geometry2d_runtime_blend_shift);
         return params;
     }
 
@@ -526,7 +534,8 @@ private:
 
             HashCombine(hash, component.runtime.route.sort_key);
             HashCombine(hash, static_cast<std::uint64_t>(component.runtime.route.geometry_id));
-            HashCombine(hash, static_cast<std::uint64_t>(component.runtime.route.material_id));
+            HashCombine(hash,
+                        static_cast<std::uint64_t>(ResolveEffectiveMaterialId(component.runtime.route)));
             HashCombine(hash, static_cast<std::uint64_t>(component.runtime.route.user_data));
             HashCombine(hash, static_cast<std::uint64_t>(component.path.revision));
             HashCombine(hash, static_cast<std::uint64_t>(component.runtime.path_data_hash));
@@ -535,11 +544,7 @@ private:
             HashCombine(hash, static_cast<std::uint64_t>(FloatBits(component.style.stroke_width_px)));
             HashCombine(hash, static_cast<std::uint64_t>(FloatBits(component.style.miter_limit)));
             HashCombine(hash, static_cast<std::uint64_t>(component.style.layer));
-            HashCombine(hash, static_cast<std::uint64_t>(component.style.antialiasing));
-            HashCombine(hash, static_cast<std::uint64_t>(component.style.topology));
-            HashCombine(hash, static_cast<std::uint64_t>(component.style.fill_rule));
-            HashCombine(hash, static_cast<std::uint64_t>(component.style.line_join));
-            HashCombine(hash, static_cast<std::uint64_t>(component.style.line_cap));
+            HashCombine(hash, static_cast<std::uint64_t>(PackStyleParams(component)));
         }
         return hash;
     }
@@ -758,7 +763,7 @@ private:
             Geometry2DDrawBatch& last = scratch_.draw_batches.back();
             if (last.sort_key == sort_key_ &&
                 last.geometry_id == component_.runtime.route.geometry_id &&
-                last.material_id == component_.runtime.route.material_id &&
+                last.material_id == ResolveEffectiveMaterialId(component_.runtime.route) &&
                 last.params == params &&
                 last.primitive_begin + last.primitive_count == primitive_begin_) {
                 last.primitive_count += primitive_count_;
@@ -771,7 +776,7 @@ private:
         batch.primitive_begin = primitive_begin_;
         batch.primitive_count = primitive_count_;
         batch.geometry_id = component_.runtime.route.geometry_id;
-        batch.material_id = component_.runtime.route.material_id;
+        batch.material_id = ResolveEffectiveMaterialId(component_.runtime.route);
         batch.first_component_index = component_index_;
         batch.params = params;
         scratch_.draw_batches.push_back(batch);
@@ -1007,7 +1012,7 @@ public:
             instance.albedo_rgba8 = PackRgba8(component.style.albedo_color);
             instance.params = PackParams(component);
             instance.geometry_id = component.runtime.route.geometry_id;
-            instance.material_id = component.runtime.route.material_id;
+            instance.material_id = ResolveEffectiveMaterialId(component.runtime.route);
             instance.submesh_index = component.mesh.submesh_index;
             instance.component_index = item.component_index;
             instance.user_data = component.runtime.route.user_data;
@@ -1136,15 +1141,23 @@ private:
     }
 
     [[nodiscard]] static std::uint32_t PackParams(const GeometryType& component_) noexcept {
+        RuntimeBlendPreset blend_preset = RuntimeBlendPreset::opaque;
+        if (component_.runtime.route.appearance_handle.index != invalid_appearance_handle.index &&
+            component_.runtime.route.appearance_handle.generation != 0U) {
+            blend_preset = ResolveRuntimeBlendPreset(component_.runtime.route.appearance_pipeline_bucket);
+        }
+        const bool depth_write_enabled =
+            (component_.style.depth_write != 0U) && !IsTransparentBlendPreset(blend_preset);
         std::uint32_t params = 0U;
         params |= (component_.style.depth_test != 0U) ? 0x1U : 0U;
-        params |= (component_.style.depth_write != 0U) ? 0x2U : 0U;
+        params |= depth_write_enabled ? 0x2U : 0U;
         params |= (component_.style.double_sided != 0U) ? 0x4U : 0U;
         params |= (component_.style.cast_shadow != 0U) ? 0x8U : 0U;
         params |= (component_.style.receive_shadow != 0U) ? 0x10U : 0U;
         params |= (static_cast<std::uint32_t>(component_.style.topology) & 0x3U) << 5U;
         params |= (static_cast<std::uint32_t>(component_.style.shading_model) & 0x1U) << 7U;
         params |= (static_cast<std::uint32_t>(component_.mesh.lod_index) & 0xFFFFU) << 8U;
+        params |= EncodeRuntimeBlendPresetBits(blend_preset, geometry_runtime_blend_shift);
         return params;
     }
 
@@ -1253,7 +1266,8 @@ private:
 
         HashCombine(hash_, component_.runtime.route.sort_key);
         HashCombine(hash_, static_cast<std::uint64_t>(component_.runtime.route.geometry_id));
-        HashCombine(hash_, static_cast<std::uint64_t>(component_.runtime.route.material_id));
+        HashCombine(hash_,
+                    static_cast<std::uint64_t>(ResolveEffectiveMaterialId(component_.runtime.route)));
         HashCombine(hash_, static_cast<std::uint64_t>(component_.runtime.route.user_data));
         HashCombine(hash_, static_cast<std::uint64_t>(component_.mesh.submesh_index));
         HashCombine(hash_, static_cast<std::uint64_t>(component_.mesh.lod_index));
@@ -1520,7 +1534,7 @@ private:
             Geometry3DDrawBatch& last = scratch_.draw_batches.back();
             if (last.sort_key == sort_key_ &&
                 last.geometry_id == component_.runtime.route.geometry_id &&
-                last.material_id == component_.runtime.route.material_id &&
+                last.material_id == ResolveEffectiveMaterialId(component_.runtime.route) &&
                 last.submesh_index == component_.mesh.submesh_index &&
                 last.params == params &&
                 last.instance_begin + last.instance_count == instance_index_) {
@@ -1534,7 +1548,7 @@ private:
         batch.instance_begin = instance_index_;
         batch.instance_count = 1U;
         batch.geometry_id = component_.runtime.route.geometry_id;
-        batch.material_id = component_.runtime.route.material_id;
+        batch.material_id = ResolveEffectiveMaterialId(component_.runtime.route);
         batch.submesh_index = component_.mesh.submesh_index;
         batch.first_component_index = component_index_;
         batch.params = params;

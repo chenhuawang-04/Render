@@ -2,6 +2,7 @@
 
 #include "Center/Memory/Container/Vector/McVector.hpp"
 #include "vr/ecs/system/appearance_system.hpp"
+#include "vr/ecs/system/transparency_render_policy.hpp"
 
 #include <algorithm>
 #include <array>
@@ -579,15 +580,19 @@ private:
                                                       std::uint32_t component_index_,
                                                       std::uint64_t pipeline_key_,
                                                       const AppearanceSortPolicy& sort_policy_) noexcept {
+        const std::uint8_t queue_bucket_value =
+            (sort_policy_.queue_bucket != 0U)
+                ? sort_policy_.queue_bucket
+                : DefaultAppearanceQueueBucket(component_.style);
         const std::uint64_t queue_bucket =
-            static_cast<std::uint64_t>(sort_policy_.queue_bucket) & sort_key_queue_mask;
+            static_cast<std::uint64_t>(queue_bucket_value) & sort_key_queue_mask;
         const std::int32_t layer_value = static_cast<std::int32_t>(component_.style.layer);
         const std::uint64_t layer_bucket =
             static_cast<std::uint64_t>(static_cast<std::uint32_t>(
                 layer_value - static_cast<std::int32_t>(std::numeric_limits<std::int16_t>::min()))) &
             sort_key_layer_mask;
         const std::uint64_t pipeline_bucket = (sort_policy_.pipeline_bucket_override == 0xFFFFU)
-            ? (pipeline_key_ & sort_key_pipeline_bucket_mask)
+            ? static_cast<std::uint64_t>(FoldPipelineSortBucket(pipeline_key_))
             : (static_cast<std::uint64_t>(sort_policy_.pipeline_bucket_override) &
                sort_key_pipeline_bucket_mask);
         const std::uint64_t depth_bucket =

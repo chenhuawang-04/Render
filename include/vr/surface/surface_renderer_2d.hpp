@@ -149,11 +149,13 @@ public:
 
 private:
     enum class BlendModeKind : std::uint8_t {
-        alpha = 0U,
-        additive = 1U,
-        multiply = 2U,
-        screen = 3U,
-        count = 4U
+        opaque = 0U,
+        alpha = 1U,
+        additive = 2U,
+        multiply = 3U,
+        premultiplied_alpha = 4U,
+        screen = 5U,
+        count = 6U
     };
 
     struct PushConstants final {

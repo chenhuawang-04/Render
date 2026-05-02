@@ -1,6 +1,7 @@
 #pragma once
 
 #include "vr/ecs/component/text_component.hpp"
+#include "vr/ecs/system/transparency_render_policy.hpp"
 
 #include <algorithm>
 #include <concepts>
@@ -188,7 +189,8 @@ public:
     }
 
     [[nodiscard]] static std::uint64_t ComposeSortKey(const TextType& component_) noexcept {
-        const std::uint64_t pass_bits = static_cast<std::uint64_t>(component_.runtime.pass_hint) & sort_key_pass_mask;
+        const std::uint64_t pass_bits =
+            static_cast<std::uint64_t>(SortPassBucket(component_.runtime.pass_hint)) & sort_key_pass_mask;
         const std::uint64_t material_bits = static_cast<std::uint64_t>(component_.runtime.material_id) & sort_key_material_mask;
         const std::uint64_t font_bits = static_cast<std::uint64_t>(component_.runtime.font_id) & sort_key_font_mask;
         const std::uint64_t atlas_bits = static_cast<std::uint64_t>(component_.runtime.atlas_page_id) & sort_key_atlas_mask;
@@ -200,7 +202,9 @@ public:
                                                static_cast<std::int32_t>(std::numeric_limits<std::int16_t>::min());
             minor_bits = static_cast<std::uint64_t>(static_cast<std::uint32_t>(shifted_layer)) & sort_key_minor_mask;
         } else {
-            minor_bits = static_cast<std::uint64_t>(component_.runtime.depth_bin) & sort_key_minor_mask;
+            minor_bits = static_cast<std::uint64_t>(
+                EncodeDepthMinorBucket(component_.runtime.depth_bin, component_.runtime.pass_hint)) &
+                sort_key_minor_mask;
         }
 
         std::uint64_t key = 0U;
@@ -226,7 +230,8 @@ public:
     }
 
     [[nodiscard]] static std::uint32_t ExtractPassBucket(std::uint64_t sort_key_) noexcept {
-        return static_cast<std::uint32_t>((sort_key_ >> sort_key_pass_shift) & sort_key_pass_mask);
+        return static_cast<std::uint32_t>(PassHintFromSortBucket<TextRenderPassHint>(
+            static_cast<std::uint32_t>((sort_key_ >> sort_key_pass_shift) & sort_key_pass_mask)));
     }
 
     [[nodiscard]] static std::uint32_t ExtractMaterialBucket(std::uint64_t sort_key_) noexcept {

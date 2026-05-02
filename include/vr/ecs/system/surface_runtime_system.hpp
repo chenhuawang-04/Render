@@ -4,6 +4,7 @@
 #include "vr/ecs/component/transform_component.hpp"
 #include "vr/ecs/system/spatial_math.hpp"
 #include "vr/ecs/system/surface_batch_system.hpp"
+#include "vr/ecs/system/transparency_render_policy.hpp"
 
 #include <algorithm>
 #include <cstddef>
@@ -506,7 +507,7 @@ public:
             instance.tint_rgba8 = PackRgba8(component.style.tint_color);
             instance.params = PackParams(component);
             instance.surface_id = component.runtime.route.surface_id;
-            instance.material_id = component.runtime.route.material_id;
+            instance.material_id = ResolveEffectiveMaterialId(component.runtime.route);
             instance.atlas_page_id = component.runtime.source.atlas_page_id;
             instance.component_index = item.component_index;
             instance.user_data = component.runtime.route.user_data;
@@ -631,12 +632,37 @@ private:
     }
 
     [[nodiscard]] static std::uint32_t PackParams(const SurfaceType& component_) noexcept {
+        RuntimeBlendPreset blend_preset = ResolveRuntimeBlendPreset(
+            component_.style.blend_mode,
+            component_.style.premultiplied_alpha != 0U);
+        if (component_.runtime.route.appearance_handle.index != invalid_appearance_handle.index &&
+            component_.runtime.route.appearance_handle.generation != 0U) {
+            blend_preset = ResolveRuntimeBlendPreset(component_.runtime.route.appearance_pipeline_bucket);
+        }
+
         std::uint32_t params = 0U;
-        params |= (static_cast<std::uint32_t>(component_.style.blend_mode) & 0x3U);
         params |= (component_.style.flip_x != 0U) ? 0x4U : 0U;
         params |= (component_.style.flip_y != 0U) ? 0x8U : 0U;
-        params |= (component_.style.premultiplied_alpha != 0U) ? 0x10U : 0U;
+        switch (blend_preset) {
+        case RuntimeBlendPreset::additive:
+            params |= 0x1U;
+            break;
+        case RuntimeBlendPreset::multiply:
+            params |= 0x2U;
+            break;
+        case RuntimeBlendPreset::screen:
+            params |= 0x3U;
+            break;
+        case RuntimeBlendPreset::premultiplied_alpha:
+            params |= 0x10U;
+            break;
+        case RuntimeBlendPreset::alpha:
+        case RuntimeBlendPreset::opaque:
+        default:
+            break;
+        }
         params |= (static_cast<std::uint32_t>(component_.runtime.source.source_kind) & 0x3U) << 5U;
+        params |= EncodeRuntimeBlendPresetBits(blend_preset, surface2d_runtime_blend_shift);
         return params;
     }
 
@@ -745,7 +771,8 @@ private:
 
         HashCombine(hash_, component_.runtime.route.sort_key);
         HashCombine(hash_, static_cast<std::uint64_t>(component_.runtime.route.surface_id));
-        HashCombine(hash_, static_cast<std::uint64_t>(component_.runtime.route.material_id));
+        HashCombine(hash_,
+                    static_cast<std::uint64_t>(ResolveEffectiveMaterialId(component_.runtime.route)));
         HashCombine(hash_, static_cast<std::uint64_t>(component_.runtime.route.user_data));
         HashCombine(hash_, static_cast<std::uint64_t>(component_.runtime.source.source_kind));
         HashCombine(hash_, static_cast<std::uint64_t>(component_.runtime.source.image_id));
@@ -763,10 +790,9 @@ private:
         HashCombine(hash_, static_cast<std::uint64_t>(PackRgba8(component_.style.tint_color)));
         HashCombine(hash_, static_cast<std::uint64_t>(FloatBits(component_.style.opacity)));
         HashCombine(hash_, static_cast<std::uint64_t>(component_.style.layer));
-        HashCombine(hash_, static_cast<std::uint64_t>(component_.style.blend_mode));
         HashCombine(hash_, static_cast<std::uint64_t>(component_.style.flip_x));
         HashCombine(hash_, static_cast<std::uint64_t>(component_.style.flip_y));
-        HashCombine(hash_, static_cast<std::uint64_t>(component_.style.premultiplied_alpha));
+        HashCombine(hash_, static_cast<std::uint64_t>(PackParams(component_)));
     }
 
     [[nodiscard]] static std::uint64_t ComputeSurfaceSignature(const SurfaceType* components_,
@@ -1023,7 +1049,7 @@ private:
             Surface2DDrawBatch& last = scratch_.draw_batches.back();
             if (last.sort_key == sort_key_ &&
                 last.surface_id == component_.runtime.route.surface_id &&
-                last.material_id == component_.runtime.route.material_id &&
+                last.material_id == ResolveEffectiveMaterialId(component_.runtime.route) &&
                 last.atlas_page_id == component_.runtime.source.atlas_page_id &&
                 last.params == params &&
                 last.instance_begin + last.instance_count == instance_index_) {
@@ -1037,7 +1063,7 @@ private:
         batch.instance_begin = instance_index_;
         batch.instance_count = 1U;
         batch.surface_id = component_.runtime.route.surface_id;
-        batch.material_id = component_.runtime.route.material_id;
+        batch.material_id = ResolveEffectiveMaterialId(component_.runtime.route);
         batch.atlas_page_id = component_.runtime.source.atlas_page_id;
         batch.first_component_index = component_index_;
         batch.params = params;
@@ -1271,7 +1297,7 @@ public:
             instance.params = PackParams(component);
             instance.texture_id = component.runtime.texture.texture_id;
             instance.sampler_id = component.runtime.texture.sampler_id;
-            instance.material_id = component.runtime.route.material_id;
+            instance.material_id = ResolveEffectiveMaterialId(component.runtime.route);
             instance.component_index = item.component_index;
             instance.user_data = component.runtime.route.user_data;
             instance.uv_set = component.runtime.texture.uv_set;
@@ -1398,14 +1424,22 @@ private:
     }
 
     [[nodiscard]] static std::uint32_t PackParams(const SurfaceType& component_) noexcept {
+        RuntimeBlendPreset blend_preset = RuntimeBlendPreset::opaque;
+        if (component_.runtime.route.appearance_handle.index != invalid_appearance_handle.index &&
+            component_.runtime.route.appearance_handle.generation != 0U) {
+            blend_preset = ResolveRuntimeBlendPreset(component_.runtime.route.appearance_pipeline_bucket);
+        }
+        const bool depth_write_enabled =
+            (component_.style.depth_write != 0U) && !IsTransparentBlendPreset(blend_preset);
         std::uint32_t params = 0U;
         params |= (component_.style.depth_test != 0U) ? 0x1U : 0U;
-        params |= (component_.style.depth_write != 0U) ? 0x2U : 0U;
+        params |= depth_write_enabled ? 0x2U : 0U;
         params |= (component_.style.double_sided != 0U) ? 0x4U : 0U;
         params |= (static_cast<std::uint32_t>(component_.style.filter_mode) & 0x3U) << 3U;
         params |= (static_cast<std::uint32_t>(component_.style.address_u) & 0x3U) << 5U;
         params |= (static_cast<std::uint32_t>(component_.style.address_v) & 0x3U) << 7U;
         params |= (static_cast<std::uint32_t>(component_.style.address_w) & 0x3U) << 9U;
+        params |= EncodeRuntimeBlendPresetBits(blend_preset, surface3d_runtime_blend_shift);
         return params;
     }
 
@@ -1514,7 +1548,8 @@ private:
 
         HashCombine(hash_, component_.runtime.route.sort_key);
         HashCombine(hash_, static_cast<std::uint64_t>(component_.runtime.route.surface_id));
-        HashCombine(hash_, static_cast<std::uint64_t>(component_.runtime.route.material_id));
+        HashCombine(hash_,
+                    static_cast<std::uint64_t>(ResolveEffectiveMaterialId(component_.runtime.route)));
         HashCombine(hash_, static_cast<std::uint64_t>(component_.runtime.route.user_data));
         HashCombine(hash_, static_cast<std::uint64_t>(component_.runtime.texture.texture_id));
         HashCombine(hash_, static_cast<std::uint64_t>(component_.runtime.texture.sampler_id));
@@ -1801,7 +1836,7 @@ private:
             if (last.sort_key == sort_key_ &&
                 last.texture_id == component_.runtime.texture.texture_id &&
                 last.sampler_id == component_.runtime.texture.sampler_id &&
-                last.material_id == component_.runtime.route.material_id &&
+                last.material_id == ResolveEffectiveMaterialId(component_.runtime.route) &&
                 last.params == params &&
                 last.instance_begin + last.instance_count == instance_index_) {
                 ++last.instance_count;
@@ -1815,7 +1850,7 @@ private:
         batch.instance_count = 1U;
         batch.texture_id = component_.runtime.texture.texture_id;
         batch.sampler_id = component_.runtime.texture.sampler_id;
-        batch.material_id = component_.runtime.route.material_id;
+        batch.material_id = ResolveEffectiveMaterialId(component_.runtime.route);
         batch.first_component_index = component_index_;
         batch.params = params;
         scratch_.draw_batches.push_back(batch);

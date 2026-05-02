@@ -107,6 +107,25 @@ VR_TEST_CASE(EcsSurfaceSystem_dim3_texture_route_style_and_visibility, "unit;cor
     VR_CHECK(!SurfaceSystem3D::IsVisibleForBatch(surface));
 }
 
+VR_TEST_CASE(EcsSurfaceSystem_dim3_transparent_sort_reverses_depth_minor_bucket,
+             "unit;core;ecs;surface") {
+    using Surface3D = vr::ecs::Surface<vr::ecs::Dim3>;
+    using SurfaceSystem3D = vr::ecs::SurfaceSystem<vr::ecs::Dim3>;
+
+    Surface3D surface{};
+    SurfaceSystem3D::Initialize(surface);
+    SurfaceSystem3D::SetTextureRoute(surface, 301U, 7U, 2U, 9U);
+    SurfaceSystem3D::SetMaterialId(surface, 88U);
+    SurfaceSystem3D::SetDepthBin(surface, 17U);
+    SurfaceSystem3D::SetRenderPassHint(surface, vr::ecs::SurfaceRenderPassHint::transparent);
+
+    const std::uint64_t sort_key = SurfaceSystem3D::SortKey(surface);
+    VR_CHECK(SurfaceSystem3D::ExtractPassBucket(sort_key) ==
+             static_cast<std::uint32_t>(vr::ecs::SurfaceRenderPassHint::transparent));
+    VR_CHECK(SurfaceSystem3D::ExtractMinorBucket(sort_key) ==
+             static_cast<std::uint32_t>((std::numeric_limits<std::uint16_t>::max)() - 17U));
+}
+
 VR_TEST_CASE(EcsSurfaceSystem_default_visibility_requires_valid_source, "unit;core;ecs;surface") {
     using Surface2D = vr::ecs::Surface<vr::ecs::Dim2>;
     using Surface3D = vr::ecs::Surface<vr::ecs::Dim3>;

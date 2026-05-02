@@ -1,5 +1,6 @@
 #include "vr/text/text_renderer_3d.hpp"
 
+#include "vr/render/color_blend_state.hpp"
 #include "vr/render/render_loop_host.hpp"
 #include "vr/render/runtime_prepare_context.hpp"
 #include "vr/render/upload_host.hpp"
@@ -1278,18 +1279,8 @@ render::GraphicsPipelineId TextRenderer3D::EnsureGraphicsPipelineForMode(VulkanC
     pipeline_desc.depth_stencil.min_depth_bounds = 0.0F;
     pipeline_desc.depth_stencil.max_depth_bounds = 1.0F;
 
-    VkPipelineColorBlendAttachmentState blend_attachment{};
-    blend_attachment.blendEnable = VK_TRUE;
-    blend_attachment.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
-    blend_attachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-    blend_attachment.colorBlendOp = VK_BLEND_OP_ADD;
-    blend_attachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
-    blend_attachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-    blend_attachment.alphaBlendOp = VK_BLEND_OP_ADD;
-    blend_attachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT |
-                                      VK_COLOR_COMPONENT_G_BIT |
-                                      VK_COLOR_COMPONENT_B_BIT |
-                                      VK_COLOR_COMPONENT_A_BIT;
+    const VkPipelineColorBlendAttachmentState blend_attachment =
+        render::BuildColorBlendAttachment(render::ColorBlendPreset::alpha);
     pipeline_desc.color_blend.attachments.push_back(blend_attachment);
 
     const render::GraphicsPipelineId pipeline_id =

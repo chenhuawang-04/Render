@@ -1,6 +1,7 @@
 #pragma once
 
 #include "vr/ecs/component/surface_component.hpp"
+#include "vr/ecs/system/transparency_render_policy.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -236,6 +237,7 @@ public:
         component_.runtime.route.appearance_resource_bucket = 0U;
         BumpAppearanceHandleMutationSerial();
         MarkDirty(component_, surface_dirty_runtime_flag);
+        RebuildSortKey(component_);
     }
 
     [[nodiscard]] static bool SetAppearanceRuntimeLink(SurfaceType& component_,
@@ -243,15 +245,14 @@ public:
                                                        std::uint64_t appearance_sort_key_,
                                                        std::uint64_t appearance_pipeline_key_,
                                                        std::uint64_t appearance_resource_key_) noexcept {
+        (void)appearance_sort_key_;
         const std::uint32_t pipeline_bucket = static_cast<std::uint32_t>(appearance_pipeline_key_);
         const std::uint32_t resource_bucket = static_cast<std::uint32_t>(appearance_resource_key_);
         const bool changed =
             component_.runtime.route.appearance_handle.index != appearance_handle_.index ||
             component_.runtime.route.appearance_handle.generation != appearance_handle_.generation ||
             component_.runtime.route.appearance_pipeline_bucket != pipeline_bucket ||
-            component_.runtime.route.appearance_resource_bucket != resource_bucket ||
-            component_.runtime.route.material_id != resource_bucket ||
-            component_.runtime.route.sort_key != appearance_sort_key_;
+            component_.runtime.route.appearance_resource_bucket != resource_bucket;
         if (!changed) {
             return false;
         }
@@ -262,12 +263,11 @@ public:
         component_.runtime.route.appearance_handle = appearance_handle_;
         component_.runtime.route.appearance_pipeline_bucket = pipeline_bucket;
         component_.runtime.route.appearance_resource_bucket = resource_bucket;
-        component_.runtime.route.material_id = resource_bucket;
-        component_.runtime.route.sort_key = appearance_sort_key_;
         if (handle_changed) {
             BumpAppearanceHandleMutationSerial();
         }
         MarkDirty(component_, surface_dirty_runtime_flag);
+        RebuildSortKey(component_);
         return true;
     }
 
@@ -582,10 +582,18 @@ public:
     }
 
     [[nodiscard]] static std::uint64_t ComposeSortKey(const SurfaceType& component_) noexcept {
-        const std::uint64_t pass_bits = static_cast<std::uint64_t>(component_.runtime.route.pass_hint) &
+        const bool has_linked_appearance =
+            component_.runtime.route.appearance_handle.index != invalid_appearance_handle.index &&
+            component_.runtime.route.appearance_handle.generation != 0U;
+        const SurfaceRenderPassHint effective_pass_hint = has_linked_appearance
+            ? ResolveLinkedPassHint(component_.runtime.route.pass_hint,
+                                    component_.runtime.route.appearance_pipeline_bucket)
+            : component_.runtime.route.pass_hint;
+        const std::uint64_t pass_bits = static_cast<std::uint64_t>(SortPassBucket(effective_pass_hint)) &
                                         sort_key_pass_mask;
         const std::uint64_t material_bits =
-            static_cast<std::uint64_t>(component_.runtime.route.material_id) & sort_key_material_mask;
+            static_cast<std::uint64_t>(ResolveEffectiveMaterialId(component_.runtime.route)) &
+            sort_key_material_mask;
         const std::uint64_t surface_bits =
             static_cast<std::uint64_t>(component_.runtime.route.surface_id) & sort_key_surface_mask;
         const std::uint64_t batch_bits =
@@ -597,7 +605,9 @@ public:
                                                static_cast<std::int32_t>(std::numeric_limits<std::int16_t>::min());
             minor_bits = static_cast<std::uint64_t>(static_cast<std::uint32_t>(shifted_layer)) & sort_key_minor_mask;
         } else {
-            minor_bits = static_cast<std::uint64_t>(component_.runtime.route.depth_bin) & sort_key_minor_mask;
+            minor_bits = static_cast<std::uint64_t>(
+                EncodeDepthMinorBucket(component_.runtime.route.depth_bin, effective_pass_hint)) &
+                sort_key_minor_mask;
         }
 
         std::uint64_t key = 0U;
@@ -626,7 +636,8 @@ public:
     }
 
     [[nodiscard]] static std::uint32_t ExtractPassBucket(std::uint64_t sort_key_) noexcept {
-        return static_cast<std::uint32_t>((sort_key_ >> sort_key_pass_shift) & sort_key_pass_mask);
+        return static_cast<std::uint32_t>(PassHintFromSortBucket<SurfaceRenderPassHint>(
+            static_cast<std::uint32_t>((sort_key_ >> sort_key_pass_shift) & sort_key_pass_mask)));
     }
 
     [[nodiscard]] static std::uint32_t ExtractMaterialBucket(std::uint64_t sort_key_) noexcept {

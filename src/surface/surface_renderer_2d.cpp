@@ -1,9 +1,11 @@
 #include "vr/surface/surface_renderer_2d.hpp"
 
+#include "vr/render/color_blend_state.hpp"
 #include "vr/render/render_loop_host.hpp"
 #include "vr/render/render_target_pass.hpp"
 #include "vr/render/runtime_prepare_context.hpp"
 #include "vr/render/upload_host.hpp"
+#include "vr/ecs/system/transparency_render_policy.hpp"
 #include "vr/resource/gpu_memory_host.hpp"
 #include "vr/resource/image_host.hpp"
 #include "vr/surface/generated/surface_2d_frag_spv.hpp"
@@ -27,14 +29,25 @@ std::size_t SurfaceRenderer2D::BlendModeIndex(BlendModeKind mode_) noexcept {
 
 SurfaceRenderer2D::BlendModeKind SurfaceRenderer2D::ResolveBlendModeFromBatchParams(
     std::uint32_t params_) noexcept {
+    switch (ecs::DecodeRuntimeBlendPresetBits(params_, ecs::surface2d_runtime_blend_shift)) {
+    case ecs::RuntimeBlendPreset::opaque: return BlendModeKind::opaque;
+    case ecs::RuntimeBlendPreset::alpha: return BlendModeKind::alpha;
+    case ecs::RuntimeBlendPreset::additive: return BlendModeKind::additive;
+    case ecs::RuntimeBlendPreset::multiply: return BlendModeKind::multiply;
+    case ecs::RuntimeBlendPreset::premultiplied_alpha: return BlendModeKind::premultiplied_alpha;
+    case ecs::RuntimeBlendPreset::screen: return BlendModeKind::screen;
+    default: break;
+    }
+
+    const bool premultiplied_alpha = (params_ & 0x10U) != 0U;
     switch (params_ & 0x3U) {
-    case 0U: return BlendModeKind::alpha;
+    case 0U: return premultiplied_alpha ? BlendModeKind::premultiplied_alpha : BlendModeKind::alpha;
     case 1U: return BlendModeKind::additive;
     case 2U: return BlendModeKind::multiply;
     case 3U: return BlendModeKind::screen;
     default: break;
     }
-    return BlendModeKind::alpha;
+    return premultiplied_alpha ? BlendModeKind::premultiplied_alpha : BlendModeKind::alpha;
 }
 
 std::size_t SurfaceRenderer2D::LowerBoundTextureSetIndex(
@@ -772,48 +785,31 @@ render::GraphicsPipelineId SurfaceRenderer2D::EnsurePipelineForBlendMode(
     desc.depth_stencil.depth_test_enable = false;
     desc.depth_stencil.depth_write_enable = false;
 
-    VkPipelineColorBlendAttachmentState blend{};
-    blend.blendEnable = VK_TRUE;
-    blend.colorWriteMask = VK_COLOR_COMPONENT_R_BIT |
-                           VK_COLOR_COMPONENT_G_BIT |
-                           VK_COLOR_COMPONENT_B_BIT |
-                           VK_COLOR_COMPONENT_A_BIT;
+    render::ColorBlendPreset blend_preset = render::ColorBlendPreset::alpha;
     switch (blend_mode_) {
+    case BlendModeKind::opaque:
+        blend_preset = render::ColorBlendPreset::disabled;
+        break;
     case BlendModeKind::alpha:
-        blend.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
-        blend.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-        blend.colorBlendOp = VK_BLEND_OP_ADD;
-        blend.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
-        blend.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-        blend.alphaBlendOp = VK_BLEND_OP_ADD;
+        blend_preset = render::ColorBlendPreset::alpha;
         break;
     case BlendModeKind::additive:
-        blend.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
-        blend.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
-        blend.colorBlendOp = VK_BLEND_OP_ADD;
-        blend.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
-        blend.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
-        blend.alphaBlendOp = VK_BLEND_OP_ADD;
+        blend_preset = render::ColorBlendPreset::additive;
         break;
     case BlendModeKind::multiply:
-        blend.srcColorBlendFactor = VK_BLEND_FACTOR_DST_COLOR;
-        blend.dstColorBlendFactor = VK_BLEND_FACTOR_ZERO;
-        blend.colorBlendOp = VK_BLEND_OP_ADD;
-        blend.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
-        blend.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-        blend.alphaBlendOp = VK_BLEND_OP_ADD;
+        blend_preset = render::ColorBlendPreset::multiply;
+        break;
+    case BlendModeKind::premultiplied_alpha:
+        blend_preset = render::ColorBlendPreset::premultiplied_alpha;
         break;
     case BlendModeKind::screen:
-        blend.srcColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_DST_COLOR;
-        blend.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
-        blend.colorBlendOp = VK_BLEND_OP_ADD;
-        blend.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
-        blend.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-        blend.alphaBlendOp = VK_BLEND_OP_ADD;
+        blend_preset = render::ColorBlendPreset::screen;
         break;
     default:
         break;
     }
+    const VkPipelineColorBlendAttachmentState blend =
+        render::BuildColorBlendAttachment(blend_preset);
     desc.color_blend.attachments.push_back(blend);
 
     return pipeline_host_.RegisterGraphicsPipeline(context_, desc);

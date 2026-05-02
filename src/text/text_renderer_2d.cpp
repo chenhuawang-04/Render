@@ -1,5 +1,6 @@
 #include "vr/text/text_renderer_2d.hpp"
 
+#include "vr/render/color_blend_state.hpp"
 #include "vr/render/render_loop_host.hpp"
 #include "vr/render/render_target_pass.hpp"
 #include "vr/render/runtime_prepare_context.hpp"
@@ -820,18 +821,8 @@ void TextRenderer2D::EnsurePipelineObjects(VulkanContext& context_,
 
     pipeline_desc.multisample.rasterization_samples = VK_SAMPLE_COUNT_1_BIT;
 
-    VkPipelineColorBlendAttachmentState blend_attachment{};
-    blend_attachment.blendEnable = VK_TRUE;
-    blend_attachment.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
-    blend_attachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-    blend_attachment.colorBlendOp = VK_BLEND_OP_ADD;
-    blend_attachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
-    blend_attachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-    blend_attachment.alphaBlendOp = VK_BLEND_OP_ADD;
-    blend_attachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT |
-                                      VK_COLOR_COMPONENT_G_BIT |
-                                      VK_COLOR_COMPONENT_B_BIT |
-                                      VK_COLOR_COMPONENT_A_BIT;
+    const VkPipelineColorBlendAttachmentState blend_attachment =
+        render::BuildColorBlendAttachment(render::ColorBlendPreset::alpha);
     pipeline_desc.color_blend.attachments.push_back(blend_attachment);
 
     graphics_pipeline_id = pipeline_host_.RegisterGraphicsPipeline(context_, pipeline_desc);

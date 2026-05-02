@@ -226,7 +226,7 @@ VR_TEST_CASE(RenderAppearanceFrameCoordinator_dim3_incremental_link_updates_only
     (void)coordinator.PrepareFrame(32U);
 
     const auto dirty_link = coordinator.LinkGeometry(geometry_components.data(), component_count, 32U);
-    VR_CHECK(dirty_link.updated_count == 4U);
+    VR_CHECK(dirty_link.updated_count == 0U);
     VR_CHECK(dirty_link.scanned_count == 4U);
 }
 

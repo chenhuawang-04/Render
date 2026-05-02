@@ -1,6 +1,8 @@
 #include "vr/surface/surface_renderer_3d.hpp"
 
+#include "vr/ecs/system/transparency_render_policy.hpp"
 #include "vr/ecs/system/spatial_math.hpp"
+#include "vr/render/color_blend_state.hpp"
 #include "vr/render/render_loop_host.hpp"
 #include "vr/render/runtime_prepare_context.hpp"
 #include "vr/render/upload_host.hpp"
@@ -69,6 +71,10 @@ std::size_t SurfaceRenderer3D::CullModeIndex(CullMode mode_) noexcept {
     return static_cast<std::size_t>(mode_);
 }
 
+std::size_t SurfaceRenderer3D::BlendModeIndex(BlendMode mode_) noexcept {
+    return static_cast<std::size_t>(mode_);
+}
+
 std::size_t SurfaceRenderer3D::LowerBoundTextureSetIndex(
     const SurfaceRenderer3DMcVector<TextureSetEntry>& entries_,
     std::uint64_t binding_key_) noexcept {
@@ -103,6 +109,25 @@ SurfaceRenderer3D::CullMode SurfaceRenderer3D::ResolveCullMode(std::uint32_t bat
     return double_sided ? CullMode::none : CullMode::back;
 }
 
+SurfaceRenderer3D::BlendMode SurfaceRenderer3D::ResolveBlendMode(std::uint32_t batch_params_) noexcept {
+    switch (ecs::DecodeRuntimeBlendPresetBits(batch_params_, ecs::surface3d_runtime_blend_shift)) {
+    case ecs::RuntimeBlendPreset::alpha:
+        return BlendMode::alpha;
+    case ecs::RuntimeBlendPreset::additive:
+        return BlendMode::additive;
+    case ecs::RuntimeBlendPreset::multiply:
+        return BlendMode::multiply;
+    case ecs::RuntimeBlendPreset::premultiplied_alpha:
+        return BlendMode::premultiplied_alpha;
+    case ecs::RuntimeBlendPreset::screen:
+        return BlendMode::screen;
+    case ecs::RuntimeBlendPreset::opaque:
+    default:
+        break;
+    }
+    return BlendMode::opaque;
+}
+
 void SurfaceRenderer3D::Initialize(const SurfaceRenderer3DCreateInfo& create_info_) {
     create_info_cache = create_info_;
 
@@ -127,9 +152,11 @@ void SurfaceRenderer3D::Initialize(const SurfaceRenderer3DCreateInfo& create_inf
     pipeline_layout_id = {};
     shader_vertex_id = {};
     shader_fragment_id = {};
-    for (auto& per_mode : pipeline_ids) {
-        for (auto& pipeline_id : per_mode) {
-            pipeline_id = {};
+    for (auto& per_blend : pipeline_ids) {
+        for (auto& per_mode : per_blend) {
+            for (auto& pipeline_id : per_mode) {
+                pipeline_id = {};
+            }
         }
     }
     pipeline_color_format = VK_FORMAT_UNDEFINED;
@@ -218,9 +245,11 @@ void SurfaceRenderer3D::Shutdown(VulkanContext& context_) {
     pipeline_layout_id = {};
     shader_vertex_id = {};
     shader_fragment_id = {};
-    for (auto& per_mode : pipeline_ids) {
-        for (auto& pipeline_id : per_mode) {
-            pipeline_id = {};
+    for (auto& per_blend : pipeline_ids) {
+        for (auto& per_mode : per_blend) {
+            for (auto& pipeline_id : per_mode) {
+                pipeline_id = {};
+            }
         }
     }
     pipeline_color_format = VK_FORMAT_UNDEFINED;
@@ -644,10 +673,16 @@ void SurfaceRenderer3D::Record(const render::FrameRecordContext& record_context_
                 continue;
             }
 
+            const BlendMode blend_mode = ResolveBlendMode(batch.params);
             const PipelineMode mode = ResolvePipelineMode(batch.params, active_depth_format != VK_FORMAT_UNDEFINED);
             const CullMode cull_mode = ResolveCullMode(batch.params);
-            const render::GraphicsPipelineId pipeline_id =
-                pipeline_ids[PipelineModeIndex(mode)][CullModeIndex(cull_mode)];
+            const render::GraphicsPipelineId pipeline_id = EnsurePipelineForMode(*context,
+                                                                                 *pipeline_host,
+                                                                                 color_pass.target.format,
+                                                                                 active_depth_format,
+                                                                                 blend_mode,
+                                                                                 mode,
+                                                                                 cull_mode);
             if (!pipeline_id.IsValid()) {
                 ++stats.skipped_batch_count;
                 continue;
@@ -805,27 +840,15 @@ void SurfaceRenderer3D::EnsurePipelineObjects(VulkanContext& context_,
     if (pipeline_color_format != color_format_ || pipeline_depth_format != depth_format_) {
         pipeline_color_format = color_format_;
         pipeline_depth_format = depth_format_;
-        for (auto& per_mode : pipeline_ids) {
-            for (auto& pipeline_id : per_mode) {
-                pipeline_id = {};
+        for (auto& per_blend : pipeline_ids) {
+            for (auto& per_mode : per_blend) {
+                for (auto& pipeline_id : per_mode) {
+                    pipeline_id = {};
+                }
             }
         }
     }
 
-    for (std::size_t mode_index = 0U; mode_index < static_cast<std::size_t>(PipelineMode::count); ++mode_index) {
-        for (std::size_t cull_index = 0U; cull_index < static_cast<std::size_t>(CullMode::count); ++cull_index) {
-            if (pipeline_ids[mode_index][cull_index].IsValid()) {
-                continue;
-            }
-            pipeline_ids[mode_index][cull_index] = EnsurePipelineForMode(
-                context_,
-                pipeline_host_,
-                color_format_,
-                depth_format_,
-                static_cast<PipelineMode>(mode_index),
-                static_cast<CullMode>(cull_index));
-        }
-    }
 }
 
 render::GraphicsPipelineId SurfaceRenderer3D::EnsurePipelineForMode(
@@ -833,8 +856,21 @@ render::GraphicsPipelineId SurfaceRenderer3D::EnsurePipelineForMode(
     render::PipelineHost& pipeline_host_,
     VkFormat color_format_,
     VkFormat depth_format_,
+    BlendMode blend_mode_,
     PipelineMode mode_,
     CullMode cull_mode_) {
+    const std::size_t blend_index = BlendModeIndex(blend_mode_);
+    const std::size_t mode_index = PipelineModeIndex(mode_);
+    const std::size_t cull_index = CullModeIndex(cull_mode_);
+    if (blend_index >= pipeline_ids.size() ||
+        mode_index >= pipeline_ids[blend_index].size() ||
+        cull_index >= pipeline_ids[blend_index][mode_index].size()) {
+        throw std::out_of_range("SurfaceRenderer3D pipeline mode out of range");
+    }
+    if (pipeline_ids[blend_index][mode_index][cull_index].IsValid()) {
+        return pipeline_ids[blend_index][mode_index][cull_index];
+    }
+
     render::GraphicsPipelineDesc desc{};
     desc.layout = pipeline_host_.GetPipelineLayout(pipeline_layout_id);
     desc.use_dynamic_rendering = true;
@@ -913,21 +949,37 @@ render::GraphicsPipelineId SurfaceRenderer3D::EnsurePipelineForMode(
         break;
     }
 
-    VkPipelineColorBlendAttachmentState blend{};
-    blend.blendEnable = VK_TRUE;
-    blend.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
-    blend.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-    blend.colorBlendOp = VK_BLEND_OP_ADD;
-    blend.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
-    blend.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-    blend.alphaBlendOp = VK_BLEND_OP_ADD;
-    blend.colorWriteMask = VK_COLOR_COMPONENT_R_BIT |
-                           VK_COLOR_COMPONENT_G_BIT |
-                           VK_COLOR_COMPONENT_B_BIT |
-                           VK_COLOR_COMPONENT_A_BIT;
+    render::ColorBlendPreset blend_preset = render::ColorBlendPreset::disabled;
+    switch (blend_mode_) {
+    case BlendMode::opaque:
+        blend_preset = render::ColorBlendPreset::disabled;
+        break;
+    case BlendMode::alpha:
+        blend_preset = render::ColorBlendPreset::alpha;
+        break;
+    case BlendMode::additive:
+        blend_preset = render::ColorBlendPreset::additive;
+        break;
+    case BlendMode::multiply:
+        blend_preset = render::ColorBlendPreset::multiply;
+        break;
+    case BlendMode::premultiplied_alpha:
+        blend_preset = render::ColorBlendPreset::premultiplied_alpha;
+        break;
+    case BlendMode::screen:
+        blend_preset = render::ColorBlendPreset::screen;
+        break;
+    default:
+        break;
+    }
+    const VkPipelineColorBlendAttachmentState blend =
+        render::BuildColorBlendAttachment(blend_preset);
     desc.color_blend.attachments.push_back(blend);
 
-    return pipeline_host_.RegisterGraphicsPipeline(context_, desc);
+    const render::GraphicsPipelineId pipeline_id =
+        pipeline_host_.RegisterGraphicsPipeline(context_, desc);
+    pipeline_ids[blend_index][mode_index][cull_index] = pipeline_id;
+    return pipeline_id;
 }
 
 void SurfaceRenderer3D::EnsureFallbackTexture(VulkanContext& context_,
