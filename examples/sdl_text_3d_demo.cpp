@@ -2,9 +2,8 @@
 #include "vr/ecs/system/camera_system.hpp"
 #include "vr/ecs/system/text_system.hpp"
 #include "vr/ecs/system/transform_system.hpp"
-#include "vr/render/render_target_bloom_renderer.hpp"
 #include "vr/render/render_runtime_host.hpp"
-#include "vr/render/scene_render_target_set.hpp"
+#include "vr/render/scene_bloom_post_stack.hpp"
 #include "vr/text/text_renderer_3d.hpp"
 
 #include <SDL3/SDL.h>
@@ -158,10 +157,9 @@ void InitializeTransform(Transform3D& transform_,
 struct Text3DOffscreenRecorder final {
     Runtime* runtime = nullptr;
     vr::text::TextRenderer3D text_renderer{};
-    vr::render::RenderTargetBloomRenderer bloom_renderer{};
-    vr::render::SceneRenderTargetSet scene_targets{};
+    vr::render::SceneBloomPostStack post_stack{};
 
-    void InitializeSceneTargets() {
+    void InitializePostStack() {
         vr::render::SceneRenderTargetSetCreateInfo create_info{};
         create_info.color_debug_name = "Text3DSceneColor";
         create_info.depth_debug_name = "Text3DSceneDepth";
@@ -169,21 +167,30 @@ struct Text3DOffscreenRecorder final {
         create_info.color_lifetime = vr::render::RenderTargetLifetime::transient;
         create_info.depth_lifetime = vr::render::RenderTargetLifetime::transient;
         create_info.clear_color = VkClearColorValue{{0.07F, 0.08F, 0.11F, 1.0F}};
-        scene_targets.Initialize(create_info);
+        vr::render::RenderTargetBloomRendererCreateInfo bloom_create_info{};
+        bloom_create_info.clear_swapchain = true;
+        bloom_create_info.clear_color = {{0.02F, 0.025F, 0.04F, 1.0F}};
+        bloom_create_info.enable_reinhard_tonemap = true;
+        bloom_create_info.exposure = 1.0F;
+        bloom_create_info.apply_manual_gamma = false;
+        bloom_create_info.bloom_threshold = 0.70F;
+        bloom_create_info.bloom_knee = 0.45F;
+        bloom_create_info.bloom_intensity = 0.95F;
+        bloom_create_info.blur_filter_scale = 1.10F;
+        bloom_create_info.downsample_scale = 0.5F;
+        post_stack.Initialize(create_info, bloom_create_info);
     }
 
     void PrepareFrame(const vr::render::RuntimePrepareContext& prepare_context_) {
-        (void)scene_targets.PrepareFrameAndConfigure(
+        (void)post_stack.PrepareFrame(
             prepare_context_,
-            &bloom_renderer,
             vr::render::BindSceneRenderer(text_renderer, vr::render::SceneRenderPassRole::single));
         text_renderer.PrepareFrame(prepare_context_);
-        bloom_renderer.PrepareFrame(prepare_context_);
     }
 
     void Record(const vr::render::FrameRecordContext& record_context_) {
         text_renderer.Record(record_context_);
-        bloom_renderer.Record(record_context_);
+        post_stack.Record(record_context_);
     }
 
     void OnSwapchainRecreated(std::uint32_t image_count_,
@@ -196,20 +203,19 @@ struct Text3DOffscreenRecorder final {
                                            format_,
                                            last_submitted_value_,
                                            completed_submit_value_);
-        bloom_renderer.OnSwapchainRecreated(image_count_, extent_, format_);
-
         if (runtime == nullptr) {
             return;
         }
 
-        (void)scene_targets.OnSwapchainRecreatedAndConfigure(
+        (void)post_stack.OnSwapchainRecreated(
             runtime->Context(),
-            runtime->RenderTarget(),
-            runtime->HasRenderTargetPool() ? &runtime->TargetPool() : nullptr,
+            image_count_,
             extent_,
+            format_,
             last_submitted_value_,
             completed_submit_value_,
-            &bloom_renderer,
+            runtime->RenderTarget(),
+            runtime->HasRenderTargetPool() ? &runtime->TargetPool() : nullptr,
             vr::render::BindSceneRenderer(text_renderer, vr::render::SceneRenderPassRole::single));
     }
 };
@@ -492,7 +498,7 @@ int main(int argc_,
 
         Text3DOffscreenRecorder recorder{};
         recorder.runtime = &runtime;
-        recorder.InitializeSceneTargets();
+        recorder.InitializePostStack();
         vr::text::TextRenderer3DCreateInfo text_renderer_create_info{};
         text_renderer_create_info.runtime_build.pixel_size_quantization = 1.0F;
         text_renderer_create_info.runtime_build.enable_kerning = true;
@@ -515,19 +521,6 @@ int main(int argc_,
                                             &camera,
                                             &camera_transform,
                                             bounds.data());
-
-        vr::render::RenderTargetBloomRendererCreateInfo bloom_create_info{};
-        bloom_create_info.clear_swapchain = true;
-        bloom_create_info.clear_color = {{0.02F, 0.025F, 0.04F, 1.0F}};
-        bloom_create_info.enable_reinhard_tonemap = true;
-        bloom_create_info.exposure = 1.0F;
-        bloom_create_info.apply_manual_gamma = false;
-        bloom_create_info.bloom_threshold = 0.68F;
-        bloom_create_info.bloom_knee = 0.42F;
-        bloom_create_info.bloom_intensity = 0.92F;
-        bloom_create_info.blur_filter_scale = 1.05F;
-        bloom_create_info.downsample_scale = 0.5F;
-        recorder.bloom_renderer.Initialize(bloom_create_info);
 
         const std::string primary_name = FileNameOnly(fonts.primary);
         const std::string secondary_name = FileNameOnly(fonts.secondary);
@@ -661,9 +654,9 @@ int main(int argc_,
                           stats.depth_write_batch_count,
                           stats.culling_visible_count,
                           stats.culling_input_count,
-                          recorder.bloom_renderer.Stats().prefilter_draw_call_count,
-                          recorder.bloom_renderer.Stats().blur_draw_call_count,
-                          recorder.bloom_renderer.Stats().combine_draw_call_count);
+                          recorder.post_stack.Stats().prefilter_draw_call_count,
+                          recorder.post_stack.Stats().blur_draw_call_count,
+                          recorder.post_stack.Stats().combine_draw_call_count);
             (void)TextSystem3D::SetText(components[runtime_stats], stats_text);
 
             SDL_Delay(8U);
@@ -673,7 +666,7 @@ int main(int argc_,
             }
         }
 
-        recorder.bloom_renderer.Shutdown(runtime.Context());
+        recorder.post_stack.Shutdown(runtime.Context());
         recorder.text_renderer.Shutdown(runtime.Context());
         runtime.Shutdown();
         return 0;

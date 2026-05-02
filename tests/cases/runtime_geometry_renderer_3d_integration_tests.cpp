@@ -6,7 +6,7 @@
 #include "vr/geometry/geometry_image_host.hpp"
 #include "vr/geometry/geometry_material_host.hpp"
 #include "vr/geometry/geometry_renderer_3d.hpp"
-#include "vr/render/render_target_composite_renderer.hpp"
+#include "vr/render/scene_bloom_post_stack.hpp"
 #include "vr/render/render_target_format_utils.hpp"
 #include "vr/render/render_runtime_host.hpp"
 #include "vr/render/scene_render_target_set.hpp"
@@ -108,10 +108,9 @@ void InitializeGeometryComponent(Geometry3D& component_,
 struct Geometry3DOffscreenRecorder final {
     Runtime* runtime = nullptr;
     vr::geometry::GeometryRenderer3D geometry_renderer{};
-    vr::render::RenderTargetCompositeRenderer composite_renderer{};
-    vr::render::SceneRenderTargetSet scene_targets{};
+    vr::render::SceneBloomPostStack post_stack{};
 
-    void InitializeSceneTargets() {
+    void InitializePostStack() {
         vr::render::SceneRenderTargetSetCreateInfo create_info{};
         create_info.color_debug_name = "RuntimeGeometry3DSceneColor";
         create_info.depth_debug_name = "RuntimeGeometry3DSceneDepth";
@@ -119,21 +118,29 @@ struct Geometry3DOffscreenRecorder final {
         create_info.color_lifetime = vr::render::RenderTargetLifetime::transient;
         create_info.depth_lifetime = vr::render::RenderTargetLifetime::transient;
         create_info.clear_color = VkClearColorValue{{0.05F, 0.07F, 0.10F, 1.0F}};
-        scene_targets.Initialize(create_info);
+        vr::render::RenderTargetBloomRendererCreateInfo bloom_create_info{};
+        bloom_create_info.clear_swapchain = true;
+        bloom_create_info.enable_reinhard_tonemap = true;
+        bloom_create_info.exposure = 1.0F;
+        bloom_create_info.apply_manual_gamma = false;
+        bloom_create_info.bloom_threshold = 0.70F;
+        bloom_create_info.bloom_knee = 0.42F;
+        bloom_create_info.bloom_intensity = 0.88F;
+        bloom_create_info.blur_filter_scale = 1.02F;
+        bloom_create_info.downsample_scale = 0.5F;
+        post_stack.Initialize(create_info, bloom_create_info);
     }
 
     void PrepareFrame(const vr::render::RuntimePrepareContext& prepare_context_) {
-        (void)scene_targets.PrepareFrameAndConfigure(
+        (void)post_stack.PrepareFrame(
             prepare_context_,
-            &composite_renderer,
             vr::render::BindSceneRenderer(geometry_renderer, vr::render::SceneRenderPassRole::single));
         geometry_renderer.PrepareFrame(prepare_context_);
-        composite_renderer.PrepareFrame(prepare_context_);
     }
 
     void Record(const vr::render::FrameRecordContext& record_context_) {
         geometry_renderer.Record(record_context_);
-        composite_renderer.Record(record_context_);
+        post_stack.Record(record_context_);
     }
 
     void OnSwapchainRecreated(std::uint32_t image_count_,
@@ -146,19 +153,18 @@ struct Geometry3DOffscreenRecorder final {
                                                format_,
                                                last_submitted_value_,
                                                completed_submit_value_);
-        composite_renderer.OnSwapchainRecreated(image_count_, extent_, format_);
-
         if (runtime == nullptr) {
             return;
         }
-        (void)scene_targets.OnSwapchainRecreatedAndConfigure(
+        (void)post_stack.OnSwapchainRecreated(
             runtime->Context(),
-            runtime->RenderTarget(),
-            runtime->HasRenderTargetPool() ? &runtime->TargetPool() : nullptr,
+            image_count_,
             extent_,
+            format_,
             last_submitted_value_,
             completed_submit_value_,
-            &composite_renderer,
+            runtime->RenderTarget(),
+            runtime->HasRenderTargetPool() ? &runtime->TargetPool() : nullptr,
             vr::render::BindSceneRenderer(geometry_renderer, vr::render::SceneRenderPassRole::single));
     }
 };
@@ -551,8 +557,8 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_end_to_end_smoke, "integrat
     }
 }
 
-VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_offscreen_composite_smoke,
-             "integration;gpu;sdl;runtime;geometry;render_target") {
+VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_bloom_post_stack_smoke,
+             "integration;gpu;sdl;runtime;geometry;render_target;postprocess") {
     Runtime runtime{};
     vr::geometry::GeometryResourceHost geometry_resource_host{};
     vr::geometry::GeometryUploadHost geometry_upload_host{};
@@ -566,7 +572,6 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_offscreen_composite_smoke,
     bool geometry_image_host_initialized = false;
     bool geometry_material_host_initialized = false;
     bool geometry_renderer_initialized = false;
-    bool composite_renderer_initialized = false;
 
     std::array<vr::geometry::GeometryMeshVertex, 4U> vertices{
         vr::geometry::GeometryMeshVertex{.position_x = -0.5F, .position_y = -0.5F, .position_z = 0.0F, .normal_x = 0.0F, .normal_y = 0.0F, .normal_z = 1.0F, .uv_u = 0.0F, .uv_v = 0.0F},
@@ -677,7 +682,7 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_offscreen_composite_smoke,
         runtime_initialized = true;
 
         recorder.runtime = &runtime;
-        recorder.InitializeSceneTargets();
+        recorder.InitializePostStack();
 
         vr::geometry::GeometryResourceHostCreateInfo resource_create_info{};
         resource_create_info.reserve_mesh_count = 32U;
@@ -786,14 +791,6 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_offscreen_composite_smoke,
                                                 &camera_transform,
                                                 bounds_components.data());
 
-        vr::render::RenderTargetCompositeRendererCreateInfo composite_create_info{};
-        composite_create_info.clear_swapchain = true;
-        composite_create_info.enable_reinhard_tonemap = true;
-        composite_create_info.exposure = 1.0F;
-        composite_create_info.apply_manual_gamma = false;
-        recorder.composite_renderer.Initialize(composite_create_info);
-        composite_renderer_initialized = true;
-
         std::uint32_t submitted_frames = 0U;
         std::uint32_t max_draw_calls = 0U;
         std::uint32_t max_draw_batches = 0U;
@@ -805,8 +802,10 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_offscreen_composite_smoke,
         std::uint32_t max_material_sets = 0U;
         std::uint32_t max_culling_input_count = 0U;
         std::uint32_t max_culling_visible_count = 0U;
-        std::uint32_t max_composite_draw_calls = 0U;
-        std::uint32_t max_composite_descriptor_updates = 0U;
+        std::uint32_t max_prefilter_draw_calls = 0U;
+        std::uint32_t max_blur_draw_calls = 0U;
+        std::uint32_t max_combine_draw_calls = 0U;
+        std::uint32_t max_bloom_descriptor_updates = 0U;
         bool observed_bounds_culling = false;
 
         constexpr std::uint32_t max_ticks = 16U;
@@ -835,8 +834,7 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_offscreen_composite_smoke,
             }
 
             const vr::geometry::GeometryRenderer3DStats renderer_stats = recorder.geometry_renderer.Stats();
-            const vr::render::RenderTargetCompositeRendererStats composite_stats =
-                recorder.composite_renderer.Stats();
+            const auto bloom_stats = recorder.post_stack.Stats();
             max_draw_calls = std::max(max_draw_calls, renderer_stats.draw_call_count);
             max_draw_batches = std::max(max_draw_batches, renderer_stats.draw_batch_count);
             max_instances = std::max(max_instances, renderer_stats.instance_count);
@@ -848,9 +846,14 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_offscreen_composite_smoke,
             max_material_sets = std::max(max_material_sets, renderer_stats.material_set_count);
             max_culling_input_count = std::max(max_culling_input_count, renderer_stats.culling_input_count);
             max_culling_visible_count = std::max(max_culling_visible_count, renderer_stats.culling_visible_count);
-            max_composite_draw_calls = std::max(max_composite_draw_calls, composite_stats.draw_call_count);
-            max_composite_descriptor_updates = std::max(max_composite_descriptor_updates,
-                                                        composite_stats.descriptor_set_update_count);
+            max_prefilter_draw_calls = std::max(max_prefilter_draw_calls,
+                                                bloom_stats.prefilter_draw_call_count);
+            max_blur_draw_calls = std::max(max_blur_draw_calls,
+                                           bloom_stats.blur_draw_call_count);
+            max_combine_draw_calls = std::max(max_combine_draw_calls,
+                                              bloom_stats.combine_draw_call_count);
+            max_bloom_descriptor_updates = std::max(max_bloom_descriptor_updates,
+                                                    bloom_stats.descriptor_set_update_count);
             observed_bounds_culling = observed_bounds_culling || renderer_stats.used_bounds_culling;
             SDL_Delay(1U);
         }
@@ -864,8 +867,10 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_offscreen_composite_smoke,
         VR_CHECK(max_descriptor_updates > 0U);
         VR_CHECK(max_material_push_constant_updates > 0U);
         VR_CHECK(max_material_sets > 0U);
-        VR_CHECK(max_composite_draw_calls > 0U);
-        VR_CHECK(max_composite_descriptor_updates > 0U);
+        VR_CHECK(max_prefilter_draw_calls > 0U);
+        VR_CHECK(max_blur_draw_calls > 0U);
+        VR_CHECK(max_combine_draw_calls > 0U);
+        VR_CHECK(max_bloom_descriptor_updates > 0U);
         VR_CHECK(observed_bounds_culling);
         VR_CHECK(max_culling_input_count == static_cast<std::uint32_t>(geometry_components.size()));
         VR_CHECK(max_culling_visible_count > 0U);
@@ -875,13 +880,12 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_offscreen_composite_smoke,
         VR_CHECK(geometry_material_host.Stats().material_count >= 2U);
         VR_CHECK(runtime.TargetPool().Stats().acquire_count > 0U);
         VR_CHECK(runtime.TargetPool().Stats().reuse_hit_count > 0U);
-        VR_CHECK(runtime.RenderTarget().ResolveView(recorder.scene_targets.ColorTarget()).state ==
+        VR_CHECK(runtime.RenderTarget().ResolveView(recorder.post_stack.Targets().ColorTarget()).state ==
                  vr::render::RenderTargetStateKind::shader_read);
-        VR_CHECK(runtime.RenderTarget().ResolveView(recorder.scene_targets.DepthTarget()).state ==
+        VR_CHECK(runtime.RenderTarget().ResolveView(recorder.post_stack.Targets().DepthTarget()).state ==
                  vr::render::RenderTargetStateKind::depth_attachment);
 
-        recorder.composite_renderer.Shutdown(runtime.Context());
-        composite_renderer_initialized = false;
+        recorder.post_stack.Shutdown(runtime.Context());
         recorder.geometry_renderer.Shutdown(runtime.Context());
         geometry_renderer_initialized = false;
         geometry_material_host.Shutdown();
@@ -895,9 +899,8 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_offscreen_composite_smoke,
         runtime.Shutdown();
         runtime_initialized = false;
     } catch (const std::exception& exception_) {
-        if (composite_renderer_initialized && runtime_initialized && runtime.IsInitialized()) {
-            recorder.composite_renderer.Shutdown(runtime.Context());
-            composite_renderer_initialized = false;
+        if (runtime_initialized && runtime.IsInitialized() && recorder.post_stack.IsInitialized()) {
+            recorder.post_stack.Shutdown(runtime.Context());
         }
         if (geometry_renderer_initialized && runtime_initialized && runtime.IsInitialized()) {
             recorder.geometry_renderer.Shutdown(runtime.Context());

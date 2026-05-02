@@ -9,9 +9,8 @@
 #include "vr/geometry/geometry_renderer_3d.hpp"
 #include "vr/geometry/geometry_resource_host.hpp"
 #include "vr/geometry/geometry_upload_host.hpp"
-#include "vr/render/render_target_composite_renderer.hpp"
 #include "vr/render/render_runtime_host.hpp"
-#include "vr/render/scene_render_target_set.hpp"
+#include "vr/render/scene_bloom_post_stack.hpp"
 
 #include <SDL3/SDL.h>
 
@@ -40,11 +39,10 @@ using CameraSystem3D = vr::ecs::CameraSystem<vr::ecs::Dim3>;
 struct GeometryUnifiedRecorder final {
     Runtime* runtime = nullptr;
     vr::geometry::GeometryRenderer3D renderer_3d{};
-    vr::render::RenderTargetCompositeRenderer composite_renderer{};
     vr::geometry::GeometryRenderer2D renderer_2d{};
-    vr::render::SceneRenderTargetSet scene_targets{};
+    vr::render::SceneBloomPostStack post_stack{};
 
-    void InitializeSceneTargets() {
+    void InitializePostStack() {
         vr::render::SceneRenderTargetSetCreateInfo create_info{};
         create_info.color_debug_name = "GeometryUnifiedSceneColor";
         create_info.depth_debug_name = "GeometryUnifiedSceneDepth";
@@ -52,7 +50,18 @@ struct GeometryUnifiedRecorder final {
         create_info.color_lifetime = vr::render::RenderTargetLifetime::transient;
         create_info.depth_lifetime = vr::render::RenderTargetLifetime::transient;
         create_info.clear_color = VkClearColorValue{{0.06F, 0.07F, 0.11F, 1.0F}};
-        scene_targets.Initialize(create_info);
+        vr::render::RenderTargetBloomRendererCreateInfo bloom_create_info{};
+        bloom_create_info.clear_swapchain = true;
+        bloom_create_info.clear_color = {{0.02F, 0.025F, 0.04F, 1.0F}};
+        bloom_create_info.enable_reinhard_tonemap = true;
+        bloom_create_info.exposure = 1.0F;
+        bloom_create_info.apply_manual_gamma = false;
+        bloom_create_info.bloom_threshold = 0.70F;
+        bloom_create_info.bloom_knee = 0.42F;
+        bloom_create_info.bloom_intensity = 0.88F;
+        bloom_create_info.blur_filter_scale = 1.02F;
+        bloom_create_info.downsample_scale = 0.5F;
+        post_stack.Initialize(create_info, bloom_create_info);
     }
 
     void ConfigureOverlayTarget() {
@@ -65,19 +74,17 @@ struct GeometryUnifiedRecorder final {
     }
 
     void PrepareFrame(const vr::render::RuntimePrepareContext& prepare_context_) {
-        (void)scene_targets.PrepareFrameAndConfigure(
+        (void)post_stack.PrepareFrame(
             prepare_context_,
-            &composite_renderer,
             vr::render::BindSceneRenderer(renderer_3d, vr::render::SceneRenderPassRole::single));
         ConfigureOverlayTarget();
         renderer_3d.PrepareFrame(prepare_context_);
-        composite_renderer.PrepareFrame(prepare_context_);
         renderer_2d.PrepareFrame(prepare_context_);
     }
 
     void Record(const vr::render::FrameRecordContext& record_context_) {
         renderer_3d.Record(record_context_);
-        composite_renderer.Record(record_context_);
+        post_stack.Record(record_context_);
         renderer_2d.Record(record_context_);
     }
 
@@ -91,7 +98,6 @@ struct GeometryUnifiedRecorder final {
                                          format_,
                                          last_submitted_value_,
                                          completed_submit_value_);
-        composite_renderer.OnSwapchainRecreated(image_count_, extent_, format_);
         renderer_2d.OnSwapchainRecreated(image_count_,
                                          extent_,
                                          format_,
@@ -101,14 +107,15 @@ struct GeometryUnifiedRecorder final {
         if (runtime == nullptr) {
             return;
         }
-        (void)scene_targets.OnSwapchainRecreatedAndConfigure(
+        (void)post_stack.OnSwapchainRecreated(
             runtime->Context(),
-            runtime->RenderTarget(),
-            runtime->HasRenderTargetPool() ? &runtime->TargetPool() : nullptr,
+            image_count_,
             extent_,
+            format_,
             last_submitted_value_,
             completed_submit_value_,
-            &composite_renderer,
+            runtime->RenderTarget(),
+            runtime->HasRenderTargetPool() ? &runtime->TargetPool() : nullptr,
             vr::render::BindSceneRenderer(renderer_3d, vr::render::SceneRenderPassRole::single));
         ConfigureOverlayTarget();
     }
@@ -218,7 +225,6 @@ int main(int argc_,
     bool geometry_image_host_initialized = false;
     bool geometry_material_host_initialized = false;
     bool renderer_3d_initialized = false;
-    bool composite_renderer_initialized = false;
     bool renderer_2d_initialized = false;
 
     try {
@@ -240,7 +246,7 @@ int main(int argc_,
         runtime_initialized = true;
 
         recorder.runtime = &runtime;
-        recorder.InitializeSceneTargets();
+        recorder.InitializePostStack();
 
         vr::geometry::GeometryResourceHostCreateInfo resource_create_info{};
         resource_create_info.reserve_mesh_count = 64U;
@@ -464,14 +470,6 @@ int main(int argc_,
                                           &camera,
                                           &camera_transform);
 
-        vr::render::RenderTargetCompositeRendererCreateInfo composite_create_info{};
-        composite_create_info.clear_swapchain = true;
-        composite_create_info.enable_reinhard_tonemap = true;
-        composite_create_info.exposure = 1.0F;
-        composite_create_info.apply_manual_gamma = false;
-        recorder.composite_renderer.Initialize(composite_create_info);
-        composite_renderer_initialized = true;
-
         vr::geometry::GeometryRenderer2DCreateInfo renderer_2d_create_info{};
         renderer_2d_create_info.reserve_component_count =
             static_cast<std::uint32_t>(geometry_2d_components.size());
@@ -485,7 +483,7 @@ int main(int argc_,
         recorder.renderer_2d.SetSceneData(geometry_2d_components.data(),
                                           static_cast<std::uint32_t>(geometry_2d_components.size()));
 
-        std::cout << "sdl_geometry_unified_demo running (3D geometry offscreen + composite + 2D overlay). Close window to exit.\n";
+        std::cout << "sdl_geometry_unified_demo running (3D geometry offscreen + bloom post stack + 2D overlay). Close window to exit.\n";
 
         std::uint64_t fps_window_begin_ticks = SDL_GetTicks();
         std::uint32_t fps_window_frame_count = 0U;
@@ -534,8 +532,7 @@ int main(int argc_,
                        static_cast<float>(fps_window_elapsed))
                     : 0.0F;
                 const vr::geometry::GeometryRenderer3DStats stats_3d = recorder.renderer_3d.Stats();
-                const vr::render::RenderTargetCompositeRendererStats composite_stats =
-                    recorder.composite_renderer.Stats();
+                const auto bloom_stats = recorder.post_stack.Stats();
                 const vr::geometry::GeometryRenderer2DStats stats_2d = recorder.renderer_2d.Stats();
                 const vr::render::RenderTargetPoolStats pool_stats = runtime.TargetPool().Stats();
                 std::cout << "FPS: " << fps
@@ -543,8 +540,10 @@ int main(int argc_,
                           << " | 3D Draw:" << stats_3d.draw_call_count
                           << " Batch:" << stats_3d.draw_batch_count
                           << " MatSet:" << stats_3d.material_set_count
-                          << " | Comp Draw:" << composite_stats.draw_call_count
-                          << " DSU:" << composite_stats.descriptor_set_update_count
+                          << " | Bloom P:" << bloom_stats.prefilter_draw_call_count
+                          << " B:" << bloom_stats.blur_draw_call_count
+                          << " C:" << bloom_stats.combine_draw_call_count
+                          << " DSU:" << bloom_stats.descriptor_set_update_count
                           << " | 2D Draw:" << stats_2d.draw_call_count
                           << " Prim:" << stats_2d.primitive_count
                           << " | Pool Acquire:" << pool_stats.acquire_count
@@ -557,8 +556,7 @@ int main(int argc_,
 
         recorder.renderer_2d.Shutdown(runtime.Context());
         renderer_2d_initialized = false;
-        recorder.composite_renderer.Shutdown(runtime.Context());
-        composite_renderer_initialized = false;
+        recorder.post_stack.Shutdown(runtime.Context());
         recorder.renderer_3d.Shutdown(runtime.Context());
         renderer_3d_initialized = false;
         geometry_material_host.Shutdown();
@@ -578,9 +576,8 @@ int main(int argc_,
             recorder.renderer_2d.Shutdown(runtime.Context());
             renderer_2d_initialized = false;
         }
-        if (composite_renderer_initialized && runtime_initialized && runtime.IsInitialized()) {
-            recorder.composite_renderer.Shutdown(runtime.Context());
-            composite_renderer_initialized = false;
+        if (runtime_initialized && runtime.IsInitialized() && recorder.post_stack.IsInitialized()) {
+            recorder.post_stack.Shutdown(runtime.Context());
         }
         if (renderer_3d_initialized && runtime_initialized && runtime.IsInitialized()) {
             recorder.renderer_3d.Shutdown(runtime.Context());

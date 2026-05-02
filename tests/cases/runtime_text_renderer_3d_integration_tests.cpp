@@ -3,10 +3,9 @@
 #include "vr/ecs/system/camera_system.hpp"
 #include "vr/ecs/system/text_system.hpp"
 #include "vr/ecs/system/transform_system.hpp"
-#include "vr/render/render_target_bloom_renderer.hpp"
 #include "vr/render/render_target_format_utils.hpp"
 #include "vr/render/render_runtime_host.hpp"
-#include "vr/render/scene_render_target_set.hpp"
+#include "vr/render/scene_bloom_post_stack.hpp"
 #include "vr/text/text_renderer_3d.hpp"
 
 #include <SDL3/SDL.h>
@@ -125,10 +124,9 @@ void InitializeTextComponent(Text3D& component_,
 struct Text3DOffscreenRecorder final {
     Runtime* runtime = nullptr;
     vr::text::TextRenderer3D text_renderer{};
-    vr::render::RenderTargetBloomRenderer bloom_renderer{};
-    vr::render::SceneRenderTargetSet scene_targets{};
+    vr::render::SceneBloomPostStack post_stack{};
 
-    void InitializeSceneTargets() {
+    void InitializePostStack() {
         vr::render::SceneRenderTargetSetCreateInfo create_info{};
         create_info.color_debug_name = "RuntimeText3DSceneColor";
         create_info.depth_debug_name = "RuntimeText3DSceneDepth";
@@ -136,21 +134,29 @@ struct Text3DOffscreenRecorder final {
         create_info.color_lifetime = vr::render::RenderTargetLifetime::transient;
         create_info.depth_lifetime = vr::render::RenderTargetLifetime::transient;
         create_info.clear_color = VkClearColorValue{{0.07F, 0.08F, 0.11F, 1.0F}};
-        scene_targets.Initialize(create_info);
+        vr::render::RenderTargetBloomRendererCreateInfo bloom_create_info{};
+        bloom_create_info.clear_swapchain = true;
+        bloom_create_info.enable_reinhard_tonemap = true;
+        bloom_create_info.exposure = 1.0F;
+        bloom_create_info.apply_manual_gamma = false;
+        bloom_create_info.bloom_threshold = 0.70F;
+        bloom_create_info.bloom_knee = 0.45F;
+        bloom_create_info.bloom_intensity = 0.95F;
+        bloom_create_info.blur_filter_scale = 1.10F;
+        bloom_create_info.downsample_scale = 0.5F;
+        post_stack.Initialize(create_info, bloom_create_info);
     }
 
     void PrepareFrame(const vr::render::RuntimePrepareContext& prepare_context_) {
-        (void)scene_targets.PrepareFrameAndConfigure(
+        (void)post_stack.PrepareFrame(
             prepare_context_,
-            &bloom_renderer,
             vr::render::BindSceneRenderer(text_renderer, vr::render::SceneRenderPassRole::single));
         text_renderer.PrepareFrame(prepare_context_);
-        bloom_renderer.PrepareFrame(prepare_context_);
     }
 
     void Record(const vr::render::FrameRecordContext& record_context_) {
         text_renderer.Record(record_context_);
-        bloom_renderer.Record(record_context_);
+        post_stack.Record(record_context_);
     }
 
     void OnSwapchainRecreated(std::uint32_t image_count_,
@@ -163,19 +169,18 @@ struct Text3DOffscreenRecorder final {
                                            format_,
                                            last_submitted_value_,
                                            completed_submit_value_);
-        bloom_renderer.OnSwapchainRecreated(image_count_, extent_, format_);
-
         if (runtime == nullptr) {
             return;
         }
-        (void)scene_targets.OnSwapchainRecreatedAndConfigure(
+        (void)post_stack.OnSwapchainRecreated(
             runtime->Context(),
-            runtime->RenderTarget(),
-            runtime->HasRenderTargetPool() ? &runtime->TargetPool() : nullptr,
+            image_count_,
             extent_,
+            format_,
             last_submitted_value_,
             completed_submit_value_,
-            &bloom_renderer,
+            runtime->RenderTarget(),
+            runtime->HasRenderTargetPool() ? &runtime->TargetPool() : nullptr,
             vr::render::BindSceneRenderer(text_renderer, vr::render::SceneRenderPassRole::single));
     }
 };
@@ -431,7 +436,6 @@ VR_TEST_CASE(RuntimeIntegration_text_renderer_3d_bloom_post_stack_smoke,
     Text3DOffscreenRecorder recorder{};
     bool runtime_initialized = false;
     bool text_renderer_initialized = false;
-    bool bloom_renderer_initialized = false;
 
     std::array<Text3D, 3U> text_components{};
     InitializeTextComponent(text_components[0U], 1U, 3U, "Melosyne 3D Text");
@@ -524,7 +528,7 @@ VR_TEST_CASE(RuntimeIntegration_text_renderer_3d_bloom_post_stack_smoke,
         runtime.Initialize(create_info);
         runtime_initialized = true;
         recorder.runtime = &runtime;
-        recorder.InitializeSceneTargets();
+        recorder.InitializePostStack();
 
         vr::text::FontFaceCreateInfo face_create_info{};
         face_create_info.file_path = font_path;
@@ -551,20 +555,6 @@ VR_TEST_CASE(RuntimeIntegration_text_renderer_3d_bloom_post_stack_smoke,
                                             &camera,
                                             &camera_transform,
                                             bounds_components.data());
-
-        vr::render::RenderTargetBloomRendererCreateInfo bloom_create_info{};
-        bloom_create_info.clear_swapchain = true;
-        bloom_create_info.clear_color = {{0.02F, 0.025F, 0.04F, 1.0F}};
-        bloom_create_info.enable_reinhard_tonemap = true;
-        bloom_create_info.exposure = 1.0F;
-        bloom_create_info.apply_manual_gamma = false;
-        bloom_create_info.bloom_threshold = 0.68F;
-        bloom_create_info.bloom_knee = 0.42F;
-        bloom_create_info.bloom_intensity = 0.92F;
-        bloom_create_info.blur_filter_scale = 1.05F;
-        bloom_create_info.downsample_scale = 0.5F;
-        recorder.bloom_renderer.Initialize(bloom_create_info);
-        bloom_renderer_initialized = true;
 
         std::uint32_t submitted_frames = 0U;
         std::uint32_t max_instance_count = 0U;
@@ -607,7 +597,7 @@ VR_TEST_CASE(RuntimeIntegration_text_renderer_3d_bloom_post_stack_smoke,
 
             const vr::text::TextRenderer3DStats& text_stats = recorder.text_renderer.Stats();
             const vr::render::RenderTargetBloomRendererStats& bloom_stats =
-                recorder.bloom_renderer.Stats();
+                recorder.post_stack.Stats();
             max_instance_count = std::max(max_instance_count, text_stats.instance_count);
             max_draw_batches = std::max(max_draw_batches, text_stats.draw_batch_count);
             max_draw_calls = std::max(max_draw_calls, text_stats.draw_call_count);
@@ -648,21 +638,19 @@ VR_TEST_CASE(RuntimeIntegration_text_renderer_3d_bloom_post_stack_smoke,
         VR_CHECK(runtime.GlyphUpload().Stats().uploaded_rect_count > 0U);
         VR_CHECK(runtime.TargetPool().Stats().acquire_count > 0U);
         VR_CHECK(runtime.TargetPool().Stats().reuse_hit_count > 0U);
-        VR_CHECK(runtime.RenderTarget().ResolveView(recorder.scene_targets.ColorTarget()).state ==
+        VR_CHECK(runtime.RenderTarget().ResolveView(recorder.post_stack.Targets().ColorTarget()).state ==
                  vr::render::RenderTargetStateKind::shader_read);
-        VR_CHECK(runtime.RenderTarget().ResolveView(recorder.scene_targets.DepthTarget()).state ==
+        VR_CHECK(runtime.RenderTarget().ResolveView(recorder.post_stack.Targets().DepthTarget()).state ==
                  vr::render::RenderTargetStateKind::depth_attachment);
 
-        recorder.bloom_renderer.Shutdown(runtime.Context());
-        bloom_renderer_initialized = false;
+        recorder.post_stack.Shutdown(runtime.Context());
         recorder.text_renderer.Shutdown(runtime.Context());
         text_renderer_initialized = false;
         runtime.Shutdown();
         runtime_initialized = false;
     } catch (const std::exception& exception_) {
-        if (bloom_renderer_initialized && runtime_initialized && runtime.IsInitialized()) {
-            recorder.bloom_renderer.Shutdown(runtime.Context());
-            bloom_renderer_initialized = false;
+        if (runtime_initialized && runtime.IsInitialized() && recorder.post_stack.IsInitialized()) {
+            recorder.post_stack.Shutdown(runtime.Context());
         }
         if (text_renderer_initialized && runtime_initialized && runtime.IsInitialized()) {
             recorder.text_renderer.Shutdown(runtime.Context());

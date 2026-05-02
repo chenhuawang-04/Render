@@ -3,9 +3,8 @@
 #include "vr/ecs/system/camera_system.hpp"
 #include "vr/ecs/system/surface_system.hpp"
 #include "vr/ecs/system/transform_system.hpp"
-#include "vr/render/render_target_bloom_renderer.hpp"
 #include "vr/render/render_runtime_host.hpp"
-#include "vr/render/scene_render_target_set.hpp"
+#include "vr/render/scene_bloom_post_stack.hpp"
 #include "vr/surface/surface_image_host.hpp"
 #include "vr/surface/surface_renderer_3d.hpp"
 #include "vr/surface/surface_upload_host.hpp"
@@ -141,10 +140,9 @@ void InitializeSurface3DComponent(Surface3D& component_,
 struct Surface3DOffscreenRecorder final {
     Runtime* runtime = nullptr;
     vr::surface::SurfaceRenderer3D surface_renderer{};
-    vr::render::RenderTargetBloomRenderer bloom_renderer{};
-    vr::render::SceneRenderTargetSet scene_targets{};
+    vr::render::SceneBloomPostStack post_stack{};
 
-    void InitializeSceneTargets() {
+    void InitializePostStack() {
         vr::render::SceneRenderTargetSetCreateInfo create_info{};
         create_info.color_debug_name = "RuntimeSurface3DSceneColor";
         create_info.depth_debug_name = "RuntimeSurface3DSceneDepth";
@@ -152,21 +150,29 @@ struct Surface3DOffscreenRecorder final {
         create_info.color_lifetime = vr::render::RenderTargetLifetime::transient;
         create_info.depth_lifetime = vr::render::RenderTargetLifetime::transient;
         create_info.clear_color = VkClearColorValue{{0.05F, 0.07F, 0.10F, 1.0F}};
-        scene_targets.Initialize(create_info);
+        vr::render::RenderTargetBloomRendererCreateInfo bloom_create_info{};
+        bloom_create_info.clear_swapchain = true;
+        bloom_create_info.enable_reinhard_tonemap = true;
+        bloom_create_info.exposure = 1.0F;
+        bloom_create_info.apply_manual_gamma = false;
+        bloom_create_info.bloom_threshold = 0.66F;
+        bloom_create_info.bloom_knee = 0.40F;
+        bloom_create_info.bloom_intensity = 0.90F;
+        bloom_create_info.blur_filter_scale = 1.05F;
+        bloom_create_info.downsample_scale = 0.5F;
+        post_stack.Initialize(create_info, bloom_create_info);
     }
 
     void PrepareFrame(const vr::render::RuntimePrepareContext& prepare_context_) {
-        (void)scene_targets.PrepareFrameAndConfigure(
+        (void)post_stack.PrepareFrame(
             prepare_context_,
-            &bloom_renderer,
             vr::render::BindSceneRenderer(surface_renderer, vr::render::SceneRenderPassRole::single));
         surface_renderer.PrepareFrame(prepare_context_);
-        bloom_renderer.PrepareFrame(prepare_context_);
     }
 
     void Record(const vr::render::FrameRecordContext& record_context_) {
         surface_renderer.Record(record_context_);
-        bloom_renderer.Record(record_context_);
+        post_stack.Record(record_context_);
     }
 
     void OnSwapchainRecreated(std::uint32_t image_count_,
@@ -179,19 +185,18 @@ struct Surface3DOffscreenRecorder final {
                                               format_,
                                               last_submitted_value_,
                                               completed_submit_value_);
-        bloom_renderer.OnSwapchainRecreated(image_count_, extent_, format_);
-
         if (runtime == nullptr) {
             return;
         }
-        (void)scene_targets.OnSwapchainRecreatedAndConfigure(
+        (void)post_stack.OnSwapchainRecreated(
             runtime->Context(),
-            runtime->RenderTarget(),
-            runtime->HasRenderTargetPool() ? &runtime->TargetPool() : nullptr,
+            image_count_,
             extent_,
+            format_,
             last_submitted_value_,
             completed_submit_value_,
-            &bloom_renderer,
+            runtime->RenderTarget(),
+            runtime->HasRenderTargetPool() ? &runtime->TargetPool() : nullptr,
             vr::render::BindSceneRenderer(surface_renderer, vr::render::SceneRenderPassRole::single));
     }
 };
@@ -207,7 +212,6 @@ VR_TEST_CASE(RuntimeIntegration_surface_renderer_3d_bloom_post_stack_smoke,
     bool upload_initialized = false;
     bool image_initialized = false;
     bool surface_renderer_initialized = false;
-    bool bloom_renderer_initialized = false;
 
     constexpr std::uint32_t texture_width = 64U;
     constexpr std::uint32_t texture_height = 64U;
@@ -239,7 +243,7 @@ VR_TEST_CASE(RuntimeIntegration_surface_renderer_3d_bloom_post_stack_smoke,
         runtime_initialized = true;
 
         recorder.runtime = &runtime;
-        recorder.InitializeSceneTargets();
+        recorder.InitializePostStack();
 
         vr::surface::SurfaceUploadHostCreateInfo upload_create_info{};
         upload_create_info.frames_in_flight = 2U;
@@ -381,19 +385,6 @@ VR_TEST_CASE(RuntimeIntegration_surface_renderer_3d_bloom_post_stack_smoke,
                                                &camera_transform,
                                                bounds.data());
 
-        vr::render::RenderTargetBloomRendererCreateInfo bloom_create_info{};
-        bloom_create_info.clear_swapchain = true;
-        bloom_create_info.enable_reinhard_tonemap = true;
-        bloom_create_info.exposure = 1.05F;
-        bloom_create_info.apply_manual_gamma = false;
-        bloom_create_info.bloom_threshold = 0.66F;
-        bloom_create_info.bloom_knee = 0.40F;
-        bloom_create_info.bloom_intensity = 0.90F;
-        bloom_create_info.blur_filter_scale = 1.05F;
-        bloom_create_info.downsample_scale = 0.5F;
-        recorder.bloom_renderer.Initialize(bloom_create_info);
-        bloom_renderer_initialized = true;
-
         std::uint32_t submitted_frames = 0U;
         std::uint32_t max_surface_draw_calls = 0U;
         std::uint32_t max_surface_draw_batches = 0U;
@@ -435,7 +426,7 @@ VR_TEST_CASE(RuntimeIntegration_surface_renderer_3d_bloom_post_stack_smoke,
             }
 
             const auto surface_stats = recorder.surface_renderer.Stats();
-            const auto bloom_stats = recorder.bloom_renderer.Stats();
+            const auto bloom_stats = recorder.post_stack.Stats();
             max_surface_draw_calls = std::max(max_surface_draw_calls, surface_stats.draw_call_count);
             max_surface_draw_batches = std::max(max_surface_draw_batches, surface_stats.draw_batch_count);
             max_surface_instances = std::max(max_surface_instances, surface_stats.instance_count);
@@ -472,16 +463,15 @@ VR_TEST_CASE(RuntimeIntegration_surface_renderer_3d_bloom_post_stack_smoke,
         VR_CHECK(max_blur_draw_calls > 0U);
         VR_CHECK(max_combine_draw_calls > 0U);
         VR_CHECK(max_bloom_descriptor_updates > 0U);
-        VR_CHECK(runtime.RenderTarget().ResolveView(recorder.scene_targets.ColorTarget()).state ==
+        VR_CHECK(runtime.RenderTarget().ResolveView(recorder.post_stack.Targets().ColorTarget()).state ==
                  vr::render::RenderTargetStateKind::shader_read);
-        VR_CHECK(runtime.RenderTarget().ResolveView(recorder.scene_targets.DepthTarget()).state ==
+        VR_CHECK(runtime.RenderTarget().ResolveView(recorder.post_stack.Targets().DepthTarget()).state ==
                  vr::render::RenderTargetStateKind::depth_attachment);
         VR_CHECK(surface_image_host.Stats().image_count >= 2U);
         VR_CHECK(runtime.TargetPool().Stats().acquire_count > 0U);
         VR_CHECK(runtime.TargetPool().Stats().reuse_hit_count > 0U);
 
-        recorder.bloom_renderer.Shutdown(runtime.Context());
-        bloom_renderer_initialized = false;
+        recorder.post_stack.Shutdown(runtime.Context());
         recorder.surface_renderer.Shutdown(runtime.Context());
         surface_renderer_initialized = false;
         surface_image_host.Shutdown(runtime.Context());
@@ -491,9 +481,8 @@ VR_TEST_CASE(RuntimeIntegration_surface_renderer_3d_bloom_post_stack_smoke,
         runtime.Shutdown();
         runtime_initialized = false;
     } catch (const std::exception& exception_) {
-        if (bloom_renderer_initialized && runtime_initialized && runtime.IsInitialized()) {
-            recorder.bloom_renderer.Shutdown(runtime.Context());
-            bloom_renderer_initialized = false;
+        if (runtime_initialized && runtime.IsInitialized() && recorder.post_stack.IsInitialized()) {
+            recorder.post_stack.Shutdown(runtime.Context());
         }
         if (surface_renderer_initialized && runtime_initialized && runtime.IsInitialized()) {
             recorder.surface_renderer.Shutdown(runtime.Context());
