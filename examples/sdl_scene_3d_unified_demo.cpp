@@ -1,6 +1,8 @@
 #include "vr/ecs/system/bounds_system.hpp"
 #include "vr/ecs/system/camera_system.hpp"
 #include "vr/ecs/system/geometry_system.hpp"
+#include "vr/ecs/system/light_system.hpp"
+#include "vr/ecs/system/shadow_system.hpp"
 #include "vr/ecs/system/surface_system.hpp"
 #include "vr/ecs/system/text_system.hpp"
 #include "vr/ecs/system/transform_system.hpp"
@@ -9,8 +11,10 @@
 #include "vr/geometry/geometry_renderer_3d.hpp"
 #include "vr/geometry/geometry_resource_host.hpp"
 #include "vr/geometry/geometry_upload_host.hpp"
+#include "vr/render/light_frame_coordinator.hpp"
 #include "vr/render/render_runtime_host.hpp"
 #include "vr/render/scene_recorder_3d.hpp"
+#include "vr/shadow/shadow_renderer_3d.hpp"
 #include "vr/surface/surface_image_host.hpp"
 #include "vr/surface/surface_renderer_3d.hpp"
 #include "vr/surface/surface_upload_host.hpp"
@@ -33,6 +37,8 @@ namespace {
 
 using Runtime = vr::render::RenderRuntimeHost<vr::platform::ActiveBackendTag, 2U>;
 using Geometry3D = vr::ecs::Geometry<vr::ecs::Dim3>;
+using Light3D = vr::ecs::Light<vr::ecs::Dim3>;
+using Shadow3D = vr::ecs::Shadow<vr::ecs::Dim3>;
 using Surface3D = vr::ecs::Surface<vr::ecs::Dim3>;
 using Text3D = vr::ecs::Text<vr::ecs::Dim3>;
 using Transform3D = vr::ecs::Transform<vr::ecs::Dim3>;
@@ -40,6 +46,8 @@ using Bounds3D = vr::ecs::Bounds<vr::ecs::Dim3>;
 using Camera3D = vr::ecs::Camera<vr::ecs::Dim3>;
 
 using GeometrySystem3D = vr::ecs::GeometrySystem<vr::ecs::Dim3>;
+using LightSystem3D = vr::ecs::LightSystem<vr::ecs::Dim3>;
+using ShadowSystem3D = vr::ecs::ShadowSystem<vr::ecs::Dim3>;
 using SurfaceSystem3D = vr::ecs::SurfaceSystem<vr::ecs::Dim3>;
 using TextSystem3D = vr::ecs::TextSystem<vr::ecs::Dim3>;
 using TransformSystem3D = vr::ecs::TransformSystem<vr::ecs::Dim3>;
@@ -132,6 +140,7 @@ void InitializeGeometryComponent(Geometry3D& component_) {
                                 vr::ecs::Float3{.x = 0.5F, .y = 0.5F, .z = 0.05F});
     component_.style.depth_test = 1U;
     component_.style.depth_write = 1U;
+    component_.style.cast_shadow = 1U;
     component_.style.shading_model = vr::ecs::Geometry3DShadingModel::lit;
     component_.style.albedo_color = vr::ecs::Rgba8{236U, 214U, 178U, 255U};
     component_.mesh.submesh_index = 0U;
@@ -139,6 +148,29 @@ void InitializeGeometryComponent(Geometry3D& component_) {
     component_.mesh.flags = 0U;
     component_.runtime.route.depth_bin = 24U;
     GeometrySystem3D::RebuildSortKey(component_);
+}
+
+void InitializeLightComponent(Light3D& component_) {
+    LightSystem3D::Initialize(component_);
+    LightSystem3D::SetLightKind(component_, vr::ecs::LightKind::spot);
+    LightSystem3D::SetColor(component_, vr::ecs::Rgba8{255U, 244U, 224U, 255U});
+    LightSystem3D::SetIntensity(component_, 1850.0F);
+    LightSystem3D::SetRange(component_, 18.0F);
+    LightSystem3D::SetConeAngles(component_, 0.30F, 0.72F);
+    LightSystem3D::SetCastShadow(component_, true);
+}
+
+void InitializeShadowComponent(Shadow3D& component_,
+                               std::uint32_t light_component_index_) {
+    ShadowSystem3D::Initialize(component_);
+    ShadowSystem3D::SetProjectionKind(component_, vr::ecs::ShadowProjectionKind::spot);
+    ShadowSystem3D::SetCascadeConfig(component_, 1U, 0.5F);
+    ShadowSystem3D::SetMapResolution(component_, 1024U, 1024U);
+    ShadowSystem3D::SetLightComponentIndex(component_, light_component_index_);
+    ShadowSystem3D::SetTransformComponentIndex(component_, 0U);
+    ShadowSystem3D::SetCameraComponentIndex(component_, 0U);
+    ShadowSystem3D::SetAtlasNamespace(component_, 9U);
+    ShadowSystem3D::SetFaceCount(component_, 1U);
 }
 
 void InitializeSurfaceComponent(Surface3D& component_,
@@ -228,6 +260,8 @@ int main(int argc_,
     vr::surface::SurfaceImageHost surface_image_host{};
     vr::render::SceneRecorder3D recorder{};
     vr::geometry::GeometryRenderer3D geometry_renderer{};
+    vr::shadow::ShadowRenderer3D shadow_renderer{};
+    vr::render::LightFrameCoordinator<vr::ecs::Dim3> light_frame_coordinator{};
     vr::surface::SurfaceRenderer3D surface_renderer{};
     vr::text::TextRenderer3D text_renderer{};
 
@@ -239,6 +273,7 @@ int main(int argc_,
     bool surface_upload_host_initialized = false;
     bool surface_image_host_initialized = false;
     bool geometry_renderer_initialized = false;
+    bool shadow_renderer_initialized = false;
     bool surface_renderer_initialized = false;
     bool text_renderer_initialized = false;
 
@@ -284,6 +319,7 @@ int main(int argc_,
 
         recorder.Initialize(BuildUnifiedSceneRecorderCreateInfo());
         recorder.BindRuntime(runtime);
+        recorder.BindLightFrameCoordinator(&light_frame_coordinator);
 
         vr::geometry::GeometryResourceHostCreateInfo geometry_resource_create_info{};
         geometry_resource_create_info.reserve_mesh_count = 16U;
@@ -487,6 +523,30 @@ int main(int argc_,
         CameraSystem3D::MarkViewDirty(camera);
         CameraSystem3D::Update(camera, camera_transform);
 
+        std::array<Light3D, 1U> lights{};
+        std::array<Transform3D, 1U> light_transforms{};
+        InitializeLightComponent(lights[0U]);
+        TransformSystem3D::Initialize(light_transforms[0U]);
+        TransformSystem3D::SetLocalPosition(light_transforms[0U],
+                                            vr::ecs::Float3{.x = 0.35F, .y = 2.75F, .z = 2.35F});
+        TransformSystem3D::SetLocalRotationEulerXyz(light_transforms[0U], -0.72F, 0.18F, 0.0F);
+        TransformSystem3D::UpdateHierarchy(light_transforms.data(),
+                                           static_cast<std::uint32_t>(light_transforms.size()));
+        light_frame_coordinator.SetLightData(lights.data(),
+                                             light_transforms.data(),
+                                             static_cast<std::uint32_t>(lights.size()));
+        light_frame_coordinator.SetCamera(&camera);
+
+        std::array<Shadow3D, 1U> shadows{};
+        std::array<Transform3D, 1U> shadow_transforms{};
+        InitializeShadowComponent(shadows[0U], 0U);
+        TransformSystem3D::Initialize(shadow_transforms[0U]);
+        TransformSystem3D::SetLocalPosition(shadow_transforms[0U],
+                                            vr::ecs::Float3{.x = 0.35F, .y = 2.75F, .z = 2.35F});
+        TransformSystem3D::SetLocalRotationEulerXyz(shadow_transforms[0U], -0.72F, 0.18F, 0.0F);
+        TransformSystem3D::UpdateHierarchy(shadow_transforms.data(),
+                                           static_cast<std::uint32_t>(shadow_transforms.size()));
+
         vr::geometry::GeometryRenderer3DCreateInfo geometry_renderer_create_info{};
         geometry_renderer_create_info.reserve_component_count = 1U;
         geometry_renderer_create_info.reserve_instance_count = 64U;
@@ -542,6 +602,19 @@ int main(int argc_,
                                    &camera,
                                    &camera_transform,
                                    &text_bounds);
+        vr::shadow::ShadowRenderer3DCreateInfo shadow_renderer_create_info{};
+        shadow_renderer_create_info.reserve_shadow_count = static_cast<std::uint32_t>(shadows.size());
+        shadow_renderer_create_info.reserve_caster_count = 1U;
+        shadow_renderer.Initialize(shadow_renderer_create_info);
+        shadow_renderer_initialized = true;
+        shadow_renderer.SetHosts(&geometry_resource_host);
+        shadow_renderer.SetSceneData(shadows.data(),
+                                     shadow_transforms.data(),
+                                     static_cast<std::uint32_t>(shadows.size()),
+                                     &camera,
+                                     &geometry_bounds);
+        shadow_renderer.SetGeometryData(&geometry_component, &geometry_transform, 1U);
+        recorder.RegisterShadowRenderer(shadow_renderer);
         recorder.RegisterSceneRenderer(geometry_renderer, vr::render::SceneRenderPassRole::first);
         recorder.RegisterSceneRenderer(surface_renderer, vr::render::SceneRenderPassRole::middle);
         recorder.RegisterSceneRenderer(text_renderer, vr::render::SceneRenderPassRole::last);
@@ -575,6 +648,22 @@ int main(int argc_,
                                                         0.0F,
                                                         0.0F,
                                                         0.12F * std::sin(time_seconds * 1.30F));
+            TransformSystem3D::SetLocalPosition(light_transforms[0U],
+                                                vr::ecs::Float3{.x = 0.45F * std::cos(time_seconds * 0.42F),
+                                                                .y = 2.75F + 0.12F * std::sin(time_seconds * 0.58F),
+                                                                .z = 2.35F});
+            TransformSystem3D::SetLocalRotationEulerXyz(light_transforms[0U],
+                                                        -0.72F,
+                                                        0.20F + 0.18F * std::sin(time_seconds * 0.37F),
+                                                        0.0F);
+            TransformSystem3D::SetLocalPosition(shadow_transforms[0U],
+                                                vr::ecs::Float3{.x = 0.45F * std::cos(time_seconds * 0.42F),
+                                                                .y = 2.75F + 0.12F * std::sin(time_seconds * 0.58F),
+                                                                .z = 2.35F});
+            TransformSystem3D::SetLocalRotationEulerXyz(shadow_transforms[0U],
+                                                        -0.72F,
+                                                        0.20F + 0.18F * std::sin(time_seconds * 0.37F),
+                                                        0.0F);
 
             char runtime_text[96]{};
             std::snprintf(runtime_text,
@@ -589,6 +678,10 @@ int main(int argc_,
             geometry_transform = shared_transforms[0U];
             surface_transform = shared_transforms[1U];
             text_transform = shared_transforms[2U];
+            TransformSystem3D::UpdateHierarchy(light_transforms.data(),
+                                               static_cast<std::uint32_t>(light_transforms.size()));
+            TransformSystem3D::UpdateHierarchy(shadow_transforms.data(),
+                                               static_cast<std::uint32_t>(shadow_transforms.size()));
 
             bounds_batch = {geometry_bounds, surface_bounds, text_bounds};
             (void)BoundsSystem3D::UpdateAligned(bounds_batch.data(),
@@ -597,6 +690,9 @@ int main(int argc_,
             geometry_bounds = bounds_batch[0U];
             surface_bounds = bounds_batch[1U];
             text_bounds = bounds_batch[2U];
+            const std::uint32_t dirty_index = 0U;
+            light_frame_coordinator.SetTransformDirtyHint(&dirty_index, 1U);
+            shadow_renderer.SetTransformDirtyHint(&dirty_index, 1U);
             CameraSystem3D::Update(camera, camera_transform);
 
             const Runtime::RuntimeTickResult tick_result = runtime.Tick(recorder);
@@ -618,15 +714,20 @@ int main(int argc_,
                 const auto surface_stats = surface_renderer.Stats();
                 const auto text_stats = text_renderer.Stats();
                 const auto bloom_stats = recorder.PostStack().Stats();
+                const auto shadow_stats = shadow_renderer.Stats();
                 const auto pool_stats = runtime.TargetPool().Stats();
                 std::cout << "FPS:" << fps
                           << " Frame:" << frame_index
                           << " | G Draw:" << geometry_stats.draw_call_count
                           << " Inst:" << geometry_stats.instance_count
+                          << " Light:" << geometry_stats.visible_light_count
+                          << " ShadowView:" << geometry_stats.shadow_view_count
                           << " | S Draw:" << surface_stats.draw_call_count
                           << " Inst:" << surface_stats.instance_count
                           << " | T Draw:" << text_stats.draw_call_count
                           << " Inst:" << text_stats.instance_count
+                          << " | Shadow Draw:" << shadow_stats.draw_call_count
+                          << " AtlasPass:" << shadow_stats.atlas_layer_draw_pass_count
                           << " | Bloom P:" << bloom_stats.prefilter_draw_call_count
                           << " B:" << bloom_stats.blur_draw_call_count
                           << " C:" << bloom_stats.combine_draw_call_count
@@ -640,6 +741,8 @@ int main(int argc_,
         }
 
         recorder.Shutdown(runtime.Context());
+        shadow_renderer.Shutdown(runtime.Context());
+        shadow_renderer_initialized = false;
         text_renderer.Shutdown(runtime.Context());
         text_renderer_initialized = false;
         surface_renderer.Shutdown(runtime.Context());
@@ -665,6 +768,10 @@ int main(int argc_,
 
         if (runtime_initialized && runtime.IsInitialized() && recorder.IsInitialized()) {
             recorder.Shutdown(runtime.Context());
+        }
+        if (shadow_renderer_initialized && runtime_initialized && runtime.IsInitialized()) {
+            shadow_renderer.Shutdown(runtime.Context());
+            shadow_renderer_initialized = false;
         }
         if (text_renderer_initialized && runtime_initialized && runtime.IsInitialized()) {
             text_renderer.Shutdown(runtime.Context());

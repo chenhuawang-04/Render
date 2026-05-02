@@ -28,6 +28,7 @@ void main() {
     mat4 world = mat4(in_world_row0, in_world_row1, in_world_row2, in_world_row3);
     vec4 world_position = world * vec4(in_position, 1.0);
     gl_Position = pc.view_projection * world_position;
+    gl_PointSize = 1.0;
     out_world_position = world_position.xyz;
 
     mat3 world3x3 = mat3(world);

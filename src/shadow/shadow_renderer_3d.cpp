@@ -930,8 +930,8 @@ void ShadowRenderer3D::RecordOneAtlas(const render::FrameRecordContext& record_c
     RecordAtlasTransition(command_buffer,
                           atlas_record_,
                           VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
-                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-    atlas_record_.current_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                          VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL);
+    atlas_record_.current_layout = VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL;
 }
 
 } // namespace vr::shadow

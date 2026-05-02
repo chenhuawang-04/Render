@@ -10,5 +10,5 @@ layout(push_constant) uniform ShadowPushConstants {
 void main() {
     vec4 world_position = pc.world * vec4(in_position, 1.0);
     gl_Position = pc.view_projection * world_position;
+    gl_PointSize = 1.0;
 }
-
