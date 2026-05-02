@@ -211,6 +211,21 @@ public:
         return ready;
     }
 
+    template<typename ConsumerT, typename... BindingTs>
+    [[nodiscard]] bool PrepareFrameAndConfigure(const RuntimePrepareContext& prepare_context_,
+                                                ConsumerT* scene_consumer_,
+                                                const BindingTs&... bindings_)
+        requires(requires(SceneRenderTargetSet& target_set_, ConsumerT& consumer_) {
+            target_set_.ConfigureSceneConsumer(consumer_);
+        }) {
+        const bool ready = PrepareFrame(prepare_context_);
+        ConfigureBindings(bindings_...);
+        if (scene_consumer_ != nullptr) {
+            (void)ConfigureSceneConsumer(*scene_consumer_);
+        }
+        return ready;
+    }
+
     template<typename... BindingTs>
     [[nodiscard]] bool OnSwapchainRecreatedAndConfigure(VulkanContext& context_,
                                                         RenderTargetHost& render_target_host_,
@@ -229,6 +244,31 @@ public:
         ConfigureBindings(bindings_...);
         if (composite_renderer_ != nullptr) {
             (void)ConfigureCompositeRenderer(*composite_renderer_);
+        }
+        return ready;
+    }
+
+    template<typename ConsumerT, typename... BindingTs>
+    [[nodiscard]] bool OnSwapchainRecreatedAndConfigure(VulkanContext& context_,
+                                                        RenderTargetHost& render_target_host_,
+                                                        RenderTargetPool* render_target_pool_,
+                                                        VkExtent2D swapchain_extent_,
+                                                        std::uint64_t last_submitted_value_,
+                                                        std::uint64_t completed_submit_value_,
+                                                        ConsumerT* scene_consumer_,
+                                                        const BindingTs&... bindings_)
+        requires(requires(SceneRenderTargetSet& target_set_, ConsumerT& consumer_) {
+            target_set_.ConfigureSceneConsumer(consumer_);
+        }) {
+        const bool ready = OnSwapchainRecreated(context_,
+                                                render_target_host_,
+                                                render_target_pool_,
+                                                swapchain_extent_,
+                                                last_submitted_value_,
+                                                completed_submit_value_);
+        ConfigureBindings(bindings_...);
+        if (scene_consumer_ != nullptr) {
+            (void)ConfigureSceneConsumer(*scene_consumer_);
         }
         return ready;
     }

@@ -2,7 +2,7 @@
 #include "vr/ecs/system/camera_system.hpp"
 #include "vr/ecs/system/text_system.hpp"
 #include "vr/ecs/system/transform_system.hpp"
-#include "vr/render/render_target_composite_renderer.hpp"
+#include "vr/render/render_target_bloom_renderer.hpp"
 #include "vr/render/render_runtime_host.hpp"
 #include "vr/render/scene_render_target_set.hpp"
 #include "vr/text/text_renderer_3d.hpp"
@@ -158,7 +158,7 @@ void InitializeTransform(Transform3D& transform_,
 struct Text3DOffscreenRecorder final {
     Runtime* runtime = nullptr;
     vr::text::TextRenderer3D text_renderer{};
-    vr::render::RenderTargetCompositeRenderer composite_renderer{};
+    vr::render::RenderTargetBloomRenderer bloom_renderer{};
     vr::render::SceneRenderTargetSet scene_targets{};
 
     void InitializeSceneTargets() {
@@ -175,15 +175,15 @@ struct Text3DOffscreenRecorder final {
     void PrepareFrame(const vr::render::RuntimePrepareContext& prepare_context_) {
         (void)scene_targets.PrepareFrameAndConfigure(
             prepare_context_,
-            &composite_renderer,
+            &bloom_renderer,
             vr::render::BindSceneRenderer(text_renderer, vr::render::SceneRenderPassRole::single));
         text_renderer.PrepareFrame(prepare_context_);
-        composite_renderer.PrepareFrame(prepare_context_);
+        bloom_renderer.PrepareFrame(prepare_context_);
     }
 
     void Record(const vr::render::FrameRecordContext& record_context_) {
         text_renderer.Record(record_context_);
-        composite_renderer.Record(record_context_);
+        bloom_renderer.Record(record_context_);
     }
 
     void OnSwapchainRecreated(std::uint32_t image_count_,
@@ -196,7 +196,7 @@ struct Text3DOffscreenRecorder final {
                                            format_,
                                            last_submitted_value_,
                                            completed_submit_value_);
-        composite_renderer.OnSwapchainRecreated(image_count_, extent_, format_);
+        bloom_renderer.OnSwapchainRecreated(image_count_, extent_, format_);
 
         if (runtime == nullptr) {
             return;
@@ -209,7 +209,7 @@ struct Text3DOffscreenRecorder final {
             extent_,
             last_submitted_value_,
             completed_submit_value_,
-            &composite_renderer,
+            &bloom_renderer,
             vr::render::BindSceneRenderer(text_renderer, vr::render::SceneRenderPassRole::single));
     }
 };
@@ -516,13 +516,18 @@ int main(int argc_,
                                             &camera_transform,
                                             bounds.data());
 
-        vr::render::RenderTargetCompositeRendererCreateInfo composite_create_info{};
-        composite_create_info.clear_swapchain = true;
-        composite_create_info.clear_color = {{0.02F, 0.025F, 0.04F, 1.0F}};
-        composite_create_info.enable_reinhard_tonemap = true;
-        composite_create_info.exposure = 1.0F;
-        composite_create_info.apply_manual_gamma = false;
-        recorder.composite_renderer.Initialize(composite_create_info);
+        vr::render::RenderTargetBloomRendererCreateInfo bloom_create_info{};
+        bloom_create_info.clear_swapchain = true;
+        bloom_create_info.clear_color = {{0.02F, 0.025F, 0.04F, 1.0F}};
+        bloom_create_info.enable_reinhard_tonemap = true;
+        bloom_create_info.exposure = 1.0F;
+        bloom_create_info.apply_manual_gamma = false;
+        bloom_create_info.bloom_threshold = 0.68F;
+        bloom_create_info.bloom_knee = 0.42F;
+        bloom_create_info.bloom_intensity = 0.92F;
+        bloom_create_info.blur_filter_scale = 1.05F;
+        bloom_create_info.downsample_scale = 0.5F;
+        recorder.bloom_renderer.Initialize(bloom_create_info);
 
         const std::string primary_name = FileNameOnly(fonts.primary);
         const std::string secondary_name = FileNameOnly(fonts.secondary);
@@ -646,7 +651,7 @@ int main(int argc_,
             char stats_text[240]{};
             std::snprintf(stats_text,
                           sizeof(stats_text),
-                          "FPS: %.1f Frame:%llu Draw:%u Batch:%u Inst:%u DT:%u DW:%u C:%u/%u Comp:%u",
+                          "FPS: %.1f Frame:%llu Draw:%u Batch:%u Inst:%u DT:%u DW:%u C:%u/%u Bloom P:%u B:%u C:%u",
                           fps,
                           static_cast<unsigned long long>(frame_counter),
                           stats.draw_call_count,
@@ -656,7 +661,9 @@ int main(int argc_,
                           stats.depth_write_batch_count,
                           stats.culling_visible_count,
                           stats.culling_input_count,
-                          recorder.composite_renderer.Stats().draw_call_count);
+                          recorder.bloom_renderer.Stats().prefilter_draw_call_count,
+                          recorder.bloom_renderer.Stats().blur_draw_call_count,
+                          recorder.bloom_renderer.Stats().combine_draw_call_count);
             (void)TextSystem3D::SetText(components[runtime_stats], stats_text);
 
             SDL_Delay(8U);
@@ -666,7 +673,7 @@ int main(int argc_,
             }
         }
 
-        recorder.composite_renderer.Shutdown(runtime.Context());
+        recorder.bloom_renderer.Shutdown(runtime.Context());
         recorder.text_renderer.Shutdown(runtime.Context());
         runtime.Shutdown();
         return 0;

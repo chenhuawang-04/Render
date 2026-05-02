@@ -231,11 +231,10 @@ struct UnifiedScene3DRecorder final {
     void PrepareFrame(const vr::render::RuntimePrepareContext& prepare_context_) {
         (void)scene_targets.PrepareFrameAndConfigure(
             prepare_context_,
-            nullptr,
+            &bloom_renderer,
             vr::render::BindSceneRenderer(geometry_renderer, vr::render::SceneRenderPassRole::first),
             vr::render::BindSceneRenderer(surface_renderer, vr::render::SceneRenderPassRole::middle),
             vr::render::BindSceneRenderer(text_renderer, vr::render::SceneRenderPassRole::last));
-        (void)scene_targets.ConfigureSceneConsumer(bloom_renderer);
         geometry_renderer.PrepareFrame(prepare_context_);
         surface_renderer.PrepareFrame(prepare_context_);
         text_renderer.PrepareFrame(prepare_context_);
@@ -281,11 +280,10 @@ struct UnifiedScene3DRecorder final {
             extent_,
             last_submitted_value_,
             completed_submit_value_,
-            nullptr,
+            &bloom_renderer,
             vr::render::BindSceneRenderer(geometry_renderer, vr::render::SceneRenderPassRole::first),
             vr::render::BindSceneRenderer(surface_renderer, vr::render::SceneRenderPassRole::middle),
             vr::render::BindSceneRenderer(text_renderer, vr::render::SceneRenderPassRole::last));
-        (void)scene_targets.ConfigureSceneConsumer(bloom_renderer);
     }
 };
 

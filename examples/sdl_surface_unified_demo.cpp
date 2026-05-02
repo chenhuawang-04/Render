@@ -2,7 +2,7 @@
 #include "vr/ecs/system/camera_system.hpp"
 #include "vr/ecs/system/surface_system.hpp"
 #include "vr/ecs/system/transform_system.hpp"
-#include "vr/render/render_target_composite_renderer.hpp"
+#include "vr/render/render_target_bloom_renderer.hpp"
 #include "vr/render/render_runtime_host.hpp"
 #include "vr/render/scene_render_target_set.hpp"
 #include "vr/surface/surface_image_host.hpp"
@@ -162,7 +162,7 @@ void InitializeSurface3DComponent(Surface3D& component_,
 struct SurfaceUnifiedRecorder final {
     Runtime* runtime = nullptr;
     vr::surface::SurfaceRenderer3D renderer_3d{};
-    vr::render::RenderTargetCompositeRenderer composite_renderer{};
+    vr::render::RenderTargetBloomRenderer bloom_renderer{};
     vr::surface::SurfaceRenderer2D renderer_2d{};
     vr::render::SceneRenderTargetSet scene_targets{};
 
@@ -189,17 +189,17 @@ struct SurfaceUnifiedRecorder final {
     void PrepareFrame(const vr::render::RuntimePrepareContext& prepare_context_) {
         (void)scene_targets.PrepareFrameAndConfigure(
             prepare_context_,
-            &composite_renderer,
+            &bloom_renderer,
             vr::render::BindSceneRenderer(renderer_3d, vr::render::SceneRenderPassRole::single));
         ConfigureOverlayTarget();
         renderer_3d.PrepareFrame(prepare_context_);
-        composite_renderer.PrepareFrame(prepare_context_);
+        bloom_renderer.PrepareFrame(prepare_context_);
         renderer_2d.PrepareFrame(prepare_context_);
     }
 
     void Record(const vr::render::FrameRecordContext& record_context_) {
         renderer_3d.Record(record_context_);
-        composite_renderer.Record(record_context_);
+        bloom_renderer.Record(record_context_);
         renderer_2d.Record(record_context_);
     }
 
@@ -213,7 +213,7 @@ struct SurfaceUnifiedRecorder final {
                                          format_,
                                          last_submitted_value_,
                                          completed_submit_value_);
-        composite_renderer.OnSwapchainRecreated(image_count_, extent_, format_);
+        bloom_renderer.OnSwapchainRecreated(image_count_, extent_, format_);
         renderer_2d.OnSwapchainRecreated(image_count_,
                                          extent_,
                                          format_,
@@ -231,7 +231,7 @@ struct SurfaceUnifiedRecorder final {
             extent_,
             last_submitted_value_,
             completed_submit_value_,
-            &composite_renderer,
+            &bloom_renderer,
             vr::render::BindSceneRenderer(renderer_3d, vr::render::SceneRenderPassRole::single));
         ConfigureOverlayTarget();
     }
@@ -251,7 +251,7 @@ int main(int argc_,
     bool upload_host_initialized = false;
     bool image_host_initialized = false;
     bool renderer_3d_initialized = false;
-    bool composite_renderer_initialized = false;
+    bool bloom_renderer_initialized = false;
     bool renderer_2d_initialized = false;
 
     try {
@@ -470,13 +470,18 @@ int main(int argc_,
                                           &camera_transform,
                                           surface_3d_bounds.data());
 
-        vr::render::RenderTargetCompositeRendererCreateInfo composite_create_info{};
-        composite_create_info.clear_swapchain = true;
-        composite_create_info.enable_reinhard_tonemap = true;
-        composite_create_info.exposure = 1.0F;
-        composite_create_info.apply_manual_gamma = false;
-        recorder.composite_renderer.Initialize(composite_create_info);
-        composite_renderer_initialized = true;
+        vr::render::RenderTargetBloomRendererCreateInfo bloom_create_info{};
+        bloom_create_info.clear_swapchain = true;
+        bloom_create_info.enable_reinhard_tonemap = true;
+        bloom_create_info.exposure = 1.0F;
+        bloom_create_info.apply_manual_gamma = false;
+        bloom_create_info.bloom_threshold = 0.66F;
+        bloom_create_info.bloom_knee = 0.40F;
+        bloom_create_info.bloom_intensity = 0.90F;
+        bloom_create_info.blur_filter_scale = 1.05F;
+        bloom_create_info.downsample_scale = 0.5F;
+        recorder.bloom_renderer.Initialize(bloom_create_info);
+        bloom_renderer_initialized = true;
 
         vr::surface::SurfaceRenderer2DCreateInfo renderer_2d_create_info{};
         renderer_2d_create_info.reserve_component_count =
@@ -492,7 +497,7 @@ int main(int argc_,
                                           surface_2d_transforms.data(),
                                           static_cast<std::uint32_t>(surface_2d_components.size()));
 
-        std::cout << "sdl_surface_unified_demo running (3D surface offscreen + composite + 2D overlay). Close window to exit.\n";
+        std::cout << "sdl_surface_unified_demo running (3D surface offscreen + bloom post stack + 2D overlay). Close window to exit.\n";
 
         std::uint64_t fps_window_begin_ticks = SDL_GetTicks();
         std::uint32_t fps_window_frame_count = 0U;
@@ -549,8 +554,10 @@ int main(int argc_,
                           << " Batch:" << stats_3d.draw_batch_count
                           << " DSB:" << stats_3d.descriptor_set_bind_count
                           << " DSU:" << stats_3d.descriptor_set_update_count
-                          << " | Comp Draw:" << recorder.composite_renderer.Stats().draw_call_count
-                          << " DSU:" << recorder.composite_renderer.Stats().descriptor_set_update_count
+                          << " | Bloom P:" << recorder.bloom_renderer.Stats().prefilter_draw_call_count
+                          << " B:" << recorder.bloom_renderer.Stats().blur_draw_call_count
+                          << " C:" << recorder.bloom_renderer.Stats().combine_draw_call_count
+                          << " DSU:" << recorder.bloom_renderer.Stats().descriptor_set_update_count
                           << " | 2D Draw:" << stats_2d.draw_call_count
                           << " Batch:" << stats_2d.draw_batch_count
                           << " DSB:" << stats_2d.descriptor_set_bind_count
@@ -567,8 +574,8 @@ int main(int argc_,
 
         recorder.renderer_2d.Shutdown(runtime.Context());
         renderer_2d_initialized = false;
-        recorder.composite_renderer.Shutdown(runtime.Context());
-        composite_renderer_initialized = false;
+        recorder.bloom_renderer.Shutdown(runtime.Context());
+        bloom_renderer_initialized = false;
         recorder.renderer_3d.Shutdown(runtime.Context());
         renderer_3d_initialized = false;
         surface_image_host.Shutdown(runtime.Context());
@@ -584,9 +591,9 @@ int main(int argc_,
             recorder.renderer_2d.Shutdown(runtime.Context());
             renderer_2d_initialized = false;
         }
-        if (composite_renderer_initialized && runtime_initialized && runtime.IsInitialized()) {
-            recorder.composite_renderer.Shutdown(runtime.Context());
-            composite_renderer_initialized = false;
+        if (bloom_renderer_initialized && runtime_initialized && runtime.IsInitialized()) {
+            recorder.bloom_renderer.Shutdown(runtime.Context());
+            bloom_renderer_initialized = false;
         }
         if (renderer_3d_initialized && runtime_initialized && runtime.IsInitialized()) {
             recorder.renderer_3d.Shutdown(runtime.Context());
