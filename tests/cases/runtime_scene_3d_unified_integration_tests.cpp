@@ -11,7 +11,7 @@
 #include "vr/geometry/geometry_resource_host.hpp"
 #include "vr/geometry/geometry_upload_host.hpp"
 #include "vr/render/render_runtime_host.hpp"
-#include "vr/render/scene_bloom_post_stack.hpp"
+#include "vr/render/scene_recorder_3d.hpp"
 #include "vr/surface/surface_image_host.hpp"
 #include "vr/surface/surface_renderer_3d.hpp"
 #include "vr/surface/surface_upload_host.hpp"
@@ -208,90 +208,27 @@ void InitializeText3DComponent(Text3D& component_,
     (void)TextSystem3D::SetText(component_, text_);
 }
 
-struct UnifiedScene3DRecorder final {
-    Runtime* runtime = nullptr;
-    vr::geometry::GeometryRenderer3D geometry_renderer{};
-    vr::surface::SurfaceRenderer3D surface_renderer{};
-    vr::text::TextRenderer3D text_renderer{};
-    vr::render::SceneBloomPostStack post_stack{};
-
-    void InitializePostStack() {
-        vr::render::SceneRenderTargetSetCreateInfo create_info{};
-        create_info.color_debug_name = "RuntimeUnified3DSceneColor";
-        create_info.depth_debug_name = "RuntimeUnified3DSceneDepth";
-        create_info.enable_depth = true;
-        create_info.color_lifetime = vr::render::RenderTargetLifetime::transient;
-        create_info.depth_lifetime = vr::render::RenderTargetLifetime::transient;
-        create_info.clear_color = VkClearColorValue{{0.035F, 0.040F, 0.060F, 1.0F}};
-        vr::render::RenderTargetBloomRendererCreateInfo bloom_create_info{};
-        bloom_create_info.clear_swapchain = true;
-        bloom_create_info.enable_reinhard_tonemap = true;
-        bloom_create_info.exposure = 1.0F;
-        bloom_create_info.apply_manual_gamma = false;
-        bloom_create_info.bloom_threshold = 0.70F;
-        bloom_create_info.bloom_knee = 0.45F;
-        bloom_create_info.bloom_intensity = 0.95F;
-        bloom_create_info.blur_filter_scale = 1.10F;
-        bloom_create_info.downsample_scale = 0.5F;
-        post_stack.Initialize(create_info, bloom_create_info);
-    }
-
-    void PrepareFrame(const vr::render::RuntimePrepareContext& prepare_context_) {
-        (void)post_stack.PrepareFrame(
-            prepare_context_,
-            vr::render::BindSceneRenderer(geometry_renderer, vr::render::SceneRenderPassRole::first),
-            vr::render::BindSceneRenderer(surface_renderer, vr::render::SceneRenderPassRole::middle),
-            vr::render::BindSceneRenderer(text_renderer, vr::render::SceneRenderPassRole::last));
-        geometry_renderer.PrepareFrame(prepare_context_);
-        surface_renderer.PrepareFrame(prepare_context_);
-        text_renderer.PrepareFrame(prepare_context_);
-    }
-
-    void Record(const vr::render::FrameRecordContext& record_context_) {
-        geometry_renderer.Record(record_context_);
-        surface_renderer.Record(record_context_);
-        text_renderer.Record(record_context_);
-        post_stack.Record(record_context_);
-    }
-
-    void OnSwapchainRecreated(std::uint32_t image_count_,
-                              VkExtent2D extent_,
-                              VkFormat format_,
-                              std::uint64_t last_submitted_value_,
-                              std::uint64_t completed_submit_value_) {
-        geometry_renderer.OnSwapchainRecreated(image_count_,
-                                               extent_,
-                                               format_,
-                                               last_submitted_value_,
-                                               completed_submit_value_);
-        surface_renderer.OnSwapchainRecreated(image_count_,
-                                              extent_,
-                                              format_,
-                                              last_submitted_value_,
-                                              completed_submit_value_);
-        text_renderer.OnSwapchainRecreated(image_count_,
-                                           extent_,
-                                           format_,
-                                           last_submitted_value_,
-                                           completed_submit_value_);
-
-        if (runtime == nullptr) {
-            return;
-        }
-        (void)post_stack.OnSwapchainRecreated(
-            runtime->Context(),
-            image_count_,
-            extent_,
-            format_,
-            last_submitted_value_,
-            completed_submit_value_,
-            runtime->RenderTarget(),
-            runtime->HasRenderTargetPool() ? &runtime->TargetPool() : nullptr,
-            vr::render::BindSceneRenderer(geometry_renderer, vr::render::SceneRenderPassRole::first),
-            vr::render::BindSceneRenderer(surface_renderer, vr::render::SceneRenderPassRole::middle),
-            vr::render::BindSceneRenderer(text_renderer, vr::render::SceneRenderPassRole::last));
-    }
-};
+[[nodiscard]] vr::render::SceneRecorder3DCreateInfo BuildUnifiedSceneRecorderCreateInfo() noexcept {
+    vr::render::SceneRecorder3DCreateInfo create_info{};
+    create_info.scene_target.color_debug_name = "RuntimeUnified3DSceneColor";
+    create_info.scene_target.depth_debug_name = "RuntimeUnified3DSceneDepth";
+    create_info.scene_target.enable_depth = true;
+    create_info.scene_target.color_lifetime = vr::render::RenderTargetLifetime::transient;
+    create_info.scene_target.depth_lifetime = vr::render::RenderTargetLifetime::transient;
+    create_info.scene_target.clear_color = VkClearColorValue{{0.035F, 0.040F, 0.060F, 1.0F}};
+    create_info.bloom.clear_swapchain = true;
+    create_info.bloom.enable_reinhard_tonemap = true;
+    create_info.bloom.exposure = 1.0F;
+    create_info.bloom.apply_manual_gamma = false;
+    create_info.bloom.bloom_threshold = 0.70F;
+    create_info.bloom.bloom_knee = 0.45F;
+    create_info.bloom.bloom_intensity = 0.95F;
+    create_info.bloom.blur_filter_scale = 1.10F;
+    create_info.bloom.downsample_scale = 0.5F;
+    create_info.reserve_scene_renderer_count = 3U;
+    create_info.reserve_overlay_renderer_count = 0U;
+    return create_info;
+}
 
 VR_TEST_CASE(RuntimeIntegration_unified_scene_3d_bloom_post_stack_smoke,
              "integration;gpu;sdl;runtime;render_target;scene3d;postprocess") {
@@ -307,7 +244,10 @@ VR_TEST_CASE(RuntimeIntegration_unified_scene_3d_bloom_post_stack_smoke,
     vr::geometry::GeometryMaterialHost geometry_material_host{};
     vr::surface::SurfaceUploadHost surface_upload_host{};
     vr::surface::SurfaceImageHost surface_image_host{};
-    UnifiedScene3DRecorder recorder{};
+    vr::render::SceneRecorder3D recorder{};
+    vr::geometry::GeometryRenderer3D geometry_renderer{};
+    vr::surface::SurfaceRenderer3D surface_renderer{};
+    vr::text::TextRenderer3D text_renderer{};
 
     bool runtime_initialized = false;
     bool geometry_resource_host_initialized = false;
@@ -360,8 +300,8 @@ VR_TEST_CASE(RuntimeIntegration_unified_scene_3d_bloom_post_stack_smoke,
         runtime.Initialize(create_info);
         runtime_initialized = true;
 
-        recorder.runtime = &runtime;
-        recorder.InitializePostStack();
+        recorder.Initialize(BuildUnifiedSceneRecorderCreateInfo());
+        recorder.BindRuntime(runtime);
 
         vr::geometry::GeometryResourceHostCreateInfo geometry_resource_create_info{};
         geometry_resource_create_info.reserve_mesh_count = 16U;
@@ -580,16 +520,16 @@ VR_TEST_CASE(RuntimeIntegration_unified_scene_3d_bloom_post_stack_smoke,
         geometry_renderer_create_info.directional_light_y = -0.8F;
         geometry_renderer_create_info.directional_light_z = 0.25F;
         geometry_renderer_create_info.directional_light_intensity = 1.0F;
-        recorder.geometry_renderer.Initialize(geometry_renderer_create_info);
+        geometry_renderer.Initialize(geometry_renderer_create_info);
         geometry_renderer_initialized = true;
-        recorder.geometry_renderer.SetHosts(&geometry_resource_host, &geometry_upload_host);
-        recorder.geometry_renderer.SetMaterialHosts(&geometry_material_host, &geometry_image_host);
-        recorder.geometry_renderer.SetSceneData(&geometry_component,
-                                                &geometry_transform,
-                                                1U,
-                                                &camera,
-                                                &camera_transform,
-                                                &geometry_bounds);
+        geometry_renderer.SetHosts(&geometry_resource_host, &geometry_upload_host);
+        geometry_renderer.SetMaterialHosts(&geometry_material_host, &geometry_image_host);
+        geometry_renderer.SetSceneData(&geometry_component,
+                                       &geometry_transform,
+                                       1U,
+                                       &camera,
+                                       &camera_transform,
+                                       &geometry_bounds);
 
         vr::surface::SurfaceRenderer3DCreateInfo surface_renderer_create_info{};
         surface_renderer_create_info.reserve_component_count = 1U;
@@ -597,15 +537,15 @@ VR_TEST_CASE(RuntimeIntegration_unified_scene_3d_bloom_post_stack_smoke,
         surface_renderer_create_info.enable_depth = true;
         surface_renderer_create_info.clear_depth = false;
         surface_renderer_create_info.clear_swapchain = false;
-        recorder.surface_renderer.Initialize(surface_renderer_create_info);
+        surface_renderer.Initialize(surface_renderer_create_info);
         surface_renderer_initialized = true;
-        recorder.surface_renderer.SetHosts(&surface_upload_host, &surface_image_host);
-        recorder.surface_renderer.SetSceneData(&surface_component,
-                                               &surface_transform,
-                                               1U,
-                                               &camera,
-                                               &camera_transform,
-                                               &surface_bounds);
+        surface_renderer.SetHosts(&surface_upload_host, &surface_image_host);
+        surface_renderer.SetSceneData(&surface_component,
+                                      &surface_transform,
+                                      1U,
+                                      &camera,
+                                      &camera_transform,
+                                      &surface_bounds);
 
         vr::text::TextRenderer3DCreateInfo text_renderer_create_info{};
         text_renderer_create_info.runtime_build.pixel_size_quantization = 1.0F;
@@ -616,14 +556,17 @@ VR_TEST_CASE(RuntimeIntegration_unified_scene_3d_bloom_post_stack_smoke,
         text_renderer_create_info.enable_depth = true;
         text_renderer_create_info.clear_depth = false;
         text_renderer_create_info.clear_swapchain = false;
-        recorder.text_renderer.Initialize(text_renderer_create_info);
+        text_renderer.Initialize(text_renderer_create_info);
         text_renderer_initialized = true;
-        recorder.text_renderer.SetSceneData(&text_component,
-                                            &text_transform,
-                                            1U,
-                                            &camera,
-                                            &camera_transform,
-                                            &text_bounds);
+        text_renderer.SetSceneData(&text_component,
+                                   &text_transform,
+                                   1U,
+                                   &camera,
+                                   &camera_transform,
+                                   &text_bounds);
+        recorder.RegisterSceneRenderer(geometry_renderer, vr::render::SceneRenderPassRole::first);
+        recorder.RegisterSceneRenderer(surface_renderer, vr::render::SceneRenderPassRole::middle);
+        recorder.RegisterSceneRenderer(text_renderer, vr::render::SceneRenderPassRole::last);
 
         std::uint32_t submitted_frames = 0U;
         std::uint32_t max_geometry_draw_calls = 0U;
@@ -679,10 +622,10 @@ VR_TEST_CASE(RuntimeIntegration_unified_scene_3d_bloom_post_stack_smoke,
                 ++submitted_frames;
             }
 
-            const auto geometry_stats = recorder.geometry_renderer.Stats();
-            const auto surface_stats = recorder.surface_renderer.Stats();
-            const auto text_stats = recorder.text_renderer.Stats();
-            const auto bloom_stats = recorder.post_stack.Stats();
+            const auto geometry_stats = geometry_renderer.Stats();
+            const auto surface_stats = surface_renderer.Stats();
+            const auto text_stats = text_renderer.Stats();
+            const auto bloom_stats = recorder.PostStack().Stats();
 
             max_geometry_draw_calls = std::max(max_geometry_draw_calls, geometry_stats.draw_call_count);
             max_surface_draw_calls = std::max(max_surface_draw_calls, surface_stats.draw_call_count);
@@ -706,18 +649,18 @@ VR_TEST_CASE(RuntimeIntegration_unified_scene_3d_bloom_post_stack_smoke,
         VR_CHECK(max_text_instances > 0U);
         VR_CHECK(runtime.TargetPool().Stats().acquire_count > 0U);
         VR_CHECK(runtime.TargetPool().Stats().reuse_hit_count > 0U);
-        VR_CHECK(runtime.RenderTarget().ResolveView(recorder.post_stack.Targets().ColorTarget()).state ==
+        VR_CHECK(runtime.RenderTarget().ResolveView(recorder.PostStack().Targets().ColorTarget()).state ==
                  vr::render::RenderTargetStateKind::shader_read);
-        VR_CHECK(runtime.RenderTarget().ResolveView(recorder.post_stack.Targets().DepthTarget()).state ==
+        VR_CHECK(runtime.RenderTarget().ResolveView(recorder.PostStack().Targets().DepthTarget()).state ==
                  vr::render::RenderTargetStateKind::depth_attachment);
         VR_CHECK(runtime.GlyphUpload().Stats().uploaded_rect_count > 0U);
 
-        recorder.post_stack.Shutdown(runtime.Context());
-        recorder.text_renderer.Shutdown(runtime.Context());
+        recorder.Shutdown(runtime.Context());
+        text_renderer.Shutdown(runtime.Context());
         text_renderer_initialized = false;
-        recorder.surface_renderer.Shutdown(runtime.Context());
+        surface_renderer.Shutdown(runtime.Context());
         surface_renderer_initialized = false;
-        recorder.geometry_renderer.Shutdown(runtime.Context());
+        geometry_renderer.Shutdown(runtime.Context());
         geometry_renderer_initialized = false;
         geometry_material_host.Shutdown();
         geometry_material_host_initialized = false;
@@ -734,19 +677,19 @@ VR_TEST_CASE(RuntimeIntegration_unified_scene_3d_bloom_post_stack_smoke,
         runtime.Shutdown();
         runtime_initialized = false;
     } catch (const std::exception& exception_) {
-        if (runtime_initialized && runtime.IsInitialized() && recorder.post_stack.IsInitialized()) {
-            recorder.post_stack.Shutdown(runtime.Context());
+        if (runtime_initialized && runtime.IsInitialized() && recorder.IsInitialized()) {
+            recorder.Shutdown(runtime.Context());
         }
         if (text_renderer_initialized && runtime_initialized && runtime.IsInitialized()) {
-            recorder.text_renderer.Shutdown(runtime.Context());
+            text_renderer.Shutdown(runtime.Context());
             text_renderer_initialized = false;
         }
         if (surface_renderer_initialized && runtime_initialized && runtime.IsInitialized()) {
-            recorder.surface_renderer.Shutdown(runtime.Context());
+            surface_renderer.Shutdown(runtime.Context());
             surface_renderer_initialized = false;
         }
         if (geometry_renderer_initialized && runtime_initialized && runtime.IsInitialized()) {
-            recorder.geometry_renderer.Shutdown(runtime.Context());
+            geometry_renderer.Shutdown(runtime.Context());
             geometry_renderer_initialized = false;
         }
         if (geometry_material_host_initialized) {

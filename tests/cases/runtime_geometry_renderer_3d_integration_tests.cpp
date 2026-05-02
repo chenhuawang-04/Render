@@ -2,14 +2,18 @@
 #include "vr/ecs/system/bounds_system.hpp"
 #include "vr/ecs/system/camera_system.hpp"
 #include "vr/ecs/system/geometry_system.hpp"
+#include "vr/ecs/system/light_system.hpp"
+#include "vr/ecs/system/shadow_system.hpp"
 #include "vr/ecs/system/transform_system.hpp"
 #include "vr/geometry/geometry_image_host.hpp"
 #include "vr/geometry/geometry_material_host.hpp"
 #include "vr/geometry/geometry_renderer_3d.hpp"
-#include "vr/render/scene_bloom_post_stack.hpp"
+#include "vr/render/light_frame_coordinator.hpp"
+#include "vr/render/scene_recorder_3d.hpp"
 #include "vr/render/render_target_format_utils.hpp"
 #include "vr/render/render_runtime_host.hpp"
 #include "vr/render/scene_render_target_set.hpp"
+#include "vr/shadow/shadow_renderer_3d.hpp"
 
 #include <SDL3/SDL.h>
 
@@ -27,6 +31,10 @@ using Bounds3D = vr::ecs::Bounds<vr::ecs::Dim3>;
 using BoundsSystem3D = vr::ecs::BoundsSystem<vr::ecs::Dim3>;
 using Geometry3D = vr::ecs::Geometry<vr::ecs::Dim3>;
 using GeometrySystem3D = vr::ecs::GeometrySystem<vr::ecs::Dim3>;
+using Light3D = vr::ecs::Light<vr::ecs::Dim3>;
+using LightSystem3D = vr::ecs::LightSystem<vr::ecs::Dim3>;
+using Shadow3D = vr::ecs::Shadow<vr::ecs::Dim3>;
+using ShadowSystem3D = vr::ecs::ShadowSystem<vr::ecs::Dim3>;
 using Transform3D = vr::ecs::Transform<vr::ecs::Dim3>;
 using TransformSystem3D = vr::ecs::TransformSystem<vr::ecs::Dim3>;
 using Camera3D = vr::ecs::Camera<vr::ecs::Dim3>;
@@ -98,6 +106,7 @@ void InitializeGeometryComponent(Geometry3D& component_,
     GeometrySystem3D::SetBounds(component_, bounds_min_, bounds_max_);
     component_.style.depth_test = depth_test_ ? 1U : 0U;
     component_.style.depth_write = depth_write_ ? 1U : 0U;
+    component_.style.cast_shadow = 1U;
     component_.style.shading_model = shading_model_;
     component_.style.albedo_color = albedo_;
     component_.mesh.submesh_index = 0U;
@@ -105,69 +114,50 @@ void InitializeGeometryComponent(Geometry3D& component_,
     component_.mesh.flags = 0U;
 }
 
-struct Geometry3DOffscreenRecorder final {
-    Runtime* runtime = nullptr;
-    vr::geometry::GeometryRenderer3D geometry_renderer{};
-    vr::render::SceneBloomPostStack post_stack{};
+void InitializeLightComponent(Light3D& component_) {
+    LightSystem3D::Initialize(component_);
+    LightSystem3D::SetLightKind(component_, vr::ecs::LightKind::spot);
+    LightSystem3D::SetColor(component_, vr::ecs::Rgba8{255U, 244U, 224U, 255U});
+    LightSystem3D::SetIntensity(component_, 1800.0F);
+    LightSystem3D::SetRange(component_, 18.0F);
+    LightSystem3D::SetConeAngles(component_, 0.30F, 0.70F);
+    LightSystem3D::SetCastShadow(component_, true);
+}
 
-    void InitializePostStack() {
-        vr::render::SceneRenderTargetSetCreateInfo create_info{};
-        create_info.color_debug_name = "RuntimeGeometry3DSceneColor";
-        create_info.depth_debug_name = "RuntimeGeometry3DSceneDepth";
-        create_info.enable_depth = true;
-        create_info.color_lifetime = vr::render::RenderTargetLifetime::transient;
-        create_info.depth_lifetime = vr::render::RenderTargetLifetime::transient;
-        create_info.clear_color = VkClearColorValue{{0.05F, 0.07F, 0.10F, 1.0F}};
-        vr::render::RenderTargetBloomRendererCreateInfo bloom_create_info{};
-        bloom_create_info.clear_swapchain = true;
-        bloom_create_info.enable_reinhard_tonemap = true;
-        bloom_create_info.exposure = 1.0F;
-        bloom_create_info.apply_manual_gamma = false;
-        bloom_create_info.bloom_threshold = 0.70F;
-        bloom_create_info.bloom_knee = 0.42F;
-        bloom_create_info.bloom_intensity = 0.88F;
-        bloom_create_info.blur_filter_scale = 1.02F;
-        bloom_create_info.downsample_scale = 0.5F;
-        post_stack.Initialize(create_info, bloom_create_info);
-    }
+void InitializeShadowComponent(Shadow3D& component_,
+                               std::uint32_t light_component_index_) {
+    ShadowSystem3D::Initialize(component_);
+    ShadowSystem3D::SetProjectionKind(component_, vr::ecs::ShadowProjectionKind::spot);
+    ShadowSystem3D::SetCascadeConfig(component_, 1U, 0.5F);
+    ShadowSystem3D::SetMapResolution(component_, 1024U, 1024U);
+    ShadowSystem3D::SetLightComponentIndex(component_, light_component_index_);
+    ShadowSystem3D::SetTransformComponentIndex(component_, 0U);
+    ShadowSystem3D::SetCameraComponentIndex(component_, 0U);
+    ShadowSystem3D::SetAtlasNamespace(component_, 7U);
+    ShadowSystem3D::SetFaceCount(component_, 1U);
+}
 
-    void PrepareFrame(const vr::render::RuntimePrepareContext& prepare_context_) {
-        (void)post_stack.PrepareFrame(
-            prepare_context_,
-            vr::render::BindSceneRenderer(geometry_renderer, vr::render::SceneRenderPassRole::single));
-        geometry_renderer.PrepareFrame(prepare_context_);
-    }
-
-    void Record(const vr::render::FrameRecordContext& record_context_) {
-        geometry_renderer.Record(record_context_);
-        post_stack.Record(record_context_);
-    }
-
-    void OnSwapchainRecreated(std::uint32_t image_count_,
-                              VkExtent2D extent_,
-                              VkFormat format_,
-                              std::uint64_t last_submitted_value_,
-                              std::uint64_t completed_submit_value_) {
-        geometry_renderer.OnSwapchainRecreated(image_count_,
-                                               extent_,
-                                               format_,
-                                               last_submitted_value_,
-                                               completed_submit_value_);
-        if (runtime == nullptr) {
-            return;
-        }
-        (void)post_stack.OnSwapchainRecreated(
-            runtime->Context(),
-            image_count_,
-            extent_,
-            format_,
-            last_submitted_value_,
-            completed_submit_value_,
-            runtime->RenderTarget(),
-            runtime->HasRenderTargetPool() ? &runtime->TargetPool() : nullptr,
-            vr::render::BindSceneRenderer(geometry_renderer, vr::render::SceneRenderPassRole::single));
-    }
-};
+[[nodiscard]] vr::render::SceneRecorder3DCreateInfo BuildGeometryRecorderCreateInfo() noexcept {
+    vr::render::SceneRecorder3DCreateInfo create_info{};
+    create_info.scene_target.color_debug_name = "RuntimeGeometry3DSceneColor";
+    create_info.scene_target.depth_debug_name = "RuntimeGeometry3DSceneDepth";
+    create_info.scene_target.enable_depth = true;
+    create_info.scene_target.color_lifetime = vr::render::RenderTargetLifetime::transient;
+    create_info.scene_target.depth_lifetime = vr::render::RenderTargetLifetime::transient;
+    create_info.scene_target.clear_color = VkClearColorValue{{0.05F, 0.07F, 0.10F, 1.0F}};
+    create_info.bloom.clear_swapchain = true;
+    create_info.bloom.enable_reinhard_tonemap = true;
+    create_info.bloom.exposure = 1.0F;
+    create_info.bloom.apply_manual_gamma = false;
+    create_info.bloom.bloom_threshold = 0.70F;
+    create_info.bloom.bloom_knee = 0.42F;
+    create_info.bloom.bloom_intensity = 0.88F;
+    create_info.bloom.blur_filter_scale = 1.02F;
+    create_info.bloom.downsample_scale = 0.5F;
+    create_info.reserve_scene_renderer_count = 1U;
+    create_info.reserve_overlay_renderer_count = 0U;
+    return create_info;
+}
 
 VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_end_to_end_smoke, "integration;gpu;sdl;runtime;geometry") {
     Runtime runtime{};
@@ -564,7 +554,10 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_bloom_post_stack_smoke,
     vr::geometry::GeometryUploadHost geometry_upload_host{};
     vr::geometry::GeometryImageHost geometry_image_host{};
     vr::geometry::GeometryMaterialHost geometry_material_host{};
-    Geometry3DOffscreenRecorder recorder{};
+    vr::render::SceneRecorder3D recorder{};
+    vr::geometry::GeometryRenderer3D geometry_renderer{};
+    vr::shadow::ShadowRenderer3D shadow_renderer{};
+    vr::render::LightFrameCoordinator<vr::ecs::Dim3> light_frame_coordinator{};
 
     bool runtime_initialized = false;
     bool geometry_resource_host_initialized = false;
@@ -572,6 +565,7 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_bloom_post_stack_smoke,
     bool geometry_image_host_initialized = false;
     bool geometry_material_host_initialized = false;
     bool geometry_renderer_initialized = false;
+    bool shadow_renderer_initialized = false;
 
     std::array<vr::geometry::GeometryMeshVertex, 4U> vertices{
         vr::geometry::GeometryMeshVertex{.position_x = -0.5F, .position_y = -0.5F, .position_z = 0.0F, .normal_x = 0.0F, .normal_y = 0.0F, .normal_z = 1.0F, .uv_u = 0.0F, .uv_v = 0.0F},
@@ -663,6 +657,30 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_bloom_post_stack_smoke,
     CameraSystem3D::MarkViewDirty(camera);
     CameraSystem3D::Update(camera, camera_transform);
 
+    std::array<Light3D, 1U> lights{};
+    std::array<Transform3D, 1U> light_transforms{};
+    InitializeLightComponent(lights[0U]);
+    TransformSystem3D::Initialize(light_transforms[0U]);
+    TransformSystem3D::SetLocalPosition(light_transforms[0U],
+                                        vr::ecs::Float3{.x = 0.15F, .y = 1.45F, .z = 2.65F});
+    TransformSystem3D::SetLocalRotationEulerXyz(light_transforms[0U], -0.52F, 0.02F, 0.0F);
+    TransformSystem3D::UpdateHierarchy(light_transforms.data(),
+                                       static_cast<std::uint32_t>(light_transforms.size()));
+    light_frame_coordinator.SetLightData(lights.data(),
+                                         light_transforms.data(),
+                                         static_cast<std::uint32_t>(lights.size()));
+    light_frame_coordinator.SetCamera(&camera);
+
+    std::array<Shadow3D, 1U> shadows{};
+    std::array<Transform3D, 1U> shadow_transforms{};
+    InitializeShadowComponent(shadows[0U], 0U);
+    TransformSystem3D::Initialize(shadow_transforms[0U]);
+    TransformSystem3D::SetLocalPosition(shadow_transforms[0U],
+                                        vr::ecs::Float3{.x = 0.15F, .y = 1.45F, .z = 2.65F});
+    TransformSystem3D::SetLocalRotationEulerXyz(shadow_transforms[0U], -0.52F, 0.02F, 0.0F);
+    TransformSystem3D::UpdateHierarchy(shadow_transforms.data(),
+                                       static_cast<std::uint32_t>(shadow_transforms.size()));
+
     try {
         Runtime::CreateInfo create_info{};
         create_info.platform.window.title = "vr_tests_runtime_geometry_3d_offscreen";
@@ -681,8 +699,9 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_bloom_post_stack_smoke,
         runtime.Initialize(create_info);
         runtime_initialized = true;
 
-        recorder.runtime = &runtime;
-        recorder.InitializePostStack();
+        recorder.Initialize(BuildGeometryRecorderCreateInfo());
+        recorder.BindRuntime(runtime);
+        recorder.BindLightFrameCoordinator(&light_frame_coordinator);
 
         vr::geometry::GeometryResourceHostCreateInfo resource_create_info{};
         resource_create_info.reserve_mesh_count = 32U;
@@ -780,16 +799,34 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_bloom_post_stack_smoke,
         renderer_create_info.directional_light_y = -0.8F;
         renderer_create_info.directional_light_z = 0.3F;
         renderer_create_info.directional_light_intensity = 1.0F;
-        recorder.geometry_renderer.Initialize(renderer_create_info);
+        geometry_renderer.Initialize(renderer_create_info);
         geometry_renderer_initialized = true;
-        recorder.geometry_renderer.SetHosts(&geometry_resource_host, &geometry_upload_host);
-        recorder.geometry_renderer.SetMaterialHosts(&geometry_material_host, &geometry_image_host);
-        recorder.geometry_renderer.SetSceneData(geometry_components.data(),
-                                                transforms.data(),
-                                                static_cast<std::uint32_t>(geometry_components.size()),
-                                                &camera,
-                                                &camera_transform,
-                                                bounds_components.data());
+        geometry_renderer.SetHosts(&geometry_resource_host, &geometry_upload_host);
+        geometry_renderer.SetMaterialHosts(&geometry_material_host, &geometry_image_host);
+        geometry_renderer.SetSceneData(geometry_components.data(),
+                                       transforms.data(),
+                                       static_cast<std::uint32_t>(geometry_components.size()),
+                                       &camera,
+                                       &camera_transform,
+                                       bounds_components.data());
+        vr::shadow::ShadowRenderer3DCreateInfo shadow_renderer_create_info{};
+        shadow_renderer_create_info.reserve_shadow_count =
+            static_cast<std::uint32_t>(shadows.size());
+        shadow_renderer_create_info.reserve_caster_count =
+            static_cast<std::uint32_t>(geometry_components.size());
+        shadow_renderer.Initialize(shadow_renderer_create_info);
+        shadow_renderer_initialized = true;
+        shadow_renderer.SetHosts(&geometry_resource_host);
+        shadow_renderer.SetSceneData(shadows.data(),
+                                     shadow_transforms.data(),
+                                     static_cast<std::uint32_t>(shadows.size()),
+                                     &camera,
+                                     bounds_components.data());
+        shadow_renderer.SetGeometryData(geometry_components.data(),
+                                        transforms.data(),
+                                        static_cast<std::uint32_t>(geometry_components.size()));
+        recorder.RegisterShadowRenderer(shadow_renderer);
+        recorder.RegisterSceneRenderer(geometry_renderer, vr::render::SceneRenderPassRole::single);
 
         std::uint32_t submitted_frames = 0U;
         std::uint32_t max_draw_calls = 0U;
@@ -806,6 +843,12 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_bloom_post_stack_smoke,
         std::uint32_t max_blur_draw_calls = 0U;
         std::uint32_t max_combine_draw_calls = 0U;
         std::uint32_t max_bloom_descriptor_updates = 0U;
+        std::uint32_t max_visible_light_count = 0U;
+        std::uint32_t max_shadow_view_count = 0U;
+        std::uint32_t max_linked_light_count = 0U;
+        std::uint32_t max_light_descriptor_binds = 0U;
+        std::uint32_t max_shadow_draw_calls = 0U;
+        std::uint32_t max_shadow_atlas_passes = 0U;
         bool observed_bounds_culling = false;
 
         constexpr std::uint32_t max_ticks = 16U;
@@ -822,9 +865,24 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_bloom_post_stack_smoke,
                                                         0.0F);
             TransformSystem3D::UpdateHierarchy(transforms.data(),
                                                static_cast<std::uint32_t>(transforms.size()));
+            TransformSystem3D::SetLocalRotationEulerXyz(light_transforms[0U],
+                                                        -0.52F,
+                                                        0.06F * static_cast<float>(tick_index),
+                                                        0.0F);
+            TransformSystem3D::SetLocalRotationEulerXyz(shadow_transforms[0U],
+                                                        -0.52F,
+                                                        0.06F * static_cast<float>(tick_index),
+                                                        0.0F);
+            TransformSystem3D::UpdateHierarchy(light_transforms.data(),
+                                               static_cast<std::uint32_t>(light_transforms.size()));
+            TransformSystem3D::UpdateHierarchy(shadow_transforms.data(),
+                                               static_cast<std::uint32_t>(shadow_transforms.size()));
             (void)BoundsSystem3D::UpdateAligned(bounds_components.data(),
                                                 transforms.data(),
                                                 static_cast<std::uint32_t>(bounds_components.size()));
+            const std::uint32_t dirty_index = 0U;
+            light_frame_coordinator.SetTransformDirtyHint(&dirty_index, 1U);
+            shadow_renderer.SetTransformDirtyHint(&dirty_index, 1U);
             CameraSystem3D::Update(camera, camera_transform);
 
             const Runtime::RuntimeTickResult tick_result = runtime.Tick(recorder);
@@ -833,8 +891,8 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_bloom_post_stack_smoke,
                 ++submitted_frames;
             }
 
-            const vr::geometry::GeometryRenderer3DStats renderer_stats = recorder.geometry_renderer.Stats();
-            const auto bloom_stats = recorder.post_stack.Stats();
+            const vr::geometry::GeometryRenderer3DStats renderer_stats = geometry_renderer.Stats();
+            const auto bloom_stats = recorder.PostStack().Stats();
             max_draw_calls = std::max(max_draw_calls, renderer_stats.draw_call_count);
             max_draw_batches = std::max(max_draw_batches, renderer_stats.draw_batch_count);
             max_instances = std::max(max_instances, renderer_stats.instance_count);
@@ -854,6 +912,18 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_bloom_post_stack_smoke,
                                               bloom_stats.combine_draw_call_count);
             max_bloom_descriptor_updates = std::max(max_bloom_descriptor_updates,
                                                     bloom_stats.descriptor_set_update_count);
+            max_visible_light_count = std::max(max_visible_light_count,
+                                               renderer_stats.visible_light_count);
+            max_shadow_view_count = std::max(max_shadow_view_count,
+                                             renderer_stats.shadow_view_count);
+            max_linked_light_count = std::max(max_linked_light_count,
+                                              renderer_stats.light_shadow_linked_count);
+            max_light_descriptor_binds = std::max(max_light_descriptor_binds,
+                                                  renderer_stats.light_descriptor_set_bind_count);
+            max_shadow_draw_calls = std::max(max_shadow_draw_calls,
+                                             shadow_renderer.Stats().draw_call_count);
+            max_shadow_atlas_passes = std::max(max_shadow_atlas_passes,
+                                               shadow_renderer.Stats().atlas_layer_draw_pass_count);
             observed_bounds_culling = observed_bounds_culling || renderer_stats.used_bounds_culling;
             SDL_Delay(1U);
         }
@@ -871,6 +941,12 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_bloom_post_stack_smoke,
         VR_CHECK(max_blur_draw_calls > 0U);
         VR_CHECK(max_combine_draw_calls > 0U);
         VR_CHECK(max_bloom_descriptor_updates > 0U);
+        VR_CHECK(max_visible_light_count > 0U);
+        VR_CHECK(max_shadow_view_count > 0U);
+        VR_CHECK(max_linked_light_count > 0U);
+        VR_CHECK(max_light_descriptor_binds > 0U);
+        VR_CHECK(max_shadow_draw_calls > 0U);
+        VR_CHECK(max_shadow_atlas_passes > 0U);
         VR_CHECK(observed_bounds_culling);
         VR_CHECK(max_culling_input_count == static_cast<std::uint32_t>(geometry_components.size()));
         VR_CHECK(max_culling_visible_count > 0U);
@@ -878,15 +954,18 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_bloom_post_stack_smoke,
         VR_CHECK(geometry_upload_host.Stats().upload_count > 0U);
         VR_CHECK(geometry_image_host.Stats().image_count >= 2U);
         VR_CHECK(geometry_material_host.Stats().material_count >= 2U);
+        VR_CHECK(recorder.Stats().pre_scene_renderer_count == 1U);
         VR_CHECK(runtime.TargetPool().Stats().acquire_count > 0U);
         VR_CHECK(runtime.TargetPool().Stats().reuse_hit_count > 0U);
-        VR_CHECK(runtime.RenderTarget().ResolveView(recorder.post_stack.Targets().ColorTarget()).state ==
+        VR_CHECK(runtime.RenderTarget().ResolveView(recorder.PostStack().Targets().ColorTarget()).state ==
                  vr::render::RenderTargetStateKind::shader_read);
-        VR_CHECK(runtime.RenderTarget().ResolveView(recorder.post_stack.Targets().DepthTarget()).state ==
+        VR_CHECK(runtime.RenderTarget().ResolveView(recorder.PostStack().Targets().DepthTarget()).state ==
                  vr::render::RenderTargetStateKind::depth_attachment);
 
-        recorder.post_stack.Shutdown(runtime.Context());
-        recorder.geometry_renderer.Shutdown(runtime.Context());
+        recorder.Shutdown(runtime.Context());
+        shadow_renderer.Shutdown(runtime.Context());
+        shadow_renderer_initialized = false;
+        geometry_renderer.Shutdown(runtime.Context());
         geometry_renderer_initialized = false;
         geometry_material_host.Shutdown();
         geometry_material_host_initialized = false;
@@ -899,11 +978,15 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_bloom_post_stack_smoke,
         runtime.Shutdown();
         runtime_initialized = false;
     } catch (const std::exception& exception_) {
-        if (runtime_initialized && runtime.IsInitialized() && recorder.post_stack.IsInitialized()) {
-            recorder.post_stack.Shutdown(runtime.Context());
+        if (runtime_initialized && runtime.IsInitialized() && recorder.IsInitialized()) {
+            recorder.Shutdown(runtime.Context());
+        }
+        if (shadow_renderer_initialized && runtime_initialized && runtime.IsInitialized()) {
+            shadow_renderer.Shutdown(runtime.Context());
+            shadow_renderer_initialized = false;
         }
         if (geometry_renderer_initialized && runtime_initialized && runtime.IsInitialized()) {
-            recorder.geometry_renderer.Shutdown(runtime.Context());
+            geometry_renderer.Shutdown(runtime.Context());
             geometry_renderer_initialized = false;
         }
         if (geometry_material_host_initialized) {

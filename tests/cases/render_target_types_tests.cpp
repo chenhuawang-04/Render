@@ -3,6 +3,7 @@
 #include "vr/render/render_target_pass.hpp"
 #include "vr/render/render_target_desc.hpp"
 #include "vr/render/render_target_host.hpp"
+#include "vr/render/scene_recorder_3d.hpp"
 #include "vr/render/render_target_types.hpp"
 #include "vr/render/scene_render_target_set.hpp"
 
@@ -26,7 +27,7 @@ struct FakeColorRenderer {
     }
 };
 
-struct FakeDepthRenderer final : FakeColorRenderer {
+struct FakeDepthRenderer : FakeColorRenderer {
     vr::render::RenderTargetDepthOutputConfig depth_output{};
     bool depth_set = false;
     bool depth_reset = false;
@@ -39,6 +40,82 @@ struct FakeDepthRenderer final : FakeColorRenderer {
     void ResetDepthTargetConfig() noexcept {
         depth_output = {};
         depth_reset = true;
+    }
+};
+
+struct FakeSceneRecorderRenderer : FakeDepthRenderer {
+    std::uint32_t prepare_count = 0U;
+    std::uint32_t record_count = 0U;
+    std::uint32_t recreate_count = 0U;
+
+    void PrepareFrame(const vr::render::RuntimePrepareContext&) noexcept {
+        prepare_count += 1U;
+    }
+
+    void Record(const vr::render::FrameRecordContext&) noexcept {
+        record_count += 1U;
+    }
+
+    void OnSwapchainRecreated(std::uint32_t,
+                              VkExtent2D,
+                              VkFormat,
+                              std::uint64_t,
+                              std::uint64_t) noexcept {
+        recreate_count += 1U;
+    }
+};
+
+struct FakePreSceneRecorderRenderer final {
+    std::uint32_t prepare_count = 0U;
+    std::uint32_t record_count = 0U;
+    std::uint32_t recreate_count = 0U;
+
+    void PrepareFrame(const vr::render::RuntimePrepareContext&) noexcept {
+        prepare_count += 1U;
+    }
+
+    void Record(const vr::render::FrameRecordContext&) noexcept {
+        record_count += 1U;
+    }
+
+    void OnSwapchainRecreated(std::uint32_t,
+                              VkExtent2D,
+                              VkFormat,
+                              std::uint64_t,
+                              std::uint64_t) noexcept {
+        recreate_count += 1U;
+    }
+};
+
+struct FakeLitSceneRecorderRenderer final : FakeSceneRecorderRenderer {
+    vr::render::LightFrameCoordinator<vr::ecs::Dim3>* light_frame = nullptr;
+    vr::render::LightShadowLinkCoordinator3D* light_shadow_link = nullptr;
+    vr::render::ShadowAtlasBindingCoordinator* shadow_atlas_binding = nullptr;
+    vr::render::ShadowFrameCoordinator<vr::ecs::Dim3>* shadow_frame = nullptr;
+    vr::shadow::ShadowAtlasHost* shadow_atlas = nullptr;
+
+    void SetLightFrameCoordinator(
+        vr::render::LightFrameCoordinator<vr::ecs::Dim3>* light_frame_coordinator_) noexcept {
+        light_frame = light_frame_coordinator_;
+    }
+
+    void SetLightShadowLinkCoordinator(
+        vr::render::LightShadowLinkCoordinator3D* coordinator_) noexcept {
+        light_shadow_link = coordinator_;
+    }
+
+    void SetShadowAtlasBindingCoordinator(
+        vr::render::ShadowAtlasBindingCoordinator* coordinator_) noexcept {
+        shadow_atlas_binding = coordinator_;
+    }
+
+    void SetShadowFrameCoordinator(
+        vr::render::ShadowFrameCoordinator<vr::ecs::Dim3>* shadow_frame_coordinator_) noexcept {
+        shadow_frame = shadow_frame_coordinator_;
+    }
+
+    void SetShadowAtlasHost(vr::shadow::ShadowAtlasHost* shadow_atlas_host_) noexcept {
+        shadow_atlas = shadow_atlas_host_;
     }
 };
 
@@ -194,6 +271,73 @@ VR_TEST_CASE(SceneRenderTargetSet_not_ready_scene_consumer_resets_source_binding
     VR_CHECK(!consumer.source_set);
     VR_CHECK(consumer.source_cleared);
     VR_CHECK(consumer.output_reset);
+}
+
+VR_TEST_CASE(SceneRecorder3D_overlay_output_defaults_match_present_overlay_contract,
+             "unit;core;render_target") {
+    const vr::render::RenderTargetColorOutputConfig overlay_output =
+        vr::render::SceneRecorder3D::MakePresentOverlayOutputConfig();
+    VR_CHECK(overlay_output.final_state == vr::render::RenderTargetStateKind::present_src);
+    VR_CHECK(overlay_output.use_explicit_load_op);
+    VR_CHECK(overlay_output.load_op == VK_ATTACHMENT_LOAD_OP_LOAD);
+    VR_CHECK(overlay_output.store_op == VK_ATTACHMENT_STORE_OP_STORE);
+}
+
+VR_TEST_CASE(SceneRecorder3D_registration_upserts_renderer_counts,
+             "unit;core;render_target") {
+    vr::render::SceneRecorder3D recorder{};
+    recorder.Initialize({});
+
+    FakePreSceneRecorderRenderer pre_scene_renderer{};
+    FakeSceneRecorderRenderer scene_renderer{};
+    FakeSceneRecorderRenderer overlay_renderer{};
+
+    recorder.RegisterPreSceneRenderer(pre_scene_renderer);
+    recorder.RegisterSceneRenderer(scene_renderer, vr::render::SceneRenderPassRole::first);
+    recorder.RegisterSceneRenderer(scene_renderer, vr::render::SceneRenderPassRole::last);
+    recorder.RegisterOverlayRenderer(overlay_renderer);
+    recorder.RegisterOverlayRenderer(overlay_renderer,
+                                     vr::render::SceneRecorder3D::MakePresentOverlayOutputConfig());
+
+    const vr::render::SceneRecorder3DStats stats = recorder.Stats();
+    VR_CHECK(stats.pre_scene_renderer_count == 1U);
+    VR_CHECK(stats.scene_renderer_count == 1U);
+    VR_CHECK(stats.overlay_renderer_count == 1U);
+    VR_CHECK(recorder.IsInitialized());
+    VR_CHECK(!recorder.HasRuntimeBinding());
+}
+
+VR_TEST_CASE(SceneRecorder3D_shadow_registration_and_lighting_binding_are_propagated,
+             "unit;core;render_target") {
+    vr::render::SceneRecorder3D recorder{};
+    vr::render::SceneRecorder3DCreateInfo create_info{};
+    create_info.reserve_pre_scene_renderer_count = 2U;
+    recorder.Initialize(create_info);
+
+    FakeLitSceneRecorderRenderer lit_renderer{};
+    vr::render::LightFrameCoordinator<vr::ecs::Dim3> light_frame_coordinator{};
+    vr::shadow::ShadowRenderer3D shadow_renderer{};
+
+    recorder.BindLightFrameCoordinator(&light_frame_coordinator);
+    recorder.RegisterSceneRenderer(lit_renderer, vr::render::SceneRenderPassRole::single);
+    recorder.RegisterShadowRenderer(shadow_renderer);
+
+    const vr::render::SceneRecorder3DStats registered_stats = recorder.Stats();
+    VR_CHECK(registered_stats.pre_scene_renderer_count == 1U);
+    VR_CHECK(registered_stats.scene_renderer_count == 1U);
+    VR_CHECK(lit_renderer.light_frame == &light_frame_coordinator);
+    VR_CHECK(lit_renderer.light_shadow_link != nullptr);
+    VR_CHECK(lit_renderer.shadow_atlas_binding != nullptr);
+    VR_CHECK(lit_renderer.shadow_frame == &shadow_renderer.FrameCoordinatorMutable());
+    VR_CHECK(lit_renderer.shadow_atlas == &shadow_renderer.AtlasHostMutable());
+
+    recorder.BindLightFrameCoordinator(nullptr);
+    recorder.ClearShadowRuntimeBinding();
+    VR_CHECK(lit_renderer.light_frame == nullptr);
+    VR_CHECK(lit_renderer.light_shadow_link != nullptr);
+    VR_CHECK(lit_renderer.shadow_atlas_binding != nullptr);
+    VR_CHECK(lit_renderer.shadow_frame == nullptr);
+    VR_CHECK(lit_renderer.shadow_atlas == nullptr);
 }
 
 } // namespace
