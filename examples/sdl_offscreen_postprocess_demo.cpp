@@ -6,8 +6,9 @@
 #include "vr/geometry/geometry_renderer_2d.hpp"
 #include "vr/geometry/geometry_upload_host.hpp"
 #include "vr/render/render_runtime_host.hpp"
+#include "vr/render/render_view_submission_utils.hpp"
+#include "vr/render/scene_recorder_2d.hpp"
 #include "vr/render/render_target_composite_renderer.hpp"
-#include "vr/render/scene_render_target_set.hpp"
 #include "vr/surface/surface_image_host.hpp"
 #include "vr/surface/surface_renderer_2d.hpp"
 #include "vr/surface/surface_upload_host.hpp"
@@ -192,79 +193,17 @@ void InitializeTextComponent(Text2D& component_,
     (void)TextSystem2D::SetText(component_, text_);
 }
 
-struct OffscreenPostProcessRecorder final {
-    Runtime* runtime = nullptr;
-    vr::geometry::GeometryRenderer2D geometry_renderer{};
-    vr::surface::SurfaceRenderer2D surface_renderer{};
-    vr::text::TextRenderer2D text_renderer{};
-    vr::render::RenderTargetCompositeRenderer composite_renderer{};
-    vr::render::SceneRenderTargetSet scene_targets{};
-
-    void InitializeSceneTargets() {
-        vr::render::SceneRenderTargetSetCreateInfo create_info{};
-        create_info.color_debug_name = "OffscreenSceneColor";
-        create_info.enable_depth = false;
-        create_info.color_lifetime = vr::render::RenderTargetLifetime::transient;
-        create_info.additional_color_usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
-        create_info.clear_color = VkClearColorValue{{0.025F, 0.030F, 0.060F, 1.0F}};
-        scene_targets.Initialize(create_info);
-    }
-
-    void PrepareFrame(const vr::render::RuntimePrepareContext& prepare_context_) {
-        (void)scene_targets.PrepareFrameAndConfigure(
-            prepare_context_,
-            &composite_renderer,
-            vr::render::BindSceneRenderer(geometry_renderer, vr::render::SceneRenderPassRole::first),
-            vr::render::BindSceneRenderer(surface_renderer, vr::render::SceneRenderPassRole::middle),
-            vr::render::BindSceneRenderer(text_renderer, vr::render::SceneRenderPassRole::last));
-        geometry_renderer.PrepareFrame(prepare_context_);
-        surface_renderer.PrepareFrame(prepare_context_);
-        text_renderer.PrepareFrame(prepare_context_);
-        composite_renderer.PrepareFrame(prepare_context_);
-    }
-
-    void Record(const vr::render::FrameRecordContext& record_context_) {
-        geometry_renderer.Record(record_context_);
-        surface_renderer.Record(record_context_);
-        text_renderer.Record(record_context_);
-        composite_renderer.Record(record_context_);
-    }
-
-    void OnSwapchainRecreated(std::uint32_t image_count_,
-                              VkExtent2D extent_,
-                              VkFormat format_,
-                              std::uint64_t last_submitted_value_,
-                              std::uint64_t completed_submit_value_) {
-        geometry_renderer.OnSwapchainRecreated(image_count_,
-                                               extent_,
-                                               format_,
-                                               last_submitted_value_,
-                                               completed_submit_value_);
-        surface_renderer.OnSwapchainRecreated(image_count_,
-                                              extent_,
-                                              format_,
-                                              last_submitted_value_,
-                                              completed_submit_value_);
-        text_renderer.OnSwapchainRecreated(image_count_, extent_, format_);
-        composite_renderer.OnSwapchainRecreated(image_count_, extent_, format_);
-
-        if (runtime == nullptr) {
-            return;
-        }
-
-        (void)scene_targets.OnSwapchainRecreatedAndConfigure(
-            runtime->Context(),
-            runtime->RenderTarget(),
-            runtime->HasRenderTargetPool() ? &runtime->TargetPool() : nullptr,
-            extent_,
-            last_submitted_value_,
-            completed_submit_value_,
-            &composite_renderer,
-            vr::render::BindSceneRenderer(geometry_renderer, vr::render::SceneRenderPassRole::first),
-            vr::render::BindSceneRenderer(surface_renderer, vr::render::SceneRenderPassRole::middle),
-            vr::render::BindSceneRenderer(text_renderer, vr::render::SceneRenderPassRole::last));
-    }
-};
+[[nodiscard]] vr::render::SceneRecorder2DCreateInfo BuildOffscreenRecorderCreateInfo() noexcept {
+    vr::render::SceneRecorder2DCreateInfo create_info{};
+    create_info.scene_target.color_debug_name = "OffscreenSceneColor";
+    create_info.scene_target.enable_depth = false;
+    create_info.scene_target.color_lifetime = vr::render::RenderTargetLifetime::transient;
+    create_info.scene_target.additional_color_usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+    create_info.scene_target.clear_color = VkClearColorValue{{0.025F, 0.030F, 0.060F, 1.0F}};
+    create_info.reserve_scene_renderer_count = 3U;
+    create_info.reserve_overlay_renderer_count = 0U;
+    return create_info;
+}
 
 } // namespace
 
@@ -286,7 +225,11 @@ int main(int argc_, char** argv_) {
         vr::surface::SurfaceUploadHost surface_upload_host{};
         vr::surface::SurfaceImageHost surface_image_host{};
         vr::geometry::GeometryUploadHost geometry_upload_host{};
-        OffscreenPostProcessRecorder recorder{};
+        vr::render::SceneRecorder2D recorder{};
+        vr::geometry::GeometryRenderer2D geometry_renderer{};
+        vr::surface::SurfaceRenderer2D surface_renderer{};
+        vr::text::TextRenderer2D text_renderer{};
+        vr::render::RenderTargetCompositeRenderer composite_renderer{};
 
         Runtime::CreateInfo create_info{};
         create_info.platform.window.title = "Vulkan SDL3 Offscreen PostProcess Demo";
@@ -304,8 +247,8 @@ int main(int argc_, char** argv_) {
         create_info.poll_events_each_tick = true;
         runtime.Initialize(create_info);
 
-        recorder.runtime = &runtime;
-        recorder.InitializeSceneTargets();
+        recorder.Initialize(BuildOffscreenRecorderCreateInfo());
+        recorder.BindRuntime(runtime);
 
         vr::surface::SurfaceUploadHostCreateInfo surface_upload_create_info{};
         surface_upload_create_info.frames_in_flight = 2U;
@@ -423,32 +366,48 @@ int main(int argc_, char** argv_) {
 
         vr::geometry::GeometryRenderer2DCreateInfo geometry_renderer_create_info{};
         geometry_renderer_create_info.clear_swapchain = false;
-        recorder.geometry_renderer.Initialize(geometry_renderer_create_info);
-        recorder.geometry_renderer.SetHost(&geometry_upload_host);
-        recorder.geometry_renderer.SetSceneData(geometry_components.data(),
-                                               static_cast<std::uint32_t>(geometry_components.size()));
+        geometry_renderer.Initialize(geometry_renderer_create_info);
+        geometry_renderer.SetHost(&geometry_upload_host);
+        geometry_renderer.SetSceneData(geometry_components.data(),
+                                       static_cast<std::uint32_t>(geometry_components.size()));
 
         vr::surface::SurfaceRenderer2DCreateInfo surface_renderer_create_info{};
         surface_renderer_create_info.clear_swapchain = false;
         surface_renderer_create_info.enable_light_shadow = false;
-        recorder.surface_renderer.Initialize(surface_renderer_create_info);
-        recorder.surface_renderer.SetHosts(&surface_upload_host, &surface_image_host);
-        recorder.surface_renderer.SetSceneData(surface_components.data(),
-                                              surface_transforms.data(),
-                                              static_cast<std::uint32_t>(surface_components.size()));
+        surface_renderer.Initialize(surface_renderer_create_info);
+        surface_renderer.SetHosts(&surface_upload_host, &surface_image_host);
+        surface_renderer.SetSceneData(surface_components.data(),
+                                      surface_transforms.data(),
+                                      static_cast<std::uint32_t>(surface_components.size()));
 
         vr::text::TextRenderer2DCreateInfo text_renderer_create_info{};
         text_renderer_create_info.clear_swapchain = false;
-        recorder.text_renderer.Initialize(text_renderer_create_info);
-        recorder.text_renderer.SetComponents(text_components.data(),
-                                            static_cast<std::uint32_t>(text_components.size()));
+        text_renderer.Initialize(text_renderer_create_info);
+        text_renderer.SetComponents(text_components.data(),
+                                    static_cast<std::uint32_t>(text_components.size()));
 
         vr::render::RenderTargetCompositeRendererCreateInfo composite_create_info{};
         composite_create_info.clear_swapchain = true;
         composite_create_info.enable_reinhard_tonemap = true;
         composite_create_info.exposure = 1.15F;
         composite_create_info.apply_manual_gamma = false;
-        recorder.composite_renderer.Initialize(composite_create_info);
+        composite_renderer.Initialize(composite_create_info);
+        recorder.RegisterSceneRenderer(geometry_renderer, vr::render::SceneRenderPassRole::first);
+        recorder.RegisterSceneRenderer(surface_renderer, vr::render::SceneRenderPassRole::middle);
+        recorder.RegisterSceneRenderer(text_renderer, vr::render::SceneRenderPassRole::last);
+        recorder.RegisterSceneConsumer(composite_renderer,
+                                      vr::render::SceneRecorder2D::MakePresentOverlayOutputConfig());
+
+        vr::render::RenderView2D main_view{};
+        vr::render::RenderScenePacket2D main_scene_packet{};
+        vr::render::RefreshExtentBoundScreenSceneSubmission(main_view,
+                                                            main_scene_packet,
+                                                            runtime.Swapchain().Extent(),
+                                                            0U,
+                                                            vr::render::RenderViewKind::world,
+                                                            vr::render::render_view_postprocess_enabled_flag,
+                                                            vr::render::render_scene_packet_allow_postprocess_flag);
+        recorder.SetFramePacket(&main_scene_packet);
 
         std::cout << "sdl_offscreen_postprocess_demo running. Close window to exit.\n";
 
@@ -478,12 +437,20 @@ int main(int argc_, char** argv_) {
                 std::string stats_text =
                     "\n\nFPS: " + std::to_string(static_cast<int>(std::round(fps))) +
                     " | Draw(surface/text/comp): " +
-                    std::to_string(recorder.surface_renderer.Stats().draw_call_count) + "/" +
-                    std::to_string(recorder.text_renderer.Stats().draw_call_count) + "/" +
-                    std::to_string(recorder.composite_renderer.Stats().draw_call_count);
+                    std::to_string(surface_renderer.Stats().draw_call_count) + "/" +
+                    std::to_string(text_renderer.Stats().draw_call_count) + "/" +
+                    std::to_string(composite_renderer.Stats().draw_call_count);
                 (void)TextSystem2D::SetText(text_components[1U], stats_text);
             }
 
+            vr::render::RefreshExtentBoundScreenSceneSubmission(main_view,
+                                                                main_scene_packet,
+                                                                runtime.Swapchain().Extent(),
+                                                                frame_counter,
+                                                                vr::render::RenderViewKind::world,
+                                                                vr::render::render_view_postprocess_enabled_flag,
+                                                                vr::render::render_scene_packet_allow_postprocess_flag);
+            recorder.SetFramePacket(&main_scene_packet);
             const auto tick_result = runtime.Tick(recorder);
             if (tick_result.render.code == vr::render::TickCode::SkippedWindowHidden) {
                 SDL_Delay(8);
@@ -496,10 +463,11 @@ int main(int argc_, char** argv_) {
             SDL_Delay(8);
         }
 
-        recorder.composite_renderer.Shutdown(runtime.Context());
-        recorder.text_renderer.Shutdown(runtime.Context());
-        recorder.surface_renderer.Shutdown(runtime.Context());
-        recorder.geometry_renderer.Shutdown(runtime.Context());
+        recorder.Shutdown(runtime.Context());
+        composite_renderer.Shutdown(runtime.Context());
+        text_renderer.Shutdown(runtime.Context());
+        surface_renderer.Shutdown(runtime.Context());
+        geometry_renderer.Shutdown(runtime.Context());
         geometry_upload_host.Shutdown(runtime.Context());
         surface_image_host.Shutdown(runtime.Context());
         surface_upload_host.Shutdown(runtime.Context());

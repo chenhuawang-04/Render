@@ -1,5 +1,6 @@
 #include "support/test_framework.hpp"
 #include "vr/render/render_pass_preset.hpp"
+#include "vr/render/scene_recorder_2d.hpp"
 #include "vr/render/render_target_pass.hpp"
 #include "vr/render/render_target_desc.hpp"
 #include "vr/render/render_target_host.hpp"
@@ -147,6 +148,33 @@ struct FakeSceneConsumer final {
     bool source_set = false;
     bool source_cleared = false;
     bool output_reset = false;
+    bool output_set = false;
+    vr::render::RenderTargetColorOutputConfig output_target{};
+    std::uint32_t prepare_count = 0U;
+    std::uint32_t record_count = 0U;
+    std::uint32_t recreate_count = 0U;
+
+    void PrepareFrame(const vr::render::RuntimePrepareContext&) noexcept {
+        prepare_count += 1U;
+    }
+
+    void Record(const vr::render::FrameRecordContext&) noexcept {
+        record_count += 1U;
+    }
+
+    void OnSwapchainRecreated(std::uint32_t,
+                              VkExtent2D,
+                              VkFormat,
+                              std::uint64_t,
+                              std::uint64_t) noexcept {
+        recreate_count += 1U;
+    }
+
+    void SetOutputTargetConfig(
+        const vr::render::RenderTargetColorOutputConfig& output_target_config_) noexcept {
+        output_target = output_target_config_;
+        output_set = true;
+    }
 
     void SetSceneSourceTarget(vr::render::RenderTargetHandle source_target_,
                               vr::render::RenderTargetStateKind expected_state_) noexcept {
@@ -361,6 +389,74 @@ VR_TEST_CASE(SceneRecorder3D_overlay_output_defaults_match_present_overlay_contr
     VR_CHECK(overlay_output.use_explicit_load_op);
     VR_CHECK(overlay_output.load_op == VK_ATTACHMENT_LOAD_OP_LOAD);
     VR_CHECK(overlay_output.store_op == VK_ATTACHMENT_STORE_OP_STORE);
+}
+
+VR_TEST_CASE(SceneRecorder2D_overlay_output_defaults_match_present_overlay_contract,
+             "unit;core;render_target") {
+    const vr::render::RenderTargetColorOutputConfig overlay_output =
+        vr::render::SceneRecorder2D::MakePresentOverlayOutputConfig();
+    VR_CHECK(overlay_output.final_state == vr::render::RenderTargetStateKind::present_src);
+    VR_CHECK(overlay_output.use_explicit_load_op);
+    VR_CHECK(overlay_output.load_op == VK_ATTACHMENT_LOAD_OP_LOAD);
+    VR_CHECK(overlay_output.store_op == VK_ATTACHMENT_STORE_OP_STORE);
+}
+
+VR_TEST_CASE(SceneRecorder2D_registration_upserts_renderer_counts,
+             "unit;core;render_target") {
+    vr::render::SceneRecorder2D recorder{};
+    recorder.Initialize({});
+
+    FakePreSceneRecorderRenderer pre_scene_renderer{};
+    FakeSceneRecorderRenderer scene_renderer{};
+    FakeSceneRecorderRenderer overlay_renderer{};
+    FakeSceneConsumer consumer{};
+
+    recorder.RegisterPreSceneRenderer(pre_scene_renderer);
+    recorder.RegisterSceneRenderer(scene_renderer, vr::render::SceneRenderPassRole::first);
+    recorder.RegisterSceneRenderer(scene_renderer, vr::render::SceneRenderPassRole::middle);
+    recorder.RegisterSceneConsumer(consumer);
+    recorder.RegisterOverlayRenderer(overlay_renderer);
+    recorder.RegisterOverlayRenderer(overlay_renderer,
+                                     vr::render::SceneRecorder2D::MakePresentOverlayOutputConfig());
+
+    const vr::render::SceneRecorder2DStats stats = recorder.Stats();
+    VR_CHECK(stats.pre_scene_renderer_count == 1U);
+    VR_CHECK(stats.scene_renderer_count == 1U);
+    VR_CHECK(stats.scene_consumer_count == 1U);
+    VR_CHECK(stats.overlay_renderer_count == 1U);
+    VR_CHECK(recorder.IsInitialized());
+    VR_CHECK(!recorder.HasRuntimeBinding());
+}
+
+VR_TEST_CASE(SceneRecorder2D_frame_packet_is_runtime_submission_not_ecs_state,
+             "unit;core;render_target") {
+    vr::render::SceneRecorder2D recorder{};
+    recorder.Initialize({});
+
+    vr::ecs::Camera<vr::ecs::Dim2> camera{};
+    camera.style.viewport = vr::ecs::CameraViewport{.origin_x = 0.0F,
+                                                    .origin_y = 0.0F,
+                                                    .width = 640.0F,
+                                                    .height = 360.0F};
+    camera.runtime.culling_mask = 0x0F0F0F0FU;
+    camera.runtime.revision = 5U;
+    vr::render::RenderView2D view = vr::render::MakeRenderViewFromCamera(camera);
+    vr::render::RenderScenePacket2D packet =
+        vr::render::MakeSingleViewScenePacket(view, 99U);
+
+    recorder.SetFramePacket(&packet);
+    VR_CHECK(recorder.FramePacket() == &packet);
+    VR_CHECK(recorder.ActiveView() == &view);
+    VR_CHECK(recorder.ActiveView()->camera == &camera);
+    VR_CHECK(recorder.Stats().frame_packet_bind_count == 1U);
+
+    vr::render::FrameRecordContext record_context{};
+    recorder.Record(record_context);
+    VR_CHECK(recorder.Stats().frame_packet_record_count == 1U);
+
+    recorder.ClearFramePacket();
+    VR_CHECK(recorder.FramePacket() == nullptr);
+    VR_CHECK(recorder.ActiveView() == nullptr);
 }
 
 VR_TEST_CASE(SceneRecorder3D_registration_upserts_renderer_counts,

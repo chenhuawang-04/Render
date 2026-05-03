@@ -1,0 +1,464 @@
+#include "vr/render/scene_recorder_2d.hpp"
+
+#include <stdexcept>
+#include <string>
+
+namespace vr::render {
+
+void SceneRecorder2D::Initialize(const SceneRecorder2DCreateInfo& create_info_) noexcept {
+    create_info_cache = create_info_;
+    scene_targets.Initialize(create_info_cache.scene_target);
+    pre_scene_renderer_entries.clear();
+    scene_renderer_entries.clear();
+    scene_consumer_entry = {};
+    overlay_renderer_entries.clear();
+    pre_scene_renderer_entries.reserve(create_info_cache.reserve_pre_scene_renderer_count);
+    scene_renderer_entries.reserve(create_info_cache.reserve_scene_renderer_count);
+    overlay_renderer_entries.reserve(create_info_cache.reserve_overlay_renderer_count);
+    stats = {};
+    context = nullptr;
+    render_target_host = nullptr;
+    render_target_pool = nullptr;
+    light_frame_coordinator = nullptr;
+    shadow_frame_coordinator = nullptr;
+    shadow_atlas_host = nullptr;
+    frame_packet = nullptr;
+    active_view = nullptr;
+    active_view_signature = 0U;
+    light_shadow_link_coordinator.Reset();
+    shadow_atlas_binding_coordinator.Reset();
+    initialized = true;
+}
+
+void SceneRecorder2D::Shutdown(VulkanContext&) noexcept {
+    if (!initialized) {
+        return;
+    }
+
+    scene_targets.Reset();
+    pre_scene_renderer_entries.clear();
+    scene_renderer_entries.clear();
+    scene_consumer_entry = {};
+    overlay_renderer_entries.clear();
+    stats = {};
+    context = nullptr;
+    render_target_host = nullptr;
+    render_target_pool = nullptr;
+    light_frame_coordinator = nullptr;
+    shadow_frame_coordinator = nullptr;
+    shadow_atlas_host = nullptr;
+    frame_packet = nullptr;
+    active_view = nullptr;
+    active_view_signature = 0U;
+    light_shadow_link_coordinator.Reset();
+    shadow_atlas_binding_coordinator.Reset();
+    initialized = false;
+}
+
+void SceneRecorder2D::BindRuntimeResources(VulkanContext& context_,
+                                           RenderTargetHost& render_target_host_,
+                                           RenderTargetPool* render_target_pool_) noexcept {
+    context = &context_;
+    render_target_host = &render_target_host_;
+    render_target_pool = render_target_pool_;
+}
+
+void SceneRecorder2D::ClearRuntimeBinding() noexcept {
+    context = nullptr;
+    render_target_host = nullptr;
+    render_target_pool = nullptr;
+}
+
+void SceneRecorder2D::BindLightFrameCoordinator(
+    render::LightFrameCoordinator<ecs::Dim2>* light_frame_coordinator_) noexcept {
+    light_frame_coordinator = light_frame_coordinator_;
+    light_shadow_link_coordinator.Reset();
+    RefreshFramePacketBinding();
+    RefreshSceneLightingBindings();
+}
+
+void SceneRecorder2D::BindShadowRuntime(render::ShadowFrameCoordinator<ecs::Dim2>* shadow_frame_coordinator_,
+                                        shadow::ShadowAtlasHost* shadow_atlas_host_) noexcept {
+    shadow_frame_coordinator = shadow_frame_coordinator_;
+    shadow_atlas_host = shadow_atlas_host_;
+    light_shadow_link_coordinator.Reset();
+    shadow_atlas_binding_coordinator.Reset();
+    RefreshSceneLightingBindings();
+}
+
+void SceneRecorder2D::ClearShadowRuntimeBinding() noexcept {
+    BindShadowRuntime(nullptr, nullptr);
+}
+
+void SceneRecorder2D::SetFramePacket(const RenderScenePacket2D* frame_packet_) noexcept {
+    if (frame_packet == frame_packet_) {
+        RefreshFramePacketBinding();
+        return;
+    }
+    frame_packet = frame_packet_;
+    ++stats.frame_packet_bind_count;
+    RefreshFramePacketBinding();
+}
+
+void SceneRecorder2D::ClearFramePacket() noexcept {
+    SetFramePacket(nullptr);
+}
+
+void SceneRecorder2D::ClearPreSceneRenderers() noexcept {
+    pre_scene_renderer_entries.clear();
+    RefreshRendererCounts();
+}
+
+void SceneRecorder2D::ClearSceneRenderers() noexcept {
+    scene_renderer_entries.clear();
+    RefreshRendererCounts();
+}
+
+void SceneRecorder2D::ClearSceneConsumer() noexcept {
+    scene_consumer_entry = {};
+    RefreshRendererCounts();
+}
+
+void SceneRecorder2D::ClearOverlayRenderers() noexcept {
+    overlay_renderer_entries.clear();
+    RefreshRendererCounts();
+}
+
+void SceneRecorder2D::ClearRendererRegistrations() noexcept {
+    ClearPreSceneRenderers();
+    ClearSceneRenderers();
+    ClearSceneConsumer();
+    ClearOverlayRenderers();
+}
+
+void SceneRecorder2D::PrepareFrame(const RuntimePrepareContext& prepare_context_) {
+    EnsureInitialized("PrepareFrame");
+    RefreshFramePacketBinding();
+    if (frame_packet != nullptr) {
+        ++stats.frame_packet_prepare_count;
+    }
+
+    const bool use_scene_targets = HasSceneConsumer();
+    if (use_scene_targets) {
+        EnsureRuntimeBinding("PrepareFrame");
+        (void)scene_targets.PrepareFrame(prepare_context_);
+        ConfigureSceneRenderersForTargets();
+        ConfigureSceneConsumerForTargets();
+    }
+
+    for (const PreSceneRendererEntry& entry : pre_scene_renderer_entries) {
+        if (entry.prepare_fn != nullptr && entry.renderer != nullptr) {
+            entry.prepare_fn(entry.renderer, prepare_context_);
+        }
+    }
+
+    for (const SceneRendererEntry& entry : scene_renderer_entries) {
+        if (entry.prepare_fn != nullptr && entry.renderer != nullptr) {
+            entry.prepare_fn(entry.renderer, prepare_context_);
+        }
+    }
+
+    if (scene_consumer_entry.renderer != nullptr) {
+        if (scene_consumer_entry.set_output_target_fn != nullptr) {
+            scene_consumer_entry.set_output_target_fn(scene_consumer_entry.renderer,
+                                                      scene_consumer_entry.output_target_config);
+        }
+        if (scene_consumer_entry.prepare_fn != nullptr) {
+            scene_consumer_entry.prepare_fn(scene_consumer_entry.renderer, prepare_context_);
+        }
+    }
+
+    for (const OverlayRendererEntry& entry : overlay_renderer_entries) {
+        if (entry.renderer != nullptr && entry.set_output_target_fn != nullptr) {
+            entry.set_output_target_fn(entry.renderer, entry.output_target_config);
+        }
+        if (entry.prepare_fn != nullptr && entry.renderer != nullptr) {
+            entry.prepare_fn(entry.renderer, prepare_context_);
+        }
+    }
+
+    stats.prepare_count += 1U;
+}
+
+void SceneRecorder2D::PrepareFrame(const RuntimePrepareContext& prepare_context_,
+                                   const RenderScenePacket2D& frame_packet_) {
+    SetFramePacket(&frame_packet_);
+    PrepareFrame(prepare_context_);
+}
+
+void SceneRecorder2D::Record(const FrameRecordContext& record_context_) {
+    EnsureInitialized("Record");
+    RefreshFramePacketBinding();
+    if (frame_packet != nullptr) {
+        ++stats.frame_packet_record_count;
+    }
+
+    for (const PreSceneRendererEntry& entry : pre_scene_renderer_entries) {
+        if (entry.record_fn != nullptr && entry.renderer != nullptr) {
+            entry.record_fn(entry.renderer, record_context_);
+        }
+    }
+
+    for (const SceneRendererEntry& entry : scene_renderer_entries) {
+        if (entry.record_fn != nullptr && entry.renderer != nullptr) {
+            entry.record_fn(entry.renderer, record_context_);
+        }
+    }
+
+    if (scene_consumer_entry.record_fn != nullptr && scene_consumer_entry.renderer != nullptr) {
+        scene_consumer_entry.record_fn(scene_consumer_entry.renderer, record_context_);
+    }
+
+    for (const OverlayRendererEntry& entry : overlay_renderer_entries) {
+        if (entry.record_fn != nullptr && entry.renderer != nullptr) {
+            entry.record_fn(entry.renderer, record_context_);
+        }
+    }
+
+    stats.record_count += 1U;
+}
+
+void SceneRecorder2D::Record(const FrameRecordContext& record_context_,
+                             const RenderScenePacket2D& frame_packet_) {
+    SetFramePacket(&frame_packet_);
+    Record(record_context_);
+}
+
+void SceneRecorder2D::OnSwapchainRecreated(std::uint32_t image_count_,
+                                           VkExtent2D extent_,
+                                           VkFormat format_,
+                                           std::uint64_t last_submitted_value_,
+                                           std::uint64_t completed_submit_value_) {
+    EnsureInitialized("OnSwapchainRecreated");
+
+    for (const PreSceneRendererEntry& entry : pre_scene_renderer_entries) {
+        if (entry.swapchain_recreated_fn != nullptr && entry.renderer != nullptr) {
+            entry.swapchain_recreated_fn(entry.renderer,
+                                         image_count_,
+                                         extent_,
+                                         format_,
+                                         last_submitted_value_,
+                                         completed_submit_value_);
+        }
+    }
+
+    for (const SceneRendererEntry& entry : scene_renderer_entries) {
+        if (entry.swapchain_recreated_fn != nullptr && entry.renderer != nullptr) {
+            entry.swapchain_recreated_fn(entry.renderer,
+                                         image_count_,
+                                         extent_,
+                                         format_,
+                                         last_submitted_value_,
+                                         completed_submit_value_);
+        }
+    }
+
+    if (scene_consumer_entry.swapchain_recreated_fn != nullptr &&
+        scene_consumer_entry.renderer != nullptr) {
+        scene_consumer_entry.swapchain_recreated_fn(scene_consumer_entry.renderer,
+                                                    image_count_,
+                                                    extent_,
+                                                    format_,
+                                                    last_submitted_value_,
+                                                    completed_submit_value_);
+    }
+
+    for (const OverlayRendererEntry& entry : overlay_renderer_entries) {
+        if (entry.swapchain_recreated_fn != nullptr && entry.renderer != nullptr) {
+            entry.swapchain_recreated_fn(entry.renderer,
+                                         image_count_,
+                                         extent_,
+                                         format_,
+                                         last_submitted_value_,
+                                         completed_submit_value_);
+        }
+    }
+
+    if (HasSceneConsumer()) {
+        EnsureRuntimeBinding("OnSwapchainRecreated");
+        (void)scene_targets.OnSwapchainRecreated(*context,
+                                                 *render_target_host,
+                                                 render_target_pool,
+                                                 extent_,
+                                                 last_submitted_value_,
+                                                 completed_submit_value_);
+        ConfigureSceneRenderersForTargets();
+        ConfigureSceneConsumerForTargets();
+    }
+
+    stats.swapchain_recreate_count += 1U;
+}
+
+bool SceneRecorder2D::IsInitialized() const noexcept {
+    return initialized;
+}
+
+bool SceneRecorder2D::HasRuntimeBinding() const noexcept {
+    return context != nullptr && render_target_host != nullptr;
+}
+
+bool SceneRecorder2D::HasSceneConsumer() const noexcept {
+    return scene_consumer_entry.renderer != nullptr;
+}
+
+const SceneRecorder2DCreateInfo& SceneRecorder2D::CreateInfo() const noexcept {
+    return create_info_cache;
+}
+
+const SceneRecorder2DStats& SceneRecorder2D::Stats() const noexcept {
+    return stats;
+}
+
+const RenderScenePacket2D* SceneRecorder2D::FramePacket() const noexcept {
+    return frame_packet;
+}
+
+const RenderView2D* SceneRecorder2D::ActiveView() const noexcept {
+    return active_view;
+}
+
+SceneRenderTargetSet& SceneRecorder2D::SceneTargets() noexcept {
+    return scene_targets;
+}
+
+const SceneRenderTargetSet& SceneRecorder2D::SceneTargets() const noexcept {
+    return scene_targets;
+}
+
+RenderTargetColorOutputConfig SceneRecorder2D::MakePresentOverlayOutputConfig() noexcept {
+    RenderTargetColorOutputConfig output{};
+    output.final_state = RenderTargetStateKind::present_src;
+    output.use_explicit_load_op = true;
+    output.load_op = VK_ATTACHMENT_LOAD_OP_LOAD;
+    output.store_op = VK_ATTACHMENT_STORE_OP_STORE;
+    return output;
+}
+
+void SceneRecorder2D::UpsertPreSceneRendererEntry(const PreSceneRendererEntry& entry_) {
+    for (PreSceneRendererEntry& entry : pre_scene_renderer_entries) {
+        if (entry.renderer == entry_.renderer) {
+            entry = entry_;
+            RefreshRendererCounts();
+            return;
+        }
+    }
+    pre_scene_renderer_entries.push_back(entry_);
+    RefreshRendererCounts();
+}
+
+void SceneRecorder2D::UpsertSceneRendererEntry(const SceneRendererEntry& entry_) {
+    for (SceneRendererEntry& entry : scene_renderer_entries) {
+        if (entry.renderer == entry_.renderer) {
+            entry = entry_;
+            RefreshSceneLightingBindings();
+            RefreshRendererCounts();
+            return;
+        }
+    }
+    scene_renderer_entries.push_back(entry_);
+    RefreshSceneLightingBindings();
+    RefreshRendererCounts();
+}
+
+void SceneRecorder2D::SetSceneConsumerEntry(const SceneConsumerEntry& entry_) noexcept {
+    scene_consumer_entry = entry_;
+    RefreshRendererCounts();
+}
+
+void SceneRecorder2D::UpsertOverlayRendererEntry(const OverlayRendererEntry& entry_) {
+    for (OverlayRendererEntry& entry : overlay_renderer_entries) {
+        if (entry.renderer == entry_.renderer) {
+            entry = entry_;
+            RefreshRendererCounts();
+            return;
+        }
+    }
+    overlay_renderer_entries.push_back(entry_);
+    RefreshRendererCounts();
+}
+
+void SceneRecorder2D::RefreshFramePacketBinding() noexcept {
+    const RenderView2D* resolved_view = nullptr;
+    if (frame_packet != nullptr) {
+        resolved_view = frame_packet->ActiveView();
+    }
+
+    const std::uint64_t resolved_signature =
+        (resolved_view != nullptr) ? resolved_view->signature : 0U;
+    if (active_view != resolved_view || active_view_signature != resolved_signature) {
+        active_view = resolved_view;
+        active_view_signature = resolved_signature;
+    }
+    if (light_frame_coordinator != nullptr) {
+        light_frame_coordinator->SetCamera(active_view != nullptr ? active_view->camera : nullptr);
+    }
+}
+
+void SceneRecorder2D::RefreshSceneLightingBindings() noexcept {
+    for (const SceneRendererEntry& entry : scene_renderer_entries) {
+        if (entry.renderer == nullptr || entry.configure_lighting_fn == nullptr) {
+            continue;
+        }
+        entry.configure_lighting_fn(entry.renderer,
+                                    light_frame_coordinator,
+                                    &light_shadow_link_coordinator,
+                                    &shadow_atlas_binding_coordinator,
+                                    shadow_frame_coordinator,
+                                    shadow_atlas_host);
+    }
+}
+
+void SceneRecorder2D::RefreshRendererCounts() noexcept {
+    stats.pre_scene_renderer_count = static_cast<std::uint32_t>(pre_scene_renderer_entries.size());
+    stats.scene_renderer_count = static_cast<std::uint32_t>(scene_renderer_entries.size());
+    stats.scene_consumer_count = (scene_consumer_entry.renderer != nullptr) ? 1U : 0U;
+    stats.overlay_renderer_count = static_cast<std::uint32_t>(overlay_renderer_entries.size());
+}
+
+void SceneRecorder2D::ConfigureSceneRenderersForTargets() noexcept {
+    for (const SceneRendererEntry& entry : scene_renderer_entries) {
+        if (entry.configure_scene_fn == nullptr || entry.renderer == nullptr) {
+            continue;
+        }
+        (void)entry.configure_scene_fn(entry.renderer, scene_targets, entry.pass_role);
+        if (entry.configure_lighting_fn != nullptr) {
+            entry.configure_lighting_fn(entry.renderer,
+                                        light_frame_coordinator,
+                                        &light_shadow_link_coordinator,
+                                        &shadow_atlas_binding_coordinator,
+                                        shadow_frame_coordinator,
+                                        shadow_atlas_host);
+        }
+    }
+}
+
+void SceneRecorder2D::ConfigureSceneConsumerForTargets() noexcept {
+    if (scene_consumer_entry.renderer == nullptr) {
+        return;
+    }
+    if (scene_consumer_entry.configure_scene_consumer_fn != nullptr) {
+        (void)scene_consumer_entry.configure_scene_consumer_fn(scene_consumer_entry.renderer, scene_targets);
+    }
+    if (scene_consumer_entry.set_output_target_fn != nullptr) {
+        scene_consumer_entry.set_output_target_fn(scene_consumer_entry.renderer,
+                                                  scene_consumer_entry.output_target_config);
+    }
+}
+
+void SceneRecorder2D::EnsureInitialized(const char* operation_) const {
+    if (initialized) {
+        return;
+    }
+    throw std::runtime_error(std::string("SceneRecorder2D::") + operation_ +
+                             " called before Initialize");
+}
+
+void SceneRecorder2D::EnsureRuntimeBinding(const char* operation_) const {
+    if (HasRuntimeBinding()) {
+        return;
+    }
+    throw std::runtime_error(std::string("SceneRecorder2D::") + operation_ +
+                             " requires bound runtime resources");
+}
+
+} // namespace vr::render
