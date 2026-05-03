@@ -16,6 +16,7 @@ target_link_libraries(vr_test_support
 
 add_executable(${VR_TEST_TARGET}
     test_main.cpp
+    cases/animation_host_tests.cpp
     cases/vulkan_types_tests.cpp
     cases/frame_retire_host_tests.cpp
     cases/ecs_geometry_component_tests.cpp
