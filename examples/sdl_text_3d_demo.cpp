@@ -3,6 +3,7 @@
 #include "vr/ecs/system/text_system.hpp"
 #include "vr/ecs/system/transform_system.hpp"
 #include "vr/render/render_runtime_host.hpp"
+#include "vr/render/render_view_submission_utils.hpp"
 #include "vr/render/scene_recorder_3d.hpp"
 #include "vr/text/text_renderer_3d.hpp"
 
@@ -481,6 +482,16 @@ int main(int argc_,
                                    bounds.data());
         recorder.RegisterTransparentSceneRenderer(text_renderer, vr::render::SceneRenderPassRole::single);
 
+        vr::render::RenderView3D main_view{};
+        vr::render::RenderScenePacket3D main_scene_packet{};
+        vr::render::RefreshExtentBoundWorldSceneSubmission(main_view,
+                                                           main_scene_packet,
+                                                           camera,
+                                                           camera_transform,
+                                                           runtime.Swapchain().Extent(),
+                                                           0U);
+        recorder.SetFramePacket(&main_scene_packet);
+
         const std::string primary_name = FileNameOnly(fonts.primary);
         const std::string secondary_name = FileNameOnly(fonts.secondary);
 
@@ -492,7 +503,6 @@ int main(int argc_,
 
         bool reverse_z_enabled = false;
         constexpr vr::ecs::CameraProjectionMode projection_mode = vr::ecs::CameraProjectionMode::perspective;
-        float cached_aspect_ratio = 1280.0F / 720.0F;
 
         std::cout << "sdl_text_3d_demo running (3D showcase). Close window to exit.\n";
         while (runtime.IsRunning()) {
@@ -507,14 +517,6 @@ int main(int argc_,
             }
 
             const VkExtent2D extent = runtime.Swapchain().Extent();
-            if (extent.width > 0U && extent.height > 0U) {
-                const float aspect_ratio = static_cast<float>(extent.width) /
-                                           static_cast<float>(extent.height);
-                if (std::abs(aspect_ratio - cached_aspect_ratio) > 1e-4F) {
-                    cached_aspect_ratio = aspect_ratio;
-                    CameraSystem3D::SetAspectRatio(camera, cached_aspect_ratio);
-                }
-            }
 
             // 透视旋转：引入 X/Y 轴旋转（而非只做屏幕内 Z 轴 roll）
             // 这样字形平面会有“近大远小”的透视变化。
@@ -569,7 +571,13 @@ int main(int argc_,
             (void)BoundsSystem3D::UpdateAligned(bounds.data(),
                                                 transforms.data(),
                                                 static_cast<std::uint32_t>(bounds.size()));
-            CameraSystem3D::Update(camera, camera_transform);
+            vr::render::RefreshExtentBoundWorldSceneSubmission(main_view,
+                                                               main_scene_packet,
+                                                               camera,
+                                                               camera_transform,
+                                                               extent,
+                                                               frame_counter);
+            recorder.SetFramePacket(&main_scene_packet);
 
             const char* projection_name =
                 (projection_mode == vr::ecs::CameraProjectionMode::perspective)

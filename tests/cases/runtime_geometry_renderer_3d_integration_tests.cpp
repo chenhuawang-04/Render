@@ -9,9 +9,10 @@
 #include "vr/geometry/geometry_material_host.hpp"
 #include "vr/geometry/geometry_renderer_3d.hpp"
 #include "vr/render/light_frame_coordinator.hpp"
-#include "vr/render/scene_recorder_3d.hpp"
 #include "vr/render/render_target_format_utils.hpp"
 #include "vr/render/render_runtime_host.hpp"
+#include "vr/render/render_view_submission_utils.hpp"
+#include "vr/render/scene_recorder_3d.hpp"
 #include "vr/render/scene_render_target_set.hpp"
 #include "vr/shadow/shadow_renderer_3d.hpp"
 
@@ -669,7 +670,6 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_bloom_post_stack_smoke,
     light_frame_coordinator.SetLightData(lights.data(),
                                          light_transforms.data(),
                                          static_cast<std::uint32_t>(lights.size()));
-    light_frame_coordinator.SetCamera(&camera);
 
     std::array<Shadow3D, 1U> shadows{};
     std::array<Transform3D, 1U> shadow_transforms{};
@@ -828,6 +828,16 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_bloom_post_stack_smoke,
         recorder.RegisterShadowRenderer(shadow_renderer);
         recorder.RegisterOpaqueSceneRenderer(geometry_renderer, vr::render::SceneRenderPassRole::single);
 
+        vr::render::RenderView3D main_view{};
+        vr::render::RenderScenePacket3D main_scene_packet{};
+        vr::render::RefreshExtentBoundWorldSceneSubmission(main_view,
+                                                           main_scene_packet,
+                                                           camera,
+                                                           camera_transform,
+                                                           runtime.Swapchain().Extent(),
+                                                           0U);
+        recorder.SetFramePacket(&main_scene_packet);
+
         std::uint32_t submitted_frames = 0U;
         std::uint32_t max_draw_calls = 0U;
         std::uint32_t max_draw_batches = 0U;
@@ -883,7 +893,13 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_bloom_post_stack_smoke,
             const std::uint32_t dirty_index = 0U;
             light_frame_coordinator.SetTransformDirtyHint(&dirty_index, 1U);
             shadow_renderer.SetTransformDirtyHint(&dirty_index, 1U);
-            CameraSystem3D::Update(camera, camera_transform);
+            vr::render::RefreshExtentBoundWorldSceneSubmission(main_view,
+                                                               main_scene_packet,
+                                                               camera,
+                                                               camera_transform,
+                                                               runtime.Swapchain().Extent(),
+                                                               tick_index);
+            recorder.SetFramePacket(&main_scene_packet);
 
             const Runtime::RuntimeTickResult tick_result = runtime.Tick(recorder);
             if (tick_result.render.code == vr::render::TickCode::Submitted ||
@@ -955,6 +971,11 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_bloom_post_stack_smoke,
         VR_CHECK(geometry_image_host.Stats().image_count >= 2U);
         VR_CHECK(geometry_material_host.Stats().material_count >= 2U);
         VR_CHECK(recorder.Stats().pre_scene_renderer_count == 1U);
+        VR_CHECK(recorder.Stats().frame_packet_prepare_count > 0U);
+        VR_CHECK(recorder.Stats().frame_packet_record_count > 0U);
+        VR_CHECK(recorder.ActiveView() == &main_view);
+        VR_CHECK(recorder.ActiveView() != nullptr);
+        VR_CHECK(recorder.ActiveView()->camera == &camera);
         VR_CHECK(runtime.TargetPool().Stats().acquire_count > 0U);
         VR_CHECK(runtime.TargetPool().Stats().reuse_hit_count > 0U);
         VR_CHECK(runtime.RenderTarget().ResolveView(recorder.PostStack().Targets().ColorTarget()).state ==

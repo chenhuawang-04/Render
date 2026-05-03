@@ -21,6 +21,9 @@ void SceneRecorder3D::Initialize(const SceneRecorder3DCreateInfo& create_info_) 
     light_frame_coordinator = nullptr;
     shadow_frame_coordinator = nullptr;
     shadow_atlas_host = nullptr;
+    frame_packet = nullptr;
+    active_view = nullptr;
+    active_view_signature = 0U;
     light_shadow_link_coordinator.Reset();
     shadow_atlas_binding_coordinator.Reset();
     initialized = true;
@@ -42,6 +45,9 @@ void SceneRecorder3D::Shutdown(VulkanContext& context_) noexcept {
     light_frame_coordinator = nullptr;
     shadow_frame_coordinator = nullptr;
     shadow_atlas_host = nullptr;
+    frame_packet = nullptr;
+    active_view = nullptr;
+    active_view_signature = 0U;
     light_shadow_link_coordinator.Reset();
     shadow_atlas_binding_coordinator.Reset();
     initialized = false;
@@ -65,6 +71,7 @@ void SceneRecorder3D::BindLightFrameCoordinator(
     render::LightFrameCoordinator<ecs::Dim3>* light_frame_coordinator_) noexcept {
     light_frame_coordinator = light_frame_coordinator_;
     light_shadow_link_coordinator.Reset();
+    RefreshFramePacketBinding();
     RefreshSceneLightingBindings();
 }
 
@@ -79,6 +86,20 @@ void SceneRecorder3D::BindShadowRuntime(render::ShadowFrameCoordinator<ecs::Dim3
 
 void SceneRecorder3D::ClearShadowRuntimeBinding() noexcept {
     BindShadowRuntime(nullptr, nullptr);
+}
+
+void SceneRecorder3D::SetFramePacket(const RenderScenePacket3D* frame_packet_) noexcept {
+    if (frame_packet == frame_packet_) {
+        RefreshFramePacketBinding();
+        return;
+    }
+    frame_packet = frame_packet_;
+    ++stats.frame_packet_bind_count;
+    RefreshFramePacketBinding();
+}
+
+void SceneRecorder3D::ClearFramePacket() noexcept {
+    SetFramePacket(nullptr);
 }
 
 void SceneRecorder3D::ClearPreSceneRenderers() noexcept {
@@ -104,6 +125,10 @@ void SceneRecorder3D::ClearRendererRegistrations() noexcept {
 
 void SceneRecorder3D::PrepareFrame(const RuntimePrepareContext& prepare_context_) {
     EnsureInitialized("PrepareFrame");
+    RefreshFramePacketBinding();
+    if (frame_packet != nullptr) {
+        ++stats.frame_packet_prepare_count;
+    }
 
     SceneRenderTargetSet& targets = post_stack.Targets();
     (void)targets.PrepareFrame(prepare_context_);
@@ -154,8 +179,18 @@ void SceneRecorder3D::PrepareFrame(const RuntimePrepareContext& prepare_context_
     stats.prepare_count += 1U;
 }
 
+void SceneRecorder3D::PrepareFrame(const RuntimePrepareContext& prepare_context_,
+                                   const RenderScenePacket3D& frame_packet_) {
+    SetFramePacket(&frame_packet_);
+    PrepareFrame(prepare_context_);
+}
+
 void SceneRecorder3D::Record(const FrameRecordContext& record_context_) {
     EnsureInitialized("Record");
+    RefreshFramePacketBinding();
+    if (frame_packet != nullptr) {
+        ++stats.frame_packet_record_count;
+    }
 
     for (const PreSceneRendererEntry& entry : pre_scene_renderer_entries) {
         if (entry.record_fn != nullptr && entry.renderer != nullptr) {
@@ -185,6 +220,12 @@ void SceneRecorder3D::Record(const FrameRecordContext& record_context_) {
     }
 
     stats.record_count += 1U;
+}
+
+void SceneRecorder3D::Record(const FrameRecordContext& record_context_,
+                             const RenderScenePacket3D& frame_packet_) {
+    SetFramePacket(&frame_packet_);
+    Record(record_context_);
 }
 
 void SceneRecorder3D::OnSwapchainRecreated(std::uint32_t image_count_,
@@ -281,6 +322,14 @@ const SceneRecorder3DStats& SceneRecorder3D::Stats() const noexcept {
     return stats;
 }
 
+const RenderScenePacket3D* SceneRecorder3D::FramePacket() const noexcept {
+    return frame_packet;
+}
+
+const RenderView3D* SceneRecorder3D::ActiveView() const noexcept {
+    return active_view;
+}
+
 SceneBloomPostStack& SceneRecorder3D::PostStack() noexcept {
     return post_stack;
 }
@@ -334,6 +383,23 @@ void SceneRecorder3D::UpsertOverlayRendererEntry(const OverlayRendererEntry& ent
     }
     overlay_renderer_entries.push_back(entry_);
     RefreshRendererCounts();
+}
+
+void SceneRecorder3D::RefreshFramePacketBinding() noexcept {
+    const RenderView3D* resolved_view = nullptr;
+    if (frame_packet != nullptr) {
+        resolved_view = frame_packet->ActiveView();
+    }
+
+    const std::uint64_t resolved_signature =
+        (resolved_view != nullptr) ? resolved_view->signature : 0U;
+    if (active_view != resolved_view || active_view_signature != resolved_signature) {
+        active_view = resolved_view;
+        active_view_signature = resolved_signature;
+    }
+    if (light_frame_coordinator != nullptr) {
+        light_frame_coordinator->SetCamera(active_view != nullptr ? active_view->camera : nullptr);
+    }
 }
 
 void SceneRecorder3D::RefreshSceneLightingBindings() noexcept {

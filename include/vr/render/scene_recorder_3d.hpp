@@ -5,6 +5,7 @@
 #include "vr/render/light_shadow_link_coordinator.hpp"
 #include "vr/render/scene_bloom_post_stack.hpp"
 #include "vr/render/scene_render_stage.hpp"
+#include "vr/render/scene_submission.hpp"
 #include "vr/render/shadow_atlas_binding_coordinator.hpp"
 #include "vr/render/shadow_frame_coordinator.hpp"
 #include "vr/shadow/shadow_atlas_host.hpp"
@@ -35,6 +36,9 @@ struct SceneRecorder3DStats final {
     std::uint32_t prepare_count = 0U;
     std::uint32_t record_count = 0U;
     std::uint32_t swapchain_recreate_count = 0U;
+    std::uint32_t frame_packet_bind_count = 0U;
+    std::uint32_t frame_packet_prepare_count = 0U;
+    std::uint32_t frame_packet_record_count = 0U;
 };
 
 class SceneRecorder3D final {
@@ -68,6 +72,8 @@ public:
     void BindShadowRuntime(render::ShadowFrameCoordinator<ecs::Dim3>* shadow_frame_coordinator_,
                            shadow::ShadowAtlasHost* shadow_atlas_host_) noexcept;
     void ClearShadowRuntimeBinding() noexcept;
+    void SetFramePacket(const RenderScenePacket3D* frame_packet_) noexcept;
+    void ClearFramePacket() noexcept;
 
     template<typename RendererT>
     void RegisterPreSceneRenderer(RendererT& renderer_) {
@@ -140,7 +146,11 @@ public:
     void ClearRendererRegistrations() noexcept;
 
     void PrepareFrame(const RuntimePrepareContext& prepare_context_);
+    void PrepareFrame(const RuntimePrepareContext& prepare_context_,
+                      const RenderScenePacket3D& frame_packet_);
     void Record(const FrameRecordContext& record_context_);
+    void Record(const FrameRecordContext& record_context_,
+                const RenderScenePacket3D& frame_packet_);
     void OnSwapchainRecreated(std::uint32_t image_count_,
                               VkExtent2D extent_,
                               VkFormat format_,
@@ -151,6 +161,8 @@ public:
     [[nodiscard]] bool HasRuntimeBinding() const noexcept;
     [[nodiscard]] const SceneRecorder3DCreateInfo& CreateInfo() const noexcept;
     [[nodiscard]] const SceneRecorder3DStats& Stats() const noexcept;
+    [[nodiscard]] const RenderScenePacket3D* FramePacket() const noexcept;
+    [[nodiscard]] const RenderView3D* ActiveView() const noexcept;
     [[nodiscard]] SceneBloomPostStack& PostStack() noexcept;
     [[nodiscard]] const SceneBloomPostStack& PostStack() const noexcept;
 
@@ -335,6 +347,7 @@ private:
     void UpsertPreSceneRendererEntry(const PreSceneRendererEntry& entry_);
     void UpsertSceneRendererEntry(const SceneRendererEntry& entry_);
     void UpsertOverlayRendererEntry(const OverlayRendererEntry& entry_);
+    void RefreshFramePacketBinding() noexcept;
     void RefreshSceneLightingBindings() noexcept;
     void RefreshRendererCounts() noexcept;
     [[nodiscard]] bool IsFirstSceneRendererEntryForRenderer(
@@ -355,6 +368,9 @@ private:
     render::LightFrameCoordinator<ecs::Dim3>* light_frame_coordinator = nullptr;
     render::ShadowFrameCoordinator<ecs::Dim3>* shadow_frame_coordinator = nullptr;
     shadow::ShadowAtlasHost* shadow_atlas_host = nullptr;
+    const RenderScenePacket3D* frame_packet = nullptr;
+    const RenderView3D* active_view = nullptr;
+    std::uint64_t active_view_signature = 0U;
     render::LightShadowLinkCoordinator3D light_shadow_link_coordinator{};
     render::ShadowAtlasBindingCoordinator shadow_atlas_binding_coordinator{};
     bool initialized = false;

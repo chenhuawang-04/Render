@@ -14,6 +14,7 @@
 #include "vr/geometry/geometry_upload_host.hpp"
 #include "vr/render/light_frame_coordinator.hpp"
 #include "vr/render/render_runtime_host.hpp"
+#include "vr/render/render_view_submission_utils.hpp"
 #include "vr/render/scene_recorder_3d.hpp"
 #include "vr/shadow/shadow_renderer_3d.hpp"
 #include "vr/surface/surface_image_host.hpp"
@@ -536,7 +537,6 @@ VR_TEST_CASE(RuntimeIntegration_unified_scene_3d_bloom_post_stack_smoke,
         CameraSystem3D::SetProjectionMode(camera, vr::ecs::CameraProjectionMode::perspective);
         CameraSystem3D::SetVerticalFovRadians(camera, 60.0F * 0.01745329251994329577F);
         CameraSystem3D::SetNearFar(camera, 0.05F, 256.0F);
-        CameraSystem3D::SetAspectRatio(camera, 800.0F / 450.0F);
 
         Transform3D camera_transform{};
         TransformSystem3D::Initialize(camera_transform);
@@ -558,7 +558,6 @@ VR_TEST_CASE(RuntimeIntegration_unified_scene_3d_bloom_post_stack_smoke,
         light_frame_coordinator.SetLightData(lights.data(),
                                              light_transforms.data(),
                                              static_cast<std::uint32_t>(lights.size()));
-        light_frame_coordinator.SetCamera(&camera);
 
         std::array<Shadow3D, 1U> shadows{};
         std::array<Transform3D, 1U> shadow_transforms{};
@@ -642,6 +641,16 @@ VR_TEST_CASE(RuntimeIntegration_unified_scene_3d_bloom_post_stack_smoke,
         recorder.RegisterTransparentSceneRenderer(surface_renderer, vr::render::SceneRenderPassRole::middle);
         recorder.RegisterTransparentSceneRenderer(text_renderer, vr::render::SceneRenderPassRole::last);
 
+        vr::render::RenderView3D main_view{};
+        vr::render::RenderScenePacket3D main_scene_packet{};
+        vr::render::RefreshExtentBoundWorldSceneSubmission(main_view,
+                                                           main_scene_packet,
+                                                           camera,
+                                                           camera_transform,
+                                                           runtime.Swapchain().Extent(),
+                                                           0U);
+        recorder.SetFramePacket(&main_scene_packet);
+
         std::uint32_t submitted_frames = 0U;
         std::uint32_t max_geometry_draw_calls = 0U;
         std::uint32_t max_surface_draw_calls = 0U;
@@ -717,7 +726,13 @@ VR_TEST_CASE(RuntimeIntegration_unified_scene_3d_bloom_post_stack_smoke,
             const std::uint32_t dirty_index = 0U;
             light_frame_coordinator.SetTransformDirtyHint(&dirty_index, 1U);
             shadow_renderer.SetTransformDirtyHint(&dirty_index, 1U);
-            CameraSystem3D::Update(camera, camera_transform);
+            vr::render::RefreshExtentBoundWorldSceneSubmission(main_view,
+                                                               main_scene_packet,
+                                                               camera,
+                                                               camera_transform,
+                                                               runtime.Swapchain().Extent(),
+                                                               tick_index);
+            recorder.SetFramePacket(&main_scene_packet);
 
             const Runtime::RuntimeTickResult tick_result = runtime.Tick(recorder);
             if (tick_result.render.code == vr::render::TickCode::Submitted ||
@@ -767,6 +782,13 @@ VR_TEST_CASE(RuntimeIntegration_unified_scene_3d_bloom_post_stack_smoke,
         VR_CHECK(max_surface_instances > 0U);
         VR_CHECK(max_text_instances > 0U);
         VR_CHECK(recorder.Stats().pre_scene_renderer_count == 1U);
+        VR_CHECK(recorder.Stats().frame_packet_bind_count >= 1U);
+        VR_CHECK(recorder.Stats().frame_packet_prepare_count > 0U);
+        VR_CHECK(recorder.Stats().frame_packet_record_count > 0U);
+        VR_CHECK(recorder.FramePacket() == &main_scene_packet);
+        VR_CHECK(recorder.ActiveView() == &main_view);
+        VR_CHECK(recorder.ActiveView() != nullptr);
+        VR_CHECK(recorder.ActiveView()->camera == &camera);
         VR_CHECK(runtime.TargetPool().Stats().acquire_count > 0U);
         VR_CHECK(runtime.TargetPool().Stats().reuse_hit_count > 0U);
         VR_CHECK(runtime.RenderTarget().ResolveView(recorder.PostStack().Targets().ColorTarget()).state ==

@@ -236,6 +236,64 @@ VR_TEST_CASE(RenderTargetTypes_state_mapping_matches_v1_contract, "unit;core;ren
     VR_CHECK(present_state.layout == VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
 }
 
+VR_TEST_CASE(RenderView_make_from_camera_preserves_camera_view_contract,
+             "unit;core;render_target") {
+    vr::ecs::Camera<vr::ecs::Dim3> camera{};
+    camera.style.viewport = vr::ecs::CameraViewport{
+        .origin_x = 16.0F,
+        .origin_y = 24.0F,
+        .width = 1280.0F,
+        .height = 720.0F,
+    };
+    camera.runtime.culling_mask = 0x00FF00FFU;
+    camera.runtime.revision = 7U;
+
+    vr::ecs::Transform<vr::ecs::Dim3> camera_transform{};
+    camera_transform.runtime.world_revision = 11U;
+
+    vr::render::RenderView3D view =
+        vr::render::MakeRenderViewFromCamera(camera,
+                                             &camera_transform,
+                                             vr::render::RenderViewKind::world,
+                                             3U);
+
+    VR_CHECK(view.kind == vr::render::RenderViewKind::world);
+    VR_CHECK(view.view_index == 3U);
+    VR_CHECK(view.camera == &camera);
+    VR_CHECK(view.camera_transform == &camera_transform);
+    VR_CHECK(view.culling_mask == 0x00FF00FFU);
+    VR_CHECK(view.viewport.x == 16.0F);
+    VR_CHECK(view.viewport.y == 24.0F);
+    VR_CHECK(view.viewport.width == 1280.0F);
+    VR_CHECK(view.viewport.height == 720.0F);
+    VR_CHECK(view.scissor.x == 16);
+    VR_CHECK(view.scissor.y == 24);
+    VR_CHECK(view.scissor.width == 1280U);
+    VR_CHECK(view.scissor.height == 720U);
+    VR_CHECK(view.signature != 0U);
+}
+
+VR_TEST_CASE(RenderScenePacket_single_view_exposes_active_view_without_allocation,
+             "unit;core;render_target") {
+    vr::ecs::Camera<vr::ecs::Dim3> camera{};
+    camera.style.viewport = vr::ecs::CameraViewport{.origin_x = 0.0F,
+                                                    .origin_y = 0.0F,
+                                                    .width = 640.0F,
+                                                    .height = 360.0F};
+    camera.runtime.culling_mask = 0x12345678U;
+    vr::render::RenderView3D view = vr::render::MakeRenderViewFromCamera(camera);
+
+    const vr::render::RenderScenePacket3D packet =
+        vr::render::MakeSingleViewScenePacket(view, 42U);
+
+    VR_CHECK(packet.views == &view);
+    VR_CHECK(packet.view_count == 1U);
+    VR_CHECK(packet.ActiveView() == &view);
+    VR_CHECK(packet.render_layer_mask == view.layer_mask);
+    VR_CHECK(packet.submission_id == 42U);
+    VR_CHECK(packet.signature != 0U);
+}
+
 VR_TEST_CASE(SceneRenderTargetSet_defaults_match_render_target_v1_contract, "unit;core;render_target") {
     vr::render::SceneRenderTargetSetCreateInfo create_info{};
     VR_CHECK(create_info.enable_depth);
@@ -377,6 +435,37 @@ VR_TEST_CASE(SceneRecorder3D_allows_same_renderer_in_opaque_and_transparent_stag
     VR_CHECK(renderer.record_count == 2U);
     VR_CHECK(renderer.opaque_record_count == 1U);
     VR_CHECK(renderer.transparent_record_count == 1U);
+}
+
+VR_TEST_CASE(SceneRecorder3D_frame_packet_is_runtime_submission_not_ecs_state,
+             "unit;core;render_target") {
+    vr::render::SceneRecorder3D recorder{};
+    recorder.Initialize({});
+
+    vr::ecs::Camera<vr::ecs::Dim3> camera{};
+    camera.style.viewport = vr::ecs::CameraViewport{.origin_x = 0.0F,
+                                                    .origin_y = 0.0F,
+                                                    .width = 320.0F,
+                                                    .height = 180.0F};
+    camera.runtime.culling_mask = 0xFFFF0000U;
+    camera.runtime.revision = 19U;
+    vr::render::RenderView3D view = vr::render::MakeRenderViewFromCamera(camera);
+    vr::render::RenderScenePacket3D packet =
+        vr::render::MakeSingleViewScenePacket(view, 77U);
+
+    recorder.SetFramePacket(&packet);
+    VR_CHECK(recorder.FramePacket() == &packet);
+    VR_CHECK(recorder.ActiveView() == &view);
+    VR_CHECK(recorder.ActiveView()->camera == &camera);
+    VR_CHECK(recorder.Stats().frame_packet_bind_count == 1U);
+
+    vr::render::FrameRecordContext record_context{};
+    recorder.Record(record_context);
+    VR_CHECK(recorder.Stats().frame_packet_record_count == 1U);
+
+    recorder.ClearFramePacket();
+    VR_CHECK(recorder.FramePacket() == nullptr);
+    VR_CHECK(recorder.ActiveView() == nullptr);
 }
 
 VR_TEST_CASE(SceneRecorder3D_shadow_registration_and_lighting_binding_are_propagated,

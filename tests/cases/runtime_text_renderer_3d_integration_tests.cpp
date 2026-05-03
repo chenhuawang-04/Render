@@ -5,6 +5,7 @@
 #include "vr/ecs/system/transform_system.hpp"
 #include "vr/render/render_target_format_utils.hpp"
 #include "vr/render/render_runtime_host.hpp"
+#include "vr/render/render_view_submission_utils.hpp"
 #include "vr/render/scene_recorder_3d.hpp"
 #include "vr/text/text_renderer_3d.hpp"
 
@@ -516,6 +517,16 @@ VR_TEST_CASE(RuntimeIntegration_text_renderer_3d_bloom_post_stack_smoke,
                                    bounds_components.data());
         recorder.RegisterTransparentSceneRenderer(text_renderer, vr::render::SceneRenderPassRole::single);
 
+        vr::render::RenderView3D main_view{};
+        vr::render::RenderScenePacket3D main_scene_packet{};
+        vr::render::RefreshExtentBoundWorldSceneSubmission(main_view,
+                                                           main_scene_packet,
+                                                           camera,
+                                                           camera_transform,
+                                                           runtime.Swapchain().Extent(),
+                                                           0U);
+        recorder.SetFramePacket(&main_scene_packet);
+
         std::uint32_t submitted_frames = 0U;
         std::uint32_t max_instance_count = 0U;
         std::uint32_t max_draw_batches = 0U;
@@ -548,6 +559,13 @@ VR_TEST_CASE(RuntimeIntegration_text_renderer_3d_bloom_post_stack_smoke,
             (void)BoundsSystem3D::UpdateAligned(bounds_components.data(),
                                                 text_transforms.data(),
                                                 static_cast<std::uint32_t>(bounds_components.size()));
+            vr::render::RefreshExtentBoundWorldSceneSubmission(main_view,
+                                                               main_scene_packet,
+                                                               camera,
+                                                               camera_transform,
+                                                               runtime.Swapchain().Extent(),
+                                                               tick_index);
+            recorder.SetFramePacket(&main_scene_packet);
 
             const Runtime::RuntimeTickResult tick_result = runtime.Tick(recorder);
             if (tick_result.render.code == vr::render::TickCode::Submitted ||
@@ -596,6 +614,11 @@ VR_TEST_CASE(RuntimeIntegration_text_renderer_3d_bloom_post_stack_smoke,
         VR_CHECK(max_culling_input_count == static_cast<std::uint32_t>(text_components.size()));
         VR_CHECK(max_culling_visible_count > 0U);
         VR_CHECK(runtime.GlyphUpload().Stats().uploaded_rect_count > 0U);
+        VR_CHECK(recorder.Stats().frame_packet_prepare_count > 0U);
+        VR_CHECK(recorder.Stats().frame_packet_record_count > 0U);
+        VR_CHECK(recorder.ActiveView() == &main_view);
+        VR_CHECK(recorder.ActiveView() != nullptr);
+        VR_CHECK(recorder.ActiveView()->camera == &camera);
         VR_CHECK(runtime.TargetPool().Stats().acquire_count > 0U);
         VR_CHECK(runtime.TargetPool().Stats().reuse_hit_count > 0U);
         VR_CHECK(runtime.RenderTarget().ResolveView(recorder.PostStack().Targets().ColorTarget()).state ==

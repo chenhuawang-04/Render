@@ -10,6 +10,7 @@
 #include "vr/geometry/geometry_resource_host.hpp"
 #include "vr/geometry/geometry_upload_host.hpp"
 #include "vr/render/render_runtime_host.hpp"
+#include "vr/render/render_view_submission_utils.hpp"
 #include "vr/render/scene_recorder_3d.hpp"
 
 #include <SDL3/SDL.h>
@@ -426,6 +427,16 @@ int main(int argc_,
         recorder.RegisterOverlayRenderer(renderer_2d,
                                          vr::render::SceneRecorder3D::MakePresentOverlayOutputConfig());
 
+        vr::render::RenderView3D main_view{};
+        vr::render::RenderScenePacket3D main_scene_packet{};
+        vr::render::RefreshExtentBoundWorldSceneSubmission(main_view,
+                                                           main_scene_packet,
+                                                           camera,
+                                                           camera_transform,
+                                                           runtime.Swapchain().Extent(),
+                                                           0U);
+        recorder.SetFramePacket(&main_scene_packet);
+
         std::cout << "sdl_geometry_unified_demo running (3D geometry offscreen + bloom post stack + 2D overlay). Close window to exit.\n";
 
         std::uint64_t fps_window_begin_ticks = SDL_GetTicks();
@@ -436,12 +447,6 @@ int main(int argc_,
             const float time_seconds = static_cast<float>(now_ticks) * 0.001F;
 
             const VkExtent2D extent = runtime.Swapchain().Extent();
-            if (extent.width > 0U && extent.height > 0U) {
-                CameraSystem3D::SetAspectRatio(camera,
-                                               static_cast<float>(extent.width) /
-                                                   static_cast<float>(extent.height));
-            }
-
             TransformSystem3D::SetLocalRotationEulerXyz(geometry_3d_transforms[0U],
                                                         0.0F,
                                                         0.0F,
@@ -452,7 +457,13 @@ int main(int argc_,
                                                         0.15F * std::sin(time_seconds));
             TransformSystem3D::UpdateHierarchy(geometry_3d_transforms.data(),
                                                static_cast<std::uint32_t>(geometry_3d_transforms.size()));
-            CameraSystem3D::Update(camera, camera_transform);
+            vr::render::RefreshExtentBoundWorldSceneSubmission(main_view,
+                                                               main_scene_packet,
+                                                               camera,
+                                                               camera_transform,
+                                                               extent,
+                                                               frame_index);
+            recorder.SetFramePacket(&main_scene_packet);
 
             const std::uint8_t pulse_alpha = static_cast<std::uint8_t>(
                 120.0F + 100.0F * (0.5F + 0.5F * std::sin(time_seconds * 2.0F)));

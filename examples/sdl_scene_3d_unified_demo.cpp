@@ -14,6 +14,7 @@
 #include "vr/render/light_frame_coordinator.hpp"
 #include "vr/render/render_runtime_host.hpp"
 #include "vr/render/scene_recorder_3d.hpp"
+#include "vr/render/render_view_submission_utils.hpp"
 #include "vr/shadow/shadow_renderer_3d.hpp"
 #include "vr/surface/surface_image_host.hpp"
 #include "vr/surface/surface_renderer_3d.hpp"
@@ -514,7 +515,6 @@ int main(int argc_,
         CameraSystem3D::SetProjectionMode(camera, vr::ecs::CameraProjectionMode::perspective);
         CameraSystem3D::SetVerticalFovRadians(camera, 60.0F * 0.01745329251994329577F);
         CameraSystem3D::SetNearFar(camera, 0.05F, 256.0F);
-        CameraSystem3D::SetAspectRatio(camera, 1280.0F / 720.0F);
 
         Transform3D camera_transform{};
         TransformSystem3D::Initialize(camera_transform);
@@ -536,7 +536,6 @@ int main(int argc_,
         light_frame_coordinator.SetLightData(lights.data(),
                                              light_transforms.data(),
                                              static_cast<std::uint32_t>(lights.size()));
-        light_frame_coordinator.SetCamera(&camera);
 
         std::array<Shadow3D, 1U> shadows{};
         std::array<Transform3D, 1U> shadow_transforms{};
@@ -620,23 +619,27 @@ int main(int argc_,
         recorder.RegisterTransparentSceneRenderer(surface_renderer, vr::render::SceneRenderPassRole::middle);
         recorder.RegisterTransparentSceneRenderer(text_renderer, vr::render::SceneRenderPassRole::last);
 
+        std::uint64_t frame_index = 0U;
+        vr::render::RenderView3D main_view{};
+        vr::render::RenderScenePacket3D main_scene_packet{};
+        vr::render::RefreshExtentBoundWorldSceneSubmission(main_view,
+                                                           main_scene_packet,
+                                                           camera,
+                                                           camera_transform,
+                                                           runtime.Swapchain().Extent(),
+                                                           frame_index);
+        recorder.SetFramePacket(&main_scene_packet);
+
         std::cout << "sdl_scene_3d_unified_demo running (geometry + surface + text share transient scene target + bloom post stack). Close window to exit.\n";
 
         std::uint64_t fps_window_begin_ticks = SDL_GetTicks();
         std::uint32_t fps_window_frame_count = 0U;
-        std::uint64_t frame_index = 0U;
 
         while (runtime.IsRunning()) {
             const std::uint64_t now_ticks = SDL_GetTicks();
             const float time_seconds = static_cast<float>(now_ticks) * 0.001F;
 
             const VkExtent2D extent = runtime.Swapchain().Extent();
-            if (extent.width > 0U && extent.height > 0U) {
-                CameraSystem3D::SetAspectRatio(camera,
-                                               static_cast<float>(extent.width) /
-                                                   static_cast<float>(extent.height));
-            }
-
             TransformSystem3D::SetLocalRotationEulerXyz(geometry_transform,
                                                         0.0F,
                                                         0.35F * time_seconds,
@@ -694,7 +697,13 @@ int main(int argc_,
             const std::uint32_t dirty_index = 0U;
             light_frame_coordinator.SetTransformDirtyHint(&dirty_index, 1U);
             shadow_renderer.SetTransformDirtyHint(&dirty_index, 1U);
-            CameraSystem3D::Update(camera, camera_transform);
+            vr::render::RefreshExtentBoundWorldSceneSubmission(main_view,
+                                                               main_scene_packet,
+                                                               camera,
+                                                               camera_transform,
+                                                               extent,
+                                                               frame_index);
+            recorder.SetFramePacket(&main_scene_packet);
 
             const Runtime::RuntimeTickResult tick_result = runtime.Tick(recorder);
             (void)tick_result;

@@ -3,6 +3,7 @@
 #include "vr/ecs/system/surface_system.hpp"
 #include "vr/ecs/system/transform_system.hpp"
 #include "vr/render/render_runtime_host.hpp"
+#include "vr/render/render_view_submission_utils.hpp"
 #include "vr/render/scene_recorder_3d.hpp"
 #include "vr/surface/surface_image_host.hpp"
 #include "vr/surface/surface_renderer_2d.hpp"
@@ -433,6 +434,16 @@ int main(int argc_,
         recorder.RegisterOverlayRenderer(renderer_2d,
                                          vr::render::SceneRecorder3D::MakePresentOverlayOutputConfig());
 
+        vr::render::RenderView3D main_view{};
+        vr::render::RenderScenePacket3D main_scene_packet{};
+        vr::render::RefreshExtentBoundWorldSceneSubmission(main_view,
+                                                           main_scene_packet,
+                                                           camera,
+                                                           camera_transform,
+                                                           runtime.Swapchain().Extent(),
+                                                           0U);
+        recorder.SetFramePacket(&main_scene_packet);
+
         std::cout << "sdl_surface_unified_demo running (3D surface offscreen + bloom post stack + 2D overlay). Close window to exit.\n";
 
         std::uint64_t fps_window_begin_ticks = SDL_GetTicks();
@@ -443,12 +454,6 @@ int main(int argc_,
             const float time_seconds = static_cast<float>(now_ticks) * 0.001F;
 
             const VkExtent2D extent = runtime.Swapchain().Extent();
-            if (extent.width > 0U && extent.height > 0U) {
-                CameraSystem3D::SetAspectRatio(camera,
-                                               static_cast<float>(extent.width) /
-                                                   static_cast<float>(extent.height));
-            }
-
             TransformSystem3D::SetLocalRotationEulerXyz(surface_3d_transforms[0U],
                                                         0.0F,
                                                         0.70F * time_seconds,
@@ -462,7 +467,13 @@ int main(int argc_,
             (void)BoundsSystem3D::UpdateAligned(surface_3d_bounds.data(),
                                                 surface_3d_transforms.data(),
                                                 static_cast<std::uint32_t>(surface_3d_bounds.size()));
-            CameraSystem3D::Update(camera, camera_transform);
+            vr::render::RefreshExtentBoundWorldSceneSubmission(main_view,
+                                                               main_scene_packet,
+                                                               camera,
+                                                               camera_transform,
+                                                               extent,
+                                                               frame_index);
+            recorder.SetFramePacket(&main_scene_packet);
 
             TransformSystem2D::SetLocalRotationRadians(surface_2d_transforms[1U],
                                                        0.40F * std::sin(time_seconds * 1.6F));
