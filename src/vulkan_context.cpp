@@ -275,6 +275,24 @@ void AppendMissingFeatureBits(std::ostringstream& stream_,
     return count;
 }
 
+[[nodiscard]] constexpr std::size_t Vulkan12FirstFeatureOffset() noexcept {
+    return offsetof(VkPhysicalDeviceVulkan12Features, samplerMirrorClampToEdge);
+}
+
+[[nodiscard]] constexpr std::size_t Vulkan12FeatureCount() noexcept {
+    return ((offsetof(VkPhysicalDeviceVulkan12Features, subgroupBroadcastDynamicId) -
+             Vulkan12FirstFeatureOffset()) / sizeof(VkBool32)) + 1U;
+}
+
+[[nodiscard]] constexpr std::size_t Vulkan13FirstFeatureOffset() noexcept {
+    return offsetof(VkPhysicalDeviceVulkan13Features, robustImageAccess);
+}
+
+[[nodiscard]] constexpr std::size_t Vulkan13FeatureCount() noexcept {
+    return ((offsetof(VkPhysicalDeviceVulkan13Features, maintenance4) -
+             Vulkan13FirstFeatureOffset()) / sizeof(VkBool32)) + 1U;
+}
+
 void NormalizeVulkan10FeatureBits(VkPhysicalDeviceFeatures& features_) noexcept {
     constexpr std::size_t feature_count =
         sizeof(VkPhysicalDeviceFeatures) / sizeof(VkBool32);
@@ -285,10 +303,8 @@ void NormalizeVulkan10FeatureBits(VkPhysicalDeviceFeatures& features_) noexcept 
 }
 
 void NormalizeVulkan12FeatureBits(VkPhysicalDeviceVulkan12Features& features_) noexcept {
-    constexpr std::size_t first_feature_offset =
-        offsetof(VkPhysicalDeviceVulkan12Features, samplerMirrorClampToEdge);
-    constexpr std::size_t feature_count =
-        (sizeof(VkPhysicalDeviceVulkan12Features) - first_feature_offset) / sizeof(VkBool32);
+    constexpr std::size_t first_feature_offset = Vulkan12FirstFeatureOffset();
+    constexpr std::size_t feature_count = Vulkan12FeatureCount();
     auto* bits = reinterpret_cast<VkBool32*>(
         reinterpret_cast<char*>(&features_) + first_feature_offset);
     for (std::size_t i = 0U; i < feature_count; ++i) {
@@ -297,10 +313,8 @@ void NormalizeVulkan12FeatureBits(VkPhysicalDeviceVulkan12Features& features_) n
 }
 
 void NormalizeVulkan13FeatureBits(VkPhysicalDeviceVulkan13Features& features_) noexcept {
-    constexpr std::size_t first_feature_offset =
-        offsetof(VkPhysicalDeviceVulkan13Features, robustImageAccess);
-    constexpr std::size_t feature_count =
-        (sizeof(VkPhysicalDeviceVulkan13Features) - first_feature_offset) / sizeof(VkBool32);
+    constexpr std::size_t first_feature_offset = Vulkan13FirstFeatureOffset();
+    constexpr std::size_t feature_count = Vulkan13FeatureCount();
     auto* bits = reinterpret_cast<VkBool32*>(
         reinterpret_cast<char*>(&features_) + first_feature_offset);
     for (std::size_t i = 0U; i < feature_count; ++i) {
@@ -359,10 +373,8 @@ void AppendMissingVulkan13NamedFeatures(std::ostringstream& stream_,
 
 [[nodiscard]] bool SupportsRequiredVulkan12Features(const VkPhysicalDeviceVulkan12Features& supported_features_,
                                                     const VkPhysicalDeviceVulkan12Features& required_features_) {
-    constexpr std::size_t first_feature_offset =
-        offsetof(VkPhysicalDeviceVulkan12Features, samplerMirrorClampToEdge);
-    constexpr std::size_t feature_count =
-        (sizeof(VkPhysicalDeviceVulkan12Features) - first_feature_offset) / sizeof(VkBool32);
+    constexpr std::size_t first_feature_offset = Vulkan12FirstFeatureOffset();
+    constexpr std::size_t feature_count = Vulkan12FeatureCount();
 
     const auto* supported = reinterpret_cast<const VkBool32*>(
         reinterpret_cast<const char*>(&supported_features_) + first_feature_offset);
@@ -379,10 +391,8 @@ void AppendMissingVulkan13NamedFeatures(std::ostringstream& stream_,
 
 [[nodiscard]] bool SupportsRequiredVulkan13Features(const VkPhysicalDeviceVulkan13Features& supported_features_,
                                                     const VkPhysicalDeviceVulkan13Features& required_features_) {
-    constexpr std::size_t first_feature_offset =
-        offsetof(VkPhysicalDeviceVulkan13Features, robustImageAccess);
-    constexpr std::size_t feature_count =
-        (sizeof(VkPhysicalDeviceVulkan13Features) - first_feature_offset) / sizeof(VkBool32);
+    constexpr std::size_t first_feature_offset = Vulkan13FirstFeatureOffset();
+    constexpr std::size_t feature_count = Vulkan13FeatureCount();
 
     const auto* supported = reinterpret_cast<const VkBool32*>(
         reinterpret_cast<const char*>(&supported_features_) + first_feature_offset);
@@ -398,10 +408,8 @@ void AppendMissingVulkan13NamedFeatures(std::ostringstream& stream_,
 }
 
 [[nodiscard]] bool HasRequiredVulkan12Features(const VkPhysicalDeviceVulkan12Features& required_features_) {
-    constexpr std::size_t first_feature_offset =
-        offsetof(VkPhysicalDeviceVulkan12Features, samplerMirrorClampToEdge);
-    constexpr std::size_t feature_count =
-        (sizeof(VkPhysicalDeviceVulkan12Features) - first_feature_offset) / sizeof(VkBool32);
+    constexpr std::size_t first_feature_offset = Vulkan12FirstFeatureOffset();
+    constexpr std::size_t feature_count = Vulkan12FeatureCount();
 
     const auto* required = reinterpret_cast<const VkBool32*>(
         reinterpret_cast<const char*>(&required_features_) + first_feature_offset);
@@ -414,10 +422,8 @@ void AppendMissingVulkan13NamedFeatures(std::ostringstream& stream_,
 }
 
 [[nodiscard]] bool HasRequiredVulkan13Features(const VkPhysicalDeviceVulkan13Features& required_features_) {
-    constexpr std::size_t first_feature_offset =
-        offsetof(VkPhysicalDeviceVulkan13Features, robustImageAccess);
-    constexpr std::size_t feature_count =
-        (sizeof(VkPhysicalDeviceVulkan13Features) - first_feature_offset) / sizeof(VkBool32);
+    constexpr std::size_t first_feature_offset = Vulkan13FirstFeatureOffset();
+    constexpr std::size_t feature_count = Vulkan13FeatureCount();
 
     const auto* required = reinterpret_cast<const VkBool32*>(
         reinterpret_cast<const char*>(&required_features_) + first_feature_offset);
@@ -1002,14 +1008,10 @@ void VulkanContext::PickPhysicalDevice(const VulkanDeviceCreateInfo& create_info
 
     constexpr std::size_t vk10_feature_count =
         sizeof(VkPhysicalDeviceFeatures) / sizeof(VkBool32);
-    constexpr std::size_t vk12_first_feature_offset =
-        offsetof(VkPhysicalDeviceVulkan12Features, samplerMirrorClampToEdge);
-    constexpr std::size_t vk12_feature_count =
-        (sizeof(VkPhysicalDeviceVulkan12Features) - vk12_first_feature_offset) / sizeof(VkBool32);
-    constexpr std::size_t vk13_first_feature_offset =
-        offsetof(VkPhysicalDeviceVulkan13Features, robustImageAccess);
-    constexpr std::size_t vk13_feature_count =
-        (sizeof(VkPhysicalDeviceVulkan13Features) - vk13_first_feature_offset) / sizeof(VkBool32);
+    constexpr std::size_t vk12_first_feature_offset = Vulkan12FirstFeatureOffset();
+    constexpr std::size_t vk12_feature_count = Vulkan12FeatureCount();
+    constexpr std::size_t vk13_first_feature_offset = Vulkan13FirstFeatureOffset();
+    constexpr std::size_t vk13_feature_count = Vulkan13FeatureCount();
 
     const auto* required_vk10_bits =
         reinterpret_cast<const VkBool32*>(&required_features);
@@ -1128,10 +1130,8 @@ void VulkanContext::PickPhysicalDevice(const VulkanDeviceCreateInfo& create_info
                 }
                 candidate_supported = false;
                 reject_reason_stream << "missing required Vulkan 1.2 features: ";
-                constexpr std::size_t first_feature_offset =
-                    offsetof(VkPhysicalDeviceVulkan12Features, samplerMirrorClampToEdge);
-                constexpr std::size_t feature_count =
-                    (sizeof(VkPhysicalDeviceVulkan12Features) - first_feature_offset) / sizeof(VkBool32);
+                constexpr std::size_t first_feature_offset = Vulkan12FirstFeatureOffset();
+                constexpr std::size_t feature_count = Vulkan12FeatureCount();
                 const auto* required_bits = reinterpret_cast<const VkBool32*>(
                     reinterpret_cast<const char*>(&required_vulkan12_features) + first_feature_offset);
                 const auto* supported_bits = reinterpret_cast<const VkBool32*>(
@@ -1149,10 +1149,8 @@ void VulkanContext::PickPhysicalDevice(const VulkanDeviceCreateInfo& create_info
                 }
                 candidate_supported = false;
                 reject_reason_stream << "missing required Vulkan 1.3 features: ";
-                constexpr std::size_t first_feature_offset =
-                    offsetof(VkPhysicalDeviceVulkan13Features, robustImageAccess);
-                constexpr std::size_t feature_count =
-                    (sizeof(VkPhysicalDeviceVulkan13Features) - first_feature_offset) / sizeof(VkBool32);
+                constexpr std::size_t first_feature_offset = Vulkan13FirstFeatureOffset();
+                constexpr std::size_t feature_count = Vulkan13FeatureCount();
                 const auto* required_bits = reinterpret_cast<const VkBool32*>(
                     reinterpret_cast<const char*>(&required_vulkan13_features) + first_feature_offset);
                 const auto* supported_bits = reinterpret_cast<const VkBool32*>(
