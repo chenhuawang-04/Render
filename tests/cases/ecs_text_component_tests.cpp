@@ -62,6 +62,7 @@ VR_TEST_CASE(EcsTextSystem_dim3_initialize_defaults_and_style_update, "unit;core
     VR_CHECK(text_component.style.depth_test == 1U);
     VR_CHECK(text_component.style.depth_write == 0U);
     VR_CHECK(text_component.style.enable_sdf == 1U);
+    VR_CHECK(text_component.runtime.pass_hint == vr::ecs::TextRenderPassHint::transparent);
 
     TextSystem3D::SetColor(text_component, vr::ecs::Rgba8{20U, 30U, 40U, 255U});
     TextSystem3D::SetHorizontalAlign(text_component, vr::ecs::TextHorizontalAlign::right);
@@ -242,9 +243,9 @@ VR_TEST_CASE(EcsTextBatchSystem_dim3_binding_key_ignores_depth_and_batch, "unit;
 
     const std::uint32_t* indices = BatchSystem3D::OrderedIndices(scratch);
     VR_REQUIRE(indices != nullptr);
-    VR_CHECK(indices[0U] == 1U);
+    VR_CHECK(indices[0U] == 0U);
     VR_CHECK(indices[1U] == 2U);
-    VR_CHECK(indices[2U] == 0U);
+    VR_CHECK(indices[2U] == 1U);
 
     std::uint32_t binding_group_count = 0U;
     std::uint32_t grouped_items = 0U;

@@ -17,6 +17,7 @@
 #include "vr/render/light_shadow_link_coordinator.hpp"
 #include "vr/render/pipeline_host.hpp"
 #include "vr/render/render_target_pass.hpp"
+#include "vr/render/scene_render_stage.hpp"
 #include "vr/render/shadow_atlas_binding_coordinator.hpp"
 #include "vr/render/shadow_frame_coordinator.hpp"
 #include "vr/resource/sampler_host.hpp"
@@ -79,6 +80,10 @@ struct GeometryRenderer3DStats {
     std::uint32_t instance_count = 0U;
     std::uint32_t draw_batch_count = 0U;
     std::uint32_t draw_call_count = 0U;
+    std::uint32_t opaque_draw_call_count = 0U;
+    std::uint32_t transparent_draw_call_count = 0U;
+    std::uint32_t stage_filtered_batch_count = 0U;
+    std::uint32_t empty_stage_pass_count = 0U;
     std::uint32_t skipped_batch_count = 0U;
     std::uint32_t depth_test_batch_count = 0U;
     std::uint32_t depth_write_batch_count = 0U;
@@ -163,6 +168,8 @@ public:
 
     void PrepareFrame(const render::RuntimePrepareContext& prepare_context_);
     void Record(const render::FrameRecordContext& record_context_);
+    void RecordSceneStage(const render::FrameRecordContext& record_context_,
+                          render::SceneRenderStage stage_);
     void OnSwapchainRecreated(std::uint32_t image_count_,
                               VkExtent2D extent_,
                               VkFormat format_);
@@ -381,6 +388,9 @@ private:
     void RecordDepthTransitionToAttachment(VkCommandBuffer command_buffer_,
                                            const resource::ImageResource& depth_resource_,
                                            bool initialized_) const;
+    void RecordInternal(const render::FrameRecordContext& record_context_,
+                        std::uint32_t pass_bucket_,
+                        bool filter_by_pass_bucket_);
 
 private:
     GeometryRenderer3DCreateInfo create_info_cache{};

@@ -47,6 +47,10 @@ struct FakeSceneRecorderRenderer : FakeDepthRenderer {
     std::uint32_t prepare_count = 0U;
     std::uint32_t record_count = 0U;
     std::uint32_t recreate_count = 0U;
+    std::uint32_t stage_order = 0U;
+    std::uint32_t opaque_record_count = 0U;
+    std::uint32_t transparent_record_count = 0U;
+    std::uint32_t* order_cursor = nullptr;
 
     void PrepareFrame(const vr::render::RuntimePrepareContext&) noexcept {
         prepare_count += 1U;
@@ -54,6 +58,24 @@ struct FakeSceneRecorderRenderer : FakeDepthRenderer {
 
     void Record(const vr::render::FrameRecordContext&) noexcept {
         record_count += 1U;
+        if (order_cursor != nullptr) {
+            stage_order = *order_cursor;
+            *order_cursor += 1U;
+        }
+    }
+
+    void RecordSceneStage(const vr::render::FrameRecordContext&,
+                          vr::render::SceneRenderStage stage_) noexcept {
+        record_count += 1U;
+        if (stage_ == vr::render::SceneRenderStage::opaque) {
+            opaque_record_count += 1U;
+        } else if (stage_ == vr::render::SceneRenderStage::transparent) {
+            transparent_record_count += 1U;
+        }
+        if (order_cursor != nullptr) {
+            stage_order = *order_cursor;
+            *order_cursor += 1U;
+        }
     }
 
     void OnSwapchainRecreated(std::uint32_t,
@@ -293,18 +315,68 @@ VR_TEST_CASE(SceneRecorder3D_registration_upserts_renderer_counts,
     FakeSceneRecorderRenderer overlay_renderer{};
 
     recorder.RegisterPreSceneRenderer(pre_scene_renderer);
-    recorder.RegisterSceneRenderer(scene_renderer, vr::render::SceneRenderPassRole::first);
-    recorder.RegisterSceneRenderer(scene_renderer, vr::render::SceneRenderPassRole::last);
+    recorder.RegisterOpaqueSceneRenderer(scene_renderer, vr::render::SceneRenderPassRole::first);
+    recorder.RegisterOpaqueSceneRenderer(scene_renderer, vr::render::SceneRenderPassRole::middle);
+    recorder.RegisterTransparentSceneRenderer(scene_renderer, vr::render::SceneRenderPassRole::last);
     recorder.RegisterOverlayRenderer(overlay_renderer);
     recorder.RegisterOverlayRenderer(overlay_renderer,
                                      vr::render::SceneRecorder3D::MakePresentOverlayOutputConfig());
 
     const vr::render::SceneRecorder3DStats stats = recorder.Stats();
     VR_CHECK(stats.pre_scene_renderer_count == 1U);
-    VR_CHECK(stats.scene_renderer_count == 1U);
+    VR_CHECK(stats.scene_renderer_count == 2U);
+    VR_CHECK(stats.opaque_scene_renderer_count == 1U);
+    VR_CHECK(stats.transparent_scene_renderer_count == 1U);
     VR_CHECK(stats.overlay_renderer_count == 1U);
     VR_CHECK(recorder.IsInitialized());
     VR_CHECK(!recorder.HasRuntimeBinding());
+}
+
+VR_TEST_CASE(SceneRecorder3D_records_opaque_stage_before_transparent_stage,
+             "unit;core;render_target") {
+    vr::render::SceneRecorder3D recorder{};
+    recorder.Initialize({});
+
+    FakeSceneRecorderRenderer opaque_renderer{};
+    FakeSceneRecorderRenderer transparent_renderer{};
+    std::uint32_t order_cursor = 1U;
+    opaque_renderer.order_cursor = &order_cursor;
+    transparent_renderer.order_cursor = &order_cursor;
+
+    recorder.RegisterTransparentSceneRenderer(transparent_renderer, vr::render::SceneRenderPassRole::single);
+    recorder.RegisterOpaqueSceneRenderer(opaque_renderer, vr::render::SceneRenderPassRole::single);
+
+    vr::render::FrameRecordContext record_context{};
+    recorder.Record(record_context);
+
+    VR_CHECK(opaque_renderer.record_count == 1U);
+    VR_CHECK(transparent_renderer.record_count == 1U);
+    VR_CHECK(opaque_renderer.opaque_record_count == 1U);
+    VR_CHECK(transparent_renderer.transparent_record_count == 1U);
+    VR_CHECK(opaque_renderer.stage_order == 1U);
+    VR_CHECK(transparent_renderer.stage_order == 2U);
+}
+
+VR_TEST_CASE(SceneRecorder3D_allows_same_renderer_in_opaque_and_transparent_stages,
+             "unit;core;render_target") {
+    vr::render::SceneRecorder3D recorder{};
+    recorder.Initialize({});
+
+    FakeSceneRecorderRenderer renderer{};
+    recorder.RegisterOpaqueSceneRenderer(renderer, vr::render::SceneRenderPassRole::first);
+    recorder.RegisterTransparentSceneRenderer(renderer, vr::render::SceneRenderPassRole::last);
+
+    vr::render::FrameRecordContext record_context{};
+    recorder.Record(record_context);
+
+    const vr::render::SceneRecorder3DStats stats = recorder.Stats();
+    VR_CHECK(stats.scene_renderer_count == 2U);
+    VR_CHECK(stats.opaque_scene_renderer_count == 1U);
+    VR_CHECK(stats.transparent_scene_renderer_count == 1U);
+    VR_CHECK(renderer.prepare_count == 0U);
+    VR_CHECK(renderer.record_count == 2U);
+    VR_CHECK(renderer.opaque_record_count == 1U);
+    VR_CHECK(renderer.transparent_record_count == 1U);
 }
 
 VR_TEST_CASE(SceneRecorder3D_shadow_registration_and_lighting_binding_are_propagated,
@@ -319,12 +391,14 @@ VR_TEST_CASE(SceneRecorder3D_shadow_registration_and_lighting_binding_are_propag
     vr::shadow::ShadowRenderer3D shadow_renderer{};
 
     recorder.BindLightFrameCoordinator(&light_frame_coordinator);
-    recorder.RegisterSceneRenderer(lit_renderer, vr::render::SceneRenderPassRole::single);
+    recorder.RegisterOpaqueSceneRenderer(lit_renderer, vr::render::SceneRenderPassRole::single);
     recorder.RegisterShadowRenderer(shadow_renderer);
 
     const vr::render::SceneRecorder3DStats registered_stats = recorder.Stats();
     VR_CHECK(registered_stats.pre_scene_renderer_count == 1U);
     VR_CHECK(registered_stats.scene_renderer_count == 1U);
+    VR_CHECK(registered_stats.opaque_scene_renderer_count == 1U);
+    VR_CHECK(registered_stats.transparent_scene_renderer_count == 0U);
     VR_CHECK(lit_renderer.light_frame == &light_frame_coordinator);
     VR_CHECK(lit_renderer.light_shadow_link != nullptr);
     VR_CHECK(lit_renderer.shadow_atlas_binding != nullptr);

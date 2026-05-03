@@ -597,6 +597,17 @@ void TextRenderer3D::PrepareFrame(const render::RuntimePrepareContext& prepare_c
 }
 
 void TextRenderer3D::Record(const render::FrameRecordContext& record_context_) {
+    RecordInternal(record_context_, 0U, false);
+}
+
+void TextRenderer3D::RecordSceneStage(const render::FrameRecordContext& record_context_,
+                                      render::SceneRenderStage stage_) {
+    RecordInternal(record_context_, render::SceneRenderStagePassHintValue(stage_), true);
+}
+
+void TextRenderer3D::RecordInternal(const render::FrameRecordContext& record_context_,
+                                    std::uint32_t pass_bucket_,
+                                    bool filter_by_pass_bucket_) {
     if (!initialized) {
         throw std::runtime_error("TextRenderer3D::Record called before Initialize");
     }
@@ -772,6 +783,8 @@ void TextRenderer3D::Record(const render::FrameRecordContext& record_context_) {
 
         const PerFrameState& frame_state = frame_states[frame_index];
         if (frame_state.instance_count > 0U && frame_state.vertex_buffer.buffer != VK_NULL_HANDLE) {
+            std::uint32_t stage_draw_call_count = 0U;
+            std::uint32_t stage_filtered_batch_count = 0U;
             const VkBuffer vertex_buffer = frame_state.vertex_buffer.buffer;
             const VkDeviceSize vertex_offset = 0U;
             vkCmdBindVertexBuffers(record_context_.command_buffer, 0U, 1U, &vertex_buffer, &vertex_offset);
@@ -779,6 +792,11 @@ void TextRenderer3D::Record(const render::FrameRecordContext& record_context_) {
             VkDescriptorSet bound_set = VK_NULL_HANDLE;
             render::GraphicsPipelineId bound_pipeline_id{};
             for (const auto& batch : render_scratch.draw_batches) {
+                if (filter_by_pass_bucket_ &&
+                    ecs::TextSystem<ecs::Dim3>::ExtractPassBucket(batch.sort_key) != pass_bucket_) {
+                    ++stage_filtered_batch_count;
+                    continue;
+                }
                 if (batch.glyph_count == 0U) {
                     continue;
                 }
@@ -840,9 +858,22 @@ void TextRenderer3D::Record(const render::FrameRecordContext& record_context_) {
                           0U,
                           batch.glyph_begin);
                 ++stats.draw_call_count;
+                ++stage_draw_call_count;
                 if (mode == DepthPipelineMode::depth_test_reverse_z ||
                     mode == DepthPipelineMode::depth_test_write_reverse_z) {
                     ++stats.reverse_z_draw_call_count;
+                }
+            }
+
+            if (filter_by_pass_bucket_) {
+                stats.stage_filtered_batch_count += stage_filtered_batch_count;
+                if (stage_draw_call_count == 0U) {
+                    ++stats.empty_stage_pass_count;
+                }
+                if (pass_bucket_ == static_cast<std::uint32_t>(ecs::TextRenderPassHint::opaque)) {
+                    stats.opaque_draw_call_count += stage_draw_call_count;
+                } else if (pass_bucket_ == static_cast<std::uint32_t>(ecs::TextRenderPassHint::transparent)) {
+                    stats.transparent_draw_call_count += stage_draw_call_count;
                 }
             }
         }

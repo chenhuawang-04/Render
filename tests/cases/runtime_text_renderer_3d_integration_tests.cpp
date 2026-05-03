@@ -514,7 +514,7 @@ VR_TEST_CASE(RuntimeIntegration_text_renderer_3d_bloom_post_stack_smoke,
                                    &camera,
                                    &camera_transform,
                                    bounds_components.data());
-        recorder.RegisterSceneRenderer(text_renderer, vr::render::SceneRenderPassRole::single);
+        recorder.RegisterTransparentSceneRenderer(text_renderer, vr::render::SceneRenderPassRole::single);
 
         std::uint32_t submitted_frames = 0U;
         std::uint32_t max_instance_count = 0U;

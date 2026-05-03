@@ -703,6 +703,17 @@ void GeometryRenderer3D::PrepareFrame(const render::RuntimePrepareContext& prepa
 }
 
 void GeometryRenderer3D::Record(const render::FrameRecordContext& record_context_) {
+    RecordInternal(record_context_, 0U, false);
+}
+
+void GeometryRenderer3D::RecordSceneStage(const render::FrameRecordContext& record_context_,
+                                          render::SceneRenderStage stage_) {
+    RecordInternal(record_context_, render::SceneRenderStagePassHintValue(stage_), true);
+}
+
+void GeometryRenderer3D::RecordInternal(const render::FrameRecordContext& record_context_,
+                                        std::uint32_t pass_bucket_,
+                                        bool filter_by_pass_bucket_) {
     if (!initialized) {
         throw std::runtime_error("GeometryRenderer3D::Record called before Initialize");
     }
@@ -901,6 +912,8 @@ void GeometryRenderer3D::Record(const render::FrameRecordContext& record_context
     }
 
     if (instance_range.buffer != VK_NULL_HANDLE && !runtime_scratch.draw_batches.empty()) {
+        std::uint32_t stage_draw_call_count = 0U;
+        std::uint32_t stage_filtered_batch_count = 0U;
         const VkBuffer instance_vertex_buffer = instance_range.buffer;
         const VkDeviceSize instance_vertex_offset = instance_range.offset;
         vkCmdBindVertexBuffers(record_context_.command_buffer,
@@ -910,6 +923,11 @@ void GeometryRenderer3D::Record(const render::FrameRecordContext& record_context
                                &instance_vertex_offset);
 
         for (const ecs::Geometry3DDrawBatch& batch : runtime_scratch.draw_batches) {
+            if (filter_by_pass_bucket_ &&
+                ecs::GeometrySystem<ecs::Dim3>::ExtractPassBucket(batch.sort_key) != pass_bucket_) {
+                ++stage_filtered_batch_count;
+                continue;
+            }
             if (batch.instance_count == 0U) {
                 continue;
             }
@@ -1031,6 +1049,19 @@ void GeometryRenderer3D::Record(const render::FrameRecordContext& record_context
                              submesh.vertex_offset,
                              batch.instance_begin);
             ++stats.draw_call_count;
+            ++stage_draw_call_count;
+        }
+
+        if (filter_by_pass_bucket_) {
+            stats.stage_filtered_batch_count += stage_filtered_batch_count;
+            if (stage_draw_call_count == 0U) {
+                ++stats.empty_stage_pass_count;
+            }
+            if (pass_bucket_ == static_cast<std::uint32_t>(ecs::GeometryRenderPassHint::opaque)) {
+                stats.opaque_draw_call_count += stage_draw_call_count;
+            } else if (pass_bucket_ == static_cast<std::uint32_t>(ecs::GeometryRenderPassHint::transparent)) {
+                stats.transparent_draw_call_count += stage_draw_call_count;
+            }
         }
     }
 

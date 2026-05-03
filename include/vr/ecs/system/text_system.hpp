@@ -108,7 +108,9 @@ public:
         component_.runtime.user_data = 0U;
         component_.runtime.depth_bin = 0U;
         component_.runtime.visible = 1U;
-        component_.runtime.pass_hint = TextRenderPassHint::overlay;
+        component_.runtime.pass_hint = std::same_as<DimensionT, Dim2>
+            ? TextRenderPassHint::overlay
+            : TextRenderPassHint::transparent;
         component_.runtime.dirty_flags = text_dirty_flag | style_dirty_flag | runtime_dirty_flag;
     }
 

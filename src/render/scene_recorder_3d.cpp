@@ -114,28 +114,34 @@ void SceneRecorder3D::PrepareFrame(const RuntimePrepareContext& prepare_context_
         }
     }
 
-    for (const SceneRendererEntry& entry : scene_renderer_entries) {
-        if (entry.configure_scene_fn == nullptr || entry.renderer == nullptr) {
-            continue;
+    auto configure_scene_renderer = [&](const SceneRendererEntry& entry_) {
+        if (entry_.configure_scene_fn == nullptr || entry_.renderer == nullptr) {
+            return;
         }
-        (void)entry.configure_scene_fn(entry.renderer, targets, entry.pass_role);
-        if (entry.configure_lighting_fn != nullptr) {
-            entry.configure_lighting_fn(entry.renderer,
-                                        light_frame_coordinator,
-                                        &light_shadow_link_coordinator,
-                                        &shadow_atlas_binding_coordinator,
-                                        shadow_frame_coordinator,
-                                        shadow_atlas_host);
+        (void)entry_.configure_scene_fn(entry_.renderer, targets, entry_.pass_role);
+        if (entry_.configure_lighting_fn != nullptr &&
+            IsFirstSceneRendererEntryForRenderer(entry_)) {
+            entry_.configure_lighting_fn(entry_.renderer,
+                                         light_frame_coordinator,
+                                         &light_shadow_link_coordinator,
+                                         &shadow_atlas_binding_coordinator,
+                                         shadow_frame_coordinator,
+                                         shadow_atlas_host);
         }
-    }
+    };
+    ForEachSceneRendererInStageOrder(configure_scene_renderer);
     (void)targets.ConfigureSceneConsumer(post_stack.Bloom());
     post_stack.Bloom().PrepareFrame(prepare_context_);
 
-    for (const SceneRendererEntry& entry : scene_renderer_entries) {
-        if (entry.prepare_fn != nullptr && entry.renderer != nullptr) {
-            entry.prepare_fn(entry.renderer, prepare_context_);
+    auto prepare_scene_renderer = [&](const SceneRendererEntry& entry_) {
+        if (entry_.prepare_fn == nullptr ||
+            entry_.renderer == nullptr ||
+            !IsFirstSceneRendererEntryForRenderer(entry_)) {
+            return;
         }
-    }
+        entry_.prepare_fn(entry_.renderer, prepare_context_);
+    };
+    ForEachSceneRendererInStageOrder(prepare_scene_renderer);
     for (const OverlayRendererEntry& entry : overlay_renderer_entries) {
         if (entry.renderer != nullptr && entry.set_output_target_fn != nullptr) {
             entry.set_output_target_fn(entry.renderer, entry.output_target_config);
@@ -157,13 +163,20 @@ void SceneRecorder3D::Record(const FrameRecordContext& record_context_) {
         }
     }
 
-    for (const SceneRendererEntry& entry : scene_renderer_entries) {
-        if (entry.record_fn != nullptr && entry.renderer != nullptr) {
-            entry.record_fn(entry.renderer, record_context_);
+    auto record_scene_renderer = [&](const SceneRendererEntry& entry_) {
+        if (entry_.record_fn == nullptr || entry_.renderer == nullptr) {
+            return;
         }
-    }
+        if (entry_.configure_scene_fn != nullptr) {
+            (void)entry_.configure_scene_fn(entry_.renderer, post_stack.Targets(), entry_.pass_role);
+        }
+        entry_.record_fn(entry_.renderer, record_context_, entry_.stage);
+    };
+    ForEachSceneRendererInStageOrder(record_scene_renderer);
 
-    post_stack.Record(record_context_);
+    if (HasRuntimeBinding()) {
+        post_stack.Record(record_context_);
+    }
 
     for (const OverlayRendererEntry& entry : overlay_renderer_entries) {
         if (entry.record_fn != nullptr && entry.renderer != nullptr) {
@@ -193,16 +206,20 @@ void SceneRecorder3D::OnSwapchainRecreated(std::uint32_t image_count_,
         }
     }
 
-    for (const SceneRendererEntry& entry : scene_renderer_entries) {
-        if (entry.swapchain_recreated_fn != nullptr && entry.renderer != nullptr) {
-            entry.swapchain_recreated_fn(entry.renderer,
-                                         image_count_,
-                                         extent_,
-                                         format_,
-                                         last_submitted_value_,
-                                         completed_submit_value_);
+    auto recreate_scene_renderer = [&](const SceneRendererEntry& entry_) {
+        if (entry_.swapchain_recreated_fn == nullptr ||
+            entry_.renderer == nullptr ||
+            !IsFirstSceneRendererEntryForRenderer(entry_)) {
+            return;
         }
-    }
+        entry_.swapchain_recreated_fn(entry_.renderer,
+                                      image_count_,
+                                      extent_,
+                                      format_,
+                                      last_submitted_value_,
+                                      completed_submit_value_);
+    };
+    ForEachSceneRendererInStageOrder(recreate_scene_renderer);
     for (const OverlayRendererEntry& entry : overlay_renderer_entries) {
         if (entry.swapchain_recreated_fn != nullptr && entry.renderer != nullptr) {
             entry.swapchain_recreated_fn(entry.renderer,
@@ -222,20 +239,22 @@ void SceneRecorder3D::OnSwapchainRecreated(std::uint32_t image_count_,
                                                     last_submitted_value_,
                                                     completed_submit_value_);
 
-    for (const SceneRendererEntry& entry : scene_renderer_entries) {
-        if (entry.configure_scene_fn == nullptr || entry.renderer == nullptr) {
-            continue;
+    auto reconfigure_scene_renderer = [&](const SceneRendererEntry& entry_) {
+        if (entry_.configure_scene_fn == nullptr || entry_.renderer == nullptr) {
+            return;
         }
-        (void)entry.configure_scene_fn(entry.renderer, post_stack.Targets(), entry.pass_role);
-        if (entry.configure_lighting_fn != nullptr) {
-            entry.configure_lighting_fn(entry.renderer,
-                                        light_frame_coordinator,
-                                        &light_shadow_link_coordinator,
-                                        &shadow_atlas_binding_coordinator,
-                                        shadow_frame_coordinator,
-                                        shadow_atlas_host);
+        (void)entry_.configure_scene_fn(entry_.renderer, post_stack.Targets(), entry_.pass_role);
+        if (entry_.configure_lighting_fn != nullptr &&
+            IsFirstSceneRendererEntryForRenderer(entry_)) {
+            entry_.configure_lighting_fn(entry_.renderer,
+                                         light_frame_coordinator,
+                                         &light_shadow_link_coordinator,
+                                         &shadow_atlas_binding_coordinator,
+                                         shadow_frame_coordinator,
+                                         shadow_atlas_host);
         }
-    }
+    };
+    ForEachSceneRendererInStageOrder(reconfigure_scene_renderer);
     (void)post_stack.Targets().ConfigureSceneConsumer(post_stack.Bloom());
     for (const OverlayRendererEntry& entry : overlay_renderer_entries) {
         if (entry.renderer != nullptr && entry.set_output_target_fn != nullptr) {
@@ -293,7 +312,7 @@ void SceneRecorder3D::UpsertPreSceneRendererEntry(const PreSceneRendererEntry& e
 
 void SceneRecorder3D::UpsertSceneRendererEntry(const SceneRendererEntry& entry_) {
     for (SceneRendererEntry& entry : scene_renderer_entries) {
-        if (entry.renderer == entry_.renderer) {
+        if (entry.renderer == entry_.renderer && entry.stage == entry_.stage) {
             entry = entry_;
             RefreshSceneLightingBindings();
             RefreshRendererCounts();
@@ -318,23 +337,53 @@ void SceneRecorder3D::UpsertOverlayRendererEntry(const OverlayRendererEntry& ent
 }
 
 void SceneRecorder3D::RefreshSceneLightingBindings() noexcept {
-    for (const SceneRendererEntry& entry : scene_renderer_entries) {
-        if (entry.renderer == nullptr || entry.configure_lighting_fn == nullptr) {
-            continue;
+    auto configure_lighting = [&](const SceneRendererEntry& entry_) {
+        if (entry_.renderer == nullptr ||
+            entry_.configure_lighting_fn == nullptr ||
+            !IsFirstSceneRendererEntryForRenderer(entry_)) {
+            return;
         }
-        entry.configure_lighting_fn(entry.renderer,
-                                    light_frame_coordinator,
-                                    &light_shadow_link_coordinator,
-                                    &shadow_atlas_binding_coordinator,
-                                    shadow_frame_coordinator,
-                                    shadow_atlas_host);
-    }
+        entry_.configure_lighting_fn(entry_.renderer,
+                                     light_frame_coordinator,
+                                     &light_shadow_link_coordinator,
+                                     &shadow_atlas_binding_coordinator,
+                                     shadow_frame_coordinator,
+                                     shadow_atlas_host);
+    };
+    ForEachSceneRendererInStageOrder(configure_lighting);
 }
 
 void SceneRecorder3D::RefreshRendererCounts() noexcept {
     stats.pre_scene_renderer_count = static_cast<std::uint32_t>(pre_scene_renderer_entries.size());
     stats.scene_renderer_count = static_cast<std::uint32_t>(scene_renderer_entries.size());
+    stats.opaque_scene_renderer_count = 0U;
+    stats.transparent_scene_renderer_count = 0U;
+    for (const SceneRendererEntry& entry : scene_renderer_entries) {
+        switch (entry.stage) {
+        case SceneRecorder3DSceneStage::opaque:
+            ++stats.opaque_scene_renderer_count;
+            break;
+        case SceneRecorder3DSceneStage::transparent:
+            ++stats.transparent_scene_renderer_count;
+            break;
+        default:
+            break;
+        }
+    }
     stats.overlay_renderer_count = static_cast<std::uint32_t>(overlay_renderer_entries.size());
+}
+
+bool SceneRecorder3D::IsFirstSceneRendererEntryForRenderer(
+    const SceneRendererEntry& entry_) const noexcept {
+    for (const SceneRendererEntry& entry : scene_renderer_entries) {
+        if (&entry == &entry_) {
+            return true;
+        }
+        if (entry.renderer == entry_.renderer) {
+            return false;
+        }
+    }
+    return false;
 }
 
 void SceneRecorder3D::EnsureInitialized(const char* operation_) const {

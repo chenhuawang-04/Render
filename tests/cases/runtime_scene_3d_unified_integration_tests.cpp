@@ -217,6 +217,7 @@ void InitializeSurface3DComponent(Surface3D& component_,
     SurfaceSystem3D::Initialize(component_);
     SurfaceSystem3D::SetTextureRoute(component_, texture_id_, sampler_id_, 0U, 0U);
     SurfaceSystem3D::SetDepthBin(component_, depth_bin_);
+    SurfaceSystem3D::SetRenderPassHint(component_, vr::ecs::SurfaceRenderPassHint::transparent);
     SurfaceSystem3D::SetDepthTest(component_, true);
     SurfaceSystem3D::SetDepthWrite(component_, false);
     SurfaceSystem3D::SetDoubleSided(component_, true);
@@ -637,9 +638,9 @@ VR_TEST_CASE(RuntimeIntegration_unified_scene_3d_bloom_post_stack_smoke,
                                      &geometry_bounds);
         shadow_renderer.SetGeometryData(&geometry_component, &geometry_transform, 1U);
         recorder.RegisterShadowRenderer(shadow_renderer);
-        recorder.RegisterSceneRenderer(geometry_renderer, vr::render::SceneRenderPassRole::first);
-        recorder.RegisterSceneRenderer(surface_renderer, vr::render::SceneRenderPassRole::middle);
-        recorder.RegisterSceneRenderer(text_renderer, vr::render::SceneRenderPassRole::last);
+        recorder.RegisterOpaqueSceneRenderer(geometry_renderer, vr::render::SceneRenderPassRole::first);
+        recorder.RegisterTransparentSceneRenderer(surface_renderer, vr::render::SceneRenderPassRole::middle);
+        recorder.RegisterTransparentSceneRenderer(text_renderer, vr::render::SceneRenderPassRole::last);
 
         std::uint32_t submitted_frames = 0U;
         std::uint32_t max_geometry_draw_calls = 0U;

@@ -505,6 +505,17 @@ void SurfaceRenderer3D::PrepareFrame(const render::RuntimePrepareContext& prepar
 }
 
 void SurfaceRenderer3D::Record(const render::FrameRecordContext& record_context_) {
+    RecordInternal(record_context_, 0U, false);
+}
+
+void SurfaceRenderer3D::RecordSceneStage(const render::FrameRecordContext& record_context_,
+                                         render::SceneRenderStage stage_) {
+    RecordInternal(record_context_, render::SceneRenderStagePassHintValue(stage_), true);
+}
+
+void SurfaceRenderer3D::RecordInternal(const render::FrameRecordContext& record_context_,
+                                       std::uint32_t pass_bucket_,
+                                       bool filter_by_pass_bucket_) {
     if (!initialized) {
         throw std::runtime_error("SurfaceRenderer3D::Record called before Initialize");
     }
@@ -646,6 +657,8 @@ void SurfaceRenderer3D::Record(const render::FrameRecordContext& record_context_
 
     if (last_upload_result.upload.buffer != VK_NULL_HANDLE &&
         !runtime_scratch.draw_batches.empty()) {
+        std::uint32_t stage_draw_call_count = 0U;
+        std::uint32_t stage_filtered_batch_count = 0U;
         const VkBuffer vertex_buffer = last_upload_result.upload.buffer;
         const VkDeviceSize vertex_offset = last_upload_result.upload.offset;
         vkCmdBindVertexBuffers(record_context_.command_buffer,
@@ -668,6 +681,11 @@ void SurfaceRenderer3D::Record(const render::FrameRecordContext& record_context_
         render::GraphicsPipelineId bound_pipeline{};
         VkDescriptorSet bound_descriptor_set = VK_NULL_HANDLE;
         for (const ecs::Surface3DDrawBatch& batch : runtime_scratch.draw_batches) {
+            if (filter_by_pass_bucket_ &&
+                ecs::SurfaceSystem<ecs::Dim3>::ExtractPassBucket(batch.sort_key) != pass_bucket_) {
+                ++stage_filtered_batch_count;
+                continue;
+            }
             if (batch.instance_count == 0U) {
                 ++stats.skipped_batch_count;
                 continue;
@@ -729,6 +747,19 @@ void SurfaceRenderer3D::Record(const render::FrameRecordContext& record_context_
                       0U,
                       batch.instance_begin);
             ++stats.draw_call_count;
+            ++stage_draw_call_count;
+        }
+
+        if (filter_by_pass_bucket_) {
+            stats.stage_filtered_batch_count += stage_filtered_batch_count;
+            if (stage_draw_call_count == 0U) {
+                ++stats.empty_stage_pass_count;
+            }
+            if (pass_bucket_ == static_cast<std::uint32_t>(ecs::SurfaceRenderPassHint::opaque)) {
+                stats.opaque_draw_call_count += stage_draw_call_count;
+            } else if (pass_bucket_ == static_cast<std::uint32_t>(ecs::SurfaceRenderPassHint::transparent)) {
+                stats.transparent_draw_call_count += stage_draw_call_count;
+            }
         }
     }
 

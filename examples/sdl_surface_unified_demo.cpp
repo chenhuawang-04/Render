@@ -136,6 +136,7 @@ void InitializeSurface3DComponent(Surface3D& component_,
     SurfaceSystem3D::Initialize(component_);
     SurfaceSystem3D::SetTextureRoute(component_, texture_id_, sampler_id_, 0U, 0U);
     SurfaceSystem3D::SetDepthBin(component_, depth_bin_);
+    SurfaceSystem3D::SetRenderPassHint(component_, vr::ecs::SurfaceRenderPassHint::transparent);
     SurfaceSystem3D::SetDepthTest(component_, true);
     SurfaceSystem3D::SetDepthWrite(component_, depth_write_);
     SurfaceSystem3D::SetDoubleSided(component_, double_sided_);
@@ -414,7 +415,7 @@ int main(int argc_,
                                  &camera,
                                  &camera_transform,
                                  surface_3d_bounds.data());
-        recorder.RegisterSceneRenderer(renderer_3d, vr::render::SceneRenderPassRole::single);
+        recorder.RegisterTransparentSceneRenderer(renderer_3d, vr::render::SceneRenderPassRole::single);
 
         vr::surface::SurfaceRenderer2DCreateInfo renderer_2d_create_info{};
         renderer_2d_create_info.reserve_component_count =

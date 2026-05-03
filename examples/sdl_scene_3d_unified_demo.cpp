@@ -178,6 +178,7 @@ void InitializeSurfaceComponent(Surface3D& component_,
     SurfaceSystem3D::Initialize(component_);
     SurfaceSystem3D::SetTextureRoute(component_, k_surface_image_id, sampler_id_, 0U, 0U);
     SurfaceSystem3D::SetDepthBin(component_, 40U);
+    SurfaceSystem3D::SetRenderPassHint(component_, vr::ecs::SurfaceRenderPassHint::transparent);
     SurfaceSystem3D::SetDepthTest(component_, true);
     SurfaceSystem3D::SetDepthWrite(component_, false);
     SurfaceSystem3D::SetDoubleSided(component_, true);
@@ -615,9 +616,9 @@ int main(int argc_,
                                      &geometry_bounds);
         shadow_renderer.SetGeometryData(&geometry_component, &geometry_transform, 1U);
         recorder.RegisterShadowRenderer(shadow_renderer);
-        recorder.RegisterSceneRenderer(geometry_renderer, vr::render::SceneRenderPassRole::first);
-        recorder.RegisterSceneRenderer(surface_renderer, vr::render::SceneRenderPassRole::middle);
-        recorder.RegisterSceneRenderer(text_renderer, vr::render::SceneRenderPassRole::last);
+        recorder.RegisterOpaqueSceneRenderer(geometry_renderer, vr::render::SceneRenderPassRole::first);
+        recorder.RegisterTransparentSceneRenderer(surface_renderer, vr::render::SceneRenderPassRole::middle);
+        recorder.RegisterTransparentSceneRenderer(text_renderer, vr::render::SceneRenderPassRole::last);
 
         std::cout << "sdl_scene_3d_unified_demo running (geometry + surface + text share transient scene target + bloom post stack). Close window to exit.\n";
 

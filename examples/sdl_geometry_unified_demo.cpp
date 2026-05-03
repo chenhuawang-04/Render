@@ -409,7 +409,7 @@ int main(int argc_,
                                  static_cast<std::uint32_t>(geometry_3d_components.size()),
                                  &camera,
                                  &camera_transform);
-        recorder.RegisterSceneRenderer(renderer_3d, vr::render::SceneRenderPassRole::single);
+        recorder.RegisterOpaqueSceneRenderer(renderer_3d, vr::render::SceneRenderPassRole::single);
 
         vr::geometry::GeometryRenderer2DCreateInfo renderer_2d_create_info{};
         renderer_2d_create_info.reserve_component_count =

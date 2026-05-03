@@ -826,7 +826,7 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_bloom_post_stack_smoke,
                                         transforms.data(),
                                         static_cast<std::uint32_t>(geometry_components.size()));
         recorder.RegisterShadowRenderer(shadow_renderer);
-        recorder.RegisterSceneRenderer(geometry_renderer, vr::render::SceneRenderPassRole::single);
+        recorder.RegisterOpaqueSceneRenderer(geometry_renderer, vr::render::SceneRenderPassRole::single);
 
         std::uint32_t submitted_frames = 0U;
         std::uint32_t max_draw_calls = 0U;

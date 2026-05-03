@@ -479,7 +479,7 @@ int main(int argc_,
                                    &camera,
                                    &camera_transform,
                                    bounds.data());
-        recorder.RegisterSceneRenderer(text_renderer, vr::render::SceneRenderPassRole::single);
+        recorder.RegisterTransparentSceneRenderer(text_renderer, vr::render::SceneRenderPassRole::single);
 
         const std::string primary_name = FileNameOnly(fonts.primary);
         const std::string secondary_name = FileNameOnly(fonts.secondary);
