@@ -417,10 +417,17 @@ void SceneRecorder2D::RefreshRendererCounts() noexcept {
 
 void SceneRecorder2D::ConfigureSceneRenderersForTargets() noexcept {
     for (const SceneRendererEntry& entry : scene_renderer_entries) {
-        if (entry.configure_scene_fn == nullptr || entry.renderer == nullptr) {
+        if (entry.renderer == nullptr) {
             continue;
         }
-        (void)entry.configure_scene_fn(entry.renderer, scene_targets, entry.pass_role);
+        if (HasSceneConsumer()) {
+            if (entry.configure_scene_fn != nullptr) {
+                (void)entry.configure_scene_fn(entry.renderer, scene_targets, entry.pass_role);
+            }
+        } else if (entry.set_output_target_fn != nullptr) {
+            entry.set_output_target_fn(entry.renderer,
+                                       BuildDirectSceneOutputConfig(entry.pass_role));
+        }
         if (entry.configure_lighting_fn != nullptr) {
             entry.configure_lighting_fn(entry.renderer,
                                         light_frame_coordinator,
@@ -443,6 +450,31 @@ void SceneRecorder2D::ConfigureSceneConsumerForTargets() noexcept {
         scene_consumer_entry.set_output_target_fn(scene_consumer_entry.renderer,
                                                   scene_consumer_entry.output_target_config);
     }
+}
+
+RenderTargetColorOutputConfig SceneRecorder2D::BuildDirectSceneOutputConfig(
+    SceneRenderPassRole pass_role_) const noexcept {
+    RenderTargetColorOutputConfig output{};
+    output.final_state = (pass_role_ == SceneRenderPassRole::single ||
+                          pass_role_ == SceneRenderPassRole::last)
+        ? RenderTargetStateKind::present_src
+        : RenderTargetStateKind::color_attachment;
+    output.use_explicit_load_op = true;
+    output.store_op = VK_ATTACHMENT_STORE_OP_STORE;
+    output.clear_color = create_info_cache.scene_target.clear_color;
+
+    switch (pass_role_) {
+    case SceneRenderPassRole::single:
+    case SceneRenderPassRole::first:
+        output.load_op = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        break;
+    case SceneRenderPassRole::middle:
+    case SceneRenderPassRole::last:
+    default:
+        output.load_op = VK_ATTACHMENT_LOAD_OP_LOAD;
+        break;
+    }
+    return output;
 }
 
 void SceneRecorder2D::EnsureInitialized(const char* operation_) const {

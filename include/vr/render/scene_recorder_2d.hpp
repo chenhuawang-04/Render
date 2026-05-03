@@ -102,6 +102,7 @@ public:
             .swapchain_recreated_fn = &OnSwapchainRecreatedRenderer<RendererT>,
             .configure_scene_fn = &ConfigureSceneRendererBinding<RendererT>,
             .configure_lighting_fn = &ConfigureSceneLightingBinding<RendererT>,
+            .set_output_target_fn = &SetOverlayOutputTarget<RendererT>,
         };
         UpsertSceneRendererEntry(entry);
     }
@@ -203,6 +204,7 @@ private:
         SwapchainRecreatedFn swapchain_recreated_fn = nullptr;
         ConfigureSceneFn configure_scene_fn = nullptr;
         ConfigureLightingFn configure_lighting_fn = nullptr;
+        SetOverlayOutputFn set_output_target_fn = nullptr;
     };
 
     struct SceneConsumerEntry final {
@@ -360,6 +362,8 @@ private:
     void RefreshRendererCounts() noexcept;
     void ConfigureSceneRenderersForTargets() noexcept;
     void ConfigureSceneConsumerForTargets() noexcept;
+    [[nodiscard]] RenderTargetColorOutputConfig BuildDirectSceneOutputConfig(
+        SceneRenderPassRole pass_role_) const noexcept;
     void EnsureInitialized(const char* operation_) const;
     void EnsureRuntimeBinding(const char* operation_) const;
 

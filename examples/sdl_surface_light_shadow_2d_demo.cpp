@@ -6,6 +6,8 @@
 #include "vr/ecs/system/transform_system.hpp"
 #include "vr/render/light_frame_coordinator.hpp"
 #include "vr/render/render_runtime_host.hpp"
+#include "vr/render/render_view_submission_utils.hpp"
+#include "vr/render/scene_recorder_2d.hpp"
 #include "vr/shadow/shadow_renderer_2d.hpp"
 #include "vr/surface/surface_image_host.hpp"
 #include "vr/surface/surface_renderer_2d.hpp"
@@ -416,43 +418,15 @@ void InitializeSurfaceComponent(Surface2D& component_,
     SurfaceSystem2D::SetVisible(component_, true);
 }
 
-struct SurfaceLightShadow2DRecorder final {
-    vr::shadow::ShadowRenderer2D shadow_renderer{};
-    vr::surface::SurfaceRenderer2D surface_renderer{};
-
-    void PrepareFrame(const vr::render::RuntimePrepareContext& prepare_context_) {
-        shadow_renderer.PrepareFrame(prepare_context_);
-        surface_renderer.PrepareFrame(prepare_context_);
-    }
-
-    void Record(const vr::render::FrameRecordContext& record_context_) {
-        shadow_renderer.Record(record_context_);
-        surface_renderer.Record(record_context_);
-    }
-
-    void OnSwapchainRecreated(std::uint32_t image_count_,
-                              VkExtent2D extent_,
-                              VkFormat format_,
-                              std::uint64_t last_submitted_value_,
-                              std::uint64_t completed_submit_value_) {
-        (void)image_count_;
-        (void)last_submitted_value_;
-        (void)completed_submit_value_;
-        surface_renderer.OnSwapchainRecreated(image_count_,
-                                              extent_,
-                                              format_,
-                                              last_submitted_value_,
-                                              completed_submit_value_);
-    }
-};
-
 } // namespace
 
 int main(int argc_, char** argv_) {
     Runtime runtime{};
     vr::surface::SurfaceUploadHost surface_upload_host{};
     vr::surface::SurfaceImageHost surface_image_host{};
-    SurfaceLightShadow2DRecorder recorder{};
+    vr::render::SceneRecorder2D recorder{};
+    vr::shadow::ShadowRenderer2D shadow_renderer{};
+    vr::surface::SurfaceRenderer2D surface_renderer{};
     vr::render::LightFrameCoordinator<vr::ecs::Dim2> light_frame_coordinator{};
 
     bool runtime_initialized = false;
@@ -484,6 +458,12 @@ int main(int argc_, char** argv_) {
         create_info.poll_events_each_tick = true;
         runtime.Initialize(create_info);
         runtime_initialized = true;
+
+        vr::render::SceneRecorder2DCreateInfo recorder_create_info{};
+        recorder_create_info.scene_target.clear_color = VkClearColorValue{{0.04F, 0.05F, 0.08F, 1.0F}};
+        recorder.Initialize(recorder_create_info);
+        recorder.BindRuntime(runtime);
+        recorder.BindLightFrameCoordinator(&light_frame_coordinator);
 
         vr::surface::SurfaceUploadHostCreateInfo upload_create_info{};
         upload_create_info.frames_in_flight = 2U;
@@ -712,14 +692,14 @@ int main(int argc_, char** argv_) {
         shadow_renderer_create_info.runtime_build.atlas_layer_count = 4U;
         shadow_renderer_create_info.caster_build.max_casters_per_view = 1024U;
         shadow_renderer_create_info.clear_atlas_each_frame = true;
-        recorder.shadow_renderer.Initialize(shadow_renderer_create_info);
+        shadow_renderer.Initialize(shadow_renderer_create_info);
         shadow_renderer_initialized = true;
-        recorder.shadow_renderer.SetSceneData(shadow_components.data(),
-                                              light_transforms.data(),
-                                              static_cast<std::uint32_t>(shadow_components.size()),
-                                              &light_camera,
-                                              caster_bounds.data(),
-                                              static_cast<std::uint32_t>(caster_bounds.size()));
+        shadow_renderer.SetSceneData(shadow_components.data(),
+                                     light_transforms.data(),
+                                     static_cast<std::uint32_t>(shadow_components.size()),
+                                     &light_camera,
+                                     caster_bounds.data(),
+                                     static_cast<std::uint32_t>(caster_bounds.size()));
 
         vr::surface::SurfaceRenderer2DCreateInfo surface_renderer_create_info{};
         surface_renderer_create_info.reserve_component_count =
@@ -735,22 +715,34 @@ int main(int argc_, char** argv_) {
             surface_renderer_create_info.light_ambient = launch_options.ambient;
         }
         surface_renderer_create_info.light_culling_config = light_culling_config;
-        recorder.surface_renderer.Initialize(surface_renderer_create_info);
+        surface_renderer.Initialize(surface_renderer_create_info);
         surface_renderer_initialized = true;
-        recorder.surface_renderer.SetHosts(&surface_upload_host, &surface_image_host);
-        recorder.surface_renderer.SetSceneData(surface_components.data(),
-                                               surface_transforms.data(),
-                                               static_cast<std::uint32_t>(surface_components.size()));
-        recorder.surface_renderer.SetLightFrameCoordinator(&light_frame_coordinator);
-        recorder.surface_renderer.SetShadowFrameCoordinator(&recorder.shadow_renderer.FrameCoordinatorMutable());
-        recorder.surface_renderer.SetShadowAtlasHost(&recorder.shadow_renderer.AtlasHostMutable());
+        surface_renderer.SetHosts(&surface_upload_host, &surface_image_host);
+        surface_renderer.SetSceneData(surface_components.data(),
+                                      surface_transforms.data(),
+                                      static_cast<std::uint32_t>(surface_components.size()));
 
         light_frame_coordinator.SetLightData(light_components.data(),
                                              light_transforms.data(),
                                              static_cast<std::uint32_t>(light_components.size()));
-        light_frame_coordinator.SetCamera(&light_camera);
         light_frame_coordinator.Reserve(static_cast<std::uint32_t>(light_components.size()),
                                         light_culling_config);
+
+        recorder.RegisterShadowRenderer(shadow_renderer);
+        recorder.RegisterSceneRenderer(surface_renderer, vr::render::SceneRenderPassRole::single);
+
+        vr::render::RenderView2D main_view{};
+        vr::render::RenderScenePacket2D main_scene_packet{};
+        vr::render::RefreshExtentBoundWorldSceneSubmission(main_view,
+                                                           main_scene_packet,
+                                                           light_camera,
+                                                           light_camera_transform,
+                                                           runtime.Swapchain().Extent(),
+                                                           0U,
+                                                           vr::render::render_view_lighting_enabled_flag |
+                                                               vr::render::render_view_shadow_enabled_flag,
+                                                           vr::render::render_scene_packet_allow_shadow_flag);
+        recorder.SetFramePacket(&main_scene_packet);
 
         std::cout << "sdl_surface_light_shadow_2d_demo running. Close window to exit.\n";
 
@@ -844,22 +836,33 @@ int main(int argc_, char** argv_) {
                                                 caster_transforms.data(),
                                                 static_cast<std::uint32_t>(caster_bounds.size()));
 
-            recorder.shadow_renderer.SetTransformDirtyHint(light_dirty_indices.data(),
-                                                           static_cast<std::uint32_t>(light_dirty_indices.size()));
-            recorder.shadow_renderer.SetShadowDirtyHint(light_dirty_indices.data(),
-                                                        static_cast<std::uint32_t>(light_dirty_indices.size()));
-            recorder.surface_renderer.SetTransformDirtyHint(surface_dirty_indices.data(),
-                                                            static_cast<std::uint32_t>(surface_dirty_indices.size()));
+            shadow_renderer.SetTransformDirtyHint(light_dirty_indices.data(),
+                                                  static_cast<std::uint32_t>(light_dirty_indices.size()));
+            shadow_renderer.SetShadowDirtyHint(light_dirty_indices.data(),
+                                               static_cast<std::uint32_t>(light_dirty_indices.size()));
+            surface_renderer.SetTransformDirtyHint(surface_dirty_indices.data(),
+                                                   static_cast<std::uint32_t>(surface_dirty_indices.size()));
             light_frame_coordinator.SetTransformDirtyHint(light_dirty_indices.data(),
                                                           static_cast<std::uint32_t>(light_dirty_indices.size()));
+
+            vr::render::RefreshExtentBoundWorldSceneSubmission(main_view,
+                                                               main_scene_packet,
+                                                               light_camera,
+                                                               light_camera_transform,
+                                                               extent,
+                                                               frame_index,
+                                                               vr::render::render_view_lighting_enabled_flag |
+                                                                   vr::render::render_view_shadow_enabled_flag,
+                                                               vr::render::render_scene_packet_allow_shadow_flag);
+            recorder.SetFramePacket(&main_scene_packet);
 
             const Runtime::RuntimeTickResult tick_result = runtime.Tick(recorder);
             ++fps_window_frame_count;
             ++frame_index;
 
             if (launch_options.log_every_frame) {
-                const vr::surface::SurfaceRenderer2DStats surface_stats = recorder.surface_renderer.Stats();
-                const vr::shadow::ShadowRenderer2DStats shadow_stats = recorder.shadow_renderer.Stats();
+                const vr::surface::SurfaceRenderer2DStats surface_stats = surface_renderer.Stats();
+                const vr::shadow::ShadowRenderer2DStats shadow_stats = shadow_renderer.Stats();
                 std::cout << "[FrameDebug] frame=" << frame_index
                           << " fi=" << tick_result.render.frame_index
                           << " ii=" << tick_result.render.image_index
@@ -881,8 +884,8 @@ int main(int argc_, char** argv_) {
                     ? (1000.0F * static_cast<float>(fps_window_frame_count) /
                        static_cast<float>(fps_window_elapsed))
                     : 0.0F;
-                const vr::surface::SurfaceRenderer2DStats surface_stats = recorder.surface_renderer.Stats();
-                const vr::shadow::ShadowRenderer2DStats shadow_stats = recorder.shadow_renderer.Stats();
+                const vr::surface::SurfaceRenderer2DStats surface_stats = surface_renderer.Stats();
+                const vr::shadow::ShadowRenderer2DStats shadow_stats = shadow_renderer.Stats();
 
                 std::cout << "FPS:" << fps
                           << " Frame:" << frame_index
@@ -905,9 +908,10 @@ int main(int argc_, char** argv_) {
             }
         }
 
-        recorder.surface_renderer.Shutdown(runtime.Context());
+        recorder.Shutdown(runtime.Context());
+        surface_renderer.Shutdown(runtime.Context());
         surface_renderer_initialized = false;
-        recorder.shadow_renderer.Shutdown(runtime.Context());
+        shadow_renderer.Shutdown(runtime.Context());
         shadow_renderer_initialized = false;
         surface_image_host.Shutdown(runtime.Context());
         image_host_initialized = false;
@@ -918,12 +922,15 @@ int main(int argc_, char** argv_) {
     } catch (const std::exception& exception_) {
         std::cerr << "sdl_surface_light_shadow_2d_demo failed: " << exception_.what() << '\n';
 
+        if (runtime_initialized && runtime.IsInitialized() && recorder.IsInitialized()) {
+            recorder.Shutdown(runtime.Context());
+        }
         if (surface_renderer_initialized && runtime_initialized && runtime.IsInitialized()) {
-            recorder.surface_renderer.Shutdown(runtime.Context());
+            surface_renderer.Shutdown(runtime.Context());
             surface_renderer_initialized = false;
         }
         if (shadow_renderer_initialized && runtime_initialized && runtime.IsInitialized()) {
-            recorder.shadow_renderer.Shutdown(runtime.Context());
+            shadow_renderer.Shutdown(runtime.Context());
             shadow_renderer_initialized = false;
         }
         if (image_host_initialized && runtime_initialized && runtime.IsInitialized()) {
