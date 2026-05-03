@@ -47,11 +47,30 @@ public:
     }
 
     static void SetMeshFlags(Geometry3D& component_, std::uint16_t flags_) noexcept {
+        if (component_.mesh.flags == flags_) {
+            return;
+        }
         component_.mesh.flags = flags_;
         BumpMeshRevision(component_);
         GeometrySystem<Dim3>::MarkDirty(component_,
                                         geometry_dirty_data_flag |
                                             geometry_dirty_runtime_flag);
+    }
+
+    static void EnableVertexDeformShader(Geometry3D& component_,
+                                         bool enabled_) noexcept {
+        const std::uint16_t next_flags = enabled_
+            ? static_cast<std::uint16_t>(component_.mesh.flags | geometry_mesh_vertex_deform_shader_flag)
+            : static_cast<std::uint16_t>(component_.mesh.flags & ~geometry_mesh_vertex_deform_shader_flag);
+        SetMeshFlags(component_, next_flags);
+    }
+
+    static void EnableFrameSequenceSubmeshAnimation(Geometry3D& component_,
+                                                    bool enabled_) noexcept {
+        const std::uint16_t next_flags = enabled_
+            ? static_cast<std::uint16_t>(component_.mesh.flags | geometry_mesh_frame_sequence_submesh_flag)
+            : static_cast<std::uint16_t>(component_.mesh.flags & ~geometry_mesh_frame_sequence_submesh_flag);
+        SetMeshFlags(component_, next_flags);
     }
 
     static void SetTopology(Geometry3D& component_,
@@ -152,4 +171,3 @@ private:
 };
 
 } // namespace vr::ecs
-

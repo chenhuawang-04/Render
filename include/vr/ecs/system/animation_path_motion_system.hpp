@@ -93,6 +93,8 @@ public:
             return;
         }
         component_.binding.path_handle = path_handle_;
+        component_.runtime.cached_source_revision = 0U;
+        component_.runtime.curve_hint_index = 0U;
         ClockSystem::MarkBindingRevisionDirty(component_);
     }
 
@@ -102,6 +104,7 @@ public:
             return;
         }
         component_.binding.orientation_mode = orientation_mode_;
+        component_.runtime.cached_source_revision = 0U;
         ClockSystem::MarkBindingRevisionDirty(component_);
     }
 

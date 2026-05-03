@@ -43,9 +43,9 @@ public:
                                          animation_dirty_sample_flag |
                                          animation_dirty_runtime_flag;
         component_.runtime.curve_hint_index = 0U;
+        component_.runtime.cached_channel_index = invalid_animation_handle_index;
+        component_.runtime.cached_source_revision = 0U;
         component_.runtime.reserved0 = 0U;
-        component_.runtime.reserved1 = 0U;
-        component_.runtime.reserved2 = 0U;
     }
 
     [[nodiscard]] static std::uint32_t DirtyFlags(const AnimationType& component_) noexcept {
@@ -105,6 +105,8 @@ public:
         }
         component_.playback.clip_handle = clip_handle_;
         component_.runtime.curve_hint_index = 0U;
+        component_.runtime.cached_channel_index = invalid_animation_handle_index;
+        component_.runtime.cached_source_revision = 0U;
         MarkPlaybackRevisionDirty(component_);
     }
 
@@ -222,6 +224,8 @@ public:
                                              animation_completed_flag |
                                              animation_ping_pong_backward_flag);
         component_.runtime.curve_hint_index = 0U;
+        component_.runtime.cached_channel_index = invalid_animation_handle_index;
+        component_.runtime.cached_source_revision = 0U;
         MarkPlaybackRevisionDirty(component_);
     }
 
@@ -230,6 +234,8 @@ public:
         component_.playback.state_flags |= animation_playing_flag;
         component_.playback.state_flags &= ~(animation_completed_flag | animation_ping_pong_backward_flag);
         component_.runtime.curve_hint_index = 0U;
+        component_.runtime.cached_channel_index = invalid_animation_handle_index;
+        component_.runtime.cached_source_revision = 0U;
         MarkPlaybackRevisionDirty(component_);
     }
 
@@ -289,6 +295,7 @@ public:
         component_.playback.time_s = std::clamp(time_s, 0.0F, duration_s);
         if (wrapped || component_.playback.time_s < previous_time) {
             component_.runtime.curve_hint_index = 0U;
+            component_.runtime.cached_channel_index = invalid_animation_handle_index;
         }
         MarkPlaybackRevisionDirty(component_);
         return true;

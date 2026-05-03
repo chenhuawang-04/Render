@@ -316,6 +316,10 @@ void GeometryRenderer3D::Shutdown(VulkanContext& context_) {
     camera_component = nullptr;
     camera_transform = nullptr;
     bounds_components = nullptr;
+    vertex_deform_outputs = nullptr;
+    vertex_deform_output_count = 0U;
+    frame_sequence_outputs = nullptr;
+    frame_sequence_output_count = 0U;
     geometry_resource_host = nullptr;
     geometry_upload_host = nullptr;
     geometry_material_host = nullptr;
@@ -415,6 +419,17 @@ void GeometryRenderer3D::SetAppearanceDirtyHint(const std::uint32_t* dirty_compo
                                                 std::uint32_t dirty_component_count_) noexcept {
     appearance_prepare_bridge.SetDirtyHint(dirty_component_indices_,
                                            dirty_component_count_);
+}
+
+void GeometryRenderer3D::SetAnimationOutputs(
+    const ecs::VertexDeformOutputState* vertex_deform_outputs_,
+    std::uint32_t vertex_deform_output_count_,
+    const ecs::FrameSequenceOutputState* frame_sequence_outputs_,
+    std::uint32_t frame_sequence_output_count_) noexcept {
+    vertex_deform_outputs = vertex_deform_outputs_;
+    vertex_deform_output_count = vertex_deform_output_count_;
+    frame_sequence_outputs = frame_sequence_outputs_;
+    frame_sequence_output_count = frame_sequence_output_count_;
 }
 
 void GeometryRenderer3D::SetAppearanceCoordinator(
@@ -638,6 +653,10 @@ void GeometryRenderer3D::PrepareFrame(const render::RuntimePrepareContext& prepa
         stats.culling_invalid_bounds_count = culling_stats.culled_by_invalid_bounds_count;
         stats.culling_plane_test_count = culling_stats.plane_test_count;
     }
+    build_hint.vertex_deform_outputs = vertex_deform_outputs;
+    build_hint.vertex_deform_output_count = vertex_deform_output_count;
+    build_hint.frame_sequence_outputs = frame_sequence_outputs;
+    build_hint.frame_sequence_output_count = frame_sequence_output_count;
 
     runtime_stats = ecs::GeometryRuntimeSystem<ecs::Dim3>::Build(geometry_components,
                                                                   transforms,
@@ -1853,6 +1872,8 @@ render::GraphicsPipelineId GeometryRenderer3D::EnsurePipelineForMode(VulkanConte
     desc.vertex_input.attributes.push_back({.location = 7U, .binding = 1U, .format = VK_FORMAT_R32G32B32A32_SFLOAT, .offset = 96U});
     desc.vertex_input.attributes.push_back({.location = 8U, .binding = 1U, .format = VK_FORMAT_R8G8B8A8_UNORM, .offset = 112U});
     desc.vertex_input.attributes.push_back({.location = 9U, .binding = 1U, .format = VK_FORMAT_R32_UINT, .offset = 116U});
+    desc.vertex_input.attributes.push_back({.location = 10U, .binding = 1U, .format = VK_FORMAT_R32G32B32A32_SFLOAT, .offset = 144U});
+    desc.vertex_input.attributes.push_back({.location = 11U, .binding = 1U, .format = VK_FORMAT_R32G32B32A32_SFLOAT, .offset = 160U});
 
     switch (topology_mode_) {
     case TopologyMode::triangles:

@@ -78,7 +78,7 @@ VR_TEST_CASE(AnimationClipHost_upsert_find_sample_and_remove,
     }};
     const std::array<vr::animation::CameraScalarChannelDesc, 1U> fov_channels{{
         {
-            .semantic = static_cast<std::uint16_t>(vr::ecs::animation_camera_apply_vertical_fov_flag),
+            .semantic = vr::ecs::CameraTrackSemantic::vertical_fov,
             .channel_mask = 0x1U,
             .reserved0 = 0U,
             .curve = vr::ecs::AnimationCurveView<float>{.keyframes = fov_keys.data(), .keyframe_count = 2U},

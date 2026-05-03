@@ -373,7 +373,11 @@ endif()
 add_library(vulkan_init STATIC
     src/vulkan_context.cpp
     src/animation/animation_clip_host.cpp
+    src/animation/animation_frame_sequence_host.cpp
+    src/animation/animation_morph_host.cpp
     src/animation/animation_path_host.cpp
+    src/animation/animation_skeletal_host.cpp
+    src/animation/animation_vertex_deform_host.cpp
     src/render/frame_command_host.cpp
     src/render/upload_host.cpp
     src/render/descriptor_host.cpp

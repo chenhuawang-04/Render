@@ -73,6 +73,11 @@ struct GeometryMeshRoute final {
     std::uint16_t flags;
 };
 
+enum GeometryMeshAnimationFlags : std::uint16_t {
+    geometry_mesh_vertex_deform_shader_flag = 1U << 0U,
+    geometry_mesh_frame_sequence_submesh_flag = 1U << 1U,
+};
+
 struct GeometryRuntimeRoute final {
     std::uint64_t sort_key;
     std::uint32_t geometry_id;

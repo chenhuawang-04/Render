@@ -364,22 +364,22 @@ ecs::AnimationClipHandle AnimationClipHost::UpsertCameraClip(const CameraAnimati
     record->camera.scalar = AppendChannels<CameraScalarChannelDesc,
                                            CameraScalarChannelRecord,
                                            float,
-                                           std::uint16_t>(
+                                           ecs::CameraTrackSemantic>(
         camera_scalar_channels, scalar_keyframes, desc_.scalar_channels, desc_.scalar_channel_count);
     record->camera.float2 = AppendChannels<CameraFloat2ChannelDesc,
                                            CameraFloat2ChannelRecord,
                                            ecs::Float2,
-                                           std::uint16_t>(
+                                           ecs::CameraTrackSemantic>(
         camera_float2_channels, float2_keyframes, desc_.float2_channels, desc_.float2_channel_count);
     record->camera.float3 = AppendChannels<CameraFloat3ChannelDesc,
                                            CameraFloat3ChannelRecord,
                                            ecs::Float3,
-                                           std::uint16_t>(
+                                           ecs::CameraTrackSemantic>(
         camera_float3_channels, float3_keyframes, desc_.float3_channels, desc_.float3_channel_count);
     record->camera.quaternion = AppendChannels<CameraQuaternionChannelDesc,
                                                CameraQuaternionChannelRecord,
                                                ecs::Quaternion,
-                                               std::uint16_t>(
+                                               ecs::CameraTrackSemantic>(
         camera_quaternion_channels, quaternion_keyframes, desc_.quaternion_channels, desc_.quaternion_channel_count);
 
     stats.clip_count = static_cast<std::uint32_t>(clips.size());

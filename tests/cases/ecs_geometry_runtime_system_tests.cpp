@@ -1,4 +1,5 @@
 #include "support/test_framework.hpp"
+#include "vr/ecs/system/animation_evaluation_context.hpp"
 #include "vr/ecs/system/appearance_runtime_system.hpp"
 #include "vr/ecs/system/appearance_system.hpp"
 #include "vr/ecs/system/geometry_mesh_system.hpp"
@@ -435,6 +436,108 @@ VR_TEST_CASE(EcsGeometryRuntimeSystem_dim3_transform_dirty_hint_updates_single_i
     VR_CHECK(stats1.transform_signature_from_hint);
     VR_CHECK(stats1.transform_update_from_dirty_hint);
     VR_CHECK(stats1.transform_rewritten_instance_count == 1U);
+}
+
+VR_TEST_CASE(EcsGeometryRuntimeSystem_dim3_vertex_deform_partial_update_rewrites_instance_payload,
+             "unit;core;ecs;geometry;runtime") {
+    using Geometry3D = vr::ecs::Geometry<vr::ecs::Dim3>;
+    using MeshSystem = vr::ecs::GeometryMeshSystem;
+    using GeometrySystem3D = vr::ecs::GeometrySystem<vr::ecs::Dim3>;
+    using RuntimeSystem3D = vr::ecs::GeometryRuntimeSystem<vr::ecs::Dim3>;
+    using Transform3D = vr::ecs::Transform<vr::ecs::Dim3>;
+    using TransformSystem3D = vr::ecs::TransformSystem<vr::ecs::Dim3>;
+
+    Geometry3D component{};
+    MeshSystem::Initialize(component);
+    MeshSystem::SetMeshRoute(component, 93U, 0U, 0U);
+    MeshSystem::EnableVertexDeformShader(component, true);
+    GeometrySystem3D::SetMaterialId(component, 5U);
+
+    Transform3D transform{};
+    TransformSystem3D::Initialize(transform);
+    TransformSystem3D::SetLocalPosition(transform, vr::ecs::Float3{.x = 0.0F, .y = 0.0F, .z = 2.0F});
+    TransformSystem3D::UpdateHierarchy(&transform, 1U);
+
+    std::array<vr::ecs::VertexDeformOutputState, 1U> outputs{};
+    std::array<vr::ecs::Float4, 2U> parameters{{
+        {.x = 1.0F, .y = 0.0F, .z = 1.0F, .w = 0.0F},
+        {.x = 0.25F, .y = 2.0F, .z = 0.5F, .w = 0.1F},
+    }};
+    outputs[0U].parameters = parameters.data();
+    outputs[0U].parameter_count = static_cast<std::uint32_t>(parameters.size());
+    outputs[0U].sampled_parameter_count = static_cast<std::uint32_t>(parameters.size());
+
+    vr::ecs::Geometry3DRuntimeScratch scratch{};
+    vr::ecs::Geometry3DRuntimeBuildHint hint{};
+    hint.vertex_deform_outputs = outputs.data();
+    hint.vertex_deform_output_count = static_cast<std::uint32_t>(outputs.size());
+
+    const auto stats0 = RuntimeSystem3D::Build(&component, &transform, 1U, scratch, {}, hint);
+    VR_REQUIRE(stats0.emitted_instance_count == 1U);
+    VR_CHECK(stats0.vertex_deform_animated_instance_count == 1U);
+    VR_CHECK(stats0.vertex_deform_rewritten_instance_count == 1U);
+    VR_CHECK(scratch.instances[0U].deform_param0_x == 1.0F);
+    VR_CHECK(scratch.instances[0U].deform_param1_y == 2.0F);
+
+    parameters[0U].x = 3.0F;
+    parameters[1U].w = 0.4F;
+
+    const auto stats1 = RuntimeSystem3D::Build(&component, &transform, 1U, scratch, {}, hint);
+    VR_CHECK(stats1.cache_status == vr::ecs::GeometryRuntimeCacheStatus::hit_partial_update);
+    VR_CHECK(stats1.cache_reused);
+    VR_CHECK(!stats1.transform_only_update);
+    VR_CHECK(stats1.vertex_deform_rewritten_instance_count == 1U);
+    VR_CHECK(scratch.instances[0U].deform_param0_x == 3.0F);
+    VR_CHECK(scratch.instances[0U].deform_param1_w == 0.4F);
+}
+
+VR_TEST_CASE(EcsGeometryRuntimeSystem_dim3_frame_sequence_signature_rebuilds_submesh_batches,
+             "unit;core;ecs;geometry;runtime") {
+    using Geometry3D = vr::ecs::Geometry<vr::ecs::Dim3>;
+    using MeshSystem = vr::ecs::GeometryMeshSystem;
+    using GeometrySystem3D = vr::ecs::GeometrySystem<vr::ecs::Dim3>;
+    using RuntimeSystem3D = vr::ecs::GeometryRuntimeSystem<vr::ecs::Dim3>;
+    using Transform3D = vr::ecs::Transform<vr::ecs::Dim3>;
+    using TransformSystem3D = vr::ecs::TransformSystem<vr::ecs::Dim3>;
+
+    Geometry3D component{};
+    MeshSystem::Initialize(component);
+    MeshSystem::SetMeshRoute(component, 109U, 2U, 0U);
+    MeshSystem::EnableFrameSequenceSubmeshAnimation(component, true);
+    GeometrySystem3D::SetMaterialId(component, 9U);
+
+    Transform3D transform{};
+    TransformSystem3D::Initialize(transform);
+    TransformSystem3D::SetLocalPosition(transform, vr::ecs::Float3{.x = 1.0F, .y = 0.0F, .z = 3.0F});
+    TransformSystem3D::UpdateHierarchy(&transform, 1U);
+
+    std::array<vr::ecs::FrameSequenceOutputState, 1U> outputs{};
+    outputs[0U].frame_index_a = 1U;
+    outputs[0U].frame_index_b = 2U;
+    outputs[0U].frame_count = 8U;
+    outputs[0U].blend_alpha = 0.25F;
+
+    vr::ecs::Geometry3DRuntimeScratch scratch{};
+    vr::ecs::Geometry3DRuntimeBuildHint hint{};
+    hint.frame_sequence_outputs = outputs.data();
+    hint.frame_sequence_output_count = static_cast<std::uint32_t>(outputs.size());
+
+    const auto stats0 = RuntimeSystem3D::Build(&component, &transform, 1U, scratch, {}, hint);
+    VR_REQUIRE(stats0.emitted_instance_count == 1U);
+    VR_CHECK(stats0.frame_sequence_animated_instance_count == 1U);
+    VR_CHECK(scratch.instances[0U].submesh_index == 3U);
+    VR_REQUIRE(!scratch.draw_batches.empty());
+    VR_CHECK(scratch.draw_batches[0U].submesh_index == 3U);
+
+    outputs[0U].frame_index_a = 4U;
+    outputs[0U].frame_index_b = 5U;
+    outputs[0U].blend_alpha = 0.75F;
+
+    const auto stats1 = RuntimeSystem3D::Build(&component, &transform, 1U, scratch, {}, hint);
+    VR_CHECK(stats1.cache_status == vr::ecs::GeometryRuntimeCacheStatus::miss);
+    VR_CHECK(stats1.cache_miss_reason == vr::ecs::GeometryRuntimeCacheMissReason::animation_signature_changed);
+    VR_CHECK(scratch.instances[0U].submesh_index == 6U);
+    VR_CHECK(scratch.draw_batches[0U].submesh_index == 6U);
 }
 
 VR_TEST_CASE(EcsGeometryRuntimeSystem_dim3_reports_cache_miss_reasons_and_epoch_progress,

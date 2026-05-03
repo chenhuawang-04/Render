@@ -2,6 +2,7 @@
 
 #include "Center/Memory/Container/Vector/McVector.hpp"
 #include "vr/ecs/component/transform_component.hpp"
+#include "vr/ecs/system/animation_evaluation_context.hpp"
 #include "vr/ecs/system/geometry_batch_system.hpp"
 #include "vr/ecs/system/geometry_path_system.hpp"
 #include "vr/ecs/system/spatial_math.hpp"
@@ -36,6 +37,7 @@ enum class GeometryRuntimeCacheMissReason : std::uint8_t {
     visibility_signature_changed = 7U,
     transform_signature_changed = 8U,
     build_config_changed = 9U,
+    animation_signature_changed = 10U,
 };
 
 [[nodiscard]] constexpr std::uint32_t NextRuntimeCacheEpoch(std::uint32_t current_epoch_) noexcept {
@@ -162,6 +164,16 @@ struct Geometry3DGpuInstance final {
     std::uint32_t component_index;
     std::uint32_t user_data;
     std::uint32_t reserved2;
+
+    float deform_param0_x;
+    float deform_param0_y;
+    float deform_param0_z;
+    float deform_param0_w;
+
+    float deform_param1_x;
+    float deform_param1_y;
+    float deform_param1_z;
+    float deform_param1_w;
 };
 
 struct Geometry3DDrawBatch final {
@@ -185,8 +197,12 @@ struct Geometry3DRuntimeBuildHint final {
     std::uint64_t external_visible_set_signature = 0U;
     const std::uint32_t* transform_dirty_component_indices = nullptr;
     const std::uint32_t* visible_component_indices = nullptr;
+    const VertexDeformOutputState* vertex_deform_outputs = nullptr;
+    const FrameSequenceOutputState* frame_sequence_outputs = nullptr;
     std::uint32_t transform_dirty_component_count = 0U;
     std::uint32_t visible_component_count = 0U;
+    std::uint32_t vertex_deform_output_count = 0U;
+    std::uint32_t frame_sequence_output_count = 0U;
     std::uint8_t use_external_geometry_signature = 0U;
     std::uint8_t use_external_transform_signature = 0U;
     std::uint8_t use_visible_component_indices = 0U;
@@ -199,6 +215,9 @@ struct Geometry3DRuntimeBuildStats final {
     std::uint32_t emitted_instance_count = 0U;
     std::uint32_t emitted_batch_count = 0U;
     std::uint32_t transform_rewritten_instance_count = 0U;
+    std::uint32_t vertex_deform_rewritten_instance_count = 0U;
+    std::uint32_t vertex_deform_animated_instance_count = 0U;
+    std::uint32_t frame_sequence_animated_instance_count = 0U;
     std::uint32_t depth_test_batch_count = 0U;
     std::uint32_t depth_write_batch_count = 0U;
     std::uint32_t shadow_cast_batch_count = 0U;
@@ -206,6 +225,8 @@ struct Geometry3DRuntimeBuildStats final {
     std::uint64_t geometry_signature = 0U;
     std::uint64_t transform_signature = 0U;
     std::uint64_t visible_set_signature = 0U;
+    std::uint64_t vertex_deform_signature = 0U;
+    std::uint64_t frame_sequence_signature = 0U;
     GeometryRuntimeCacheStatus cache_status = GeometryRuntimeCacheStatus::miss;
     GeometryRuntimeCacheMissReason cache_miss_reason = GeometryRuntimeCacheMissReason::none;
     bool cache_reused = false;
@@ -227,6 +248,8 @@ struct Geometry3DRuntimeCache final {
     std::uint64_t geometry_signature = 0U;
     std::uint64_t transform_signature = 0U;
     std::uint64_t visible_set_signature = 0U;
+    std::uint64_t vertex_deform_signature = 0U;
+    std::uint64_t frame_sequence_signature = 0U;
     std::uint32_t epoch = 0U;
     GeometryRuntimeMcVector<std::uint32_t> instance_world_revisions{};
     GeometryRuntimeMcVector<std::uint32_t> component_to_instance_index{};
@@ -831,6 +854,12 @@ public:
         const bool use_visible_component_indices = build_hint_.use_visible_component_indices != 0U;
         const bool use_external_visible_set_signature =
             build_hint_.use_external_visible_set_signature != 0U;
+        const bool use_vertex_deform_outputs =
+            build_hint_.vertex_deform_outputs != nullptr &&
+            build_hint_.vertex_deform_output_count > 0U;
+        const bool use_frame_sequence_outputs =
+            build_hint_.frame_sequence_outputs != nullptr &&
+            build_hint_.frame_sequence_output_count > 0U;
         const std::uint32_t* candidate_component_indices = use_visible_component_indices
             ? build_hint_.visible_component_indices
             : nullptr;
@@ -858,10 +887,30 @@ public:
                                         candidate_component_indices,
                                         candidate_component_count,
                                         use_visible_component_indices);
+        const std::uint64_t vertex_deform_signature = use_vertex_deform_outputs
+            ? ComputeVertexDeformSignature(components_,
+                                           component_count_,
+                                           candidate_component_indices,
+                                           candidate_component_count,
+                                           use_visible_component_indices,
+                                           build_hint_.vertex_deform_outputs,
+                                           build_hint_.vertex_deform_output_count)
+            : 0U;
+        const std::uint64_t frame_sequence_signature = use_frame_sequence_outputs
+            ? ComputeFrameSequenceSignature(components_,
+                                            component_count_,
+                                            candidate_component_indices,
+                                            candidate_component_count,
+                                            use_visible_component_indices,
+                                            build_hint_.frame_sequence_outputs,
+                                            build_hint_.frame_sequence_output_count)
+            : 0U;
         stats.candidate_component_count = candidate_component_count;
         stats.geometry_signature = geometry_signature;
         stats.transform_signature = transform_signature;
         stats.visible_set_signature = visible_set_signature;
+        stats.vertex_deform_signature = vertex_deform_signature;
+        stats.frame_sequence_signature = frame_sequence_signature;
         stats.used_visible_component_indices = use_visible_component_indices;
         stats.geometry_signature_from_hint = use_external_geometry_signature;
         stats.transform_signature_from_hint = use_external_transform_signature;
@@ -871,21 +920,26 @@ public:
                                                         transforms_,
                                                         component_count_,
                                                         geometry_signature,
+                                                        frame_sequence_signature,
                                                         visible_set_signature,
                                                         candidate_component_count,
                                                         build_config_);
         stats.cache_key_matched = cache_probe.key_matched;
         if (cache_probe.key_matched) {
-            if (scratch_.cache.transform_signature == transform_signature) {
+            if (scratch_.cache.transform_signature == transform_signature &&
+                scratch_.cache.vertex_deform_signature == vertex_deform_signature) {
                 stats = scratch_.cache.last_stats;
                 stats.geometry_signature = geometry_signature;
                 stats.transform_signature = transform_signature;
                 stats.visible_set_signature = visible_set_signature;
+                stats.vertex_deform_signature = vertex_deform_signature;
+                stats.frame_sequence_signature = frame_sequence_signature;
                 stats.cache_status = GeometryRuntimeCacheStatus::hit_reused;
                 stats.cache_miss_reason = GeometryRuntimeCacheMissReason::none;
                 stats.cache_reused = true;
                 stats.transform_only_update = false;
                 stats.transform_rewritten_instance_count = 0U;
+                stats.vertex_deform_rewritten_instance_count = 0U;
                 stats.used_visible_component_indices = use_visible_component_indices;
                 stats.candidate_component_count = candidate_component_count;
                 stats.cache_valid_before_build = true;
@@ -909,14 +963,29 @@ public:
                                             build_hint_.transform_dirty_component_indices,
                                             build_hint_.transform_dirty_component_count,
                                             used_dirty_hint);
+            stats.vertex_deform_rewritten_instance_count =
+                UpdateInstanceVertexDeformParameters(scratch_.instances,
+                                                    components_,
+                                                    component_count_,
+                                                    build_hint_.vertex_deform_outputs,
+                                                    build_hint_.vertex_deform_output_count);
             scratch_.cache.transform_signature = transform_signature;
+            scratch_.cache.vertex_deform_signature = vertex_deform_signature;
             stats.geometry_signature = geometry_signature;
             stats.transform_signature = transform_signature;
             stats.visible_set_signature = visible_set_signature;
-            stats.cache_status = GeometryRuntimeCacheStatus::hit_partial_update;
+            stats.vertex_deform_signature = vertex_deform_signature;
+            stats.frame_sequence_signature = frame_sequence_signature;
+            stats.cache_status =
+                (stats.transform_rewritten_instance_count > 0U ||
+                 stats.vertex_deform_rewritten_instance_count > 0U)
+                    ? GeometryRuntimeCacheStatus::hit_partial_update
+                    : GeometryRuntimeCacheStatus::hit_reused;
             stats.cache_miss_reason = GeometryRuntimeCacheMissReason::none;
             stats.cache_reused = true;
-            stats.transform_only_update = true;
+            stats.transform_only_update =
+                stats.transform_rewritten_instance_count > 0U &&
+                stats.vertex_deform_rewritten_instance_count == 0U;
             stats.used_visible_component_indices = use_visible_component_indices;
             stats.candidate_component_count = candidate_component_count;
             stats.cache_valid_before_build = true;
@@ -954,6 +1023,8 @@ public:
             stats.geometry_signature = geometry_signature;
             stats.transform_signature = transform_signature;
             stats.visible_set_signature = visible_set_signature;
+            stats.vertex_deform_signature = vertex_deform_signature;
+            stats.frame_sequence_signature = frame_sequence_signature;
             stats.used_visible_component_indices = use_visible_component_indices;
             stats.candidate_component_count = candidate_component_count;
             stats.cache_valid_before_build = scratch_.cache.valid;
@@ -971,6 +1042,8 @@ public:
                             geometry_signature,
                             transform_signature,
                             visible_set_signature,
+                            vertex_deform_signature,
+                            frame_sequence_signature,
                             candidate_component_count,
                             build_config_,
                             stats);
@@ -1013,10 +1086,28 @@ public:
             instance.params = PackParams(component);
             instance.geometry_id = component.runtime.route.geometry_id;
             instance.material_id = ResolveEffectiveMaterialId(component.runtime.route);
-            instance.submesh_index = component.mesh.submesh_index;
+            instance.submesh_index = ResolveAnimatedSubmeshIndex(component,
+                                                                 item.component_index,
+                                                                 build_hint_.frame_sequence_outputs,
+                                                                 build_hint_.frame_sequence_output_count);
             instance.component_index = item.component_index;
             instance.user_data = component.runtime.route.user_data;
             instance.reserved2 = 0U;
+            const DeformInstanceParams deform_params = ResolveVertexDeformInstanceParams(
+                component,
+                item.component_index,
+                build_hint_.vertex_deform_outputs,
+                build_hint_.vertex_deform_output_count);
+            WriteVertexDeformParamsToInstance(instance, deform_params);
+            if (deform_params.enabled) {
+                ++stats.vertex_deform_animated_instance_count;
+            }
+            if (IsFrameSequenceAnimated(component,
+                                        item.component_index,
+                                        build_hint_.frame_sequence_outputs,
+                                        build_hint_.frame_sequence_output_count)) {
+                ++stats.frame_sequence_animated_instance_count;
+            }
             scratch_.instances[i] = instance;
             if (item.component_index < scratch_.cache.component_to_instance_index.size()) {
                 scratch_.cache.component_to_instance_index[item.component_index] = i;
@@ -1049,9 +1140,12 @@ public:
         stats.emitted_instance_count = static_cast<std::uint32_t>(scratch_.instances.size());
         stats.emitted_batch_count = static_cast<std::uint32_t>(scratch_.draw_batches.size());
         stats.transform_rewritten_instance_count = stats.emitted_instance_count;
+        stats.vertex_deform_rewritten_instance_count = stats.vertex_deform_animated_instance_count;
         stats.geometry_signature = geometry_signature;
         stats.transform_signature = transform_signature;
         stats.visible_set_signature = visible_set_signature;
+        stats.vertex_deform_signature = vertex_deform_signature;
+        stats.frame_sequence_signature = frame_sequence_signature;
         stats.cache_status = GeometryRuntimeCacheStatus::miss;
         stats.cache_miss_reason = cache_probe.miss_reason;
         stats.cache_reused = false;
@@ -1072,6 +1166,8 @@ public:
                         geometry_signature,
                         transform_signature,
                         visible_set_signature,
+                        vertex_deform_signature,
+                        frame_sequence_signature,
                         candidate_component_count,
                         build_config_,
                         stats);
@@ -1103,6 +1199,8 @@ private:
         cache_.geometry_signature = 0U;
         cache_.transform_signature = 0U;
         cache_.visible_set_signature = 0U;
+        cache_.vertex_deform_signature = 0U;
+        cache_.frame_sequence_signature = 0U;
         cache_.epoch = 0U;
         cache_.instance_world_revisions.clear();
         cache_.component_to_instance_index.clear();
@@ -1116,6 +1214,8 @@ private:
                                 std::uint64_t geometry_signature_,
                                 std::uint64_t transform_signature_,
                                 std::uint64_t visible_set_signature_,
+                                std::uint64_t vertex_deform_signature_,
+                                std::uint64_t frame_sequence_signature_,
                                 std::uint32_t candidate_component_count_,
                                 const Geometry3DRuntimeBuildConfig& build_config_,
                                 Geometry3DRuntimeBuildStats& stats_) {
@@ -1126,6 +1226,8 @@ private:
         cache_.geometry_signature = geometry_signature_;
         cache_.transform_signature = transform_signature_;
         cache_.visible_set_signature = visible_set_signature_;
+        cache_.vertex_deform_signature = vertex_deform_signature_;
+        cache_.frame_sequence_signature = frame_sequence_signature_;
         cache_.build_config = build_config_;
         cache_.epoch = NextRuntimeCacheEpoch(cache_.epoch);
         stats_.cache_epoch = cache_.epoch;
@@ -1184,6 +1286,7 @@ private:
                                                      const TransformType* transforms_,
                                                      std::uint32_t component_count_,
                                                      std::uint64_t geometry_signature_,
+                                                     std::uint64_t frame_sequence_signature_,
                                                      std::uint64_t visible_set_signature_,
                                                      std::uint32_t candidate_component_count_,
                                                      const Geometry3DRuntimeBuildConfig& build_config_) noexcept {
@@ -1215,6 +1318,12 @@ private:
             return CacheProbeResult{
                 .key_matched = false,
                 .miss_reason = GeometryRuntimeCacheMissReason::geometry_signature_changed
+            };
+        }
+        if (cache_.frame_sequence_signature != frame_sequence_signature_) {
+            return CacheProbeResult{
+                .key_matched = false,
+                .miss_reason = GeometryRuntimeCacheMissReason::animation_signature_changed
             };
         }
         if (cache_.visible_set_signature != visible_set_signature_ ||
@@ -1287,6 +1396,120 @@ private:
         HashCombine(hash_, static_cast<std::uint64_t>(FloatBits(component_.runtime.bounds_max.z)));
     }
 
+    struct DeformInstanceParams final {
+        Float4 params0{.x = 0.0F, .y = 0.0F, .z = 0.0F, .w = 0.0F};
+        Float4 params1{.x = 0.0F, .y = 0.0F, .z = 0.0F, .w = 0.0F};
+        bool enabled = false;
+    };
+
+    [[nodiscard]] static bool IsVertexDeformEnabled(const GeometryType& component_) noexcept {
+        return (component_.mesh.flags & geometry_mesh_vertex_deform_shader_flag) != 0U;
+    }
+
+    [[nodiscard]] static bool IsFrameSequenceSubmeshEnabled(const GeometryType& component_) noexcept {
+        return (component_.mesh.flags & geometry_mesh_frame_sequence_submesh_flag) != 0U;
+    }
+
+    [[nodiscard]] static const VertexDeformOutputState* ResolveVertexDeformOutput(
+        std::uint32_t component_index_,
+        const VertexDeformOutputState* outputs_,
+        std::uint32_t output_count_) noexcept {
+        if (outputs_ == nullptr || component_index_ >= output_count_) {
+            return nullptr;
+        }
+        return outputs_ + component_index_;
+    }
+
+    [[nodiscard]] static const FrameSequenceOutputState* ResolveFrameSequenceOutput(
+        std::uint32_t component_index_,
+        const FrameSequenceOutputState* outputs_,
+        std::uint32_t output_count_) noexcept {
+        if (outputs_ == nullptr || component_index_ >= output_count_) {
+            return nullptr;
+        }
+        return outputs_ + component_index_;
+    }
+
+    [[nodiscard]] static DeformInstanceParams ResolveVertexDeformInstanceParams(
+        const GeometryType& component_,
+        std::uint32_t component_index_,
+        const VertexDeformOutputState* outputs_,
+        std::uint32_t output_count_) noexcept {
+        DeformInstanceParams result{};
+        if (!IsVertexDeformEnabled(component_)) {
+            return result;
+        }
+
+        const VertexDeformOutputState* output = ResolveVertexDeformOutput(component_index_,
+                                                                          outputs_,
+                                                                          output_count_);
+        if (output == nullptr || output->parameters == nullptr || output->sampled_parameter_count == 0U) {
+            return result;
+        }
+
+        result.params0 = output->parameters[0U];
+        if (output->sampled_parameter_count > 1U && output->parameter_count > 1U) {
+            result.params1 = output->parameters[1U];
+        }
+        result.enabled = true;
+        return result;
+    }
+
+    [[nodiscard]] static bool IsFrameSequenceAnimated(const GeometryType& component_,
+                                                      std::uint32_t component_index_,
+                                                      const FrameSequenceOutputState* outputs_,
+                                                      std::uint32_t output_count_) noexcept {
+        if (!IsFrameSequenceSubmeshEnabled(component_)) {
+            return false;
+        }
+        const FrameSequenceOutputState* output = ResolveFrameSequenceOutput(component_index_,
+                                                                            outputs_,
+                                                                            output_count_);
+        return output != nullptr && output->frame_count > 0U;
+    }
+
+    [[nodiscard]] static std::uint32_t ResolveAnimatedSubmeshIndex(
+        const GeometryType& component_,
+        std::uint32_t component_index_,
+        const FrameSequenceOutputState* outputs_,
+        std::uint32_t output_count_) noexcept {
+        if (!IsFrameSequenceSubmeshEnabled(component_)) {
+            return component_.mesh.submesh_index;
+        }
+
+        const FrameSequenceOutputState* output = ResolveFrameSequenceOutput(component_index_,
+                                                                            outputs_,
+                                                                            output_count_);
+        if (output == nullptr || output->frame_count == 0U) {
+            return component_.mesh.submesh_index;
+        }
+        return component_.mesh.submesh_index + output->frame_index_a;
+    }
+
+    static void WriteVertexDeformParamsToInstance(Geometry3DGpuInstance& instance_,
+                                                  const DeformInstanceParams& params_) noexcept {
+        instance_.deform_param0_x = params_.params0.x;
+        instance_.deform_param0_y = params_.params0.y;
+        instance_.deform_param0_z = params_.params0.z;
+        instance_.deform_param0_w = params_.params0.w;
+        instance_.deform_param1_x = params_.params1.x;
+        instance_.deform_param1_y = params_.params1.y;
+        instance_.deform_param1_z = params_.params1.z;
+        instance_.deform_param1_w = params_.params1.w;
+    }
+
+    [[nodiscard]] static bool InstanceVertexDeformParamsEqual(const Geometry3DGpuInstance& instance_,
+                                                              const DeformInstanceParams& params_) noexcept {
+        return instance_.deform_param0_x == params_.params0.x &&
+               instance_.deform_param0_y == params_.params0.y &&
+               instance_.deform_param0_z == params_.params0.z &&
+               instance_.deform_param0_w == params_.params0.w &&
+               instance_.deform_param1_x == params_.params1.x &&
+               instance_.deform_param1_y == params_.params1.y &&
+               instance_.deform_param1_z == params_.params1.z &&
+               instance_.deform_param1_w == params_.params1.w;
+    }
+
     [[nodiscard]] static std::uint64_t ComputeGeometrySignature(
         const GeometryType* components_,
         std::uint32_t component_count_,
@@ -1355,6 +1578,114 @@ private:
                 continue;
             }
             HashCombine(hash, static_cast<std::uint64_t>(transforms_[component_index].runtime.world_revision));
+        }
+        return hash;
+    }
+
+    [[nodiscard]] static std::uint64_t ComputeVertexDeformSignature(
+        const GeometryType* components_,
+        std::uint32_t component_count_,
+        const std::uint32_t* candidate_component_indices_,
+        std::uint32_t candidate_component_count_,
+        bool use_candidate_indices_,
+        const VertexDeformOutputState* outputs_,
+        std::uint32_t output_count_) noexcept {
+        std::uint64_t hash = 0xa8d6f1b34c2e9087ULL;
+        if (components_ == nullptr || component_count_ == 0U || outputs_ == nullptr || output_count_ == 0U) {
+            return hash;
+        }
+
+        const auto hash_component = [&](std::uint32_t component_index_) noexcept {
+            if (component_index_ >= component_count_) {
+                return;
+            }
+            const GeometryType& component = components_[component_index_];
+            if (component.runtime.route.visible == 0U || !IsVertexDeformEnabled(component)) {
+                return;
+            }
+
+            const DeformInstanceParams params = ResolveVertexDeformInstanceParams(component,
+                                                                                  component_index_,
+                                                                                  outputs_,
+                                                                                  output_count_);
+            HashCombine(hash, static_cast<std::uint64_t>(component_index_));
+            HashCombine(hash, static_cast<std::uint64_t>(params.enabled ? 1U : 0U));
+            HashCombine(hash, static_cast<std::uint64_t>(FloatBits(params.params0.x)));
+            HashCombine(hash, static_cast<std::uint64_t>(FloatBits(params.params0.y)));
+            HashCombine(hash, static_cast<std::uint64_t>(FloatBits(params.params0.z)));
+            HashCombine(hash, static_cast<std::uint64_t>(FloatBits(params.params0.w)));
+            HashCombine(hash, static_cast<std::uint64_t>(FloatBits(params.params1.x)));
+            HashCombine(hash, static_cast<std::uint64_t>(FloatBits(params.params1.y)));
+            HashCombine(hash, static_cast<std::uint64_t>(FloatBits(params.params1.z)));
+            HashCombine(hash, static_cast<std::uint64_t>(FloatBits(params.params1.w)));
+        };
+
+        if (!use_candidate_indices_) {
+            for (std::uint32_t i = 0U; i < component_count_; ++i) {
+                hash_component(i);
+            }
+            return hash;
+        }
+
+        HashCombine(hash, static_cast<std::uint64_t>(candidate_component_count_));
+        if (candidate_component_indices_ == nullptr) {
+            return hash;
+        }
+        for (std::uint32_t i = 0U; i < candidate_component_count_; ++i) {
+            hash_component(candidate_component_indices_[i]);
+        }
+        return hash;
+    }
+
+    [[nodiscard]] static std::uint64_t ComputeFrameSequenceSignature(
+        const GeometryType* components_,
+        std::uint32_t component_count_,
+        const std::uint32_t* candidate_component_indices_,
+        std::uint32_t candidate_component_count_,
+        bool use_candidate_indices_,
+        const FrameSequenceOutputState* outputs_,
+        std::uint32_t output_count_) noexcept {
+        std::uint64_t hash = 0x7c51de93ab40621fULL;
+        if (components_ == nullptr || component_count_ == 0U || outputs_ == nullptr || output_count_ == 0U) {
+            return hash;
+        }
+
+        const auto hash_component = [&](std::uint32_t component_index_) noexcept {
+            if (component_index_ >= component_count_) {
+                return;
+            }
+            const GeometryType& component = components_[component_index_];
+            if (component.runtime.route.visible == 0U || !IsFrameSequenceSubmeshEnabled(component)) {
+                return;
+            }
+
+            const FrameSequenceOutputState* output = ResolveFrameSequenceOutput(component_index_,
+                                                                                outputs_,
+                                                                                output_count_);
+            HashCombine(hash, static_cast<std::uint64_t>(component_index_));
+            if (output == nullptr) {
+                HashCombine(hash, 0xffffffffffffffffULL);
+                return;
+            }
+            HashCombine(hash, static_cast<std::uint64_t>(output->frame_index_a));
+            HashCombine(hash, static_cast<std::uint64_t>(output->frame_index_b));
+            HashCombine(hash, static_cast<std::uint64_t>(output->frame_count));
+            HashCombine(hash, static_cast<std::uint64_t>(FloatBits(output->blend_alpha)));
+        };
+
+        if (!use_candidate_indices_) {
+            for (std::uint32_t i = 0U; i < component_count_; ++i) {
+                hash_component(i);
+            }
+            return hash;
+        }
+
+        HashCombine(hash, static_cast<std::uint64_t>(candidate_component_count_));
+        if (candidate_component_indices_ == nullptr) {
+            return hash;
+        }
+        for (std::uint32_t i = 0U; i < candidate_component_count_; ++i) {
+            hash_component(candidate_component_indices_[i]);
         }
         return hash;
     }
@@ -1524,18 +1855,48 @@ private:
         return rewritten_count;
     }
 
+    [[nodiscard]] static std::uint32_t UpdateInstanceVertexDeformParameters(
+        GeometryRuntimeMcVector<Geometry3DGpuInstance>& instances_,
+        const GeometryType* components_,
+        std::uint32_t component_count_,
+        const VertexDeformOutputState* outputs_,
+        std::uint32_t output_count_) {
+        if (instances_.empty() || components_ == nullptr || outputs_ == nullptr || output_count_ == 0U) {
+            return 0U;
+        }
+
+        std::uint32_t rewritten_count = 0U;
+        for (Geometry3DGpuInstance& instance : instances_) {
+            if (instance.component_index >= component_count_) {
+                continue;
+            }
+            const GeometryType& component = components_[instance.component_index];
+            const DeformInstanceParams params = ResolveVertexDeformInstanceParams(component,
+                                                                                  instance.component_index,
+                                                                                  outputs_,
+                                                                                  output_count_);
+            if (InstanceVertexDeformParamsEqual(instance, params)) {
+                continue;
+            }
+            WriteVertexDeformParamsToInstance(instance, params);
+            ++rewritten_count;
+        }
+        return rewritten_count;
+    }
+
     static void AppendOrMergeBatch(const GeometryType& component_,
                                    std::uint64_t sort_key_,
                                    std::uint32_t component_index_,
                                    std::uint32_t instance_index_,
                                    ScratchType& scratch_) {
         const std::uint32_t params = PackParams(component_);
+        const std::uint32_t animated_submesh_index = scratch_.instances[instance_index_].submesh_index;
         if (!scratch_.draw_batches.empty()) {
             Geometry3DDrawBatch& last = scratch_.draw_batches.back();
             if (last.sort_key == sort_key_ &&
                 last.geometry_id == component_.runtime.route.geometry_id &&
                 last.material_id == ResolveEffectiveMaterialId(component_.runtime.route) &&
-                last.submesh_index == component_.mesh.submesh_index &&
+                last.submesh_index == animated_submesh_index &&
                 last.params == params &&
                 last.instance_begin + last.instance_count == instance_index_) {
                 ++last.instance_count;
@@ -1549,7 +1910,7 @@ private:
         batch.instance_count = 1U;
         batch.geometry_id = component_.runtime.route.geometry_id;
         batch.material_id = ResolveEffectiveMaterialId(component_.runtime.route);
-        batch.submesh_index = component_.mesh.submesh_index;
+        batch.submesh_index = animated_submesh_index;
         batch.first_component_index = component_index_;
         batch.params = params;
         scratch_.draw_batches.push_back(batch);

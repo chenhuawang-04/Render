@@ -92,6 +92,16 @@ enum class MaterialTrackSemantic : std::uint16_t {
     appearance_emissive_intensity = 19U,
 };
 
+enum class CameraTrackSemantic : std::uint16_t {
+    none = 0U,
+    transform_position = 1U,
+    transform_rotation = 2U,
+    vertical_fov = 3U,
+    orthographic_height = 4U,
+    zoom = 5U,
+    shake_offset = 6U,
+};
+
 enum class AnimationPathOrientationMode : std::uint8_t {
     none = 0U,
     sampled = 1U,
@@ -159,9 +169,9 @@ struct AnimationRuntimeState final {
     std::uint32_t sample_revision;
     std::uint32_t dirty_flags;
     std::uint32_t curve_hint_index;
+    std::uint32_t cached_channel_index;
+    std::uint32_t cached_source_revision;
     std::uint32_t reserved0;
-    std::uint32_t reserved1;
-    std::uint32_t reserved2;
 };
 
 struct PropertyTrackBinding final {

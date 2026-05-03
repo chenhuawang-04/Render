@@ -44,10 +44,10 @@ using MaterialScalarChannelDesc = TypedAnimationChannelDesc<ecs::MaterialTrackSe
 using MaterialFloat4ChannelDesc = TypedAnimationChannelDesc<ecs::MaterialTrackSemantic, ecs::Float4>;
 using MaterialColorChannelDesc = TypedAnimationChannelDesc<ecs::MaterialTrackSemantic, ecs::Rgba8>;
 
-using CameraScalarChannelDesc = TypedAnimationChannelDesc<std::uint16_t, float>;
-using CameraFloat2ChannelDesc = TypedAnimationChannelDesc<std::uint16_t, ecs::Float2>;
-using CameraFloat3ChannelDesc = TypedAnimationChannelDesc<std::uint16_t, ecs::Float3>;
-using CameraQuaternionChannelDesc = TypedAnimationChannelDesc<std::uint16_t, ecs::Quaternion>;
+using CameraScalarChannelDesc = TypedAnimationChannelDesc<ecs::CameraTrackSemantic, float>;
+using CameraFloat2ChannelDesc = TypedAnimationChannelDesc<ecs::CameraTrackSemantic, ecs::Float2>;
+using CameraFloat3ChannelDesc = TypedAnimationChannelDesc<ecs::CameraTrackSemantic, ecs::Float3>;
+using CameraQuaternionChannelDesc = TypedAnimationChannelDesc<ecs::CameraTrackSemantic, ecs::Quaternion>;
 
 struct PropertyAnimationClipDesc final {
     std::uint32_t clip_id = 0U;
@@ -167,10 +167,10 @@ using MaterialScalarChannelRecord = AnimationChannelRecord<ecs::MaterialTrackSem
 using MaterialFloat4ChannelRecord = AnimationChannelRecord<ecs::MaterialTrackSemantic, AnimationFloat4ValueTag>;
 using MaterialColorChannelRecord = AnimationChannelRecord<ecs::MaterialTrackSemantic, AnimationColorValueTag>;
 
-using CameraScalarChannelRecord = AnimationChannelRecord<std::uint16_t, AnimationScalarValueTag>;
-using CameraFloat2ChannelRecord = AnimationChannelRecord<std::uint16_t, AnimationFloat2ValueTag>;
-using CameraFloat3ChannelRecord = AnimationChannelRecord<std::uint16_t, AnimationFloat3ValueTag>;
-using CameraQuaternionChannelRecord = AnimationChannelRecord<std::uint16_t, AnimationQuaternionValueTag>;
+using CameraScalarChannelRecord = AnimationChannelRecord<ecs::CameraTrackSemantic, AnimationScalarValueTag>;
+using CameraFloat2ChannelRecord = AnimationChannelRecord<ecs::CameraTrackSemantic, AnimationFloat2ValueTag>;
+using CameraFloat3ChannelRecord = AnimationChannelRecord<ecs::CameraTrackSemantic, AnimationFloat3ValueTag>;
+using CameraQuaternionChannelRecord = AnimationChannelRecord<ecs::CameraTrackSemantic, AnimationQuaternionValueTag>;
 
 class AnimationClipHost final {
 public:

@@ -72,6 +72,9 @@ public:
             return;
         }
         component_.binding.apply_flags = apply_flags_;
+        component_.runtime.cached_channel_index = invalid_animation_handle_index;
+        component_.runtime.cached_source_revision = 0U;
+        component_.runtime.curve_hint_index = 0U;
         ClockSystem::MarkBindingRevisionDirty(component_);
     }
 
@@ -82,6 +85,9 @@ public:
             return;
         }
         component_.binding.shake_weight = clamped;
+        component_.runtime.cached_channel_index = invalid_animation_handle_index;
+        component_.runtime.cached_source_revision = 0U;
+        component_.runtime.curve_hint_index = 0U;
         ClockSystem::MarkBindingRevisionDirty(component_);
     }
 

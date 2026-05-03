@@ -155,6 +155,10 @@ public:
                            std::uint32_t appearance_component_count_) noexcept;
     void SetAppearanceDirtyHint(const std::uint32_t* dirty_component_indices_,
                                 std::uint32_t dirty_component_count_) noexcept;
+    void SetAnimationOutputs(const ecs::VertexDeformOutputState* vertex_deform_outputs_,
+                             std::uint32_t vertex_deform_output_count_,
+                             const ecs::FrameSequenceOutputState* frame_sequence_outputs_,
+                             std::uint32_t frame_sequence_output_count_) noexcept;
     void SetAppearanceCoordinator(render::AppearanceFrameCoordinator<ecs::Dim3>* appearance_frame_coordinator_) noexcept;
     void SetLightFrameCoordinator(render::LightFrameCoordinator<ecs::Dim3>* light_frame_coordinator_) noexcept;
     void SetLightShadowLinkCoordinator(render::LightShadowLinkCoordinator3D* light_shadow_link_coordinator_) noexcept;
@@ -403,6 +407,10 @@ private:
     ecs::Camera<ecs::Dim3>* camera_component = nullptr;
     ecs::Transform<ecs::Dim3>* camera_transform = nullptr;
     ecs::Bounds<ecs::Dim3>* bounds_components = nullptr;
+    const ecs::VertexDeformOutputState* vertex_deform_outputs = nullptr;
+    std::uint32_t vertex_deform_output_count = 0U;
+    const ecs::FrameSequenceOutputState* frame_sequence_outputs = nullptr;
+    std::uint32_t frame_sequence_output_count = 0U;
 
     ecs::Geometry3DRuntimeScratch runtime_scratch{};
     ecs::Geometry3DRuntimeBuildStats runtime_stats{};

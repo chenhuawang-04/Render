@@ -63,6 +63,7 @@ public:
             return;
         }
         component_.binding.target = target_;
+        ResetBindingCache(component_);
         ClockSystem::MarkBindingRevisionDirty(component_);
     }
 
@@ -72,6 +73,7 @@ public:
             return;
         }
         component_.binding.semantic = semantic_;
+        ResetBindingCache(component_);
         ClockSystem::MarkBindingRevisionDirty(component_);
     }
 
@@ -81,6 +83,7 @@ public:
             return;
         }
         component_.binding.value_encoding = value_encoding_;
+        ResetBindingCache(component_);
         ClockSystem::MarkBindingRevisionDirty(component_);
     }
 
@@ -90,6 +93,7 @@ public:
             return;
         }
         component_.binding.channel_mask = channel_mask_;
+        ResetBindingCache(component_);
         ClockSystem::MarkBindingRevisionDirty(component_);
     }
 
@@ -99,6 +103,7 @@ public:
             return;
         }
         component_.binding.binding_handle = binding_handle_;
+        ResetBindingCache(component_);
         ClockSystem::MarkBindingRevisionDirty(component_);
     }
 
@@ -112,6 +117,7 @@ public:
         component_.runtime.curve_hint_index = mutable_cursor.segment_index;
         component_.sample.value = Float4{.x = sampled, .y = 0.0F, .z = 0.0F, .w = 0.0F};
         component_.sample.value_encoding = AnimationValueEncoding::scalar;
+        component_.sample.channel_mask = component_.binding.channel_mask;
         ClockSystem::MarkSampleRevisionDirty(component_);
     }
 
@@ -124,6 +130,7 @@ public:
         component_.runtime.curve_hint_index = cursor.segment_index;
         component_.sample.value = Float4{.x = sampled.x, .y = sampled.y, .z = 0.0F, .w = 0.0F};
         component_.sample.value_encoding = AnimationValueEncoding::float2;
+        component_.sample.channel_mask = component_.binding.channel_mask;
         ClockSystem::MarkSampleRevisionDirty(component_);
     }
 
@@ -136,6 +143,7 @@ public:
         component_.runtime.curve_hint_index = cursor.segment_index;
         component_.sample.value = Float4{.x = sampled.x, .y = sampled.y, .z = sampled.z, .w = 0.0F};
         component_.sample.value_encoding = AnimationValueEncoding::float3;
+        component_.sample.channel_mask = component_.binding.channel_mask;
         ClockSystem::MarkSampleRevisionDirty(component_);
     }
 
@@ -148,6 +156,7 @@ public:
         component_.runtime.curve_hint_index = cursor.segment_index;
         component_.sample.value = sampled;
         component_.sample.value_encoding = AnimationValueEncoding::float4;
+        component_.sample.channel_mask = component_.binding.channel_mask;
         ClockSystem::MarkSampleRevisionDirty(component_);
     }
 
@@ -159,6 +168,7 @@ public:
                                                                         &cursor);
         component_.runtime.curve_hint_index = cursor.segment_index;
         component_.sample.value_encoding = AnimationValueEncoding::quaternion;
+        component_.sample.channel_mask = component_.binding.channel_mask;
         ClockSystem::MarkSampleRevisionDirty(component_);
     }
 
@@ -171,6 +181,7 @@ public:
         component_.runtime.curve_hint_index = cursor.segment_index;
         component_.sample.value = EncodeColor(sampled);
         component_.sample.value_encoding = AnimationValueEncoding::color_rgba8;
+        component_.sample.channel_mask = component_.binding.channel_mask;
         ClockSystem::MarkSampleRevisionDirty(component_);
     }
 
@@ -179,14 +190,15 @@ public:
         switch (component_.binding.semantic) {
             case PropertyTrackSemantic::transform_local_position:
                 if constexpr (std::same_as<DimensionT, Dim2>) {
-                    TransformSystem<DimensionT>::SetLocalPosition(transform_,
-                                                                  component_.sample.value.x,
-                                                                  component_.sample.value.y);
+                    const Float2 position = MaskedFloat2(transform_.style.position,
+                                                         component_.sample.value,
+                                                         ResolveActiveChannelMask(component_));
+                    TransformSystem<DimensionT>::SetLocalPosition(transform_, position.x, position.y);
                 } else {
                     TransformSystem<DimensionT>::SetLocalPosition(transform_,
                                                                   MaskedFloat3(transform_.style.position,
                                                                                component_.sample.value,
-                                                                               component_.binding.channel_mask));
+                                                                               ResolveActiveChannelMask(component_)));
                 }
                 return true;
             case PropertyTrackSemantic::transform_local_rotation:
@@ -202,13 +214,13 @@ public:
                 if constexpr (std::same_as<DimensionT, Dim2>) {
                     const Float2 scale = MaskedFloat2(transform_.style.scale,
                                                       component_.sample.value,
-                                                      component_.binding.channel_mask);
+                                                      ResolveActiveChannelMask(component_));
                     TransformSystem<DimensionT>::SetLocalScale(transform_, scale.x, scale.y);
                 } else {
                     TransformSystem<DimensionT>::SetLocalScale(transform_,
                                                                MaskedFloat3(transform_.style.scale,
                                                                             component_.sample.value,
-                                                                            component_.binding.channel_mask));
+                                                                            ResolveActiveChannelMask(component_)));
                 }
                 return true;
             default:
@@ -254,6 +266,12 @@ public:
     }
 
 private:
+    static void ResetBindingCache(AnimationType& component_) noexcept {
+        component_.runtime.cached_channel_index = invalid_animation_handle_index;
+        component_.runtime.cached_source_revision = 0U;
+        component_.runtime.curve_hint_index = 0U;
+    }
+
     [[nodiscard]] static Float4 EncodeColor(Rgba8 color_) noexcept {
         return Float4{
             .x = static_cast<float>(color_.r) / 255.0F,
@@ -296,6 +314,14 @@ private:
             .y = (mask & 0x2U) != 0U ? sampled_.y : current_.y,
             .z = (mask & 0x4U) != 0U ? sampled_.z : current_.z,
         };
+    }
+
+    [[nodiscard]] static std::uint16_t ResolveActiveChannelMask(const AnimationType& component_) noexcept {
+        const std::uint16_t sample_mask = component_.sample.channel_mask;
+        if (sample_mask != 0U && sample_mask != 0xFFFFU) {
+            return sample_mask;
+        }
+        return component_.binding.channel_mask;
     }
 };
 

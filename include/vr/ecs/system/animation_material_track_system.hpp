@@ -59,6 +59,7 @@ public:
             return;
         }
         component_.binding.target = target_;
+        ResetBindingCache(component_);
         ClockSystem::MarkBindingRevisionDirty(component_);
     }
 
@@ -68,6 +69,17 @@ public:
             return;
         }
         component_.binding.semantic = semantic_;
+        ResetBindingCache(component_);
+        ClockSystem::MarkBindingRevisionDirty(component_);
+    }
+
+    static void SetValueEncoding(AnimationType& component_,
+                                 AnimationValueEncoding value_encoding_) noexcept {
+        if (component_.binding.value_encoding == value_encoding_) {
+            return;
+        }
+        component_.binding.value_encoding = value_encoding_;
+        ResetBindingCache(component_);
         ClockSystem::MarkBindingRevisionDirty(component_);
     }
 
@@ -77,6 +89,7 @@ public:
             return;
         }
         component_.binding.channel_mask = channel_mask_;
+        ResetBindingCache(component_);
         ClockSystem::MarkBindingRevisionDirty(component_);
     }
 
@@ -181,6 +194,12 @@ public:
     }
 
 private:
+    static void ResetBindingCache(AnimationType& component_) noexcept {
+        component_.runtime.cached_channel_index = invalid_animation_handle_index;
+        component_.runtime.cached_source_revision = 0U;
+        component_.runtime.curve_hint_index = 0U;
+    }
+
     [[nodiscard]] static Float4 EncodeColor(Rgba8 color_) noexcept {
         return Float4{
             .x = static_cast<float>(color_.r) / 255.0F,
