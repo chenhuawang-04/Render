@@ -23,6 +23,7 @@ add_executable(${VR_TEST_TARGET}
     cases/ecs_geometry_runtime_system_tests.cpp
     cases/ecs_text_component_tests.cpp
     cases/ecs_light_component_tests.cpp
+    cases/ecs_animation_system_tests.cpp
     cases/ecs_shadow_component_tests.cpp
     cases/ecs_surface_component_tests.cpp
     cases/ecs_appearance_component_tests.cpp
