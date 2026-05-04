@@ -140,6 +140,8 @@ public:
     [[nodiscard]] uint32_t CachedLayoutCount() const noexcept;
     [[nodiscard]] uint32_t TotalPoolCount() const noexcept;
     [[nodiscard]] uint32_t FramePoolCount(uint32_t frame_index_) const;
+    [[nodiscard]] uint32_t TotalAllocatedSetCount() const noexcept;
+    [[nodiscard]] uint32_t FrameAllocatedSetCount(uint32_t frame_index_) const;
     [[nodiscard]] bool ValidationEnabled() const noexcept;
     [[nodiscard]] DescriptorValidationStats ValidationStats() const noexcept;
 #if VR_ENABLE_DESCRIPTOR_VALIDATION

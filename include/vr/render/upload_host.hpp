@@ -26,6 +26,8 @@ struct UploadHostCreateInfo {
     VkCommandPoolCreateFlags command_pool_flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
     bool prefer_transfer_queue = true;
     bool fallback_to_graphics_queue = true;
+    bool allow_staging_page_growth = true;
+    uint32_t max_staging_page_count = 4U;
 };
 
 struct UploadSubmitInfo {
@@ -49,6 +51,8 @@ struct UploadAllocation {
 struct UploadFrameStats {
     VkDeviceSize used_bytes = 0U;
     VkDeviceSize capacity_bytes = 0U;
+    uint32_t staging_page_count = 0U;
+    uint32_t staging_page_growth_count = 0U;
     uint32_t buffer_copy_count = 0U;
     uint32_t image_copy_count = 0U;
     uint32_t barrier_count = 0U;
@@ -133,14 +137,19 @@ public:
     [[nodiscard]] VkDeviceSize CapacityBytes() const noexcept;
 
 private:
-    struct UploadFrameSlot {
+    struct UploadStagingPage {
         VkBuffer staging_buffer = VK_NULL_HANDLE;
         Center::Memory::Vulkan::Slice allocation_slice{};
         void* mapped_ptr = nullptr;
+        VkDeviceSize capacity_bytes = 0U;
+        VkDeviceSize write_head = 0U;
+    };
+
+    struct UploadFrameSlot {
+        UploadMcVector<UploadStagingPage> pages{};
         VkCommandPool command_pool = VK_NULL_HANDLE;
         VkCommandBuffer command_buffer = VK_NULL_HANDLE;
         VkFence in_flight_fence = VK_NULL_HANDLE;
-        VkDeviceSize write_head = 0U;
         bool recording_active = false;
         bool recorded_work = false;
         UploadFrameStats stats{};
@@ -149,14 +158,23 @@ private:
     static void ThrowVk(const char* stage_, VkResult result_);
     static void CheckVk(const char* stage_, VkResult result_);
     static VkDeviceSize AlignUp(VkDeviceSize value_, VkDeviceSize alignment_);
+    static VkDeviceSize NextPow2(VkDeviceSize value_) noexcept;
 
     UploadFrameSlot& SlotAt(uint32_t frame_index_);
     const UploadFrameSlot& SlotAt(uint32_t frame_index_) const;
 
     void CreateSlotResources(VulkanContext& context_, UploadFrameSlot& slot_);
     void DestroySlotResources(VulkanContext& context_, UploadFrameSlot& slot_);
+    void CreateStagingPage(VulkanContext& context_,
+                           UploadStagingPage& page_,
+                           VkDeviceSize capacity_bytes_);
+    void DestroyStagingPage(VulkanContext& context_, UploadStagingPage& page_);
+    [[nodiscard]] UploadStagingPage& AcquireWritablePage(UploadFrameSlot& slot_,
+                                                         VkDeviceSize size_,
+                                                         VkDeviceSize alignment_);
+    [[nodiscard]] VkDeviceSize SlotCapacityBytes(const UploadFrameSlot& slot_) const noexcept;
     void FlushAllocationIfNeeded(VulkanContext& context_,
-                                 const UploadFrameSlot& slot_,
+                                 const UploadStagingPage& page_,
                                  VkDeviceSize offset_,
                                  VkDeviceSize size_) const;
     [[nodiscard]] VkPipelineStageFlags2 SanitizeStageMaskForSubmitQueue(
@@ -169,6 +187,7 @@ private:
 private:
     UploadMcVector<UploadFrameSlot> slots{};
     UploadHostCreateInfo create_info_cache{};
+    VulkanContext* context = nullptr;
     resource::GpuMemoryHost* memory_host = nullptr;
     VkQueue submit_queue = VK_NULL_HANDLE;
     uint32_t queue_family_index = 0U;

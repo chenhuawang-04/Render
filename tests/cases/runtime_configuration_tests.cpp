@@ -1,5 +1,6 @@
 #include "support/test_framework.hpp"
 #include "vr/render/render_runtime_host.hpp"
+#include "vr/text/text_runtime_contract.hpp"
 
 #include <functional>
 #include <stdexcept>
@@ -65,6 +66,21 @@ VR_TEST_CASE(RuntimeConfig_default_state_before_initialize_is_safe, "unit;core;r
     VR_CHECK(config.modules.enable_freetype_host);
     VR_CHECK(config.modules.enable_glyph_atlas_host);
     VR_CHECK(config.modules.enable_glyph_upload_host);
+    VR_CHECK(!config.diagnostics.enable_frame_diagnostics);
+}
+
+VR_TEST_CASE(RuntimeConfig_text_runtime_feature_contract_enables_dynamic_rendering_and_sync2,
+             "unit;core;runtime;text") {
+    Runtime::CreateInfo create_info{};
+    vr::text::ApplyTextRuntimeFeatureContract(create_info);
+
+    VR_CHECK(create_info.platform.device.required_vulkan13_features.dynamicRendering == VK_TRUE);
+    VR_CHECK(create_info.platform.device.required_vulkan13_features.synchronization2 == VK_TRUE);
+
+    const auto default_text_create_info =
+        vr::text::MakeDefaultTextRuntimeCreateInfo<Runtime::CreateInfo>();
+    VR_CHECK(default_text_create_info.platform.device.required_vulkan13_features.dynamicRendering == VK_TRUE);
+    VR_CHECK(default_text_create_info.platform.device.required_vulkan13_features.synchronization2 == VK_TRUE);
 }
 
 VR_TEST_CASE(RuntimeConfig_unavailable_modules_throw_before_initialize, "unit;core;runtime") {

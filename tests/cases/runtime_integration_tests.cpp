@@ -8,6 +8,7 @@
 #include <array>
 #include <cctype>
 #include <cstdint>
+#include <cstring>
 #include <string>
 #include <string_view>
 
@@ -241,6 +242,88 @@ private:
     std::uint32_t created_count = 0U;
 };
 
+class SwapchainLifecycleRecorder final {
+public:
+    void OnSwapchainRecreated(std::uint32_t image_count_,
+                              VkExtent2D extent_,
+                              VkFormat format_,
+                              std::uint64_t,
+                              std::uint64_t) noexcept {
+        recreate_count += 1U;
+        last_image_count = image_count_;
+        last_extent = extent_;
+        last_format = format_;
+        clear_recorder.OnSwapchainRecreated(image_count_, extent_, format_);
+    }
+
+    void Record(const vr::render::FrameRecordContext& record_context_) {
+        clear_recorder.Record(record_context_);
+    }
+
+    std::uint32_t recreate_count = 0U;
+    std::uint32_t last_image_count = 0U;
+    VkExtent2D last_extent{};
+    VkFormat last_format = VK_FORMAT_UNDEFINED;
+
+private:
+    ClearToPresentRecorder clear_recorder{};
+};
+
+class UploadCopyRecorder final {
+public:
+    explicit UploadCopyRecorder(std::uint32_t payload_bytes_ = 4096U)
+        : payload_bytes(payload_bytes_) {
+        payload.resize(payload_bytes);
+        for (std::uint32_t i = 0U; i < payload.size(); ++i) {
+            payload[i] = static_cast<std::uint8_t>(i & 0xFFU);
+        }
+    }
+
+    void SetDestinationBuffer(VkBuffer destination_buffer_) noexcept {
+        destination_buffer = destination_buffer_;
+    }
+
+    void PrepareFrame(const vr::render::RuntimePrepareContext& prepare_context_) {
+        prepare_count += 1U;
+        if (prepare_context_.upload_host == nullptr || destination_buffer == VK_NULL_HANDLE) {
+            return;
+        }
+
+        prepare_context_.upload_host->StageAndRecordCopyBuffer(prepare_context_.frame_index,
+                                                               destination_buffer,
+                                                               0U,
+                                                               payload.data(),
+                                                               payload.size(),
+                                                               16U);
+        upload_record_count += 1U;
+        last_frame_index = prepare_context_.frame_index;
+    }
+
+    void OnSwapchainRecreated(std::uint32_t image_count_,
+                              VkExtent2D extent_,
+                              VkFormat format_) {
+        clear_recorder.OnSwapchainRecreated(image_count_, extent_, format_);
+    }
+
+    void Record(const vr::render::FrameRecordContext& record_context_) {
+        clear_recorder.Record(record_context_);
+    }
+
+    [[nodiscard]] std::uint32_t PayloadBytes() const noexcept {
+        return payload_bytes;
+    }
+
+    std::uint32_t prepare_count = 0U;
+    std::uint32_t upload_record_count = 0U;
+    std::uint32_t last_frame_index = 0U;
+
+private:
+    ClearToPresentRecorder clear_recorder{};
+    vr::McVector<std::uint8_t> payload{};
+    VkBuffer destination_buffer = VK_NULL_HANDLE;
+    std::uint32_t payload_bytes = 0U;
+};
+
 VR_TEST_CASE(RuntimeIntegration_initialize_tick_shutdown_smoke, "integration;gpu;sdl;runtime") {
     Runtime runtime{};
     Runtime::CreateInfo create_info{};
@@ -333,6 +416,220 @@ VR_TEST_CASE(RuntimeIntegration_render_target_pool_reuses_transient_targets, "in
     VR_CHECK(recorder.CreatedCount() > 0U);
     VR_CHECK(recorder.ReusedCount() > 0U);
     VR_CHECK(pool_stats.bucket_count >= 1U);
+}
+
+VR_TEST_CASE(RuntimeIntegration_frame_diagnostics_capture_swapchain_state,
+             "integration;gpu;sdl;runtime;diagnostics") {
+    Runtime runtime{};
+    Runtime::CreateInfo create_info{};
+    create_info.platform.window.title = "vr_tests_runtime_diagnostics";
+    create_info.platform.window.width = 320;
+    create_info.platform.window.height = 240;
+    create_info.platform.window.resizable = false;
+    create_info.platform.window.high_pixel_density = false;
+    create_info.platform.instance.enable_validation = false;
+    create_info.render_loop.swapchain.enable_vsync = false;
+    create_info.diagnostics.enable_frame_diagnostics = true;
+
+    ClearToPresentRecorder recorder{};
+    try {
+        runtime.Initialize(create_info);
+    } catch (const std::exception& exception_) {
+        if (IsEnvironmentSkipError(exception_.what())) {
+            VR_SKIP(exception_.what());
+        }
+        throw;
+    }
+
+    const Runtime::RuntimeTickResult tick_result = runtime.Tick(recorder);
+    runtime.Shutdown();
+
+    VR_REQUIRE(tick_result.diagnostics.collected);
+    VR_CHECK(tick_result.diagnostics.swapchain_valid);
+    VR_CHECK(tick_result.diagnostics.swapchain_generation > 0U);
+    VR_CHECK(tick_result.diagnostics.swapchain_image_count >= 2U);
+    VR_CHECK(tick_result.diagnostics.swapchain_extent.width == 320U);
+    VR_CHECK(tick_result.diagnostics.swapchain_extent.height == 240U);
+    VR_CHECK(tick_result.diagnostics.frame_index == tick_result.render.frame_index);
+    VR_CHECK(tick_result.diagnostics.image_index == tick_result.render.image_index);
+}
+
+VR_TEST_CASE(RuntimeIntegration_swapchain_mark_dirty_notifies_recorder,
+             "integration;gpu;sdl;runtime;swapchain") {
+    Runtime runtime{};
+    Runtime::CreateInfo create_info{};
+    create_info.platform.window.title = "vr_tests_runtime_swapchain_recreate";
+    create_info.platform.window.width = 320;
+    create_info.platform.window.height = 240;
+    create_info.platform.window.resizable = true;
+    create_info.platform.window.high_pixel_density = false;
+    create_info.platform.instance.enable_validation = false;
+    create_info.render_loop.swapchain.enable_vsync = false;
+
+    SwapchainLifecycleRecorder recorder{};
+    try {
+        runtime.Initialize(create_info);
+    } catch (const std::exception& exception_) {
+        if (IsEnvironmentSkipError(exception_.what())) {
+            VR_SKIP(exception_.what());
+        }
+        throw;
+    }
+
+    (void)runtime.Tick(recorder);
+    const std::uint32_t recreate_count_before_dirty = recorder.recreate_count;
+    runtime.Swapchain().MarkDirty();
+    (void)runtime.Tick(recorder);
+    runtime.Shutdown();
+
+    VR_CHECK(recorder.recreate_count >= recreate_count_before_dirty + 1U);
+    VR_CHECK(recorder.last_image_count >= 2U);
+    VR_CHECK(recorder.last_extent.width == 320U);
+    VR_CHECK(recorder.last_extent.height == 240U);
+    VR_CHECK(recorder.last_format != VK_FORMAT_UNDEFINED);
+}
+
+VR_TEST_CASE(RuntimeIntegration_cross_queue_upload_reports_extra_wait_when_available,
+             "integration;gpu;sdl;runtime;upload") {
+    Runtime runtime{};
+    Runtime::CreateInfo create_info{};
+    create_info.platform.window.title = "vr_tests_runtime_upload_cross_queue";
+    create_info.platform.window.width = 320;
+    create_info.platform.window.height = 240;
+    create_info.platform.window.resizable = false;
+    create_info.platform.window.high_pixel_density = false;
+    create_info.platform.instance.enable_validation = false;
+    create_info.render_loop.swapchain.enable_vsync = false;
+    create_info.diagnostics.enable_frame_diagnostics = true;
+
+    UploadCopyRecorder recorder{};
+    vr::resource::BufferResource destination_buffer{};
+
+    try {
+        runtime.Initialize(create_info);
+    } catch (const std::exception& exception_) {
+        if (IsEnvironmentSkipError(exception_.what())) {
+            VR_SKIP(exception_.what());
+        }
+        throw;
+    }
+
+    if (!runtime.Upload().UsesCrossQueueSubmit()) {
+        runtime.Shutdown();
+        VR_SKIP("No dedicated transfer queue available for cross-queue upload test.");
+    }
+
+    vr::resource::BufferCreateInfo buffer_create_info{};
+    buffer_create_info.size = recorder.PayloadBytes();
+    buffer_create_info.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+    buffer_create_info.memory_properties = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+    destination_buffer = runtime.CreateBuffer(buffer_create_info);
+    recorder.SetDestinationBuffer(destination_buffer.buffer);
+
+    const Runtime::RuntimeTickResult tick_result = runtime.Tick(recorder);
+    runtime.DestroyBuffer(destination_buffer);
+    runtime.Shutdown();
+
+    VR_CHECK(tick_result.upload_submitted);
+    VR_CHECK(tick_result.upload_cross_queue_wait);
+    VR_REQUIRE(tick_result.diagnostics.collected);
+    VR_CHECK(tick_result.diagnostics.upload_enabled);
+    VR_CHECK(tick_result.diagnostics.upload_uses_cross_queue);
+    VR_CHECK(tick_result.diagnostics.upload.buffer_copy_count > 0U);
+}
+
+VR_TEST_CASE(RuntimeIntegration_upload_staging_page_growth_handles_large_copy,
+             "integration;gpu;sdl;runtime;upload") {
+    Runtime runtime{};
+    Runtime::CreateInfo create_info{};
+    create_info.platform.window.title = "vr_tests_runtime_upload_growth";
+    create_info.platform.window.width = 320;
+    create_info.platform.window.height = 240;
+    create_info.platform.window.resizable = false;
+    create_info.platform.window.high_pixel_density = false;
+    create_info.platform.instance.enable_validation = false;
+    create_info.render_loop.swapchain.enable_vsync = false;
+    create_info.diagnostics.enable_frame_diagnostics = true;
+    create_info.upload.staging_buffer_size = 256U;
+    create_info.upload.max_staging_page_count = 4U;
+    create_info.upload.allow_staging_page_growth = true;
+
+    UploadCopyRecorder recorder{1024U};
+    vr::resource::BufferResource destination_buffer{};
+
+    try {
+        runtime.Initialize(create_info);
+    } catch (const std::exception& exception_) {
+        if (IsEnvironmentSkipError(exception_.what())) {
+            VR_SKIP(exception_.what());
+        }
+        throw;
+    }
+
+    vr::resource::BufferCreateInfo buffer_create_info{};
+    buffer_create_info.size = recorder.PayloadBytes();
+    buffer_create_info.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+    buffer_create_info.memory_properties = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+    destination_buffer = runtime.CreateBuffer(buffer_create_info);
+    recorder.SetDestinationBuffer(destination_buffer.buffer);
+
+    const Runtime::RuntimeTickResult tick_result = runtime.Tick(recorder);
+    runtime.DestroyBuffer(destination_buffer);
+    runtime.Shutdown();
+
+    VR_REQUIRE(tick_result.diagnostics.collected);
+    VR_CHECK(tick_result.diagnostics.upload.buffer_copy_count > 0U);
+    VR_CHECK(tick_result.diagnostics.upload.staging_page_count >= 2U);
+    VR_CHECK(tick_result.diagnostics.upload.staging_page_growth_count >= 1U);
+    VR_CHECK(tick_result.diagnostics.upload.capacity_bytes >= recorder.PayloadBytes());
+}
+
+VR_TEST_CASE(RuntimeIntegration_upload_staging_exhaustion_reports_capacity_details,
+             "integration;gpu;sdl;runtime;upload") {
+    Runtime runtime{};
+    Runtime::CreateInfo create_info{};
+    create_info.platform.window.title = "vr_tests_runtime_upload_exhausted";
+    create_info.platform.window.width = 320;
+    create_info.platform.window.height = 240;
+    create_info.platform.window.resizable = false;
+    create_info.platform.window.high_pixel_density = false;
+    create_info.platform.instance.enable_validation = false;
+    create_info.render_loop.swapchain.enable_vsync = false;
+    create_info.upload.staging_buffer_size = 256U;
+    create_info.upload.max_staging_page_count = 1U;
+    create_info.upload.allow_staging_page_growth = false;
+
+    UploadCopyRecorder recorder{1024U};
+    vr::resource::BufferResource destination_buffer{};
+
+    try {
+        runtime.Initialize(create_info);
+    } catch (const std::exception& exception_) {
+        if (IsEnvironmentSkipError(exception_.what())) {
+            VR_SKIP(exception_.what());
+        }
+        throw;
+    }
+
+    vr::resource::BufferCreateInfo buffer_create_info{};
+    buffer_create_info.size = recorder.PayloadBytes();
+    buffer_create_info.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+    buffer_create_info.memory_properties = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+    destination_buffer = runtime.CreateBuffer(buffer_create_info);
+    recorder.SetDestinationBuffer(destination_buffer.buffer);
+
+    bool saw_expected_exception = false;
+    try {
+        (void)runtime.Tick(recorder);
+    } catch (const std::exception& exception_) {
+        saw_expected_exception =
+            ContainsCaseInsensitive(exception_.what(), "UploadHost staging capacity exhausted") &&
+            ContainsCaseInsensitive(exception_.what(), "page_count=");
+    }
+
+    runtime.DestroyBuffer(destination_buffer);
+    runtime.Shutdown();
+    VR_CHECK(saw_expected_exception);
 }
 
 } // namespace

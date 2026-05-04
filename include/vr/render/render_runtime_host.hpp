@@ -35,6 +35,38 @@ struct RuntimeModulesCreateInfo {
     bool enable_glyph_upload_host = true;
 };
 
+struct RuntimeDiagnosticsCreateInfo {
+    bool enable_frame_diagnostics = false;
+};
+
+struct RuntimeFrameDiagnostics {
+    bool collected = false;
+    bool swapchain_valid = false;
+    std::uint64_t swapchain_generation = 0U;
+    std::uint32_t swapchain_image_count = 0U;
+    VkExtent2D swapchain_extent{};
+    VkFormat swapchain_format = VK_FORMAT_UNDEFINED;
+    VkColorSpaceKHR swapchain_color_space = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
+    VkPresentModeKHR swapchain_present_mode = VK_PRESENT_MODE_FIFO_KHR;
+    std::uint32_t frame_index = 0U;
+    std::uint32_t image_index = 0U;
+    std::uint64_t last_submitted_value = 0U;
+    std::uint64_t completed_submit_value = 0U;
+    bool upload_enabled = false;
+    bool upload_uses_cross_queue = false;
+    UploadFrameStats upload{};
+    std::uint32_t descriptor_total_pool_count = 0U;
+    std::uint32_t descriptor_frame_pool_count = 0U;
+    std::uint32_t descriptor_total_allocated_set_count = 0U;
+    std::uint32_t descriptor_frame_allocated_set_count = 0U;
+    DescriptorValidationStats descriptor_validation{};
+    PipelineHostStats pipeline{};
+    RenderTargetHostStats render_target{};
+    RenderTargetPoolStats render_target_pool{};
+    text::GlyphAtlasHostStats glyph_atlas{};
+    text::GlyphUploadHostStats glyph_upload{};
+};
+
 template<typename RecorderT>
 concept RuntimeFramePreparer = requires(RecorderT& recorder_,
                                         const RuntimePrepareContext& prepare_context_) {
@@ -76,6 +108,7 @@ public:
         text::GlyphUploadHostCreateInfo glyph_upload{};
 
         RuntimeModulesCreateInfo modules{};
+        RuntimeDiagnosticsCreateInfo diagnostics{};
         PipelineWarmupCreateInfo pipeline_warmup{};
 
         bool poll_events_each_tick = true;
@@ -91,6 +124,7 @@ public:
         bool upload_cross_queue_wait = false;
         bool events_polled = false;
         bool running = true;
+        RuntimeFrameDiagnostics diagnostics{};
     };
 
     RenderRuntimeHost() = default;
@@ -375,6 +409,7 @@ public:
                 .image_index = 0U
             };
             FillPipelineQueueStats(result);
+            FillFrameDiagnostics(result);
             return result;
         }
 
@@ -486,6 +521,7 @@ public:
         }
 
         FillPipelineQueueStats(result);
+        FillFrameDiagnostics(result);
         result.running = platform_host.IsRunning();
         return result;
     }
@@ -853,6 +889,56 @@ private:
         }
         result_.pending_graphics_compile_count = pipeline_host.PendingGraphicsCompileCount();
         result_.pending_compute_compile_count = pipeline_host.PendingComputeCompileCount();
+    }
+
+    void FillFrameDiagnostics(RuntimeTickResult& result_) const noexcept {
+        if (!create_info_cache.diagnostics.enable_frame_diagnostics) {
+            result_.diagnostics = {};
+            return;
+        }
+
+        RuntimeFrameDiagnostics diagnostics{};
+        diagnostics.collected = true;
+        diagnostics.swapchain_valid = swapchain.IsValid();
+        diagnostics.swapchain_generation = swapchain.Generation();
+        diagnostics.swapchain_image_count = swapchain.ImageCount();
+        diagnostics.swapchain_extent = swapchain.Extent();
+        diagnostics.swapchain_format = swapchain.Format();
+        diagnostics.swapchain_color_space = swapchain.ColorSpace();
+        diagnostics.swapchain_present_mode = swapchain.PresentMode();
+        diagnostics.frame_index = result_.render.frame_index;
+        diagnostics.image_index = result_.render.image_index;
+        diagnostics.last_submitted_value = render_loop.Sync().LastSubmittedValue();
+        diagnostics.completed_submit_value = render_loop.Sync().CompletedSubmitValue();
+        diagnostics.upload_enabled = upload_initialized;
+        diagnostics.upload_uses_cross_queue = upload_initialized && upload_host.UsesCrossQueueSubmit();
+        if (upload_initialized && result_.render.frame_index < upload_host.FramesInFlight()) {
+            diagnostics.upload = upload_host.FrameStats(result_.render.frame_index);
+        }
+        if (descriptor_initialized) {
+            diagnostics.descriptor_total_pool_count = descriptor_host.TotalPoolCount();
+            diagnostics.descriptor_frame_pool_count = descriptor_host.FramePoolCount(result_.render.frame_index);
+            diagnostics.descriptor_total_allocated_set_count = descriptor_host.TotalAllocatedSetCount();
+            diagnostics.descriptor_frame_allocated_set_count =
+                descriptor_host.FrameAllocatedSetCount(result_.render.frame_index);
+            diagnostics.descriptor_validation = descriptor_host.ValidationStats();
+        }
+        if (pipeline_initialized) {
+            diagnostics.pipeline = pipeline_host.Stats();
+        }
+        if (render_target_initialized) {
+            diagnostics.render_target = render_target_host.Stats();
+        }
+        if (render_target_pool_initialized) {
+            diagnostics.render_target_pool = render_target_pool.Stats();
+        }
+        if (glyph_atlas_initialized) {
+            diagnostics.glyph_atlas = glyph_atlas_host.Stats();
+        }
+        if (glyph_upload_initialized) {
+            diagnostics.glyph_upload = glyph_upload_host.Stats();
+        }
+        result_.diagnostics = diagnostics;
     }
 
     void InvalidateSwapchainRenderTargets(std::uint64_t last_submitted_value_,
