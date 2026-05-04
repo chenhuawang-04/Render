@@ -36,6 +36,13 @@ struct SceneRecorder2DStats final {
     std::uint32_t frame_packet_bind_count = 0U;
     std::uint32_t frame_packet_prepare_count = 0U;
     std::uint32_t frame_packet_record_count = 0U;
+    std::uint32_t frame_view_count = 0U;
+    std::uint32_t effective_layer_mask = 0xFFFF'FFFFU;
+    std::uint32_t debug_flags = render_view_debug_none_flag;
+    std::uint8_t shadow_enabled = 1U;
+    std::uint8_t overlay_enabled = 1U;
+    std::uint8_t postprocess_enabled = 1U;
+    std::uint8_t reserved0 = 0U;
 };
 
 class SceneRecorder2D final {
@@ -73,10 +80,15 @@ public:
     void ClearFramePacket() noexcept;
 
     template<typename RendererT>
-    void RegisterPreSceneRenderer(RendererT& renderer_) {
+    void RegisterPreSceneRenderer(RendererT& renderer_,
+                                 std::uint32_t submission_layer_mask_ = all_submission_layers) {
         EnsureInitialized("RegisterPreSceneRenderer");
         const PreSceneRendererEntry entry{
             .renderer = &renderer_,
+            .kind = PreSceneRendererKind::generic,
+            .reserved0 = 0U,
+            .reserved1 = 0U,
+            .submission_layer_mask = submission_layer_mask_,
             .prepare_fn = &PrepareRenderer<RendererT>,
             .record_fn = &RecordRenderer<RendererT>,
             .swapchain_recreated_fn = &OptionalOnSwapchainRecreatedRenderer<RendererT>,
@@ -84,19 +96,33 @@ public:
         UpsertPreSceneRendererEntry(entry);
     }
 
-    void RegisterShadowRenderer(shadow::ShadowRenderer2D& shadow_renderer_) {
-        RegisterPreSceneRenderer(shadow_renderer_);
+    void RegisterShadowRenderer(shadow::ShadowRenderer2D& shadow_renderer_,
+                               std::uint32_t submission_layer_mask_ = all_submission_layers) {
+        EnsureInitialized("RegisterShadowRenderer");
+        const PreSceneRendererEntry entry{
+            .renderer = &shadow_renderer_,
+            .kind = PreSceneRendererKind::shadow,
+            .reserved0 = 0U,
+            .reserved1 = 0U,
+            .submission_layer_mask = submission_layer_mask_,
+            .prepare_fn = &PrepareRenderer<shadow::ShadowRenderer2D>,
+            .record_fn = &RecordRenderer<shadow::ShadowRenderer2D>,
+            .swapchain_recreated_fn = &OptionalOnSwapchainRecreatedRenderer<shadow::ShadowRenderer2D>,
+        };
+        UpsertPreSceneRendererEntry(entry);
         BindShadowRuntime(&shadow_renderer_.FrameCoordinatorMutable(),
                           &shadow_renderer_.AtlasHostMutable());
     }
 
     template<typename RendererT>
     void RegisterSceneRenderer(RendererT& renderer_,
-                               SceneRenderPassRole pass_role_) {
+                               SceneRenderPassRole pass_role_,
+                               std::uint32_t submission_layer_mask_ = all_submission_layers) {
         EnsureInitialized("RegisterSceneRenderer");
         const SceneRendererEntry entry{
             .renderer = &renderer_,
             .pass_role = pass_role_,
+            .submission_layer_mask = submission_layer_mask_,
             .prepare_fn = &PrepareRenderer<RendererT>,
             .record_fn = &RecordRenderer<RendererT>,
             .swapchain_recreated_fn = &OnSwapchainRecreatedRenderer<RendererT>,
@@ -110,11 +136,13 @@ public:
     template<typename RendererT>
     void RegisterSceneConsumer(RendererT& renderer_,
                                const RenderTargetColorOutputConfig& output_target_config_ =
-                                   MakePresentOverlayOutputConfig()) {
+                                   MakePresentOverlayOutputConfig(),
+                               std::uint32_t submission_layer_mask_ = all_submission_layers) {
         EnsureInitialized("RegisterSceneConsumer");
         const SceneConsumerEntry entry{
             .renderer = &renderer_,
             .output_target_config = output_target_config_,
+            .submission_layer_mask = submission_layer_mask_,
             .prepare_fn = &PrepareRenderer<RendererT>,
             .record_fn = &RecordRenderer<RendererT>,
             .swapchain_recreated_fn = &OnSwapchainRecreatedRenderer<RendererT>,
@@ -127,11 +155,13 @@ public:
     template<typename RendererT>
     void RegisterOverlayRenderer(RendererT& renderer_,
                                  const RenderTargetColorOutputConfig& output_target_config_ =
-                                     MakePresentOverlayOutputConfig()) {
+                                     MakePresentOverlayOutputConfig(),
+                                 std::uint32_t submission_layer_mask_ = all_submission_layers) {
         EnsureInitialized("RegisterOverlayRenderer");
         const OverlayRendererEntry entry{
             .renderer = &renderer_,
             .output_target_config = output_target_config_,
+            .submission_layer_mask = submission_layer_mask_,
             .prepare_fn = &PrepareRenderer<RendererT>,
             .record_fn = &RecordRenderer<RendererT>,
             .swapchain_recreated_fn = &OnSwapchainRecreatedRenderer<RendererT>,
@@ -171,6 +201,8 @@ public:
     [[nodiscard]] static RenderTargetColorOutputConfig MakePresentOverlayOutputConfig() noexcept;
 
 private:
+    static constexpr std::uint32_t all_submission_layers = 0xFFFF'FFFFU;
+
     using PrepareFn = void (*)(void*, const RuntimePrepareContext&);
     using RecordFn = void (*)(void*, const FrameRecordContext&);
     using SwapchainRecreatedFn = void (*)(void*,
@@ -189,8 +221,17 @@ private:
                                          shadow::ShadowAtlasHost*);
     using SetOverlayOutputFn = void (*)(void*, const RenderTargetColorOutputConfig&);
 
+    enum class PreSceneRendererKind : std::uint8_t {
+        generic = 0U,
+        shadow = 1U,
+    };
+
     struct PreSceneRendererEntry final {
         void* renderer = nullptr;
+        PreSceneRendererKind kind = PreSceneRendererKind::generic;
+        std::uint8_t reserved0 = 0U;
+        std::uint16_t reserved1 = 0U;
+        std::uint32_t submission_layer_mask = all_submission_layers;
         PrepareFn prepare_fn = nullptr;
         RecordFn record_fn = nullptr;
         SwapchainRecreatedFn swapchain_recreated_fn = nullptr;
@@ -199,6 +240,7 @@ private:
     struct SceneRendererEntry final {
         void* renderer = nullptr;
         SceneRenderPassRole pass_role = SceneRenderPassRole::single;
+        std::uint32_t submission_layer_mask = all_submission_layers;
         PrepareFn prepare_fn = nullptr;
         RecordFn record_fn = nullptr;
         SwapchainRecreatedFn swapchain_recreated_fn = nullptr;
@@ -210,6 +252,7 @@ private:
     struct SceneConsumerEntry final {
         void* renderer = nullptr;
         RenderTargetColorOutputConfig output_target_config{};
+        std::uint32_t submission_layer_mask = all_submission_layers;
         PrepareFn prepare_fn = nullptr;
         RecordFn record_fn = nullptr;
         SwapchainRecreatedFn swapchain_recreated_fn = nullptr;
@@ -220,6 +263,7 @@ private:
     struct OverlayRendererEntry final {
         void* renderer = nullptr;
         RenderTargetColorOutputConfig output_target_config{};
+        std::uint32_t submission_layer_mask = all_submission_layers;
         PrepareFn prepare_fn = nullptr;
         RecordFn record_fn = nullptr;
         SwapchainRecreatedFn swapchain_recreated_fn = nullptr;
@@ -360,6 +404,11 @@ private:
     void RefreshFramePacketBinding() noexcept;
     void RefreshSceneLightingBindings() noexcept;
     void RefreshRendererCounts() noexcept;
+    [[nodiscard]] std::uint32_t EffectiveLayerMask() const noexcept;
+    [[nodiscard]] bool IsShadowEnabledForSubmission() const noexcept;
+    [[nodiscard]] bool IsOverlayEnabledForSubmission() const noexcept;
+    [[nodiscard]] bool IsPostProcessEnabledForSubmission() const noexcept;
+    [[nodiscard]] bool IsLayerVisibleForSubmission(std::uint32_t submission_layer_mask_) const noexcept;
     void ConfigureSceneRenderersForTargets() noexcept;
     void ConfigureSceneConsumerForTargets() noexcept;
     [[nodiscard]] RenderTargetColorOutputConfig BuildDirectSceneOutputConfig(

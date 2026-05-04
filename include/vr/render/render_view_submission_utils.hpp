@@ -20,7 +20,10 @@ void RefreshExtentBoundWorldSceneSubmission(
                                 render_view_shadow_enabled_flag |
                                 render_view_postprocess_enabled_flag,
     std::uint32_t packet_flags_ = render_scene_packet_allow_postprocess_flag |
-                                  render_scene_packet_allow_shadow_flag) noexcept {
+                                  render_scene_packet_allow_shadow_flag,
+    std::uint32_t layer_mask_ = 0xFFFF'FFFFU,
+    std::uint32_t debug_flags_ = render_view_debug_none_flag,
+    RenderPostProcessPolicy postprocess_policy_ = RenderPostProcessPolicy::inherit) noexcept {
     using CameraSystemType = ecs::CameraSystem<DimensionT>;
 
     const float width = static_cast<float>((extent_.width > 0U) ? extent_.width : 1U);
@@ -46,6 +49,9 @@ void RefreshExtentBoundWorldSceneSubmission(
                                      RenderViewKind::world,
                                      0U);
     view_.flags = view_flags_;
+    view_.layer_mask = layer_mask_;
+    view_.debug_flags = debug_flags_;
+    view_.postprocess_policy = postprocess_policy_;
     RefreshRenderViewSignature(view_);
 
     packet_.kind = RenderScenePacketKind::world;
@@ -53,7 +59,9 @@ void RefreshExtentBoundWorldSceneSubmission(
     packet_.view_count = 1U;
     packet_.active_view_index = 0U;
     packet_.flags = packet_flags_;
-    packet_.render_layer_mask = view_.layer_mask;
+    packet_.render_layer_mask = layer_mask_;
+    packet_.debug_flags = debug_flags_;
+    packet_.postprocess_policy = postprocess_policy_;
     packet_.submission_id = submission_id_;
     RefreshRenderScenePacketSignature(packet_);
 }
@@ -66,13 +74,19 @@ void RefreshExtentBoundScreenSceneSubmission(
     std::uint64_t submission_id_,
     RenderViewKind kind_ = RenderViewKind::ui,
     std::uint32_t view_flags_ = render_view_overlay_enabled_flag,
-    std::uint32_t packet_flags_ = render_scene_packet_allow_overlay_flag) noexcept {
+    std::uint32_t packet_flags_ = render_scene_packet_allow_overlay_flag,
+    std::uint32_t layer_mask_ = 0xFFFF'FFFFU,
+    std::uint32_t debug_flags_ = render_view_debug_none_flag,
+    RenderPostProcessPolicy postprocess_policy_ = RenderPostProcessPolicy::inherit) noexcept {
     const float width = static_cast<float>((extent_.width > 0U) ? extent_.width : 1U);
     const float height = static_cast<float>((extent_.height > 0U) ? extent_.height : 1U);
 
     view_ = {};
     view_.kind = kind_;
     view_.flags = view_flags_;
+    view_.layer_mask = layer_mask_;
+    view_.debug_flags = debug_flags_;
+    view_.postprocess_policy = postprocess_policy_;
     view_.viewport = RenderViewViewport{
         .x = 0.0F,
         .y = 0.0F,
@@ -96,7 +110,9 @@ void RefreshExtentBoundScreenSceneSubmission(
     packet_.view_count = 1U;
     packet_.active_view_index = 0U;
     packet_.flags = packet_flags_;
-    packet_.render_layer_mask = view_.layer_mask;
+    packet_.render_layer_mask = layer_mask_;
+    packet_.debug_flags = debug_flags_;
+    packet_.postprocess_policy = postprocess_policy_;
     packet_.submission_id = submission_id_;
     RefreshRenderScenePacketSignature(packet_);
 }

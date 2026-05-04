@@ -5,6 +5,7 @@
 #include "vr/render/render_target_pass.hpp"
 #include "vr/render/render_target_desc.hpp"
 #include "vr/render/render_target_host.hpp"
+#include "vr/render/render_view_submission_utils.hpp"
 #include "vr/render/scene_recorder_3d.hpp"
 #include "vr/render/render_target_types.hpp"
 #include "vr/render/scene_render_target_set.hpp"
@@ -395,6 +396,39 @@ VR_TEST_CASE(RenderScenePacket_single_view_exposes_active_view_without_allocatio
     VR_CHECK(packet.signature != 0U);
 }
 
+VR_TEST_CASE(RenderScenePacket_resolves_layer_debug_and_policy_from_view_and_packet,
+             "unit;core;render_target") {
+    vr::ecs::Camera<vr::ecs::Dim3> camera{};
+    camera.style.viewport = vr::ecs::CameraViewport{.origin_x = 0.0F,
+                                                    .origin_y = 0.0F,
+                                                    .width = 320.0F,
+                                                    .height = 180.0F};
+    vr::render::RenderView3D view = vr::render::MakeRenderViewFromCamera(camera);
+    view.layer_mask = 0x00FF00FFU;
+    view.debug_flags = vr::render::render_view_debug_bounds_flag;
+    view.flags = vr::render::render_view_shadow_enabled_flag |
+                 vr::render::render_view_overlay_enabled_flag;
+    view.postprocess_policy = vr::render::RenderPostProcessPolicy::disabled;
+    vr::render::RefreshRenderViewSignature(view);
+
+    vr::render::RenderScenePacket3D packet =
+        vr::render::MakeSingleViewScenePacket(view, 7U);
+    packet.render_layer_mask = 0x0F0F0F0FU;
+    packet.debug_flags = vr::render::render_view_debug_wireframe_flag;
+    packet.postprocess_policy = vr::render::RenderPostProcessPolicy::inherit;
+    packet.flags = vr::render::render_scene_packet_allow_shadow_flag |
+                   vr::render::render_scene_packet_allow_overlay_flag |
+                   vr::render::render_scene_packet_allow_postprocess_flag;
+    vr::render::RefreshRenderScenePacketSignature(packet);
+
+    VR_CHECK(vr::render::ResolveSceneLayerMask(packet) == (0x00FF00FFU & 0x0F0F0F0FU));
+    VR_CHECK(vr::render::ResolveSceneDebugFlags(packet) ==
+             (vr::render::render_view_debug_bounds_flag | vr::render::render_view_debug_wireframe_flag));
+    VR_CHECK(vr::render::ResolveSceneShadowEnabled(packet));
+    VR_CHECK(vr::render::ResolveSceneOverlayEnabled(packet));
+    VR_CHECK(!vr::render::ResolveScenePostProcessEnabled(packet));
+}
+
 VR_TEST_CASE(SceneRenderTargetSet_defaults_match_render_target_v1_contract, "unit;core;render_target") {
     vr::render::SceneRenderTargetSetCreateInfo create_info{};
     VR_CHECK(create_info.enable_depth);
@@ -530,6 +564,43 @@ VR_TEST_CASE(SceneRecorder2D_frame_packet_is_runtime_submission_not_ecs_state,
     recorder.ClearFramePacket();
     VR_CHECK(recorder.FramePacket() == nullptr);
     VR_CHECK(recorder.ActiveView() == nullptr);
+}
+
+VR_TEST_CASE(SceneRecorder2D_submission_flags_and_layers_filter_recorders,
+             "unit;core;render_target") {
+    vr::render::SceneRecorder2D recorder{};
+    recorder.Initialize({});
+
+    FakeSceneRecorderRenderer world_renderer{};
+    FakeSceneRecorderRenderer overlay_renderer{};
+    recorder.RegisterSceneRenderer(world_renderer, vr::render::SceneRenderPassRole::single, 0x1U);
+    recorder.RegisterOverlayRenderer(overlay_renderer,
+                                     vr::render::SceneRecorder2D::MakePresentOverlayOutputConfig(),
+                                     0x2U);
+
+    vr::render::RenderView2D view{};
+    vr::render::RenderScenePacket2D packet{};
+    vr::render::RefreshExtentBoundScreenSceneSubmission(view,
+                                                        packet,
+                                                        VkExtent2D{.width = 640U, .height = 360U},
+                                                        1U,
+                                                        vr::render::RenderViewKind::world,
+                                                        vr::render::render_view_lighting_enabled_flag,
+                                                        vr::render::render_scene_packet_allow_overlay_flag,
+                                                        0x1U);
+    recorder.SetFramePacket(&packet);
+
+    vr::render::RuntimePrepareContext prepare_context{};
+    vr::render::FrameRecordContext record_context{};
+    recorder.PrepareFrame(prepare_context);
+    recorder.Record(record_context);
+
+    VR_CHECK(world_renderer.prepare_count == 1U);
+    VR_CHECK(world_renderer.record_count == 1U);
+    VR_CHECK(overlay_renderer.prepare_count == 0U);
+    VR_CHECK(overlay_renderer.record_count == 0U);
+    VR_CHECK(recorder.Stats().effective_layer_mask == 0x1U);
+    VR_CHECK(recorder.Stats().overlay_enabled == 0U);
 }
 
 VR_TEST_CASE(SceneRecorder3D_registration_upserts_renderer_counts,
@@ -751,6 +822,89 @@ VR_TEST_CASE(SceneRecorder3D_animation_binding_is_propagated_to_scene_and_shadow
     VR_CHECK(shadow_renderer.skeletal_outputs == nullptr);
     VR_CHECK(shadow_renderer.morph_outputs == nullptr);
     VR_CHECK(shadow_renderer.frame_sequence_outputs == nullptr);
+}
+
+VR_TEST_CASE(SceneRecorder3D_submission_flags_and_layers_filter_renderers,
+             "unit;core;render_target") {
+    vr::render::SceneRecorder3D recorder{};
+    recorder.Initialize({});
+
+    FakeAnimatedShadowRecorderRenderer shadow_renderer{};
+    FakeSceneRecorderRenderer scene_renderer{};
+    FakeSceneRecorderRenderer overlay_renderer{};
+    recorder.RegisterPreSceneRenderer(shadow_renderer, 0x2U);
+    recorder.RegisterOpaqueSceneRenderer(scene_renderer, vr::render::SceneRenderPassRole::single, 0x1U);
+    recorder.RegisterOverlayRenderer(overlay_renderer,
+                                     vr::render::SceneRecorder3D::MakePresentOverlayOutputConfig(),
+                                     0x2U);
+
+    vr::ecs::Camera<vr::ecs::Dim3> camera{};
+    camera.style.viewport = vr::ecs::CameraViewport{.origin_x = 0.0F,
+                                                    .origin_y = 0.0F,
+                                                    .width = 800.0F,
+                                                    .height = 450.0F};
+    vr::render::RenderView3D view = vr::render::MakeRenderViewFromCamera(camera);
+    view.flags = vr::render::render_view_shadow_enabled_flag;
+    view.layer_mask = 0x1U;
+    vr::render::RefreshRenderViewSignature(view);
+    vr::render::RenderScenePacket3D packet =
+        vr::render::MakeSingleViewScenePacket(view, 9U);
+    packet.flags = vr::render::render_scene_packet_allow_shadow_flag;
+    packet.render_layer_mask = 0x1U;
+    vr::render::RefreshRenderScenePacketSignature(packet);
+    recorder.SetFramePacket(&packet);
+
+    vr::render::RuntimePrepareContext prepare_context{};
+    vr::render::FrameRecordContext record_context{};
+    recorder.PrepareFrame(prepare_context);
+    recorder.Record(record_context);
+
+    VR_CHECK(shadow_renderer.prepare_count == 0U);
+    VR_CHECK(shadow_renderer.record_count == 0U);
+    VR_CHECK(scene_renderer.prepare_count == 1U);
+    VR_CHECK(scene_renderer.record_count == 1U);
+    VR_CHECK(overlay_renderer.prepare_count == 0U);
+    VR_CHECK(overlay_renderer.record_count == 0U);
+    VR_CHECK(recorder.Stats().effective_layer_mask == 0x1U);
+    VR_CHECK(recorder.Stats().shadow_enabled == 1U);
+    VR_CHECK(recorder.Stats().overlay_enabled == 0U);
+}
+
+VR_TEST_CASE(SceneRecorder3D_postprocess_disabled_falls_back_to_direct_scene_outputs,
+             "unit;core;render_target") {
+    vr::render::SceneRecorder3D recorder{};
+    recorder.Initialize({});
+
+    FakeSceneRecorderRenderer scene_renderer{};
+    recorder.RegisterOpaqueSceneRenderer(scene_renderer, vr::render::SceneRenderPassRole::single, 0x1U);
+
+    vr::ecs::Camera<vr::ecs::Dim3> camera{};
+    camera.style.viewport = vr::ecs::CameraViewport{.origin_x = 0.0F,
+                                                    .origin_y = 0.0F,
+                                                    .width = 640.0F,
+                                                    .height = 360.0F};
+    vr::render::RenderView3D view = vr::render::MakeRenderViewFromCamera(camera);
+    view.flags = vr::render::render_view_shadow_enabled_flag;
+    view.postprocess_policy = vr::render::RenderPostProcessPolicy::disabled;
+    vr::render::RefreshRenderViewSignature(view);
+
+    vr::render::RenderScenePacket3D packet =
+        vr::render::MakeSingleViewScenePacket(view, 10U);
+    packet.flags = vr::render::render_scene_packet_allow_shadow_flag;
+    vr::render::RefreshRenderScenePacketSignature(packet);
+    recorder.SetFramePacket(&packet);
+
+    vr::render::RuntimePrepareContext prepare_context{};
+    recorder.PrepareFrame(prepare_context);
+
+    VR_CHECK(scene_renderer.color_set);
+    VR_CHECK(scene_renderer.depth_set);
+    VR_CHECK(scene_renderer.color_output.final_state == vr::render::RenderTargetStateKind::present_src);
+    VR_CHECK(scene_renderer.color_output.use_explicit_load_op);
+    VR_CHECK(scene_renderer.color_output.load_op == VK_ATTACHMENT_LOAD_OP_CLEAR);
+    VR_CHECK(scene_renderer.depth_output.final_state == vr::render::RenderTargetStateKind::depth_attachment);
+    VR_CHECK(scene_renderer.depth_output.load_op == VK_ATTACHMENT_LOAD_OP_CLEAR);
+    VR_CHECK(recorder.Stats().postprocess_enabled == 0U);
 }
 
 } // namespace

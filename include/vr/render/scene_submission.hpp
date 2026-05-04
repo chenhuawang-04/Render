@@ -36,6 +36,10 @@ struct RenderScenePacket final {
     const ViewType* views = nullptr;
     std::uint32_t view_count = 0U;
     std::uint32_t render_layer_mask = 0xFFFF'FFFFU;
+    std::uint32_t debug_flags = render_view_debug_none_flag;
+    RenderPostProcessPolicy postprocess_policy = RenderPostProcessPolicy::inherit;
+    std::uint8_t reserved2 = 0U;
+    std::uint16_t reserved3 = 0U;
     std::uint64_t submission_id = 0U;
     std::uint64_t signature = 0U;
 
@@ -61,6 +65,8 @@ template<ecs::DimensionTag DimensionT>
     RenderViewHashCombine(hash, static_cast<std::uint64_t>(packet_.flags));
     RenderViewHashCombine(hash, static_cast<std::uint64_t>(packet_.view_count));
     RenderViewHashCombine(hash, static_cast<std::uint64_t>(packet_.render_layer_mask));
+    RenderViewHashCombine(hash, static_cast<std::uint64_t>(packet_.debug_flags));
+    RenderViewHashCombine(hash, static_cast<std::uint64_t>(packet_.postprocess_policy));
     RenderViewHashCombine(hash, packet_.submission_id);
     for (std::uint32_t view_index = 0U; view_index < packet_.view_count; ++view_index) {
         const RenderView<DimensionT>& view = packet_.views[view_index];
@@ -90,6 +96,63 @@ template<ecs::DimensionTag DimensionT>
 template<ecs::DimensionTag DimensionT>
 void RefreshRenderScenePacketSignature(RenderScenePacket<DimensionT>& packet_) noexcept {
     packet_.signature = detail::ComposeRenderScenePacketSignature(packet_);
+}
+
+template<ecs::DimensionTag DimensionT>
+[[nodiscard]] constexpr std::uint32_t ResolveSceneLayerMask(
+    const RenderScenePacket<DimensionT>& packet_) noexcept {
+    const RenderView<DimensionT>* active_view = packet_.ActiveView();
+    const std::uint32_t view_layer_mask =
+        (active_view != nullptr) ? active_view->layer_mask : 0xFFFF'FFFFU;
+    return packet_.render_layer_mask & view_layer_mask;
+}
+
+template<ecs::DimensionTag DimensionT>
+[[nodiscard]] constexpr std::uint32_t ResolveSceneDebugFlags(
+    const RenderScenePacket<DimensionT>& packet_) noexcept {
+    const RenderView<DimensionT>* active_view = packet_.ActiveView();
+    const std::uint32_t view_debug_flags =
+        (active_view != nullptr) ? active_view->debug_flags : render_view_debug_none_flag;
+    return packet_.debug_flags | view_debug_flags;
+}
+
+template<ecs::DimensionTag DimensionT>
+[[nodiscard]] constexpr bool ResolveSceneShadowEnabled(
+    const RenderScenePacket<DimensionT>& packet_) noexcept {
+    const RenderView<DimensionT>* active_view = packet_.ActiveView();
+    return (packet_.flags & render_scene_packet_allow_shadow_flag) != 0U &&
+           active_view != nullptr &&
+           HasRenderViewFlag(active_view->flags, render_view_shadow_enabled_flag);
+}
+
+template<ecs::DimensionTag DimensionT>
+[[nodiscard]] constexpr bool ResolveSceneOverlayEnabled(
+    const RenderScenePacket<DimensionT>& packet_) noexcept {
+    const RenderView<DimensionT>* active_view = packet_.ActiveView();
+    return (packet_.flags & render_scene_packet_allow_overlay_flag) != 0U &&
+           active_view != nullptr &&
+           HasRenderViewFlag(active_view->flags, render_view_overlay_enabled_flag);
+}
+
+template<ecs::DimensionTag DimensionT>
+[[nodiscard]] constexpr bool ResolveScenePostProcessEnabled(
+    const RenderScenePacket<DimensionT>& packet_) noexcept {
+    const RenderView<DimensionT>* active_view = packet_.ActiveView();
+    if ((packet_.flags & render_scene_packet_allow_postprocess_flag) == 0U || active_view == nullptr) {
+        return false;
+    }
+
+    const RenderPostProcessPolicy effective_policy =
+        (packet_.postprocess_policy != RenderPostProcessPolicy::inherit)
+            ? packet_.postprocess_policy
+            : active_view->postprocess_policy;
+    if (effective_policy == RenderPostProcessPolicy::enabled) {
+        return true;
+    }
+    if (effective_policy == RenderPostProcessPolicy::disabled) {
+        return false;
+    }
+    return HasRenderViewFlag(active_view->flags, render_view_postprocess_enabled_flag);
 }
 
 static_assert(std::is_standard_layout_v<RenderScenePacket2D>);

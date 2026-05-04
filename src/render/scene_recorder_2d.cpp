@@ -138,27 +138,41 @@ void SceneRecorder2D::PrepareFrame(const RuntimePrepareContext& prepare_context_
         ++stats.frame_packet_prepare_count;
     }
 
-    const bool use_scene_targets = HasSceneConsumer();
+    const bool use_scene_targets = HasSceneConsumer() && IsPostProcessEnabledForSubmission();
+    const bool overlay_enabled = IsOverlayEnabledForSubmission();
+    const bool shadow_enabled = IsShadowEnabledForSubmission();
     if (use_scene_targets) {
         EnsureRuntimeBinding("PrepareFrame");
         (void)scene_targets.PrepareFrame(prepare_context_);
-        ConfigureSceneRenderersForTargets();
+    }
+    ConfigureSceneRenderersForTargets();
+    if (use_scene_targets) {
         ConfigureSceneConsumerForTargets();
     }
 
     for (const PreSceneRendererEntry& entry : pre_scene_renderer_entries) {
+        if (!IsLayerVisibleForSubmission(entry.submission_layer_mask)) {
+            continue;
+        }
+        if (entry.kind == PreSceneRendererKind::shadow && !shadow_enabled) {
+            continue;
+        }
         if (entry.prepare_fn != nullptr && entry.renderer != nullptr) {
             entry.prepare_fn(entry.renderer, prepare_context_);
         }
     }
 
     for (const SceneRendererEntry& entry : scene_renderer_entries) {
+        if (!IsLayerVisibleForSubmission(entry.submission_layer_mask)) {
+            continue;
+        }
         if (entry.prepare_fn != nullptr && entry.renderer != nullptr) {
             entry.prepare_fn(entry.renderer, prepare_context_);
         }
     }
 
-    if (scene_consumer_entry.renderer != nullptr) {
+    if (use_scene_targets && scene_consumer_entry.renderer != nullptr &&
+        IsLayerVisibleForSubmission(scene_consumer_entry.submission_layer_mask)) {
         if (scene_consumer_entry.set_output_target_fn != nullptr) {
             scene_consumer_entry.set_output_target_fn(scene_consumer_entry.renderer,
                                                       scene_consumer_entry.output_target_config);
@@ -169,6 +183,9 @@ void SceneRecorder2D::PrepareFrame(const RuntimePrepareContext& prepare_context_
     }
 
     for (const OverlayRendererEntry& entry : overlay_renderer_entries) {
+        if (!overlay_enabled || !IsLayerVisibleForSubmission(entry.submission_layer_mask)) {
+            continue;
+        }
         if (entry.renderer != nullptr && entry.set_output_target_fn != nullptr) {
             entry.set_output_target_fn(entry.renderer, entry.output_target_config);
         }
@@ -193,23 +210,42 @@ void SceneRecorder2D::Record(const FrameRecordContext& record_context_) {
         ++stats.frame_packet_record_count;
     }
 
+    const bool use_scene_targets = HasSceneConsumer() && IsPostProcessEnabledForSubmission();
+    const bool overlay_enabled = IsOverlayEnabledForSubmission();
+    const bool shadow_enabled = IsShadowEnabledForSubmission();
+
     for (const PreSceneRendererEntry& entry : pre_scene_renderer_entries) {
+        if (!IsLayerVisibleForSubmission(entry.submission_layer_mask)) {
+            continue;
+        }
+        if (entry.kind == PreSceneRendererKind::shadow && !shadow_enabled) {
+            continue;
+        }
         if (entry.record_fn != nullptr && entry.renderer != nullptr) {
             entry.record_fn(entry.renderer, record_context_);
         }
     }
 
     for (const SceneRendererEntry& entry : scene_renderer_entries) {
+        if (!IsLayerVisibleForSubmission(entry.submission_layer_mask)) {
+            continue;
+        }
         if (entry.record_fn != nullptr && entry.renderer != nullptr) {
             entry.record_fn(entry.renderer, record_context_);
         }
     }
 
-    if (scene_consumer_entry.record_fn != nullptr && scene_consumer_entry.renderer != nullptr) {
+    if (use_scene_targets &&
+        scene_consumer_entry.record_fn != nullptr &&
+        scene_consumer_entry.renderer != nullptr &&
+        IsLayerVisibleForSubmission(scene_consumer_entry.submission_layer_mask)) {
         scene_consumer_entry.record_fn(scene_consumer_entry.renderer, record_context_);
     }
 
     for (const OverlayRendererEntry& entry : overlay_renderer_entries) {
+        if (!overlay_enabled || !IsLayerVisibleForSubmission(entry.submission_layer_mask)) {
+            continue;
+        }
         if (entry.record_fn != nullptr && entry.renderer != nullptr) {
             entry.record_fn(entry.renderer, record_context_);
         }
@@ -231,7 +267,17 @@ void SceneRecorder2D::OnSwapchainRecreated(std::uint32_t image_count_,
                                            std::uint64_t completed_submit_value_) {
     EnsureInitialized("OnSwapchainRecreated");
 
+    const bool use_scene_targets = HasSceneConsumer() && IsPostProcessEnabledForSubmission();
+    const bool overlay_enabled = IsOverlayEnabledForSubmission();
+    const bool shadow_enabled = IsShadowEnabledForSubmission();
+
     for (const PreSceneRendererEntry& entry : pre_scene_renderer_entries) {
+        if (!IsLayerVisibleForSubmission(entry.submission_layer_mask)) {
+            continue;
+        }
+        if (entry.kind == PreSceneRendererKind::shadow && !shadow_enabled) {
+            continue;
+        }
         if (entry.swapchain_recreated_fn != nullptr && entry.renderer != nullptr) {
             entry.swapchain_recreated_fn(entry.renderer,
                                          image_count_,
@@ -243,6 +289,9 @@ void SceneRecorder2D::OnSwapchainRecreated(std::uint32_t image_count_,
     }
 
     for (const SceneRendererEntry& entry : scene_renderer_entries) {
+        if (!IsLayerVisibleForSubmission(entry.submission_layer_mask)) {
+            continue;
+        }
         if (entry.swapchain_recreated_fn != nullptr && entry.renderer != nullptr) {
             entry.swapchain_recreated_fn(entry.renderer,
                                          image_count_,
@@ -253,8 +302,10 @@ void SceneRecorder2D::OnSwapchainRecreated(std::uint32_t image_count_,
         }
     }
 
-    if (scene_consumer_entry.swapchain_recreated_fn != nullptr &&
-        scene_consumer_entry.renderer != nullptr) {
+    if (use_scene_targets &&
+        scene_consumer_entry.swapchain_recreated_fn != nullptr &&
+        scene_consumer_entry.renderer != nullptr &&
+        IsLayerVisibleForSubmission(scene_consumer_entry.submission_layer_mask)) {
         scene_consumer_entry.swapchain_recreated_fn(scene_consumer_entry.renderer,
                                                     image_count_,
                                                     extent_,
@@ -264,6 +315,9 @@ void SceneRecorder2D::OnSwapchainRecreated(std::uint32_t image_count_,
     }
 
     for (const OverlayRendererEntry& entry : overlay_renderer_entries) {
+        if (!overlay_enabled || !IsLayerVisibleForSubmission(entry.submission_layer_mask)) {
+            continue;
+        }
         if (entry.swapchain_recreated_fn != nullptr && entry.renderer != nullptr) {
             entry.swapchain_recreated_fn(entry.renderer,
                                          image_count_,
@@ -274,7 +328,7 @@ void SceneRecorder2D::OnSwapchainRecreated(std::uint32_t image_count_,
         }
     }
 
-    if (HasSceneConsumer()) {
+    if (use_scene_targets) {
         EnsureRuntimeBinding("OnSwapchainRecreated");
         (void)scene_targets.OnSwapchainRecreated(*context,
                                                  *render_target_host,
@@ -282,7 +336,9 @@ void SceneRecorder2D::OnSwapchainRecreated(std::uint32_t image_count_,
                                                  extent_,
                                                  last_submitted_value_,
                                                  completed_submit_value_);
-        ConfigureSceneRenderersForTargets();
+    }
+    ConfigureSceneRenderersForTargets();
+    if (use_scene_targets) {
         ConfigureSceneConsumerForTargets();
     }
 
@@ -389,6 +445,16 @@ void SceneRecorder2D::RefreshFramePacketBinding() noexcept {
         active_view = resolved_view;
         active_view_signature = resolved_signature;
     }
+    stats.frame_view_count = (frame_packet != nullptr) ? frame_packet->view_count : 0U;
+    stats.effective_layer_mask = (frame_packet != nullptr)
+        ? ResolveSceneLayerMask(*frame_packet)
+        : all_submission_layers;
+    stats.debug_flags = (frame_packet != nullptr)
+        ? ResolveSceneDebugFlags(*frame_packet)
+        : render_view_debug_none_flag;
+    stats.shadow_enabled = IsShadowEnabledForSubmission() ? 1U : 0U;
+    stats.overlay_enabled = IsOverlayEnabledForSubmission() ? 1U : 0U;
+    stats.postprocess_enabled = IsPostProcessEnabledForSubmission() ? 1U : 0U;
     if (light_frame_coordinator != nullptr) {
         light_frame_coordinator->SetCamera(active_view != nullptr ? active_view->camera : nullptr);
     }
@@ -415,12 +481,45 @@ void SceneRecorder2D::RefreshRendererCounts() noexcept {
     stats.overlay_renderer_count = static_cast<std::uint32_t>(overlay_renderer_entries.size());
 }
 
+std::uint32_t SceneRecorder2D::EffectiveLayerMask() const noexcept {
+    if (frame_packet == nullptr) {
+        return all_submission_layers;
+    }
+    return ResolveSceneLayerMask(*frame_packet);
+}
+
+bool SceneRecorder2D::IsShadowEnabledForSubmission() const noexcept {
+    if (frame_packet == nullptr) {
+        return true;
+    }
+    return ResolveSceneShadowEnabled(*frame_packet);
+}
+
+bool SceneRecorder2D::IsOverlayEnabledForSubmission() const noexcept {
+    if (frame_packet == nullptr) {
+        return true;
+    }
+    return ResolveSceneOverlayEnabled(*frame_packet);
+}
+
+bool SceneRecorder2D::IsPostProcessEnabledForSubmission() const noexcept {
+    if (frame_packet == nullptr) {
+        return true;
+    }
+    return ResolveScenePostProcessEnabled(*frame_packet);
+}
+
+bool SceneRecorder2D::IsLayerVisibleForSubmission(std::uint32_t submission_layer_mask_) const noexcept {
+    return (EffectiveLayerMask() & submission_layer_mask_) != 0U;
+}
+
 void SceneRecorder2D::ConfigureSceneRenderersForTargets() noexcept {
+    const bool use_scene_targets = HasSceneConsumer() && IsPostProcessEnabledForSubmission();
     for (const SceneRendererEntry& entry : scene_renderer_entries) {
         if (entry.renderer == nullptr) {
             continue;
         }
-        if (HasSceneConsumer()) {
+        if (use_scene_targets) {
             if (entry.configure_scene_fn != nullptr) {
                 (void)entry.configure_scene_fn(entry.renderer, scene_targets, entry.pass_role);
             }

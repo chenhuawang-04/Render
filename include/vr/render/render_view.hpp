@@ -29,6 +29,21 @@ enum RenderViewFlags : std::uint32_t {
     render_view_overlay_enabled_flag = 1U << 3U,
 };
 
+enum RenderViewDebugFlags : std::uint32_t {
+    render_view_debug_none_flag = 0U,
+    render_view_debug_bounds_flag = 1U << 0U,
+    render_view_debug_culling_flag = 1U << 1U,
+    render_view_debug_light_clusters_flag = 1U << 2U,
+    render_view_debug_shadow_atlas_flag = 1U << 3U,
+    render_view_debug_wireframe_flag = 1U << 4U,
+};
+
+enum class RenderPostProcessPolicy : std::uint8_t {
+    inherit = 0U,
+    enabled = 1U,
+    disabled = 2U,
+};
+
 struct RenderViewViewport final {
     float x = 0.0F;
     float y = 0.0F;
@@ -66,6 +81,10 @@ struct RenderView final {
                           render_view_postprocess_enabled_flag;
     std::uint32_t culling_mask = 0xFFFF'FFFFU;
     std::uint32_t layer_mask = 0xFFFF'FFFFU;
+    std::uint32_t debug_flags = render_view_debug_none_flag;
+    RenderPostProcessPolicy postprocess_policy = RenderPostProcessPolicy::inherit;
+    std::uint8_t reserved2 = 0U;
+    std::uint16_t reserved3 = 0U;
     RenderViewViewport viewport{};
     RenderViewScissor scissor{};
     RenderViewTargetRefs targets{};
@@ -100,6 +119,8 @@ template<ecs::DimensionTag DimensionT>
     RenderViewHashCombine(hash, static_cast<std::uint64_t>(view_.flags));
     RenderViewHashCombine(hash, static_cast<std::uint64_t>(view_.culling_mask));
     RenderViewHashCombine(hash, static_cast<std::uint64_t>(view_.layer_mask));
+    RenderViewHashCombine(hash, static_cast<std::uint64_t>(view_.debug_flags));
+    RenderViewHashCombine(hash, static_cast<std::uint64_t>(view_.postprocess_policy));
     RenderViewHashCombine(hash, static_cast<std::uint64_t>(RenderViewFloatBits(view_.viewport.x)));
     RenderViewHashCombine(hash, static_cast<std::uint64_t>(RenderViewFloatBits(view_.viewport.y)));
     RenderViewHashCombine(hash, static_cast<std::uint64_t>(RenderViewFloatBits(view_.viewport.width)));
@@ -176,6 +197,11 @@ template<ecs::DimensionTag DimensionT>
 template<ecs::DimensionTag DimensionT>
 void RefreshRenderViewSignature(RenderView<DimensionT>& view_) noexcept {
     view_.signature = detail::ComposeRenderViewSignature(view_);
+}
+
+[[nodiscard]] constexpr bool HasRenderViewFlag(std::uint32_t flags_,
+                                               RenderViewFlags flag_) noexcept {
+    return (flags_ & static_cast<std::uint32_t>(flag_)) != 0U;
 }
 
 [[nodiscard]] inline VkViewport ToVkViewport(const RenderViewViewport& viewport_) noexcept {

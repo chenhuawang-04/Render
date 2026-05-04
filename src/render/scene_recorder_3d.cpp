@@ -142,10 +142,23 @@ void SceneRecorder3D::PrepareFrame(const RuntimePrepareContext& prepare_context_
         ++stats.frame_packet_prepare_count;
     }
 
-    SceneRenderTargetSet& targets = post_stack.Targets();
-    (void)targets.PrepareFrame(prepare_context_);
+    const bool overlay_enabled = IsOverlayEnabledForSubmission();
+    const bool shadow_enabled = IsShadowEnabledForSubmission();
+    const bool use_post_stack = ShouldUsePostStackForSubmission();
+
+    SceneRenderTargetSet* targets = nullptr;
+    if (use_post_stack) {
+        targets = &post_stack.Targets();
+        (void)targets->PrepareFrame(prepare_context_);
+    }
 
     for (const PreSceneRendererEntry& entry : pre_scene_renderer_entries) {
+        if (!IsLayerVisibleForSubmission(entry.submission_layer_mask)) {
+            continue;
+        }
+        if (entry.kind == PreSceneRendererKind::shadow && !shadow_enabled) {
+            continue;
+        }
         if (entry.configure_animation_fn != nullptr && entry.renderer != nullptr) {
             entry.configure_animation_fn(entry.renderer, animation_frame_coordinator);
         }
@@ -155,10 +168,29 @@ void SceneRecorder3D::PrepareFrame(const RuntimePrepareContext& prepare_context_
     }
 
     auto configure_scene_renderer = [&](const SceneRendererEntry& entry_) {
-        if (entry_.configure_scene_fn == nullptr || entry_.renderer == nullptr) {
+        if (!IsLayerVisibleForSubmission(entry_.submission_layer_mask)) {
             return;
         }
-        (void)entry_.configure_scene_fn(entry_.renderer, targets, entry_.pass_role);
+        if (entry_.renderer == nullptr) {
+            return;
+        }
+        if (use_post_stack) {
+            if (entry_.configure_scene_fn != nullptr && targets != nullptr) {
+                (void)entry_.configure_scene_fn(entry_.renderer, *targets, entry_.pass_role);
+            }
+        } else if (entry_.configure_direct_scene_fn != nullptr) {
+            const RenderTargetColorOutputConfig color_output =
+                BuildDirectSceneOutputConfig(entry_.pass_role);
+            const RenderTargetDepthOutputConfig direct_depth_output =
+                BuildDirectDepthOutputConfig(entry_.pass_role);
+            const RenderTargetDepthOutputConfig* depth_output_config =
+                create_info_cache.scene_target.enable_depth ? &direct_depth_output : nullptr;
+            entry_.configure_direct_scene_fn(entry_.renderer,
+                                             entry_.pass_role,
+                                             color_output,
+                                             depth_output_config,
+                                             create_info_cache.scene_target.enable_depth);
+        }
         if (entry_.configure_lighting_fn != nullptr &&
             IsFirstSceneRendererEntryForRenderer(entry_)) {
             entry_.configure_lighting_fn(entry_.renderer,
@@ -174,10 +206,15 @@ void SceneRecorder3D::PrepareFrame(const RuntimePrepareContext& prepare_context_
         }
     };
     ForEachSceneRendererInStageOrder(configure_scene_renderer);
-    (void)targets.ConfigureSceneConsumer(post_stack.Bloom());
-    post_stack.Bloom().PrepareFrame(prepare_context_);
+    if (targets != nullptr) {
+        (void)targets->ConfigureSceneConsumer(post_stack.Bloom());
+        post_stack.Bloom().PrepareFrame(prepare_context_);
+    }
 
     auto prepare_scene_renderer = [&](const SceneRendererEntry& entry_) {
+        if (!IsLayerVisibleForSubmission(entry_.submission_layer_mask)) {
+            return;
+        }
         if (entry_.prepare_fn == nullptr ||
             entry_.renderer == nullptr ||
             !IsFirstSceneRendererEntryForRenderer(entry_)) {
@@ -187,6 +224,9 @@ void SceneRecorder3D::PrepareFrame(const RuntimePrepareContext& prepare_context_
     };
     ForEachSceneRendererInStageOrder(prepare_scene_renderer);
     for (const OverlayRendererEntry& entry : overlay_renderer_entries) {
+        if (!overlay_enabled || !IsLayerVisibleForSubmission(entry.submission_layer_mask)) {
+            continue;
+        }
         if (entry.renderer != nullptr && entry.set_output_target_fn != nullptr) {
             entry.set_output_target_fn(entry.renderer, entry.output_target_config);
         }
@@ -211,28 +251,44 @@ void SceneRecorder3D::Record(const FrameRecordContext& record_context_) {
         ++stats.frame_packet_record_count;
     }
 
+    const bool overlay_enabled = IsOverlayEnabledForSubmission();
+    const bool shadow_enabled = IsShadowEnabledForSubmission();
+    const bool use_post_stack = ShouldUsePostStackForSubmission();
+
     for (const PreSceneRendererEntry& entry : pre_scene_renderer_entries) {
+        if (!IsLayerVisibleForSubmission(entry.submission_layer_mask)) {
+            continue;
+        }
+        if (entry.kind == PreSceneRendererKind::shadow && !shadow_enabled) {
+            continue;
+        }
         if (entry.record_fn != nullptr && entry.renderer != nullptr) {
             entry.record_fn(entry.renderer, record_context_);
         }
     }
 
     auto record_scene_renderer = [&](const SceneRendererEntry& entry_) {
+        if (!IsLayerVisibleForSubmission(entry_.submission_layer_mask)) {
+            return;
+        }
         if (entry_.record_fn == nullptr || entry_.renderer == nullptr) {
             return;
         }
-        if (entry_.configure_scene_fn != nullptr) {
+        if (use_post_stack && entry_.configure_scene_fn != nullptr) {
             (void)entry_.configure_scene_fn(entry_.renderer, post_stack.Targets(), entry_.pass_role);
         }
         entry_.record_fn(entry_.renderer, record_context_, entry_.stage);
     };
     ForEachSceneRendererInStageOrder(record_scene_renderer);
 
-    if (HasRuntimeBinding()) {
+    if (use_post_stack) {
         post_stack.Record(record_context_);
     }
 
     for (const OverlayRendererEntry& entry : overlay_renderer_entries) {
+        if (!overlay_enabled || !IsLayerVisibleForSubmission(entry.submission_layer_mask)) {
+            continue;
+        }
         if (entry.record_fn != nullptr && entry.renderer != nullptr) {
             entry.record_fn(entry.renderer, record_context_);
         }
@@ -255,7 +311,17 @@ void SceneRecorder3D::OnSwapchainRecreated(std::uint32_t image_count_,
     EnsureInitialized("OnSwapchainRecreated");
     EnsureRuntimeBinding("OnSwapchainRecreated");
 
+    const bool overlay_enabled = IsOverlayEnabledForSubmission();
+    const bool shadow_enabled = IsShadowEnabledForSubmission();
+    const bool use_post_stack = IsPostProcessEnabledForSubmission();
+
     for (const PreSceneRendererEntry& entry : pre_scene_renderer_entries) {
+        if (!IsLayerVisibleForSubmission(entry.submission_layer_mask)) {
+            continue;
+        }
+        if (entry.kind == PreSceneRendererKind::shadow && !shadow_enabled) {
+            continue;
+        }
         if (entry.swapchain_recreated_fn != nullptr && entry.renderer != nullptr) {
             entry.swapchain_recreated_fn(entry.renderer,
                                          image_count_,
@@ -267,6 +333,9 @@ void SceneRecorder3D::OnSwapchainRecreated(std::uint32_t image_count_,
     }
 
     auto recreate_scene_renderer = [&](const SceneRendererEntry& entry_) {
+        if (!IsLayerVisibleForSubmission(entry_.submission_layer_mask)) {
+            return;
+        }
         if (entry_.swapchain_recreated_fn == nullptr ||
             entry_.renderer == nullptr ||
             !IsFirstSceneRendererEntryForRenderer(entry_)) {
@@ -281,6 +350,9 @@ void SceneRecorder3D::OnSwapchainRecreated(std::uint32_t image_count_,
     };
     ForEachSceneRendererInStageOrder(recreate_scene_renderer);
     for (const OverlayRendererEntry& entry : overlay_renderer_entries) {
+        if (!overlay_enabled || !IsLayerVisibleForSubmission(entry.submission_layer_mask)) {
+            continue;
+        }
         if (entry.swapchain_recreated_fn != nullptr && entry.renderer != nullptr) {
             entry.swapchain_recreated_fn(entry.renderer,
                                          image_count_,
@@ -300,10 +372,27 @@ void SceneRecorder3D::OnSwapchainRecreated(std::uint32_t image_count_,
                                                     completed_submit_value_);
 
     auto reconfigure_scene_renderer = [&](const SceneRendererEntry& entry_) {
-        if (entry_.configure_scene_fn == nullptr || entry_.renderer == nullptr) {
+        if (!IsLayerVisibleForSubmission(entry_.submission_layer_mask)) {
             return;
         }
-        (void)entry_.configure_scene_fn(entry_.renderer, post_stack.Targets(), entry_.pass_role);
+        if (entry_.renderer == nullptr) {
+            return;
+        }
+        if (use_post_stack) {
+            if (entry_.configure_scene_fn != nullptr) {
+                (void)entry_.configure_scene_fn(entry_.renderer, post_stack.Targets(), entry_.pass_role);
+            }
+        } else if (entry_.configure_direct_scene_fn != nullptr) {
+            const RenderTargetColorOutputConfig color_output =
+                BuildDirectSceneOutputConfig(entry_.pass_role);
+            const RenderTargetDepthOutputConfig depth_output =
+                BuildDirectDepthOutputConfig(entry_.pass_role);
+            entry_.configure_direct_scene_fn(entry_.renderer,
+                                             entry_.pass_role,
+                                             color_output,
+                                             create_info_cache.scene_target.enable_depth ? &depth_output : nullptr,
+                                             create_info_cache.scene_target.enable_depth);
+        }
         if (entry_.configure_lighting_fn != nullptr &&
             IsFirstSceneRendererEntryForRenderer(entry_)) {
             entry_.configure_lighting_fn(entry_.renderer,
@@ -319,8 +408,13 @@ void SceneRecorder3D::OnSwapchainRecreated(std::uint32_t image_count_,
         }
     };
     ForEachSceneRendererInStageOrder(reconfigure_scene_renderer);
-    (void)post_stack.Targets().ConfigureSceneConsumer(post_stack.Bloom());
+    if (use_post_stack) {
+        (void)post_stack.Targets().ConfigureSceneConsumer(post_stack.Bloom());
+    }
     for (const OverlayRendererEntry& entry : overlay_renderer_entries) {
+        if (!overlay_enabled || !IsLayerVisibleForSubmission(entry.submission_layer_mask)) {
+            continue;
+        }
         if (entry.renderer != nullptr && entry.set_output_target_fn != nullptr) {
             entry.set_output_target_fn(entry.renderer, entry.output_target_config);
         }
@@ -424,6 +518,16 @@ void SceneRecorder3D::RefreshFramePacketBinding() noexcept {
         active_view = resolved_view;
         active_view_signature = resolved_signature;
     }
+    stats.frame_view_count = (frame_packet != nullptr) ? frame_packet->view_count : 0U;
+    stats.effective_layer_mask = (frame_packet != nullptr)
+        ? ResolveSceneLayerMask(*frame_packet)
+        : all_submission_layers;
+    stats.debug_flags = (frame_packet != nullptr)
+        ? ResolveSceneDebugFlags(*frame_packet)
+        : render_view_debug_none_flag;
+    stats.shadow_enabled = IsShadowEnabledForSubmission() ? 1U : 0U;
+    stats.overlay_enabled = IsOverlayEnabledForSubmission() ? 1U : 0U;
+    stats.postprocess_enabled = IsPostProcessEnabledForSubmission() ? 1U : 0U;
     if (light_frame_coordinator != nullptr) {
         light_frame_coordinator->SetCamera(active_view != nullptr ? active_view->camera : nullptr);
     }
@@ -484,6 +588,96 @@ void SceneRecorder3D::RefreshRendererCounts() noexcept {
         }
     }
     stats.overlay_renderer_count = static_cast<std::uint32_t>(overlay_renderer_entries.size());
+}
+
+RenderTargetColorOutputConfig SceneRecorder3D::BuildDirectSceneOutputConfig(
+    SceneRenderPassRole pass_role_) const noexcept {
+    RenderTargetColorOutputConfig output{};
+    output.final_state = (pass_role_ == SceneRenderPassRole::single ||
+                          pass_role_ == SceneRenderPassRole::last)
+        ? RenderTargetStateKind::present_src
+        : RenderTargetStateKind::color_attachment;
+    output.use_explicit_load_op = true;
+    output.store_op = VK_ATTACHMENT_STORE_OP_STORE;
+    output.clear_color = create_info_cache.scene_target.clear_color;
+
+    switch (pass_role_) {
+    case SceneRenderPassRole::single:
+    case SceneRenderPassRole::first:
+        output.load_op = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        break;
+    case SceneRenderPassRole::middle:
+    case SceneRenderPassRole::last:
+    default:
+        output.load_op = VK_ATTACHMENT_LOAD_OP_LOAD;
+        break;
+    }
+    return output;
+}
+
+RenderTargetDepthOutputConfig SceneRecorder3D::BuildDirectDepthOutputConfig(
+    SceneRenderPassRole pass_role_) const noexcept {
+    RenderTargetDepthOutputConfig output{};
+    output.final_state = RenderTargetStateKind::depth_attachment;
+    output.use_explicit_load_op = true;
+    output.store_op = VK_ATTACHMENT_STORE_OP_STORE;
+    output.clear_depth_stencil.depth = create_info_cache.scene_target.clear_depth_value;
+    output.clear_depth_stencil.stencil = create_info_cache.scene_target.clear_stencil_value;
+
+    switch (pass_role_) {
+    case SceneRenderPassRole::single:
+    case SceneRenderPassRole::first:
+        output.load_op = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        break;
+    case SceneRenderPassRole::middle:
+    case SceneRenderPassRole::last:
+    default:
+        output.load_op = VK_ATTACHMENT_LOAD_OP_LOAD;
+        break;
+    }
+    return output;
+}
+
+bool SceneRecorder3D::ShouldUsePostStackForSubmission() const noexcept {
+    if (!HasRuntimeBinding()) {
+        return false;
+    }
+    if (frame_packet == nullptr) {
+        return true;
+    }
+    return ResolveScenePostProcessEnabled(*frame_packet);
+}
+
+std::uint32_t SceneRecorder3D::EffectiveLayerMask() const noexcept {
+    if (frame_packet == nullptr) {
+        return all_submission_layers;
+    }
+    return ResolveSceneLayerMask(*frame_packet);
+}
+
+bool SceneRecorder3D::IsShadowEnabledForSubmission() const noexcept {
+    if (frame_packet == nullptr) {
+        return true;
+    }
+    return ResolveSceneShadowEnabled(*frame_packet);
+}
+
+bool SceneRecorder3D::IsOverlayEnabledForSubmission() const noexcept {
+    if (frame_packet == nullptr) {
+        return true;
+    }
+    return ResolveSceneOverlayEnabled(*frame_packet);
+}
+
+bool SceneRecorder3D::IsPostProcessEnabledForSubmission() const noexcept {
+    if (frame_packet == nullptr) {
+        return true;
+    }
+    return ResolveScenePostProcessEnabled(*frame_packet);
+}
+
+bool SceneRecorder3D::IsLayerVisibleForSubmission(std::uint32_t submission_layer_mask_) const noexcept {
+    return (EffectiveLayerMask() & submission_layer_mask_) != 0U;
 }
 
 bool SceneRecorder3D::IsFirstSceneRendererEntryForRenderer(

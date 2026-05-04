@@ -41,6 +41,13 @@ struct SceneRecorder3DStats final {
     std::uint32_t frame_packet_prepare_count = 0U;
     std::uint32_t frame_packet_record_count = 0U;
     std::uint32_t animation_binding_refresh_count = 0U;
+    std::uint32_t frame_view_count = 0U;
+    std::uint32_t effective_layer_mask = 0xFFFF'FFFFU;
+    std::uint32_t debug_flags = render_view_debug_none_flag;
+    std::uint8_t shadow_enabled = 1U;
+    std::uint8_t overlay_enabled = 1U;
+    std::uint8_t postprocess_enabled = 1U;
+    std::uint8_t reserved0 = 0U;
 };
 
 class SceneRecorder3D final {
@@ -80,10 +87,15 @@ public:
     void ClearFramePacket() noexcept;
 
     template<typename RendererT>
-    void RegisterPreSceneRenderer(RendererT& renderer_) {
+    void RegisterPreSceneRenderer(RendererT& renderer_,
+                                 std::uint32_t submission_layer_mask_ = all_submission_layers) {
         EnsureInitialized("RegisterPreSceneRenderer");
         const PreSceneRendererEntry entry{
             .renderer = &renderer_,
+            .kind = PreSceneRendererKind::generic,
+            .reserved0 = 0U,
+            .reserved1 = 0U,
+            .submission_layer_mask = submission_layer_mask_,
             .prepare_fn = &PrepareRenderer<RendererT>,
             .record_fn = &RecordRenderer<RendererT>,
             .swapchain_recreated_fn = &OptionalOnSwapchainRecreatedRenderer<RendererT>,
@@ -92,8 +104,21 @@ public:
         UpsertPreSceneRendererEntry(entry);
     }
 
-    void RegisterShadowRenderer(shadow::ShadowRenderer3D& shadow_renderer_) {
-        RegisterPreSceneRenderer(shadow_renderer_);
+    void RegisterShadowRenderer(shadow::ShadowRenderer3D& shadow_renderer_,
+                               std::uint32_t submission_layer_mask_ = all_submission_layers) {
+        EnsureInitialized("RegisterShadowRenderer");
+        const PreSceneRendererEntry entry{
+            .renderer = &shadow_renderer_,
+            .kind = PreSceneRendererKind::shadow,
+            .reserved0 = 0U,
+            .reserved1 = 0U,
+            .submission_layer_mask = submission_layer_mask_,
+            .prepare_fn = &PrepareRenderer<shadow::ShadowRenderer3D>,
+            .record_fn = &RecordRenderer<shadow::ShadowRenderer3D>,
+            .swapchain_recreated_fn = &OptionalOnSwapchainRecreatedRenderer<shadow::ShadowRenderer3D>,
+            .configure_animation_fn = &ConfigurePreSceneAnimationBinding<shadow::ShadowRenderer3D>,
+        };
+        UpsertPreSceneRendererEntry(entry);
         BindShadowRuntime(&shadow_renderer_.FrameCoordinatorMutable(),
                           &shadow_renderer_.AtlasHostMutable());
     }
@@ -102,16 +127,20 @@ public:
     void RegisterSceneRenderer(RendererT& renderer_,
                                SceneRenderPassRole pass_role_,
                                SceneRecorder3DSceneStage stage_ =
-                                   SceneRecorder3DSceneStage::opaque) {
+                                   SceneRecorder3DSceneStage::opaque,
+                               std::uint32_t submission_layer_mask_ = all_submission_layers) {
         EnsureInitialized("RegisterSceneRenderer");
         const SceneRendererEntry entry{
             .renderer = &renderer_,
             .pass_role = pass_role_,
             .stage = stage_,
+            .reserved0 = 0U,
+            .submission_layer_mask = submission_layer_mask_,
             .prepare_fn = &PrepareRenderer<RendererT>,
             .record_fn = &RecordSceneRenderer<RendererT>,
             .swapchain_recreated_fn = &OnSwapchainRecreatedRenderer<RendererT>,
             .configure_scene_fn = &ConfigureSceneRendererBinding<RendererT>,
+            .configure_direct_scene_fn = &ConfigureDirectSceneRendererBinding<RendererT>,
             .configure_lighting_fn = &ConfigureSceneLightingBinding<RendererT>,
             .configure_animation_fn = &ConfigureSceneAnimationBinding<RendererT>,
         };
@@ -120,24 +149,28 @@ public:
 
     template<typename RendererT>
     void RegisterOpaqueSceneRenderer(RendererT& renderer_,
-                                     SceneRenderPassRole pass_role_) {
-        RegisterSceneRenderer(renderer_, pass_role_, SceneRecorder3DSceneStage::opaque);
+                                     SceneRenderPassRole pass_role_,
+                                     std::uint32_t submission_layer_mask_ = all_submission_layers) {
+        RegisterSceneRenderer(renderer_, pass_role_, SceneRecorder3DSceneStage::opaque, submission_layer_mask_);
     }
 
     template<typename RendererT>
     void RegisterTransparentSceneRenderer(RendererT& renderer_,
-                                          SceneRenderPassRole pass_role_) {
-        RegisterSceneRenderer(renderer_, pass_role_, SceneRecorder3DSceneStage::transparent);
+                                          SceneRenderPassRole pass_role_,
+                                          std::uint32_t submission_layer_mask_ = all_submission_layers) {
+        RegisterSceneRenderer(renderer_, pass_role_, SceneRecorder3DSceneStage::transparent, submission_layer_mask_);
     }
 
     template<typename RendererT>
     void RegisterOverlayRenderer(RendererT& renderer_,
                                  const RenderTargetColorOutputConfig& output_target_config_ =
-                                     MakePresentOverlayOutputConfig()) {
+                                     MakePresentOverlayOutputConfig(),
+                                 std::uint32_t submission_layer_mask_ = all_submission_layers) {
         EnsureInitialized("RegisterOverlayRenderer");
         const OverlayRendererEntry entry{
             .renderer = &renderer_,
             .output_target_config = output_target_config_,
+            .submission_layer_mask = submission_layer_mask_,
             .prepare_fn = &PrepareRenderer<RendererT>,
             .record_fn = &RecordRenderer<RendererT>,
             .swapchain_recreated_fn = &OnSwapchainRecreatedRenderer<RendererT>,
@@ -175,6 +208,8 @@ public:
     [[nodiscard]] static RenderTargetColorOutputConfig MakePresentOverlayOutputConfig() noexcept;
 
 private:
+    static constexpr std::uint32_t all_submission_layers = 0xFFFF'FFFFU;
+
     using PrepareFn = void (*)(void*, const RuntimePrepareContext&);
     using RecordFn = void (*)(void*, const FrameRecordContext&);
     using SceneRecordFn = void (*)(void*, const FrameRecordContext&, SceneRecorder3DSceneStage);
@@ -185,6 +220,11 @@ private:
                                           std::uint64_t,
                                           std::uint64_t);
     using ConfigureSceneFn = bool (*)(void*, const SceneRenderTargetSet&, SceneRenderPassRole);
+    using ConfigureDirectSceneFn = void (*)(void*,
+                                            SceneRenderPassRole,
+                                            const RenderTargetColorOutputConfig&,
+                                            const RenderTargetDepthOutputConfig*,
+                                            bool);
     using ConfigureLightingFn = void (*)(void*,
                                          render::LightFrameCoordinator<ecs::Dim3>*,
                                          render::LightShadowLinkCoordinator3D*,
@@ -202,8 +242,17 @@ private:
         SceneRecorder3DSceneStage::transparent,
     };
 
+    enum class PreSceneRendererKind : std::uint8_t {
+        generic = 0U,
+        shadow = 1U,
+    };
+
     struct PreSceneRendererEntry final {
         void* renderer = nullptr;
+        PreSceneRendererKind kind = PreSceneRendererKind::generic;
+        std::uint8_t reserved0 = 0U;
+        std::uint16_t reserved1 = 0U;
+        std::uint32_t submission_layer_mask = all_submission_layers;
         PrepareFn prepare_fn = nullptr;
         RecordFn record_fn = nullptr;
         SwapchainRecreatedFn swapchain_recreated_fn = nullptr;
@@ -214,10 +263,13 @@ private:
         void* renderer = nullptr;
         SceneRenderPassRole pass_role = SceneRenderPassRole::single;
         SceneRecorder3DSceneStage stage = SceneRecorder3DSceneStage::opaque;
+        std::uint16_t reserved0 = 0U;
+        std::uint32_t submission_layer_mask = all_submission_layers;
         PrepareFn prepare_fn = nullptr;
         SceneRecordFn record_fn = nullptr;
         SwapchainRecreatedFn swapchain_recreated_fn = nullptr;
         ConfigureSceneFn configure_scene_fn = nullptr;
+        ConfigureDirectSceneFn configure_direct_scene_fn = nullptr;
         ConfigureLightingFn configure_lighting_fn = nullptr;
         ConfigureSceneAnimationFn configure_animation_fn = nullptr;
     };
@@ -225,6 +277,7 @@ private:
     struct OverlayRendererEntry final {
         void* renderer = nullptr;
         RenderTargetColorOutputConfig output_target_config{};
+        std::uint32_t submission_layer_mask = all_submission_layers;
         PrepareFn prepare_fn = nullptr;
         RecordFn record_fn = nullptr;
         SwapchainRecreatedFn swapchain_recreated_fn = nullptr;
@@ -297,6 +350,31 @@ private:
                                               const SceneRenderTargetSet& target_set_,
                                               SceneRenderPassRole pass_role_) {
         return target_set_.ConfigureSceneRenderer(*static_cast<RendererT*>(renderer_), pass_role_);
+    }
+
+    template<typename RendererT>
+    static void ConfigureDirectSceneRendererBinding(
+        void* renderer_,
+        SceneRenderPassRole,
+        const RenderTargetColorOutputConfig& color_output_target_config_,
+        const RenderTargetDepthOutputConfig* depth_output_target_config_,
+        bool enable_depth_) {
+        RendererT& renderer_ref = *static_cast<RendererT*>(renderer_);
+        renderer_ref.SetOutputTargetConfig(color_output_target_config_);
+        if (!enable_depth_) {
+            return;
+        }
+        if constexpr (requires(RendererT& candidate_,
+                               const RenderTargetDepthOutputConfig& depth_output_target_config_ref_) {
+                          candidate_.SetDepthTargetConfig(depth_output_target_config_ref_);
+                      }) {
+            if (depth_output_target_config_ != nullptr) {
+                renderer_ref.SetDepthTargetConfig(*depth_output_target_config_);
+            }
+        } else {
+            throw std::runtime_error(
+                "SceneRecorder3D direct scene output requires depth target support");
+        }
     }
 
     template<typename RendererT>
@@ -407,6 +485,16 @@ private:
     void RefreshSceneLightingBindings() noexcept;
     void RefreshAnimationBindings() noexcept;
     void RefreshRendererCounts() noexcept;
+    [[nodiscard]] RenderTargetColorOutputConfig BuildDirectSceneOutputConfig(
+        SceneRenderPassRole pass_role_) const noexcept;
+    [[nodiscard]] RenderTargetDepthOutputConfig BuildDirectDepthOutputConfig(
+        SceneRenderPassRole pass_role_) const noexcept;
+    [[nodiscard]] bool ShouldUsePostStackForSubmission() const noexcept;
+    [[nodiscard]] std::uint32_t EffectiveLayerMask() const noexcept;
+    [[nodiscard]] bool IsShadowEnabledForSubmission() const noexcept;
+    [[nodiscard]] bool IsOverlayEnabledForSubmission() const noexcept;
+    [[nodiscard]] bool IsPostProcessEnabledForSubmission() const noexcept;
+    [[nodiscard]] bool IsLayerVisibleForSubmission(std::uint32_t submission_layer_mask_) const noexcept;
     [[nodiscard]] bool IsFirstSceneRendererEntryForRenderer(
         const SceneRendererEntry& entry_) const noexcept;
     void EnsureInitialized(const char* operation_) const;
