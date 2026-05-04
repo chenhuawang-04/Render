@@ -48,6 +48,10 @@ struct SkeletalPoseOutputState final {
     std::uint32_t joint_count;
     std::uint32_t sampled_joint_count;
     std::uint32_t revision;
+    const SkeletalJointPose<DimensionT>* bind_pose_joints;
+    std::uint32_t bind_pose_joint_count;
+    std::uint32_t reserved0;
+    std::uint32_t reserved1;
 };
 
 struct MorphWeightOutputState final {

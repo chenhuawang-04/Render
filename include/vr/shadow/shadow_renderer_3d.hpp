@@ -7,8 +7,10 @@
 #include "vr/ecs/component/shadow_component.hpp"
 #include "vr/ecs/component/transform_component.hpp"
 #include "vr/ecs/system/animation_evaluation_context.hpp"
+#include "vr/geometry/geometry_skeletal_palette_builder.hpp"
 #include "vr/geometry/geometry_resource_host.hpp"
 #include "vr/render/pipeline_host.hpp"
+#include "vr/render/descriptor_host.hpp"
 #include "vr/render/render_loop_host.hpp"
 #include "vr/render/runtime_prepare_context.hpp"
 #include "vr/render/shadow_frame_coordinator.hpp"
@@ -57,9 +59,13 @@ struct ShadowRenderer3DStats final {
     std::uint32_t skipped_no_shadow_flag_count = 0U;
     std::uint32_t skipped_out_of_range_count = 0U;
     std::uint32_t pipeline_bind_count = 0U;
+    std::uint32_t descriptor_set_bind_count = 0U;
+    std::uint32_t descriptor_set_update_count = 0U;
     std::uint32_t pipeline_compile_count = 0U;
     std::uint32_t reused_pipeline_count = 0U;
     std::uint32_t morph_animated_draw_call_count = 0U;
+    std::uint32_t skeletal_palette_component_count = 0U;
+    std::uint32_t skeletal_palette_matrix_count = 0U;
     bool runtime_cache_reused = false;
     bool runtime_transform_only_update = false;
 };
@@ -179,6 +185,8 @@ private:
     void EnsurePipelineObjects(VulkanContext& context_,
                                render::PipelineHost& pipeline_host_,
                                VkFormat depth_format_);
+    void EnsureDescriptorObjects(VulkanContext& context_,
+                                 render::DescriptorHost& descriptor_host_);
     [[nodiscard]] render::GraphicsPipelineId EnsureGraphicsPipeline(VulkanContext& context_,
                                                                     render::PipelineHost& pipeline_host_,
                                                                     VkFormat depth_format_,
@@ -192,6 +200,10 @@ private:
                                                  render::PipelineHost& pipeline_host_,
                                                  VkFormat depth_format_);
     void BuildAtlasRequests();
+    void EnsureSkeletalBufferCapacity(resource::BufferResource& buffer_,
+                                      VkDeviceSize required_bytes_);
+    void DestroySkeletalBuffer(resource::BufferResource& buffer_) noexcept;
+    void PrepareSkeletalResourcesForFrame();
     void RecordAtlasTransition(VkCommandBuffer command_buffer_,
                                const ShadowAtlasHost::AtlasRecord& atlas_record_,
                                VkImageLayout old_layout_,
@@ -221,6 +233,7 @@ private:
     geometry::GeometryResourceHost* geometry_resource_host = nullptr;
 
     VulkanContext* context = nullptr;
+    render::DescriptorHost* descriptor_host = nullptr;
     render::PipelineHost* pipeline_host = nullptr;
     resource::GpuMemoryHost* gpu_memory_host = nullptr;
 
@@ -230,6 +243,7 @@ private:
     ShadowRenderer3DMcVector<AtlasRequestAggregate> atlas_requests{};
 
     render::PipelineLayoutId pipeline_layout_id{};
+    render::DescriptorSetLayoutId descriptor_layout_id{};
     render::ShaderModuleId shader_vertex_id{};
     std::array<std::array<std::array<render::GraphicsPipelineId,
                                      static_cast<std::size_t>(CullMode::count)>,
@@ -237,6 +251,21 @@ private:
                static_cast<std::size_t>(DepthMode::count)> pipeline_ids{};
     VkFormat pipeline_depth_format = VK_FORMAT_UNDEFINED;
     VkFormat resolved_depth_format = VK_FORMAT_UNDEFINED;
+
+    struct FrameSkeletalResources final {
+        resource::BufferResource skeletal_components{};
+        resource::BufferResource skeletal_matrices{};
+        VkDescriptorSet descriptor_set = VK_NULL_HANDLE;
+        std::uint32_t skeletal_component_count = 0U;
+        std::uint32_t skeletal_matrix_count = 0U;
+        std::uint64_t skeletal_signature = 0U;
+        std::uint64_t descriptor_signature = 0U;
+    };
+
+    ShadowRenderer3DMcVector<FrameSkeletalResources> frame_skeletal_resources{};
+    ShadowRenderer3DMcVector<geometry::GeometrySkeletalComponentGpu> skeletal_component_scratch{};
+    ShadowRenderer3DMcVector<geometry::GeometrySkeletalMatrixGpu> skeletal_matrix_scratch{};
+    std::uint32_t active_frame_index = 0U;
 
     bool initialized = false;
 };

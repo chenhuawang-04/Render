@@ -46,6 +46,8 @@ public:
             if (base_pose == nullptr && clip->joint_count > 0U) {
                 return false;
             }
+            output_.bind_pose_joints = base_pose;
+            output_.bind_pose_joint_count = clip->joint_count;
             for (std::uint32_t i = 0U; i < clip->joint_count; ++i) {
                 output_.joints[i] = base_pose[i];
             }
@@ -74,6 +76,8 @@ public:
             if (base_pose == nullptr && clip->joint_count > 0U) {
                 return false;
             }
+            output_.bind_pose_joints = base_pose;
+            output_.bind_pose_joint_count = clip->joint_count;
             for (std::uint32_t i = 0U; i < clip->joint_count; ++i) {
                 output_.joints[i] = base_pose[i];
             }

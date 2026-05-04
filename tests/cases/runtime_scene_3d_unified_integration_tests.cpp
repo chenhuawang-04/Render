@@ -314,10 +314,10 @@ VR_TEST_CASE(RuntimeIntegration_unified_scene_3d_bloom_post_stack_smoke,
     FillGradientTexture(surface_pixels.data(), texture_width, texture_height);
 
     std::array<vr::geometry::GeometryMeshVertex, 4U> mesh_vertices{
-        vr::geometry::GeometryMeshVertex{.position_x = -0.5F, .position_y = -0.5F, .position_z = 0.0F, .normal_x = 0.0F, .normal_y = 0.0F, .normal_z = 1.0F, .uv_u = 0.0F, .uv_v = 0.0F, .morph0_position_delta_z = -0.18F, .morph1_position_delta_x = -0.08F},
-        vr::geometry::GeometryMeshVertex{.position_x = 0.5F, .position_y = -0.5F, .position_z = 0.0F, .normal_x = 0.0F, .normal_y = 0.0F, .normal_z = 1.0F, .uv_u = 1.0F, .uv_v = 0.0F, .morph0_position_delta_z = 0.18F, .morph1_position_delta_x = 0.08F},
-        vr::geometry::GeometryMeshVertex{.position_x = 0.5F, .position_y = 0.5F, .position_z = 0.0F, .normal_x = 0.0F, .normal_y = 0.0F, .normal_z = 1.0F, .uv_u = 1.0F, .uv_v = 1.0F, .morph0_position_delta_z = 0.28F, .morph1_position_delta_x = 0.12F},
-        vr::geometry::GeometryMeshVertex{.position_x = -0.5F, .position_y = 0.5F, .position_z = 0.0F, .normal_x = 0.0F, .normal_y = 0.0F, .normal_z = 1.0F, .uv_u = 0.0F, .uv_v = 1.0F, .morph0_position_delta_z = -0.28F, .morph1_position_delta_x = -0.12F}
+        vr::geometry::GeometryMeshVertex{.position_x = -0.5F, .position_y = -0.5F, .position_z = 0.0F, .normal_x = 0.0F, .normal_y = 0.0F, .normal_z = 1.0F, .uv_u = 0.0F, .uv_v = 0.0F, .morph0_position_delta_z = -0.18F, .morph1_position_delta_x = -0.08F, .joint_index0 = 0U, .joint_weight0 = 1.0F},
+        vr::geometry::GeometryMeshVertex{.position_x = 0.5F, .position_y = -0.5F, .position_z = 0.0F, .normal_x = 0.0F, .normal_y = 0.0F, .normal_z = 1.0F, .uv_u = 1.0F, .uv_v = 0.0F, .morph0_position_delta_z = 0.18F, .morph1_position_delta_x = 0.08F, .joint_index0 = 0U, .joint_weight0 = 1.0F},
+        vr::geometry::GeometryMeshVertex{.position_x = 0.5F, .position_y = 0.5F, .position_z = 0.0F, .normal_x = 0.0F, .normal_y = 0.0F, .normal_z = 1.0F, .uv_u = 1.0F, .uv_v = 1.0F, .morph0_position_delta_z = 0.28F, .morph1_position_delta_x = 0.12F, .joint_index0 = 0U, .joint_weight0 = 1.0F},
+        vr::geometry::GeometryMeshVertex{.position_x = -0.5F, .position_y = 0.5F, .position_z = 0.0F, .normal_x = 0.0F, .normal_y = 0.0F, .normal_z = 1.0F, .uv_u = 0.0F, .uv_v = 1.0F, .morph0_position_delta_z = -0.28F, .morph1_position_delta_x = -0.12F, .joint_index0 = 0U, .joint_weight0 = 1.0F}
     };
     std::array<std::uint32_t, 6U> mesh_indices{0U, 1U, 2U, 2U, 3U, 0U};
     std::array<vr::geometry::GeometrySubmeshRange, 1U> mesh_submeshes{
@@ -478,6 +478,7 @@ VR_TEST_CASE(RuntimeIntegration_unified_scene_3d_bloom_post_stack_smoke,
         GeometryMeshSystem3D::EnableVertexDeformShader(geometry_component, true);
         GeometryMeshSystem3D::EnableMorphTargets(geometry_component, true);
         GeometryMeshSystem3D::EnableSkeletalRootMotion(geometry_component, true);
+        GeometryMeshSystem3D::EnableSkeletalSkinning(geometry_component, true);
         geometry_component.runtime.route.depth_bin = 24U;
         GeometrySystem3D::RebuildSortKey(geometry_component);
 
@@ -567,6 +568,10 @@ VR_TEST_CASE(RuntimeIntegration_unified_scene_3d_bloom_post_stack_smoke,
                 .joint_count = static_cast<std::uint32_t>(skeletal_joint_storage.size()),
                 .sampled_joint_count = static_cast<std::uint32_t>(skeletal_joint_storage.size()),
                 .revision = 1U,
+                .bind_pose_joints = skeletal_joint_storage.data(),
+                .bind_pose_joint_count = static_cast<std::uint32_t>(skeletal_joint_storage.size()),
+                .reserved0 = 0U,
+                .reserved1 = 0U,
             }
         };
         std::array<float, 2U> morph_weight_storage{0.0F, 0.0F};

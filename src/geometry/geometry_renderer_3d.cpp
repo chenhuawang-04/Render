@@ -228,6 +228,9 @@ void GeometryRenderer3D::Initialize(const GeometryRenderer3DCreateInfo& create_i
     if (create_info_cache.reserve_material_set_count > 0U) {
         resolved_materials.reserve(create_info_cache.reserve_material_set_count);
     }
+    if (create_info_cache.reserve_component_count > 0U) {
+        skeletal_component_scratch.reserve(create_info_cache.reserve_component_count);
+    }
     runtime_stats = {};
     appearance_runtime_stats = {};
     appearance_link_stats = {};
@@ -268,6 +271,10 @@ void GeometryRenderer3D::Shutdown(VulkanContext& context_) {
     if (light_shadow_upload_host.IsInitialized()) {
         light_shadow_upload_host.Shutdown(context_);
     }
+    for (auto& frame_resources : frame_lighting_resources) {
+        DestroySkeletalBuffer(frame_resources.skeletal_components);
+        DestroySkeletalBuffer(frame_resources.skeletal_matrices);
+    }
     image_initialized.clear();
     for (auto& frame_sets : frame_material_sets) {
         frame_sets.clear();
@@ -275,6 +282,8 @@ void GeometryRenderer3D::Shutdown(VulkanContext& context_) {
     frame_material_sets.clear();
     frame_lighting_resources.clear();
     resolved_materials.clear();
+    skeletal_component_scratch.clear();
+    skeletal_matrix_scratch.clear();
 
     if (fallback_shadow_array_view != VK_NULL_HANDLE) {
         resource::ImageHost::DestroyView(context_, fallback_shadow_array_view);
@@ -1211,6 +1220,16 @@ void GeometryRenderer3D::EnsureLightingDescriptorObjects(VulkanContext& context_
         binding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         layout_desc.bindings.push_back(binding);
 
+        binding.binding = 6U;
+        binding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        binding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+        layout_desc.bindings.push_back(binding);
+
+        binding.binding = 7U;
+        binding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        binding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+        layout_desc.bindings.push_back(binding);
+
         lighting_descriptor_layout_id = descriptor_host_.RegisterLayout(context_, layout_desc);
     }
 
@@ -1272,6 +1291,44 @@ GeometryRenderer3D::LightingParamsGpu GeometryRenderer3D::BuildLightingParamsGpu
     }
 
     return params;
+}
+
+void GeometryRenderer3D::DestroySkeletalBuffer(resource::BufferResource& buffer_) noexcept {
+    if (context == nullptr || context->Device() == VK_NULL_HANDLE) {
+        buffer_ = {};
+        return;
+    }
+    resource::BufferHost::DestroyBuffer(*context, buffer_);
+}
+
+void GeometryRenderer3D::EnsureSkeletalBufferCapacity(resource::BufferResource& buffer_,
+                                                      VkDeviceSize required_bytes_) {
+    if (context == nullptr || gpu_memory_host == nullptr) {
+        throw std::runtime_error("GeometryRenderer3D::EnsureSkeletalBufferCapacity missing runtime hosts");
+    }
+    if (required_bytes_ == 0U) {
+        return;
+    }
+    if (buffer_.buffer != VK_NULL_HANDLE && buffer_.size >= required_bytes_) {
+        return;
+    }
+
+    if (buffer_.buffer != VK_NULL_HANDLE) {
+        resource::BufferHost::DestroyBuffer(*context, buffer_);
+    }
+
+    VkDeviceSize capacity = 256U;
+    while (capacity < required_bytes_) {
+        capacity <<= 1U;
+    }
+
+    resource::BufferCreateInfo create_info{};
+    create_info.size = capacity;
+    create_info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+    create_info.memory_properties =
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+    create_info.persistently_mapped = true;
+    buffer_ = resource::BufferHost::CreateBuffer(*context, create_info, *gpu_memory_host);
 }
 
 void GeometryRenderer3D::EnsureLightingResourcesForFrame(
@@ -1560,6 +1617,44 @@ void GeometryRenderer3D::EnsureLightingResourcesForFrame(
     frame_resources.shadow_namespace_id = lighting_enabled ? shadow_namespace_id : 0U;
     frame_resources.upload_signature = uniform_revision ^ cluster_revision ^ shadow_view_revision;
 
+    const GeometrySkeletalPaletteBuildStats skeletal_build_stats =
+        GeometrySkeletalPaletteBuilder::Build(geometry_components,
+                                             component_count,
+                                             skeletal_outputs,
+                                             skeletal_output_count,
+                                             skeletal_component_scratch,
+                                             skeletal_matrix_scratch);
+    const std::uint32_t skeletal_component_upload_count =
+        std::max<std::uint32_t>(static_cast<std::uint32_t>(skeletal_component_scratch.size()), 1U);
+    const std::uint32_t skeletal_matrix_upload_count =
+        std::max<std::uint32_t>(static_cast<std::uint32_t>(skeletal_matrix_scratch.size()), 1U);
+    if (skeletal_component_scratch.empty()) {
+        skeletal_component_scratch.resize(1U);
+        skeletal_component_scratch[0U] = {};
+    }
+    if (skeletal_matrix_scratch.empty()) {
+        skeletal_matrix_scratch.resize(1U);
+        skeletal_matrix_scratch[0U].matrix = ecs::spatial_math::IdentityMatrix4x4();
+    }
+
+    const VkDeviceSize skeletal_component_bytes =
+        static_cast<VkDeviceSize>(skeletal_component_upload_count) * sizeof(GeometrySkeletalComponentGpu);
+    const VkDeviceSize skeletal_matrix_bytes =
+        static_cast<VkDeviceSize>(skeletal_matrix_upload_count) * sizeof(GeometrySkeletalMatrixGpu);
+    EnsureSkeletalBufferCapacity(frame_resources.skeletal_components, skeletal_component_bytes);
+    EnsureSkeletalBufferCapacity(frame_resources.skeletal_matrices, skeletal_matrix_bytes);
+    std::memcpy(frame_resources.skeletal_components.mapped_ptr,
+                skeletal_component_scratch.data(),
+                static_cast<std::size_t>(skeletal_component_bytes));
+    std::memcpy(frame_resources.skeletal_matrices.mapped_ptr,
+                skeletal_matrix_scratch.data(),
+                static_cast<std::size_t>(skeletal_matrix_bytes));
+    frame_resources.skeletal_component_count =
+        skeletal_component_upload_count;
+    frame_resources.skeletal_matrix_count =
+        skeletal_matrix_upload_count;
+    frame_resources.skeletal_signature = skeletal_build_stats.signature;
+
     stats.light_count = resolved_light_count;
     stats.visible_light_count = resolved_visible_light_count;
     stats.shadow_view_count = resolved_shadow_view_count;
@@ -1570,6 +1665,9 @@ void GeometryRenderer3D::EnsureLightingResourcesForFrame(
     stats.light_shadow_linked_count = linked_light_count;
     stats.light_shadow_namespace_drop_count = namespace_drop_count;
     stats.light_shadow_unmapped_count = unmapped_light_count;
+    stats.skeletal_palette_component_count = skeletal_build_stats.skinned_component_count;
+    stats.skeletal_palette_matrix_count = skeletal_build_stats.matrix_count;
+    stats.skeletal_palette_upload_count = (skeletal_build_stats.skinned_component_count > 0U) ? 2U : 0U;
     stats.light_buffer_upload_count =
         static_cast<std::uint32_t>(frame_resources.light_records.uploaded) +
         static_cast<std::uint32_t>(frame_resources.cluster_headers.uploaded) +
@@ -1603,16 +1701,25 @@ void GeometryRenderer3D::EnsureLightingResourcesForFrame(
                      reinterpret_cast<std::uintptr_t>(frame_resources.shadow_views.buffer));
     hash_from_handle(descriptor_signature,
                      reinterpret_cast<std::uintptr_t>(frame_resources.lighting_uniform.buffer));
+    hash_from_handle(descriptor_signature,
+                     reinterpret_cast<std::uintptr_t>(frame_resources.skeletal_components.buffer));
+    hash_from_handle(descriptor_signature,
+                     reinterpret_cast<std::uintptr_t>(frame_resources.skeletal_matrices.buffer));
     hash_combine(descriptor_signature, static_cast<std::uint64_t>(frame_resources.light_records.offset));
     hash_combine(descriptor_signature, static_cast<std::uint64_t>(frame_resources.cluster_headers.offset));
     hash_combine(descriptor_signature, static_cast<std::uint64_t>(frame_resources.cluster_indices.offset));
     hash_combine(descriptor_signature, static_cast<std::uint64_t>(frame_resources.shadow_views.offset));
     hash_combine(descriptor_signature, static_cast<std::uint64_t>(frame_resources.lighting_uniform.offset));
+    hash_combine(descriptor_signature, 0U);
+    hash_combine(descriptor_signature, 0U);
     hash_combine(descriptor_signature, static_cast<std::uint64_t>(frame_resources.light_records.size_bytes));
     hash_combine(descriptor_signature, static_cast<std::uint64_t>(frame_resources.cluster_headers.size_bytes));
     hash_combine(descriptor_signature, static_cast<std::uint64_t>(frame_resources.cluster_indices.size_bytes));
     hash_combine(descriptor_signature, static_cast<std::uint64_t>(frame_resources.shadow_views.size_bytes));
     hash_combine(descriptor_signature, static_cast<std::uint64_t>(frame_resources.lighting_uniform.size_bytes));
+    hash_combine(descriptor_signature, static_cast<std::uint64_t>(skeletal_component_bytes));
+    hash_combine(descriptor_signature, static_cast<std::uint64_t>(skeletal_matrix_bytes));
+    hash_combine(descriptor_signature, frame_resources.skeletal_signature);
     frame_resources.descriptor_payload_signature = descriptor_signature;
 }
 
@@ -1631,7 +1738,9 @@ void GeometryRenderer3D::PrepareLightingDescriptorSetForFrame(std::uint32_t fram
         frame_resources.cluster_headers.buffer == VK_NULL_HANDLE ||
         frame_resources.cluster_indices.buffer == VK_NULL_HANDLE ||
         frame_resources.shadow_views.buffer == VK_NULL_HANDLE ||
-        frame_resources.lighting_uniform.buffer == VK_NULL_HANDLE) {
+        frame_resources.lighting_uniform.buffer == VK_NULL_HANDLE ||
+        frame_resources.skeletal_components.buffer == VK_NULL_HANDLE ||
+        frame_resources.skeletal_matrices.buffer == VK_NULL_HANDLE) {
         return;
     }
     if (frame_resources.descriptor_set == VK_NULL_HANDLE) {
@@ -1695,7 +1804,7 @@ void GeometryRenderer3D::PrepareLightingDescriptorSetForFrame(std::uint32_t fram
     descriptor_buffer_write_scratch.clear();
     descriptor_image_write_scratch.clear();
     descriptor_texel_write_scratch.clear();
-    descriptor_buffer_write_scratch.reserve(need_buffer_update ? 5U : 0U);
+    descriptor_buffer_write_scratch.reserve(need_buffer_update ? 7U : 0U);
     descriptor_image_write_scratch.reserve(need_image_update ? 1U : 0U);
 
     if (need_buffer_update) {
@@ -1738,6 +1847,24 @@ void GeometryRenderer3D::PrepareLightingDescriptorSetForFrame(std::uint32_t fram
             .buffer = frame_resources.lighting_uniform.buffer,
             .offset = frame_resources.lighting_uniform.offset,
             .range = frame_resources.lighting_uniform.size_bytes
+        });
+        descriptor_buffer_write_scratch.push_back({
+            .binding = 6U,
+            .array_element = 0U,
+            .descriptor_type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+            .buffer = frame_resources.skeletal_components.buffer,
+            .offset = 0U,
+            .range = static_cast<VkDeviceSize>(frame_resources.skeletal_component_count) *
+                     sizeof(GeometrySkeletalComponentGpu)
+        });
+        descriptor_buffer_write_scratch.push_back({
+            .binding = 7U,
+            .array_element = 0U,
+            .descriptor_type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+            .buffer = frame_resources.skeletal_matrices.buffer,
+            .offset = 0U,
+            .range = static_cast<VkDeviceSize>(frame_resources.skeletal_matrix_count) *
+                     sizeof(GeometrySkeletalMatrixGpu)
         });
     }
 
@@ -1882,23 +2009,26 @@ render::GraphicsPipelineId GeometryRenderer3D::EnsurePipelineForMode(VulkanConte
         .stride = static_cast<std::uint32_t>(sizeof(ecs::Geometry3DGpuInstance)),
         .inputRate = VK_VERTEX_INPUT_RATE_INSTANCE
     });
-    desc.vertex_input.attributes.push_back({.location = 0U, .binding = 0U, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = 0U});
-    desc.vertex_input.attributes.push_back({.location = 1U, .binding = 0U, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = 12U});
-    desc.vertex_input.attributes.push_back({.location = 2U, .binding = 0U, .format = VK_FORMAT_R32G32_SFLOAT, .offset = 24U});
-    desc.vertex_input.attributes.push_back({.location = 12U, .binding = 0U, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = 32U});
-    desc.vertex_input.attributes.push_back({.location = 13U, .binding = 0U, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = 44U});
-    desc.vertex_input.attributes.push_back({.location = 14U, .binding = 0U, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = 56U});
-    desc.vertex_input.attributes.push_back({.location = 15U, .binding = 0U, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = 68U});
-    desc.vertex_input.attributes.push_back({.location = 3U, .binding = 1U, .format = VK_FORMAT_R32G32B32A32_SFLOAT, .offset = 0U});
-    desc.vertex_input.attributes.push_back({.location = 4U, .binding = 1U, .format = VK_FORMAT_R32G32B32A32_SFLOAT, .offset = 16U});
-    desc.vertex_input.attributes.push_back({.location = 5U, .binding = 1U, .format = VK_FORMAT_R32G32B32A32_SFLOAT, .offset = 32U});
-    desc.vertex_input.attributes.push_back({.location = 6U, .binding = 1U, .format = VK_FORMAT_R32G32B32A32_SFLOAT, .offset = 48U});
-    desc.vertex_input.attributes.push_back({.location = 7U, .binding = 1U, .format = VK_FORMAT_R32G32B32A32_SFLOAT, .offset = 96U});
-    desc.vertex_input.attributes.push_back({.location = 8U, .binding = 1U, .format = VK_FORMAT_R8G8B8A8_UNORM, .offset = 112U});
-    desc.vertex_input.attributes.push_back({.location = 9U, .binding = 1U, .format = VK_FORMAT_R32_UINT, .offset = 116U});
-    desc.vertex_input.attributes.push_back({.location = 10U, .binding = 1U, .format = VK_FORMAT_R32G32B32A32_SFLOAT, .offset = 144U});
-    desc.vertex_input.attributes.push_back({.location = 11U, .binding = 1U, .format = VK_FORMAT_R32G32B32A32_SFLOAT, .offset = 160U});
-    desc.vertex_input.attributes.push_back({.location = 16U, .binding = 1U, .format = VK_FORMAT_R32G32B32A32_SFLOAT, .offset = 176U});
+    desc.vertex_input.attributes.push_back({.location = 0U, .binding = 0U, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = static_cast<std::uint32_t>(offsetof(GeometryMeshVertex, position_x))});
+    desc.vertex_input.attributes.push_back({.location = 1U, .binding = 0U, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = static_cast<std::uint32_t>(offsetof(GeometryMeshVertex, normal_x))});
+    desc.vertex_input.attributes.push_back({.location = 2U, .binding = 0U, .format = VK_FORMAT_R32G32_SFLOAT, .offset = static_cast<std::uint32_t>(offsetof(GeometryMeshVertex, uv_u))});
+    desc.vertex_input.attributes.push_back({.location = 12U, .binding = 0U, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = static_cast<std::uint32_t>(offsetof(GeometryMeshVertex, morph0_position_delta_x))});
+    desc.vertex_input.attributes.push_back({.location = 13U, .binding = 0U, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = static_cast<std::uint32_t>(offsetof(GeometryMeshVertex, morph0_normal_delta_x))});
+    desc.vertex_input.attributes.push_back({.location = 14U, .binding = 0U, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = static_cast<std::uint32_t>(offsetof(GeometryMeshVertex, morph1_position_delta_x))});
+    desc.vertex_input.attributes.push_back({.location = 15U, .binding = 0U, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = static_cast<std::uint32_t>(offsetof(GeometryMeshVertex, morph1_normal_delta_x))});
+    desc.vertex_input.attributes.push_back({.location = 17U, .binding = 0U, .format = VK_FORMAT_R32G32B32A32_UINT, .offset = static_cast<std::uint32_t>(offsetof(GeometryMeshVertex, joint_index0))});
+    desc.vertex_input.attributes.push_back({.location = 18U, .binding = 0U, .format = VK_FORMAT_R32G32B32A32_SFLOAT, .offset = static_cast<std::uint32_t>(offsetof(GeometryMeshVertex, joint_weight0))});
+    desc.vertex_input.attributes.push_back({.location = 3U, .binding = 1U, .format = VK_FORMAT_R32G32B32A32_SFLOAT, .offset = static_cast<std::uint32_t>(offsetof(ecs::Geometry3DGpuInstance, world_m00))});
+    desc.vertex_input.attributes.push_back({.location = 4U, .binding = 1U, .format = VK_FORMAT_R32G32B32A32_SFLOAT, .offset = static_cast<std::uint32_t>(offsetof(ecs::Geometry3DGpuInstance, world_m10))});
+    desc.vertex_input.attributes.push_back({.location = 5U, .binding = 1U, .format = VK_FORMAT_R32G32B32A32_SFLOAT, .offset = static_cast<std::uint32_t>(offsetof(ecs::Geometry3DGpuInstance, world_m20))});
+    desc.vertex_input.attributes.push_back({.location = 6U, .binding = 1U, .format = VK_FORMAT_R32G32B32A32_SFLOAT, .offset = static_cast<std::uint32_t>(offsetof(ecs::Geometry3DGpuInstance, world_m30))});
+    desc.vertex_input.attributes.push_back({.location = 7U, .binding = 1U, .format = VK_FORMAT_R32G32B32A32_SFLOAT, .offset = static_cast<std::uint32_t>(offsetof(ecs::Geometry3DGpuInstance, metallic))});
+    desc.vertex_input.attributes.push_back({.location = 8U, .binding = 1U, .format = VK_FORMAT_R8G8B8A8_UNORM, .offset = static_cast<std::uint32_t>(offsetof(ecs::Geometry3DGpuInstance, albedo_rgba8))});
+    desc.vertex_input.attributes.push_back({.location = 9U, .binding = 1U, .format = VK_FORMAT_R32_UINT, .offset = static_cast<std::uint32_t>(offsetof(ecs::Geometry3DGpuInstance, params))});
+    desc.vertex_input.attributes.push_back({.location = 10U, .binding = 1U, .format = VK_FORMAT_R32G32B32A32_SFLOAT, .offset = static_cast<std::uint32_t>(offsetof(ecs::Geometry3DGpuInstance, deform_param0_x))});
+    desc.vertex_input.attributes.push_back({.location = 11U, .binding = 1U, .format = VK_FORMAT_R32G32B32A32_SFLOAT, .offset = static_cast<std::uint32_t>(offsetof(ecs::Geometry3DGpuInstance, deform_param1_x))});
+    desc.vertex_input.attributes.push_back({.location = 16U, .binding = 1U, .format = VK_FORMAT_R32G32B32A32_SFLOAT, .offset = static_cast<std::uint32_t>(offsetof(ecs::Geometry3DGpuInstance, morph_weight0))});
+    desc.vertex_input.attributes.push_back({.location = 21U, .binding = 1U, .format = VK_FORMAT_R32_UINT, .offset = static_cast<std::uint32_t>(offsetof(ecs::Geometry3DGpuInstance, component_index))});
 
     switch (topology_mode_) {
     case TopologyMode::triangles:

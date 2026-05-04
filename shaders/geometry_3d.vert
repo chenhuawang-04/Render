@@ -18,11 +18,29 @@ layout(location = 9) in uint in_instance_params;
 layout(location = 10) in vec4 in_deform_param0;
 layout(location = 11) in vec4 in_deform_param1;
 layout(location = 16) in vec4 in_morph_weights;
+layout(location = 17) in uvec4 in_joint_indices;
+layout(location = 18) in vec4 in_joint_weights;
+layout(location = 21) in uint in_component_index;
 
 layout(push_constant) uniform Geometry3DPushConstants {
     mat4 view_projection;
     vec4 light_direction_intensity;
 } pc;
+
+struct SkeletalComponentGpu {
+    uint matrix_offset;
+    uint joint_count;
+    uint flags;
+    uint reserved0;
+};
+
+layout(std430, set = 1, binding = 6) readonly buffer SkeletalComponentBuffer {
+    SkeletalComponentGpu skeletal_components[];
+};
+
+layout(std430, set = 1, binding = 7) readonly buffer SkeletalMatrixBuffer {
+    mat4 skeletal_matrices[];
+};
 
 layout(location = 0) out vec3 out_normal_world;
 layout(location = 1) out vec4 out_albedo;
@@ -68,10 +86,51 @@ vec3 apply_morph_normal(vec3 local_normal) {
     return (normal_length > 1e-6) ? (morphed_normal / normal_length) : local_normal;
 }
 
+bool skeletal_enabled() {
+    return (skeletal_components[in_component_index].flags & 1u) != 0u;
+}
+
+mat4 fetch_joint_matrix(uint joint_index) {
+    SkeletalComponentGpu component = skeletal_components[in_component_index];
+    if ((component.flags & 1u) == 0u || joint_index >= component.joint_count) {
+        return mat4(1.0);
+    }
+    return skeletal_matrices[component.matrix_offset + joint_index];
+}
+
+vec3 apply_skinning_position(vec3 local_position) {
+    if (!skeletal_enabled() || dot(in_joint_weights, vec4(1.0)) <= 1e-6) {
+        return local_position;
+    }
+
+    vec4 skinned = vec4(0.0);
+    skinned += fetch_joint_matrix(in_joint_indices.x) * vec4(local_position, 1.0) * in_joint_weights.x;
+    skinned += fetch_joint_matrix(in_joint_indices.y) * vec4(local_position, 1.0) * in_joint_weights.y;
+    skinned += fetch_joint_matrix(in_joint_indices.z) * vec4(local_position, 1.0) * in_joint_weights.z;
+    skinned += fetch_joint_matrix(in_joint_indices.w) * vec4(local_position, 1.0) * in_joint_weights.w;
+    return skinned.xyz;
+}
+
+vec3 apply_skinning_normal(vec3 local_normal) {
+    if (!skeletal_enabled() || dot(in_joint_weights, vec4(1.0)) <= 1e-6) {
+        return local_normal;
+    }
+
+    vec3 skinned = vec3(0.0);
+    skinned += mat3(fetch_joint_matrix(in_joint_indices.x)) * local_normal * in_joint_weights.x;
+    skinned += mat3(fetch_joint_matrix(in_joint_indices.y)) * local_normal * in_joint_weights.y;
+    skinned += mat3(fetch_joint_matrix(in_joint_indices.z)) * local_normal * in_joint_weights.z;
+    skinned += mat3(fetch_joint_matrix(in_joint_indices.w)) * local_normal * in_joint_weights.w;
+    float skinned_length = length(skinned);
+    return (skinned_length > 1e-6) ? (skinned / skinned_length) : local_normal;
+}
+
 void main() {
     vec3 morphed_normal = apply_morph_normal(in_normal);
     vec3 morphed_position = apply_morph_position(in_position);
-    vec3 local_position = apply_vertex_deform(morphed_position, morphed_normal);
+    vec3 skinned_normal = apply_skinning_normal(morphed_normal);
+    vec3 skinned_position = apply_skinning_position(morphed_position);
+    vec3 local_position = apply_vertex_deform(skinned_position, skinned_normal);
     mat4 world = mat4(in_world_row0, in_world_row1, in_world_row2, in_world_row3);
     vec4 world_position = world * vec4(local_position, 1.0);
     gl_Position = pc.view_projection * world_position;
@@ -79,7 +138,7 @@ void main() {
     out_world_position = world_position.xyz;
 
     mat3 world3x3 = mat3(world);
-    vec3 normal_world = world3x3 * morphed_normal;
+    vec3 normal_world = world3x3 * skinned_normal;
     float normal_length = length(normal_world);
     out_normal_world = (normal_length > 1e-6) ? (normal_world / normal_length) : vec3(0.0, 0.0, 1.0);
     out_albedo = in_albedo;

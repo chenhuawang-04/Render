@@ -39,6 +39,16 @@ struct GeometryMeshVertex final {
     float morph1_normal_delta_x;
     float morph1_normal_delta_y;
     float morph1_normal_delta_z;
+
+    std::uint32_t joint_index0;
+    std::uint32_t joint_index1;
+    std::uint32_t joint_index2;
+    std::uint32_t joint_index3;
+
+    float joint_weight0;
+    float joint_weight1;
+    float joint_weight2;
+    float joint_weight3;
 };
 
 struct GeometrySubmeshRange final {
@@ -70,7 +80,22 @@ struct GeometryUploadRange final {
     bool uploaded = false;
 };
 
+struct GeometrySkeletalComponentGpu final {
+    std::uint32_t matrix_offset;
+    std::uint32_t joint_count;
+    std::uint32_t flags;
+    std::uint32_t reserved0;
+};
+
+struct GeometrySkeletalMatrixGpu final {
+    ecs::Matrix4x4 matrix;
+};
+
 static_assert(std::is_standard_layout_v<GeometryMeshVertex> && std::is_trivial_v<GeometryMeshVertex>);
 static_assert(std::is_standard_layout_v<GeometrySubmeshRange> && std::is_trivial_v<GeometrySubmeshRange>);
+static_assert(std::is_standard_layout_v<GeometrySkeletalComponentGpu> &&
+              std::is_trivial_v<GeometrySkeletalComponentGpu>);
+static_assert(std::is_standard_layout_v<GeometrySkeletalMatrixGpu> &&
+              std::is_trivial_v<GeometrySkeletalMatrixGpu>);
 
 } // namespace vr::geometry

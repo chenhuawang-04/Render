@@ -78,6 +78,7 @@ enum GeometryMeshAnimationFlags : std::uint16_t {
     geometry_mesh_frame_sequence_submesh_flag = 1U << 1U,
     geometry_mesh_skeletal_root_motion_flag = 1U << 2U,
     geometry_mesh_morph_targets_flag = 1U << 3U,
+    geometry_mesh_skeletal_skinning_flag = 1U << 4U,
 };
 
 struct GeometryRuntimeRoute final {

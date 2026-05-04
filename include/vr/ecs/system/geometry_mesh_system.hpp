@@ -89,6 +89,14 @@ public:
         SetMeshFlags(component_, next_flags);
     }
 
+    static void EnableSkeletalSkinning(Geometry3D& component_,
+                                       bool enabled_) noexcept {
+        const std::uint16_t next_flags = enabled_
+            ? static_cast<std::uint16_t>(component_.mesh.flags | geometry_mesh_skeletal_skinning_flag)
+            : static_cast<std::uint16_t>(component_.mesh.flags & ~geometry_mesh_skeletal_skinning_flag);
+        SetMeshFlags(component_, next_flags);
+    }
+
     static void SetTopology(Geometry3D& component_,
                             Geometry3DTopology topology_) noexcept {
         component_.style.topology = topology_;

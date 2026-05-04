@@ -9,6 +9,7 @@
 #include "vr/geometry/geometry_image_host.hpp"
 #include "vr/geometry/geometry_material_host.hpp"
 #include "vr/geometry/geometry_resource_host.hpp"
+#include "vr/geometry/geometry_skeletal_palette_builder.hpp"
 #include "vr/geometry/geometry_upload_host.hpp"
 #include "vr/light/light_shadow_upload_host.hpp"
 #include "vr/render/appearance_prepare_bridge.hpp"
@@ -92,6 +93,9 @@ struct GeometryRenderer3DStats {
     std::uint32_t vertex_deform_animated_instance_count = 0U;
     std::uint32_t morph_animated_instance_count = 0U;
     std::uint32_t frame_sequence_animated_instance_count = 0U;
+    std::uint32_t skeletal_palette_component_count = 0U;
+    std::uint32_t skeletal_palette_matrix_count = 0U;
+    std::uint32_t skeletal_palette_upload_count = 0U;
     std::uint32_t uploaded_instance_count = 0U;
     std::uint32_t descriptor_set_bind_count = 0U;
     std::uint32_t descriptor_set_update_count = 0U;
@@ -260,9 +264,14 @@ private:
         light::LightShadowBufferRange cluster_indices{};
         light::LightShadowBufferRange shadow_views{};
         light::LightShadowBufferRange lighting_uniform{};
+        resource::BufferResource skeletal_components{};
+        resource::BufferResource skeletal_matrices{};
         VkDescriptorSet descriptor_set = VK_NULL_HANDLE;
         std::uint32_t shadow_namespace_id = 0U;
+        std::uint32_t skeletal_component_count = 0U;
+        std::uint32_t skeletal_matrix_count = 0U;
         std::uint64_t upload_signature = 0U;
+        std::uint64_t skeletal_signature = 0U;
         std::uint64_t descriptor_payload_signature = 0U;
         std::uint64_t descriptor_buffer_signature = 0U;
         std::uint64_t descriptor_image_signature = 0U;
@@ -373,6 +382,9 @@ private:
     void EnsureLightingDescriptorObjects(VulkanContext& context_,
                                          render::DescriptorHost& descriptor_host_);
     void EnsureLightingResourcesForFrame(VulkanContext& context_);
+    void EnsureSkeletalBufferCapacity(resource::BufferResource& buffer_,
+                                      VkDeviceSize required_bytes_);
+    void DestroySkeletalBuffer(resource::BufferResource& buffer_) noexcept;
     void PrepareLightingDescriptorSetForFrame(std::uint32_t frame_index_);
     [[nodiscard]] LightingParamsGpu BuildLightingParamsGpu(VkExtent2D extent_) const noexcept;
     void EnsureFallbackMaterialResources(VulkanContext& context_);
@@ -465,6 +477,8 @@ private:
     GeometryRenderer3DMcVector<GeometryRenderer3DMcVector<MaterialSetEntry>> frame_material_sets{};
     GeometryRenderer3DMcVector<FrameLightingResources> frame_lighting_resources{};
     GeometryRenderer3DMcVector<ResolvedMaterialEntry> resolved_materials{};
+    GeometryRenderer3DMcVector<GeometrySkeletalComponentGpu> skeletal_component_scratch{};
+    GeometryRenderer3DMcVector<GeometrySkeletalMatrixGpu> skeletal_matrix_scratch{};
     render::DescriptorMcVector<render::DescriptorImageWrite> descriptor_image_write_scratch{};
     render::DescriptorMcVector<render::DescriptorBufferWrite> descriptor_buffer_write_scratch{};
     render::DescriptorMcVector<render::DescriptorTexelBufferWrite> descriptor_texel_write_scratch{};
