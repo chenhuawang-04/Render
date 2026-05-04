@@ -686,6 +686,10 @@ void GeometryRenderer3D::PrepareFrame(const render::RuntimePrepareContext& prepa
     stats.depth_test_batch_count = runtime_stats.depth_test_batch_count;
     stats.depth_write_batch_count = runtime_stats.depth_write_batch_count;
     stats.shadow_cast_batch_count = runtime_stats.shadow_cast_batch_count;
+    stats.skeletal_animated_instance_count = runtime_stats.skeletal_animated_instance_count;
+    stats.vertex_deform_animated_instance_count = runtime_stats.vertex_deform_animated_instance_count;
+    stats.morph_animated_instance_count = runtime_stats.morph_animated_instance_count;
+    stats.frame_sequence_animated_instance_count = runtime_stats.frame_sequence_animated_instance_count;
     stats.cache_reused = runtime_stats.cache_reused;
     stats.transform_only_update = runtime_stats.transform_only_update;
 

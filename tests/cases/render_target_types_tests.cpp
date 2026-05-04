@@ -179,6 +179,8 @@ struct FakeAnimatedShadowRecorderRenderer final {
     std::uint32_t recreate_count = 0U;
     const vr::ecs::SkeletalPoseOutputState<vr::ecs::Dim3>* skeletal_outputs = nullptr;
     std::uint32_t skeletal_output_count = 0U;
+    const vr::ecs::MorphWeightOutputState* morph_outputs = nullptr;
+    std::uint32_t morph_output_count = 0U;
     const vr::ecs::FrameSequenceOutputState* frame_sequence_outputs = nullptr;
     std::uint32_t frame_sequence_output_count = 0U;
 
@@ -200,10 +202,14 @@ struct FakeAnimatedShadowRecorderRenderer final {
 
     void SetAnimationOutputs(const vr::ecs::SkeletalPoseOutputState<vr::ecs::Dim3>* skeletal_outputs_,
                              std::uint32_t skeletal_output_count_,
+                             const vr::ecs::MorphWeightOutputState* morph_outputs_,
+                             std::uint32_t morph_output_count_,
                              const vr::ecs::FrameSequenceOutputState* frame_sequence_outputs_,
                              std::uint32_t frame_sequence_output_count_) noexcept {
         skeletal_outputs = skeletal_outputs_;
         skeletal_output_count = skeletal_output_count_;
+        morph_outputs = morph_outputs_;
+        morph_output_count = morph_output_count_;
         frame_sequence_outputs = frame_sequence_outputs_;
         frame_sequence_output_count = frame_sequence_output_count_;
     }
@@ -581,6 +587,8 @@ VR_TEST_CASE(AnimationFrameCoordinator_dim3_applies_outputs_to_geometry_and_shad
     VR_CHECK(scene_renderer.morph_outputs == morph_outputs.data());
     VR_CHECK(scene_renderer.frame_sequence_outputs == frame_outputs.data());
     VR_CHECK(shadow_renderer.skeletal_outputs == skeletal_outputs.data());
+    VR_CHECK(shadow_renderer.morph_output_count == 1U);
+    VR_CHECK(shadow_renderer.morph_outputs == morph_outputs.data());
     VR_CHECK(shadow_renderer.frame_sequence_outputs == frame_outputs.data());
     VR_CHECK(coordinator.Stats().apply_scene_call_count == 1U);
     VR_CHECK(coordinator.Stats().apply_shadow_call_count == 1U);
@@ -730,6 +738,8 @@ VR_TEST_CASE(SceneRecorder3D_animation_binding_is_propagated_to_scene_and_shadow
     VR_CHECK(scene_renderer.morph_outputs == morph_outputs.data());
     VR_CHECK(scene_renderer.frame_sequence_outputs == frame_outputs.data());
     VR_CHECK(shadow_renderer.skeletal_outputs == skeletal_outputs.data());
+    VR_CHECK(shadow_renderer.morph_output_count == 1U);
+    VR_CHECK(shadow_renderer.morph_outputs == morph_outputs.data());
     VR_CHECK(shadow_renderer.frame_sequence_outputs == frame_outputs.data());
     VR_CHECK(recorder.Stats().animation_binding_refresh_count > 0U);
 
@@ -739,6 +749,7 @@ VR_TEST_CASE(SceneRecorder3D_animation_binding_is_propagated_to_scene_and_shadow
     VR_CHECK(scene_renderer.morph_outputs == nullptr);
     VR_CHECK(scene_renderer.frame_sequence_outputs == nullptr);
     VR_CHECK(shadow_renderer.skeletal_outputs == nullptr);
+    VR_CHECK(shadow_renderer.morph_outputs == nullptr);
     VR_CHECK(shadow_renderer.frame_sequence_outputs == nullptr);
 }
 

@@ -1,8 +1,11 @@
+#include "vr/ecs/system/animation_evaluation_context.hpp"
 #include "vr/ecs/system/bounds_system.hpp"
 #include "vr/ecs/system/camera_system.hpp"
+#include "vr/ecs/system/geometry_mesh_system.hpp"
 #include "vr/ecs/system/geometry_system.hpp"
 #include "vr/ecs/system/light_system.hpp"
 #include "vr/ecs/system/shadow_system.hpp"
+#include "vr/ecs/system/spatial_math.hpp"
 #include "vr/ecs/system/surface_system.hpp"
 #include "vr/ecs/system/text_system.hpp"
 #include "vr/ecs/system/transform_system.hpp"
@@ -11,6 +14,7 @@
 #include "vr/geometry/geometry_renderer_3d.hpp"
 #include "vr/geometry/geometry_resource_host.hpp"
 #include "vr/geometry/geometry_upload_host.hpp"
+#include "vr/render/animation_frame_coordinator.hpp"
 #include "vr/render/light_frame_coordinator.hpp"
 #include "vr/render/render_runtime_host.hpp"
 #include "vr/render/scene_recorder_3d.hpp"
@@ -54,6 +58,7 @@ using TextSystem3D = vr::ecs::TextSystem<vr::ecs::Dim3>;
 using TransformSystem3D = vr::ecs::TransformSystem<vr::ecs::Dim3>;
 using BoundsSystem3D = vr::ecs::BoundsSystem<vr::ecs::Dim3>;
 using CameraSystem3D = vr::ecs::CameraSystem<vr::ecs::Dim3>;
+using GeometryMeshSystem3D = vr::ecs::GeometryMeshSystem;
 
 constexpr float k_pi = 3.14159265358979323846F;
 constexpr std::uint32_t k_geometry_material_id = 1101U;
@@ -291,10 +296,10 @@ int main(int argc_,
     FillGradientTexture(surface_pixels.data(), texture_width, texture_height);
 
     std::array<vr::geometry::GeometryMeshVertex, 4U> mesh_vertices{
-        vr::geometry::GeometryMeshVertex{.position_x = -0.5F, .position_y = -0.5F, .position_z = 0.0F, .normal_x = 0.0F, .normal_y = 0.0F, .normal_z = 1.0F, .uv_u = 0.0F, .uv_v = 0.0F},
-        vr::geometry::GeometryMeshVertex{.position_x = 0.5F, .position_y = -0.5F, .position_z = 0.0F, .normal_x = 0.0F, .normal_y = 0.0F, .normal_z = 1.0F, .uv_u = 1.0F, .uv_v = 0.0F},
-        vr::geometry::GeometryMeshVertex{.position_x = 0.5F, .position_y = 0.5F, .position_z = 0.0F, .normal_x = 0.0F, .normal_y = 0.0F, .normal_z = 1.0F, .uv_u = 1.0F, .uv_v = 1.0F},
-        vr::geometry::GeometryMeshVertex{.position_x = -0.5F, .position_y = 0.5F, .position_z = 0.0F, .normal_x = 0.0F, .normal_y = 0.0F, .normal_z = 1.0F, .uv_u = 0.0F, .uv_v = 1.0F}
+        vr::geometry::GeometryMeshVertex{.position_x = -0.5F, .position_y = -0.5F, .position_z = 0.0F, .normal_x = 0.0F, .normal_y = 0.0F, .normal_z = 1.0F, .uv_u = 0.0F, .uv_v = 0.0F, .morph0_position_delta_z = -0.18F, .morph1_position_delta_x = -0.08F},
+        vr::geometry::GeometryMeshVertex{.position_x = 0.5F, .position_y = -0.5F, .position_z = 0.0F, .normal_x = 0.0F, .normal_y = 0.0F, .normal_z = 1.0F, .uv_u = 1.0F, .uv_v = 0.0F, .morph0_position_delta_z = 0.18F, .morph1_position_delta_x = 0.08F},
+        vr::geometry::GeometryMeshVertex{.position_x = 0.5F, .position_y = 0.5F, .position_z = 0.0F, .normal_x = 0.0F, .normal_y = 0.0F, .normal_z = 1.0F, .uv_u = 1.0F, .uv_v = 1.0F, .morph0_position_delta_z = 0.28F, .morph1_position_delta_x = 0.12F},
+        vr::geometry::GeometryMeshVertex{.position_x = -0.5F, .position_y = 0.5F, .position_z = 0.0F, .normal_x = 0.0F, .normal_y = 0.0F, .normal_z = 1.0F, .uv_u = 0.0F, .uv_v = 1.0F, .morph0_position_delta_z = -0.28F, .morph1_position_delta_x = -0.12F}
     };
     std::array<std::uint32_t, 6U> mesh_indices{0U, 1U, 2U, 2U, 3U, 0U};
     std::array<vr::geometry::GeometrySubmeshRange, 1U> mesh_submeshes{
@@ -453,6 +458,9 @@ int main(int argc_,
 
         Geometry3D geometry_component{};
         InitializeGeometryComponent(geometry_component);
+        GeometryMeshSystem3D::EnableVertexDeformShader(geometry_component, true);
+        GeometryMeshSystem3D::EnableMorphTargets(geometry_component, true);
+        GeometryMeshSystem3D::EnableSkeletalRootMotion(geometry_component, true);
 
         Surface3D surface_component{};
         InitializeSurfaceComponent(surface_component, surface_sampler_id.value);
@@ -523,6 +531,70 @@ int main(int argc_,
         TransformSystem3D::UpdateHierarchy(&camera_transform, 1U);
         CameraSystem3D::MarkViewDirty(camera);
         CameraSystem3D::Update(camera, camera_transform);
+
+        std::array<vr::ecs::SkeletalJointPose<vr::ecs::Dim3>, 1U> skeletal_joint_storage{
+            vr::ecs::SkeletalJointPose<vr::ecs::Dim3>{
+                .position = vr::ecs::Float3{.x = 0.0F, .y = 0.0F, .z = 0.0F},
+                .rotation = vr::ecs::Quaternion{.x = 0.0F, .y = 0.0F, .z = 0.0F, .w = 1.0F},
+                .scale = vr::ecs::Float3{.x = 1.0F, .y = 1.0F, .z = 1.0F},
+            }
+        };
+        std::array<vr::ecs::SkeletalPoseOutputState<vr::ecs::Dim3>, 1U> skeletal_outputs{
+            vr::ecs::SkeletalPoseOutputState<vr::ecs::Dim3>{
+                .joints = skeletal_joint_storage.data(),
+                .joint_count = static_cast<std::uint32_t>(skeletal_joint_storage.size()),
+                .sampled_joint_count = static_cast<std::uint32_t>(skeletal_joint_storage.size()),
+                .revision = 1U,
+            }
+        };
+        std::array<float, 2U> morph_weight_storage{0.0F, 0.0F};
+        std::array<vr::ecs::MorphWeightOutputState, 1U> morph_outputs{
+            vr::ecs::MorphWeightOutputState{
+                .weights = morph_weight_storage.data(),
+                .weight_count = static_cast<std::uint32_t>(morph_weight_storage.size()),
+                .sampled_weight_count = static_cast<std::uint32_t>(morph_weight_storage.size()),
+                .revision = 1U,
+            }
+        };
+        std::array<vr::ecs::Float4, 2U> vertex_deform_parameter_storage{
+            vr::ecs::Float4{.x = 0.0F, .y = 0.0F, .z = 1.0F, .w = 0.0F},
+            vr::ecs::Float4{.x = 0.0F, .y = 2.5F, .z = 0.0F, .w = 0.0F}
+        };
+        std::array<vr::ecs::VertexDeformOutputState, 1U> vertex_deform_outputs{
+            vr::ecs::VertexDeformOutputState{
+                .parameters = vertex_deform_parameter_storage.data(),
+                .parameter_count = static_cast<std::uint32_t>(vertex_deform_parameter_storage.size()),
+                .sampled_parameter_count = static_cast<std::uint32_t>(vertex_deform_parameter_storage.size()),
+                .revision = 1U,
+            }
+        };
+        std::array<vr::ecs::FrameSequenceOutputState, 1U> frame_sequence_outputs{
+            vr::ecs::FrameSequenceOutputState{
+                .frame_index_a = 0U,
+                .frame_index_b = 0U,
+                .frame_count = 0U,
+                .revision = 1U,
+                .blend_alpha = 0.0F,
+                .normalized_time = 0.0F,
+                .frame_position = 0.0F,
+                .reserved0 = 0U,
+            }
+        };
+        vr::ecs::AnimationEvaluationContext<vr::ecs::Dim3> animation_evaluation_context{};
+        animation_evaluation_context.skeletal_outputs = {skeletal_outputs.data(),
+                                                         static_cast<std::uint32_t>(skeletal_outputs.size())};
+        animation_evaluation_context.morph_outputs = {morph_outputs.data(),
+                                                      static_cast<std::uint32_t>(morph_outputs.size())};
+        animation_evaluation_context.vertex_deform_outputs = {
+            vertex_deform_outputs.data(),
+            static_cast<std::uint32_t>(vertex_deform_outputs.size())
+        };
+        animation_evaluation_context.frame_sequence_outputs = {
+            frame_sequence_outputs.data(),
+            static_cast<std::uint32_t>(frame_sequence_outputs.size())
+        };
+        vr::render::AnimationFrameCoordinator<vr::ecs::Dim3> animation_frame_coordinator{};
+        animation_frame_coordinator.SetEvaluationContext(animation_evaluation_context);
 
         std::array<Light3D, 1U> lights{};
         std::array<Transform3D, 1U> light_transforms{};
@@ -614,6 +686,7 @@ int main(int argc_,
                                      &camera,
                                      &geometry_bounds);
         shadow_renderer.SetGeometryData(&geometry_component, &geometry_transform, 1U);
+        recorder.BindAnimationFrameCoordinator(&animation_frame_coordinator);
         recorder.RegisterShadowRenderer(shadow_renderer);
         recorder.RegisterOpaqueSceneRenderer(geometry_renderer, vr::render::SceneRenderPassRole::first);
         recorder.RegisterTransparentSceneRenderer(surface_renderer, vr::render::SceneRenderPassRole::middle);
@@ -638,6 +711,8 @@ int main(int argc_,
         while (runtime.IsRunning()) {
             const std::uint64_t now_ticks = SDL_GetTicks();
             const float time_seconds = static_cast<float>(now_ticks) * 0.001F;
+            const float wave = std::sin(time_seconds * 1.20F);
+            const float secondary_wave = std::cos(time_seconds * 0.95F);
 
             const VkExtent2D extent = runtime.Swapchain().Extent();
             TransformSystem3D::SetLocalRotationEulerXyz(geometry_transform,
@@ -675,6 +750,41 @@ int main(int argc_,
                           "Unified Scene | Frame:%llu",
                           static_cast<unsigned long long>(frame_index));
             (void)TextSystem3D::SetText(text_component, runtime_text);
+
+            skeletal_joint_storage[0U].position = vr::ecs::Float3{
+                .x = 0.0F,
+                .y = 0.08F * wave,
+                .z = 0.0F,
+            };
+            skeletal_joint_storage[0U].rotation =
+                vr::ecs::spatial_math::QuaternionFromEulerXyz(0.0F, 0.0F, 0.14F * wave);
+            skeletal_joint_storage[0U].scale = vr::ecs::Float3{
+                .x = 1.0F,
+                .y = 1.0F + 0.06F * secondary_wave,
+                .z = 1.0F,
+            };
+            skeletal_outputs[0U].revision = static_cast<std::uint32_t>(frame_index + 2U);
+            skeletal_outputs[0U].sampled_joint_count = 1U;
+
+            morph_weight_storage[0U] = 0.5F + 0.5F * wave;
+            morph_weight_storage[1U] = 0.25F + 0.25F * secondary_wave;
+            morph_outputs[0U].revision = static_cast<std::uint32_t>(frame_index + 2U);
+            morph_outputs[0U].sampled_weight_count = 2U;
+
+            vertex_deform_parameter_storage[0U] = vr::ecs::Float4{
+                .x = 0.08F,
+                .y = 0.0F,
+                .z = 1.0F,
+                .w = 0.0F,
+            };
+            vertex_deform_parameter_storage[1U] = vr::ecs::Float4{
+                .x = time_seconds * 1.15F,
+                .y = 3.0F,
+                .z = 0.0F,
+                .w = 0.02F * wave,
+            };
+            vertex_deform_outputs[0U].revision = static_cast<std::uint32_t>(frame_index + 2U);
+            vertex_deform_outputs[0U].sampled_parameter_count = 2U;
 
             shared_transforms = {geometry_transform, surface_transform, text_transform};
             TransformSystem3D::UpdateHierarchy(shared_transforms.data(),

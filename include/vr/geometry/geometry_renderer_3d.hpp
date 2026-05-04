@@ -88,6 +88,10 @@ struct GeometryRenderer3DStats {
     std::uint32_t depth_test_batch_count = 0U;
     std::uint32_t depth_write_batch_count = 0U;
     std::uint32_t shadow_cast_batch_count = 0U;
+    std::uint32_t skeletal_animated_instance_count = 0U;
+    std::uint32_t vertex_deform_animated_instance_count = 0U;
+    std::uint32_t morph_animated_instance_count = 0U;
+    std::uint32_t frame_sequence_animated_instance_count = 0U;
     std::uint32_t uploaded_instance_count = 0U;
     std::uint32_t descriptor_set_bind_count = 0U;
     std::uint32_t descriptor_set_update_count = 0U;

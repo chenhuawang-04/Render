@@ -16,6 +16,57 @@
 
 namespace vr::shadow {
 
+namespace {
+
+struct ShadowMorphWeights final {
+    float weight0 = 0.0F;
+    float weight1 = 0.0F;
+    bool enabled = false;
+};
+
+[[nodiscard]] ShadowMorphWeights ResolveMorphWeights(
+    const ecs::Geometry<ecs::Dim3>& geometry_component_,
+    std::uint32_t component_index_,
+    const ecs::MorphWeightOutputState* morph_outputs_,
+    std::uint32_t morph_output_count_) noexcept {
+    ShadowMorphWeights result{};
+    if ((geometry_component_.mesh.flags & vr::ecs::geometry_mesh_morph_targets_flag) == 0U ||
+        morph_outputs_ == nullptr ||
+        component_index_ >= morph_output_count_) {
+        return result;
+    }
+
+    const ecs::MorphWeightOutputState& output = morph_outputs_[component_index_];
+    if (output.weights == nullptr || output.sampled_weight_count == 0U || output.weight_count == 0U) {
+        return result;
+    }
+
+    result.weight0 = output.weights[0U];
+    if (output.sampled_weight_count > 1U && output.weight_count > 1U) {
+        result.weight1 = output.weights[1U];
+    }
+    result.enabled = (result.weight0 != 0.0F) || (result.weight1 != 0.0F);
+    return result;
+}
+
+void WriteAffineWorldMatrix(const ecs::Matrix4x4& world_matrix_,
+                            float (&out_affine_)[12]) noexcept {
+    out_affine_[0] = world_matrix_.m[0];
+    out_affine_[1] = world_matrix_.m[1];
+    out_affine_[2] = world_matrix_.m[2];
+    out_affine_[3] = world_matrix_.m[4];
+    out_affine_[4] = world_matrix_.m[5];
+    out_affine_[5] = world_matrix_.m[6];
+    out_affine_[6] = world_matrix_.m[8];
+    out_affine_[7] = world_matrix_.m[9];
+    out_affine_[8] = world_matrix_.m[10];
+    out_affine_[9] = world_matrix_.m[12];
+    out_affine_[10] = world_matrix_.m[13];
+    out_affine_[11] = world_matrix_.m[14];
+}
+
+} // namespace
+
 bool ShadowRenderer3D::IsDepthFormatSupported(VulkanContext& context_,
                                               VkFormat format_) noexcept {
     if (format_ == VK_FORMAT_UNDEFINED || context_.PhysicalDevice() == VK_NULL_HANDLE) {
@@ -290,10 +341,14 @@ void ShadowRenderer3D::SetGeometryData(ecs::Geometry<ecs::Dim3>* geometry_compon
 void ShadowRenderer3D::SetAnimationOutputs(
     const ecs::SkeletalPoseOutputState<ecs::Dim3>* skeletal_outputs_,
     std::uint32_t skeletal_output_count_,
+    const ecs::MorphWeightOutputState* morph_outputs_,
+    std::uint32_t morph_output_count_,
     const ecs::FrameSequenceOutputState* frame_sequence_outputs_,
     std::uint32_t frame_sequence_output_count_) noexcept {
     skeletal_outputs = skeletal_outputs_;
     skeletal_output_count = skeletal_output_count_;
+    morph_outputs = morph_outputs_;
+    morph_output_count = morph_output_count_;
     frame_sequence_outputs = frame_sequence_outputs_;
     frame_sequence_output_count = frame_sequence_output_count_;
 }
@@ -515,6 +570,16 @@ render::GraphicsPipelineId ShadowRenderer3D::EnsureGraphicsPipeline(VulkanContex
     attribute_desc.binding = 0U;
     attribute_desc.format = VK_FORMAT_R32G32B32_SFLOAT;
     attribute_desc.offset = offsetof(geometry::GeometryMeshVertex, position_x);
+    desc.vertex_input.attributes.push_back(attribute_desc);
+
+    attribute_desc.location = 12U;
+    attribute_desc.format = VK_FORMAT_R32G32B32_SFLOAT;
+    attribute_desc.offset = offsetof(geometry::GeometryMeshVertex, morph0_position_delta_x);
+    desc.vertex_input.attributes.push_back(attribute_desc);
+
+    attribute_desc.location = 14U;
+    attribute_desc.format = VK_FORMAT_R32G32B32_SFLOAT;
+    attribute_desc.offset = offsetof(geometry::GeometryMeshVertex, morph1_position_delta_x);
     desc.vertex_input.attributes.push_back(attribute_desc);
 
     switch (topology_mode_) {
@@ -971,11 +1036,25 @@ void ShadowRenderer3D::RecordOneAtlas(const render::FrameRecordContext& record_c
 
             PushConstants push_constants{};
             push_constants.view_projection = view_record.view_projection_matrix;
-            push_constants.world = ComposeEffectiveWorldMatrix(geometry_transforms[caster_index].runtime.world_matrix,
-                                                               geometry_component,
-                                                               caster_index,
-                                                               skeletal_outputs,
-                                                               skeletal_output_count);
+            const ecs::Matrix4x4 effective_world =
+                ComposeEffectiveWorldMatrix(geometry_transforms[caster_index].runtime.world_matrix,
+                                            geometry_component,
+                                            caster_index,
+                                            skeletal_outputs,
+                                            skeletal_output_count);
+            WriteAffineWorldMatrix(effective_world, push_constants.world_affine);
+            const ShadowMorphWeights morph_weights =
+                ResolveMorphWeights(geometry_component,
+                                    caster_index,
+                                    morph_outputs,
+                                    morph_output_count);
+            push_constants.morph_weights[0] = morph_weights.weight0;
+            push_constants.morph_weights[1] = morph_weights.weight1;
+            push_constants.morph_weights[2] = 0.0F;
+            push_constants.morph_weights[3] = 0.0F;
+            if (morph_weights.enabled) {
+                ++stats.morph_animated_draw_call_count;
+            }
             vkCmdPushConstants(command_buffer,
                                pipeline_layout,
                                VK_SHADER_STAGE_VERTEX_BIT,

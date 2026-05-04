@@ -374,10 +374,12 @@ private:
         if constexpr (requires(RendererT& candidate_) {
                           candidate_.SetAnimationOutputs(static_cast<const ecs::SkeletalPoseOutputState<ecs::Dim3>*>(nullptr),
                                                          0U,
+                                                         static_cast<const ecs::MorphWeightOutputState*>(nullptr),
+                                                         0U,
                                                          static_cast<const ecs::FrameSequenceOutputState*>(nullptr),
                                                          0U);
                       }) {
-            renderer_ref.SetAnimationOutputs(nullptr, 0U, nullptr, 0U);
+            renderer_ref.SetAnimationOutputs(nullptr, 0U, nullptr, 0U, nullptr, 0U);
         }
     }
 

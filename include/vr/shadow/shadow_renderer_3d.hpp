@@ -59,6 +59,7 @@ struct ShadowRenderer3DStats final {
     std::uint32_t pipeline_bind_count = 0U;
     std::uint32_t pipeline_compile_count = 0U;
     std::uint32_t reused_pipeline_count = 0U;
+    std::uint32_t morph_animated_draw_call_count = 0U;
     bool runtime_cache_reused = false;
     bool runtime_transform_only_update = false;
 };
@@ -88,6 +89,8 @@ public:
                          std::uint32_t geometry_component_count_) noexcept;
     void SetAnimationOutputs(const ecs::SkeletalPoseOutputState<ecs::Dim3>* skeletal_outputs_,
                              std::uint32_t skeletal_output_count_,
+                             const ecs::MorphWeightOutputState* morph_outputs_,
+                             std::uint32_t morph_output_count_,
                              const ecs::FrameSequenceOutputState* frame_sequence_outputs_,
                              std::uint32_t frame_sequence_output_count_) noexcept;
     void SetShadowDirtyHint(const std::uint32_t* dirty_component_indices_,
@@ -108,7 +111,8 @@ public:
 private:
     struct PushConstants final {
         ecs::Matrix4x4 view_projection{};
-        ecs::Matrix4x4 world{};
+        float world_affine[12]{};
+        float morph_weights[4]{};
     };
 
     static_assert(sizeof(PushConstants) == 128U);
@@ -209,6 +213,8 @@ private:
     std::uint32_t geometry_component_count = 0U;
     const ecs::SkeletalPoseOutputState<ecs::Dim3>* skeletal_outputs = nullptr;
     std::uint32_t skeletal_output_count = 0U;
+    const ecs::MorphWeightOutputState* morph_outputs = nullptr;
+    std::uint32_t morph_output_count = 0U;
     const ecs::FrameSequenceOutputState* frame_sequence_outputs = nullptr;
     std::uint32_t frame_sequence_output_count = 0U;
 

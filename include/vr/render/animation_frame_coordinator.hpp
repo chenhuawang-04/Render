@@ -124,15 +124,21 @@ public:
         if constexpr (requires(RendererT& candidate_,
                                const SkeletalOutputType* skeletal_outputs_arg_,
                                std::uint32_t skeletal_count_arg_,
+                               const MorphOutputType* morph_outputs_arg_,
+                               std::uint32_t morph_count_arg_,
                                const FrameSequenceOutputType* frame_outputs_arg_,
                                std::uint32_t frame_count_arg_) {
                           candidate_.SetAnimationOutputs(skeletal_outputs_arg_,
                                                          skeletal_count_arg_,
+                                                         morph_outputs_arg_,
+                                                         morph_count_arg_,
                                                          frame_outputs_arg_,
                                                          frame_count_arg_);
                       }) {
             renderer_.SetAnimationOutputs(skeletal_outputs,
                                           skeletal_output_count,
+                                          morph_outputs,
+                                          morph_output_count,
                                           frame_sequence_outputs,
                                           frame_sequence_output_count);
         }
