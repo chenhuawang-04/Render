@@ -73,6 +73,22 @@ public:
         SetMeshFlags(component_, next_flags);
     }
 
+    static void EnableSkeletalRootMotion(Geometry3D& component_,
+                                         bool enabled_) noexcept {
+        const std::uint16_t next_flags = enabled_
+            ? static_cast<std::uint16_t>(component_.mesh.flags | geometry_mesh_skeletal_root_motion_flag)
+            : static_cast<std::uint16_t>(component_.mesh.flags & ~geometry_mesh_skeletal_root_motion_flag);
+        SetMeshFlags(component_, next_flags);
+    }
+
+    static void EnableMorphTargets(Geometry3D& component_,
+                                   bool enabled_) noexcept {
+        const std::uint16_t next_flags = enabled_
+            ? static_cast<std::uint16_t>(component_.mesh.flags | geometry_mesh_morph_targets_flag)
+            : static_cast<std::uint16_t>(component_.mesh.flags & ~geometry_mesh_morph_targets_flag);
+        SetMeshFlags(component_, next_flags);
+    }
+
     static void SetTopology(Geometry3D& component_,
                             Geometry3DTopology topology_) noexcept {
         component_.style.topology = topology_;

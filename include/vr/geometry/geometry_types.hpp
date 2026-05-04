@@ -23,6 +23,22 @@ struct GeometryMeshVertex final {
 
     float uv_u;
     float uv_v;
+
+    float morph0_position_delta_x;
+    float morph0_position_delta_y;
+    float morph0_position_delta_z;
+
+    float morph0_normal_delta_x;
+    float morph0_normal_delta_y;
+    float morph0_normal_delta_z;
+
+    float morph1_position_delta_x;
+    float morph1_position_delta_y;
+    float morph1_position_delta_z;
+
+    float morph1_normal_delta_x;
+    float morph1_normal_delta_y;
+    float morph1_normal_delta_z;
 };
 
 struct GeometrySubmeshRange final {

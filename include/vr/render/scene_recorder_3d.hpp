@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Center/Memory/Container/Vector/McVector.hpp"
+#include "vr/render/animation_frame_coordinator.hpp"
 #include "vr/render/light_frame_coordinator.hpp"
 #include "vr/render/light_shadow_link_coordinator.hpp"
 #include "vr/render/scene_bloom_post_stack.hpp"
@@ -39,6 +40,7 @@ struct SceneRecorder3DStats final {
     std::uint32_t frame_packet_bind_count = 0U;
     std::uint32_t frame_packet_prepare_count = 0U;
     std::uint32_t frame_packet_record_count = 0U;
+    std::uint32_t animation_binding_refresh_count = 0U;
 };
 
 class SceneRecorder3D final {
@@ -69,9 +71,11 @@ public:
     void ClearRuntimeBinding() noexcept;
 
     void BindLightFrameCoordinator(render::LightFrameCoordinator<ecs::Dim3>* light_frame_coordinator_) noexcept;
+    void BindAnimationFrameCoordinator(render::AnimationFrameCoordinator<ecs::Dim3>* animation_frame_coordinator_) noexcept;
     void BindShadowRuntime(render::ShadowFrameCoordinator<ecs::Dim3>* shadow_frame_coordinator_,
                            shadow::ShadowAtlasHost* shadow_atlas_host_) noexcept;
     void ClearShadowRuntimeBinding() noexcept;
+    void ClearAnimationFrameBinding() noexcept;
     void SetFramePacket(const RenderScenePacket3D* frame_packet_) noexcept;
     void ClearFramePacket() noexcept;
 
@@ -83,6 +87,7 @@ public:
             .prepare_fn = &PrepareRenderer<RendererT>,
             .record_fn = &RecordRenderer<RendererT>,
             .swapchain_recreated_fn = &OptionalOnSwapchainRecreatedRenderer<RendererT>,
+            .configure_animation_fn = &ConfigurePreSceneAnimationBinding<RendererT>,
         };
         UpsertPreSceneRendererEntry(entry);
     }
@@ -108,6 +113,7 @@ public:
             .swapchain_recreated_fn = &OnSwapchainRecreatedRenderer<RendererT>,
             .configure_scene_fn = &ConfigureSceneRendererBinding<RendererT>,
             .configure_lighting_fn = &ConfigureSceneLightingBinding<RendererT>,
+            .configure_animation_fn = &ConfigureSceneAnimationBinding<RendererT>,
         };
         UpsertSceneRendererEntry(entry);
     }
@@ -185,6 +191,10 @@ private:
                                          render::ShadowAtlasBindingCoordinator*,
                                          render::ShadowFrameCoordinator<ecs::Dim3>*,
                                          shadow::ShadowAtlasHost*);
+    using ConfigureSceneAnimationFn = void (*)(void*,
+                                               render::AnimationFrameCoordinator<ecs::Dim3>*);
+    using ConfigurePreSceneAnimationFn = void (*)(void*,
+                                                  render::AnimationFrameCoordinator<ecs::Dim3>*);
     using SetOverlayOutputFn = void (*)(void*, const RenderTargetColorOutputConfig&);
 
     static constexpr SceneRecorder3DSceneStage scene_stage_record_order[2] = {
@@ -197,6 +207,7 @@ private:
         PrepareFn prepare_fn = nullptr;
         RecordFn record_fn = nullptr;
         SwapchainRecreatedFn swapchain_recreated_fn = nullptr;
+        ConfigurePreSceneAnimationFn configure_animation_fn = nullptr;
     };
 
     struct SceneRendererEntry final {
@@ -208,6 +219,7 @@ private:
         SwapchainRecreatedFn swapchain_recreated_fn = nullptr;
         ConfigureSceneFn configure_scene_fn = nullptr;
         ConfigureLightingFn configure_lighting_fn = nullptr;
+        ConfigureSceneAnimationFn configure_animation_fn = nullptr;
     };
 
     struct OverlayRendererEntry final {
@@ -328,6 +340,48 @@ private:
     }
 
     template<typename RendererT>
+    static void ConfigureSceneAnimationBinding(
+        void* renderer_,
+        render::AnimationFrameCoordinator<ecs::Dim3>* animation_frame_coordinator_) {
+        RendererT& renderer_ref = *static_cast<RendererT*>(renderer_);
+        if (animation_frame_coordinator_ != nullptr) {
+            animation_frame_coordinator_->ApplyToSceneRenderer(renderer_ref);
+            return;
+        }
+        if constexpr (requires(RendererT& candidate_) {
+                          candidate_.SetAnimationOutputs(static_cast<const ecs::SkeletalPoseOutputState<ecs::Dim3>*>(nullptr),
+                                                         0U,
+                                                         static_cast<const ecs::VertexDeformOutputState*>(nullptr),
+                                                         0U,
+                                                         static_cast<const ecs::MorphWeightOutputState*>(nullptr),
+                                                         0U,
+                                                         static_cast<const ecs::FrameSequenceOutputState*>(nullptr),
+                                                         0U);
+                      }) {
+            renderer_ref.SetAnimationOutputs(nullptr, 0U, nullptr, 0U, nullptr, 0U, nullptr, 0U);
+        }
+    }
+
+    template<typename RendererT>
+    static void ConfigurePreSceneAnimationBinding(
+        void* renderer_,
+        render::AnimationFrameCoordinator<ecs::Dim3>* animation_frame_coordinator_) {
+        RendererT& renderer_ref = *static_cast<RendererT*>(renderer_);
+        if (animation_frame_coordinator_ != nullptr) {
+            animation_frame_coordinator_->ApplyToShadowRenderer(renderer_ref);
+            return;
+        }
+        if constexpr (requires(RendererT& candidate_) {
+                          candidate_.SetAnimationOutputs(static_cast<const ecs::SkeletalPoseOutputState<ecs::Dim3>*>(nullptr),
+                                                         0U,
+                                                         static_cast<const ecs::FrameSequenceOutputState*>(nullptr),
+                                                         0U);
+                      }) {
+            renderer_ref.SetAnimationOutputs(nullptr, 0U, nullptr, 0U);
+        }
+    }
+
+    template<typename RendererT>
     static void SetOverlayOutputTarget(void* renderer_,
                                        const RenderTargetColorOutputConfig& output_target_config_) {
         static_cast<RendererT*>(renderer_)->SetOutputTargetConfig(output_target_config_);
@@ -349,6 +403,7 @@ private:
     void UpsertOverlayRendererEntry(const OverlayRendererEntry& entry_);
     void RefreshFramePacketBinding() noexcept;
     void RefreshSceneLightingBindings() noexcept;
+    void RefreshAnimationBindings() noexcept;
     void RefreshRendererCounts() noexcept;
     [[nodiscard]] bool IsFirstSceneRendererEntryForRenderer(
         const SceneRendererEntry& entry_) const noexcept;
@@ -366,6 +421,7 @@ private:
     RenderTargetHost* render_target_host = nullptr;
     RenderTargetPool* render_target_pool = nullptr;
     render::LightFrameCoordinator<ecs::Dim3>* light_frame_coordinator = nullptr;
+    render::AnimationFrameCoordinator<ecs::Dim3>* animation_frame_coordinator = nullptr;
     render::ShadowFrameCoordinator<ecs::Dim3>* shadow_frame_coordinator = nullptr;
     shadow::ShadowAtlasHost* shadow_atlas_host = nullptr;
     const RenderScenePacket3D* frame_packet = nullptr;

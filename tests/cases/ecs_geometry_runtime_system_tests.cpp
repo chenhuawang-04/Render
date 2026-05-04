@@ -491,6 +491,113 @@ VR_TEST_CASE(EcsGeometryRuntimeSystem_dim3_vertex_deform_partial_update_rewrites
     VR_CHECK(scratch.instances[0U].deform_param1_w == 0.4F);
 }
 
+VR_TEST_CASE(EcsGeometryRuntimeSystem_dim3_morph_partial_update_rewrites_instance_weights,
+             "unit;core;ecs;geometry;runtime") {
+    using Geometry3D = vr::ecs::Geometry<vr::ecs::Dim3>;
+    using MeshSystem = vr::ecs::GeometryMeshSystem;
+    using GeometrySystem3D = vr::ecs::GeometrySystem<vr::ecs::Dim3>;
+    using RuntimeSystem3D = vr::ecs::GeometryRuntimeSystem<vr::ecs::Dim3>;
+    using Transform3D = vr::ecs::Transform<vr::ecs::Dim3>;
+    using TransformSystem3D = vr::ecs::TransformSystem<vr::ecs::Dim3>;
+
+    Geometry3D component{};
+    MeshSystem::Initialize(component);
+    MeshSystem::SetMeshRoute(component, 95U, 0U, 0U);
+    MeshSystem::EnableMorphTargets(component, true);
+    GeometrySystem3D::SetMaterialId(component, 8U);
+
+    Transform3D transform{};
+    TransformSystem3D::Initialize(transform);
+    TransformSystem3D::SetLocalPosition(transform, vr::ecs::Float3{.x = 0.0F, .y = 0.0F, .z = 2.0F});
+    TransformSystem3D::UpdateHierarchy(&transform, 1U);
+
+    std::array<vr::ecs::MorphWeightOutputState, 1U> outputs{};
+    std::array<float, 2U> weights{0.25F, 0.5F};
+    outputs[0U].weights = weights.data();
+    outputs[0U].weight_count = static_cast<std::uint32_t>(weights.size());
+    outputs[0U].sampled_weight_count = static_cast<std::uint32_t>(weights.size());
+    outputs[0U].revision = 1U;
+
+    vr::ecs::Geometry3DRuntimeScratch scratch{};
+    vr::ecs::Geometry3DRuntimeBuildHint hint{};
+    hint.morph_outputs = outputs.data();
+    hint.morph_output_count = static_cast<std::uint32_t>(outputs.size());
+
+    const auto stats0 = RuntimeSystem3D::Build(&component, &transform, 1U, scratch, {}, hint);
+    VR_REQUIRE(stats0.emitted_instance_count == 1U);
+    VR_CHECK(stats0.morph_animated_instance_count == 1U);
+    VR_CHECK(stats0.morph_rewritten_instance_count == 1U);
+    VR_CHECK(scratch.instances[0U].morph_weight0 == 0.25F);
+    VR_CHECK(scratch.instances[0U].morph_weight1 == 0.5F);
+
+    weights[0U] = 0.75F;
+    weights[1U] = 0.1F;
+    outputs[0U].revision = 2U;
+
+    const auto stats1 = RuntimeSystem3D::Build(&component, &transform, 1U, scratch, {}, hint);
+    VR_CHECK(stats1.cache_status == vr::ecs::GeometryRuntimeCacheStatus::hit_partial_update);
+    VR_CHECK(stats1.cache_reused);
+    VR_CHECK(stats1.morph_rewritten_instance_count == 1U);
+    VR_CHECK(!stats1.transform_only_update);
+    VR_CHECK(scratch.instances[0U].morph_weight0 == 0.75F);
+    VR_CHECK(scratch.instances[0U].morph_weight1 == 0.1F);
+}
+
+VR_TEST_CASE(EcsGeometryRuntimeSystem_dim3_skeletal_root_motion_updates_world_matrix,
+             "unit;core;ecs;geometry;runtime") {
+    using Geometry3D = vr::ecs::Geometry<vr::ecs::Dim3>;
+    using MeshSystem = vr::ecs::GeometryMeshSystem;
+    using GeometrySystem3D = vr::ecs::GeometrySystem<vr::ecs::Dim3>;
+    using RuntimeSystem3D = vr::ecs::GeometryRuntimeSystem<vr::ecs::Dim3>;
+    using Transform3D = vr::ecs::Transform<vr::ecs::Dim3>;
+    using TransformSystem3D = vr::ecs::TransformSystem<vr::ecs::Dim3>;
+
+    Geometry3D component{};
+    MeshSystem::Initialize(component);
+    MeshSystem::SetMeshRoute(component, 97U, 0U, 0U);
+    MeshSystem::EnableSkeletalRootMotion(component, true);
+    GeometrySystem3D::SetMaterialId(component, 6U);
+
+    Transform3D transform{};
+    TransformSystem3D::Initialize(transform);
+    TransformSystem3D::SetLocalPosition(transform, vr::ecs::Float3{.x = 10.0F, .y = 0.0F, .z = 2.0F});
+    TransformSystem3D::UpdateHierarchy(&transform, 1U);
+
+    std::array<vr::ecs::SkeletalPoseOutputState<vr::ecs::Dim3>, 1U> outputs{};
+    std::array<vr::ecs::SkeletalJointPose<vr::ecs::Dim3>, 1U> joints{{
+        {
+            .position = vr::ecs::Float3{.x = 1.5F, .y = 0.0F, .z = 0.0F},
+            .rotation = vr::ecs::Quaternion{.x = 0.0F, .y = 0.0F, .z = 0.0F, .w = 1.0F},
+            .scale = vr::ecs::Float3{.x = 1.0F, .y = 1.0F, .z = 1.0F},
+        },
+    }};
+    outputs[0U].joints = joints.data();
+    outputs[0U].joint_count = static_cast<std::uint32_t>(joints.size());
+    outputs[0U].sampled_joint_count = static_cast<std::uint32_t>(joints.size());
+    outputs[0U].revision = 1U;
+
+    vr::ecs::Geometry3DRuntimeScratch scratch{};
+    vr::ecs::Geometry3DRuntimeBuildHint hint{};
+    hint.skeletal_outputs = outputs.data();
+    hint.skeletal_output_count = static_cast<std::uint32_t>(outputs.size());
+
+    const auto stats0 = RuntimeSystem3D::Build(&component, &transform, 1U, scratch, {}, hint);
+    VR_REQUIRE(stats0.emitted_instance_count == 1U);
+    VR_CHECK(stats0.skeletal_animated_instance_count == 1U);
+    VR_CHECK(stats0.skeletal_rewritten_instance_count == 1U);
+    VR_CHECK(scratch.instances[0U].world_m30 == 11.5F);
+
+    joints[0U].position.x = 4.0F;
+    outputs[0U].revision = 2U;
+
+    const auto stats1 = RuntimeSystem3D::Build(&component, &transform, 1U, scratch, {}, hint);
+    VR_CHECK(stats1.cache_status == vr::ecs::GeometryRuntimeCacheStatus::hit_partial_update);
+    VR_CHECK(stats1.cache_reused);
+    VR_CHECK(stats1.skeletal_rewritten_instance_count == 1U);
+    VR_CHECK(stats1.transform_only_update);
+    VR_CHECK(scratch.instances[0U].world_m30 == 14.0F);
+}
+
 VR_TEST_CASE(EcsGeometryRuntimeSystem_dim3_frame_sequence_signature_rebuilds_submesh_batches,
              "unit;core;ecs;geometry;runtime") {
     using Geometry3D = vr::ecs::Geometry<vr::ecs::Dim3>;

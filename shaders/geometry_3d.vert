@@ -3,6 +3,10 @@
 layout(location = 0) in vec3 in_position;
 layout(location = 1) in vec3 in_normal;
 layout(location = 2) in vec2 in_uv;
+layout(location = 12) in vec3 in_morph0_position_delta;
+layout(location = 13) in vec3 in_morph0_normal_delta;
+layout(location = 14) in vec3 in_morph1_position_delta;
+layout(location = 15) in vec3 in_morph1_normal_delta;
 
 layout(location = 3) in vec4 in_world_row0;
 layout(location = 4) in vec4 in_world_row1;
@@ -13,6 +17,7 @@ layout(location = 8) in vec4 in_albedo;
 layout(location = 9) in uint in_instance_params;
 layout(location = 10) in vec4 in_deform_param0;
 layout(location = 11) in vec4 in_deform_param1;
+layout(location = 16) in vec4 in_morph_weights;
 
 layout(push_constant) uniform Geometry3DPushConstants {
     mat4 view_projection;
@@ -49,8 +54,24 @@ vec3 apply_vertex_deform(vec3 local_position, vec3 local_normal) {
     return local_position + axis * wave + local_normal * normal_offset;
 }
 
+vec3 apply_morph_position(vec3 local_position) {
+    return local_position +
+           in_morph0_position_delta * in_morph_weights.x +
+           in_morph1_position_delta * in_morph_weights.y;
+}
+
+vec3 apply_morph_normal(vec3 local_normal) {
+    vec3 morphed_normal = local_normal +
+                          in_morph0_normal_delta * in_morph_weights.x +
+                          in_morph1_normal_delta * in_morph_weights.y;
+    float normal_length = length(morphed_normal);
+    return (normal_length > 1e-6) ? (morphed_normal / normal_length) : local_normal;
+}
+
 void main() {
-    vec3 local_position = apply_vertex_deform(in_position, in_normal);
+    vec3 morphed_normal = apply_morph_normal(in_normal);
+    vec3 morphed_position = apply_morph_position(in_position);
+    vec3 local_position = apply_vertex_deform(morphed_position, morphed_normal);
     mat4 world = mat4(in_world_row0, in_world_row1, in_world_row2, in_world_row3);
     vec4 world_position = world * vec4(local_position, 1.0);
     gl_Position = pc.view_projection * world_position;
@@ -58,7 +79,7 @@ void main() {
     out_world_position = world_position.xyz;
 
     mat3 world3x3 = mat3(world);
-    vec3 normal_world = world3x3 * in_normal;
+    vec3 normal_world = world3x3 * morphed_normal;
     float normal_length = length(normal_world);
     out_normal_world = (normal_length > 1e-6) ? (normal_world / normal_length) : vec3(0.0, 0.0, 1.0);
     out_albedo = in_albedo;

@@ -6,6 +6,7 @@
 #include "vr/ecs/component/geometry_component.hpp"
 #include "vr/ecs/component/shadow_component.hpp"
 #include "vr/ecs/component/transform_component.hpp"
+#include "vr/ecs/system/animation_evaluation_context.hpp"
 #include "vr/geometry/geometry_resource_host.hpp"
 #include "vr/render/pipeline_host.hpp"
 #include "vr/render/render_loop_host.hpp"
@@ -85,6 +86,10 @@ public:
     void SetGeometryData(ecs::Geometry<ecs::Dim3>* geometry_components_,
                          ecs::Transform<ecs::Dim3>* geometry_transforms_,
                          std::uint32_t geometry_component_count_) noexcept;
+    void SetAnimationOutputs(const ecs::SkeletalPoseOutputState<ecs::Dim3>* skeletal_outputs_,
+                             std::uint32_t skeletal_output_count_,
+                             const ecs::FrameSequenceOutputState* frame_sequence_outputs_,
+                             std::uint32_t frame_sequence_output_count_) noexcept;
     void SetShadowDirtyHint(const std::uint32_t* dirty_component_indices_,
                             std::uint32_t dirty_component_count_) noexcept;
     void SetTransformDirtyHint(const std::uint32_t* dirty_component_indices_,
@@ -152,6 +157,17 @@ private:
     [[nodiscard]] static TopologyMode ResolveTopologyMode(ecs::Geometry3DTopology topology_) noexcept;
     [[nodiscard]] static CullMode ResolveCullMode(const ecs::Geometry<ecs::Dim3>& geometry_component_) noexcept;
     [[nodiscard]] static DepthMode ResolveDepthMode(const ecs::ShadowViewGpuRecord& view_record_) noexcept;
+    [[nodiscard]] static ecs::Matrix4x4 ComposeEffectiveWorldMatrix(
+        const ecs::Matrix4x4& base_world_matrix_,
+        const ecs::Geometry<ecs::Dim3>& geometry_component_,
+        std::uint32_t component_index_,
+        const ecs::SkeletalPoseOutputState<ecs::Dim3>* skeletal_outputs_,
+        std::uint32_t skeletal_output_count_) noexcept;
+    [[nodiscard]] static std::uint32_t ResolveAnimatedSubmeshIndex(
+        const ecs::Geometry<ecs::Dim3>& geometry_component_,
+        std::uint32_t component_index_,
+        const ecs::FrameSequenceOutputState* frame_sequence_outputs_,
+        std::uint32_t frame_sequence_output_count_) noexcept;
     [[nodiscard]] static std::size_t LowerBoundAtlasRequestIndex(
         const ShadowRenderer3DMcVector<AtlasRequestAggregate>& entries_,
         std::uint32_t namespace_id_) noexcept;
@@ -191,6 +207,10 @@ private:
     ecs::Geometry<ecs::Dim3>* geometry_components = nullptr;
     ecs::Transform<ecs::Dim3>* geometry_transforms = nullptr;
     std::uint32_t geometry_component_count = 0U;
+    const ecs::SkeletalPoseOutputState<ecs::Dim3>* skeletal_outputs = nullptr;
+    std::uint32_t skeletal_output_count = 0U;
+    const ecs::FrameSequenceOutputState* frame_sequence_outputs = nullptr;
+    std::uint32_t frame_sequence_output_count = 0U;
 
     geometry::GeometryResourceHost* geometry_resource_host = nullptr;
 

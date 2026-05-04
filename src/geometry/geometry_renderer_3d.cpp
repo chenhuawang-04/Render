@@ -316,8 +316,12 @@ void GeometryRenderer3D::Shutdown(VulkanContext& context_) {
     camera_component = nullptr;
     camera_transform = nullptr;
     bounds_components = nullptr;
+    skeletal_outputs = nullptr;
+    skeletal_output_count = 0U;
     vertex_deform_outputs = nullptr;
     vertex_deform_output_count = 0U;
+    morph_outputs = nullptr;
+    morph_output_count = 0U;
     frame_sequence_outputs = nullptr;
     frame_sequence_output_count = 0U;
     geometry_resource_host = nullptr;
@@ -422,12 +426,20 @@ void GeometryRenderer3D::SetAppearanceDirtyHint(const std::uint32_t* dirty_compo
 }
 
 void GeometryRenderer3D::SetAnimationOutputs(
+    const ecs::SkeletalPoseOutputState<ecs::Dim3>* skeletal_outputs_,
+    std::uint32_t skeletal_output_count_,
     const ecs::VertexDeformOutputState* vertex_deform_outputs_,
     std::uint32_t vertex_deform_output_count_,
+    const ecs::MorphWeightOutputState* morph_outputs_,
+    std::uint32_t morph_output_count_,
     const ecs::FrameSequenceOutputState* frame_sequence_outputs_,
     std::uint32_t frame_sequence_output_count_) noexcept {
+    skeletal_outputs = skeletal_outputs_;
+    skeletal_output_count = skeletal_output_count_;
     vertex_deform_outputs = vertex_deform_outputs_;
     vertex_deform_output_count = vertex_deform_output_count_;
+    morph_outputs = morph_outputs_;
+    morph_output_count = morph_output_count_;
     frame_sequence_outputs = frame_sequence_outputs_;
     frame_sequence_output_count = frame_sequence_output_count_;
 }
@@ -653,8 +665,12 @@ void GeometryRenderer3D::PrepareFrame(const render::RuntimePrepareContext& prepa
         stats.culling_invalid_bounds_count = culling_stats.culled_by_invalid_bounds_count;
         stats.culling_plane_test_count = culling_stats.plane_test_count;
     }
+    build_hint.skeletal_outputs = skeletal_outputs;
+    build_hint.skeletal_output_count = skeletal_output_count;
     build_hint.vertex_deform_outputs = vertex_deform_outputs;
     build_hint.vertex_deform_output_count = vertex_deform_output_count;
+    build_hint.morph_outputs = morph_outputs;
+    build_hint.morph_output_count = morph_output_count;
     build_hint.frame_sequence_outputs = frame_sequence_outputs;
     build_hint.frame_sequence_output_count = frame_sequence_output_count;
 
@@ -1865,6 +1881,10 @@ render::GraphicsPipelineId GeometryRenderer3D::EnsurePipelineForMode(VulkanConte
     desc.vertex_input.attributes.push_back({.location = 0U, .binding = 0U, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = 0U});
     desc.vertex_input.attributes.push_back({.location = 1U, .binding = 0U, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = 12U});
     desc.vertex_input.attributes.push_back({.location = 2U, .binding = 0U, .format = VK_FORMAT_R32G32_SFLOAT, .offset = 24U});
+    desc.vertex_input.attributes.push_back({.location = 12U, .binding = 0U, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = 32U});
+    desc.vertex_input.attributes.push_back({.location = 13U, .binding = 0U, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = 44U});
+    desc.vertex_input.attributes.push_back({.location = 14U, .binding = 0U, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = 56U});
+    desc.vertex_input.attributes.push_back({.location = 15U, .binding = 0U, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = 68U});
     desc.vertex_input.attributes.push_back({.location = 3U, .binding = 1U, .format = VK_FORMAT_R32G32B32A32_SFLOAT, .offset = 0U});
     desc.vertex_input.attributes.push_back({.location = 4U, .binding = 1U, .format = VK_FORMAT_R32G32B32A32_SFLOAT, .offset = 16U});
     desc.vertex_input.attributes.push_back({.location = 5U, .binding = 1U, .format = VK_FORMAT_R32G32B32A32_SFLOAT, .offset = 32U});
@@ -1874,6 +1894,7 @@ render::GraphicsPipelineId GeometryRenderer3D::EnsurePipelineForMode(VulkanConte
     desc.vertex_input.attributes.push_back({.location = 9U, .binding = 1U, .format = VK_FORMAT_R32_UINT, .offset = 116U});
     desc.vertex_input.attributes.push_back({.location = 10U, .binding = 1U, .format = VK_FORMAT_R32G32B32A32_SFLOAT, .offset = 144U});
     desc.vertex_input.attributes.push_back({.location = 11U, .binding = 1U, .format = VK_FORMAT_R32G32B32A32_SFLOAT, .offset = 160U});
+    desc.vertex_input.attributes.push_back({.location = 16U, .binding = 1U, .format = VK_FORMAT_R32G32B32A32_SFLOAT, .offset = 176U});
 
     switch (topology_mode_) {
     case TopologyMode::triangles:

@@ -1,5 +1,6 @@
 #include "support/test_framework.hpp"
 #include "vr/render/render_pass_preset.hpp"
+#include "vr/render/animation_frame_coordinator.hpp"
 #include "vr/render/scene_recorder_2d.hpp"
 #include "vr/render/render_target_pass.hpp"
 #include "vr/render/render_target_desc.hpp"
@@ -8,6 +9,7 @@
 #include "vr/render/render_target_types.hpp"
 #include "vr/render/scene_render_target_set.hpp"
 
+#include <array>
 #include <type_traits>
 
 namespace {
@@ -139,6 +141,71 @@ struct FakeLitSceneRecorderRenderer final : FakeSceneRecorderRenderer {
 
     void SetShadowAtlasHost(vr::shadow::ShadowAtlasHost* shadow_atlas_host_) noexcept {
         shadow_atlas = shadow_atlas_host_;
+    }
+};
+
+struct FakeAnimatedSceneRecorderRenderer final : FakeSceneRecorderRenderer {
+    const vr::ecs::SkeletalPoseOutputState<vr::ecs::Dim3>* skeletal_outputs = nullptr;
+    std::uint32_t skeletal_output_count = 0U;
+    const vr::ecs::VertexDeformOutputState* vertex_deform_outputs = nullptr;
+    std::uint32_t vertex_deform_output_count = 0U;
+    const vr::ecs::MorphWeightOutputState* morph_outputs = nullptr;
+    std::uint32_t morph_output_count = 0U;
+    const vr::ecs::FrameSequenceOutputState* frame_sequence_outputs = nullptr;
+    std::uint32_t frame_sequence_output_count = 0U;
+
+    void SetAnimationOutputs(const vr::ecs::SkeletalPoseOutputState<vr::ecs::Dim3>* skeletal_outputs_,
+                             std::uint32_t skeletal_output_count_,
+                             const vr::ecs::VertexDeformOutputState* vertex_deform_outputs_,
+                             std::uint32_t vertex_deform_output_count_,
+                             const vr::ecs::MorphWeightOutputState* morph_outputs_,
+                             std::uint32_t morph_output_count_,
+                             const vr::ecs::FrameSequenceOutputState* frame_sequence_outputs_,
+                             std::uint32_t frame_sequence_output_count_) noexcept {
+        skeletal_outputs = skeletal_outputs_;
+        skeletal_output_count = skeletal_output_count_;
+        vertex_deform_outputs = vertex_deform_outputs_;
+        vertex_deform_output_count = vertex_deform_output_count_;
+        morph_outputs = morph_outputs_;
+        morph_output_count = morph_output_count_;
+        frame_sequence_outputs = frame_sequence_outputs_;
+        frame_sequence_output_count = frame_sequence_output_count_;
+    }
+};
+
+struct FakeAnimatedShadowRecorderRenderer final {
+    std::uint32_t prepare_count = 0U;
+    std::uint32_t record_count = 0U;
+    std::uint32_t recreate_count = 0U;
+    const vr::ecs::SkeletalPoseOutputState<vr::ecs::Dim3>* skeletal_outputs = nullptr;
+    std::uint32_t skeletal_output_count = 0U;
+    const vr::ecs::FrameSequenceOutputState* frame_sequence_outputs = nullptr;
+    std::uint32_t frame_sequence_output_count = 0U;
+
+    void PrepareFrame(const vr::render::RuntimePrepareContext&) noexcept {
+        prepare_count += 1U;
+    }
+
+    void Record(const vr::render::FrameRecordContext&) noexcept {
+        record_count += 1U;
+    }
+
+    void OnSwapchainRecreated(std::uint32_t,
+                              VkExtent2D,
+                              VkFormat,
+                              std::uint64_t,
+                              std::uint64_t) noexcept {
+        recreate_count += 1U;
+    }
+
+    void SetAnimationOutputs(const vr::ecs::SkeletalPoseOutputState<vr::ecs::Dim3>* skeletal_outputs_,
+                             std::uint32_t skeletal_output_count_,
+                             const vr::ecs::FrameSequenceOutputState* frame_sequence_outputs_,
+                             std::uint32_t frame_sequence_output_count_) noexcept {
+        skeletal_outputs = skeletal_outputs_;
+        skeletal_output_count = skeletal_output_count_;
+        frame_sequence_outputs = frame_sequence_outputs_;
+        frame_sequence_output_count = frame_sequence_output_count_;
     }
 };
 
@@ -486,6 +553,39 @@ VR_TEST_CASE(SceneRecorder3D_registration_upserts_renderer_counts,
     VR_CHECK(!recorder.HasRuntimeBinding());
 }
 
+VR_TEST_CASE(AnimationFrameCoordinator_dim3_applies_outputs_to_geometry_and_shadow_renderers,
+             "unit;core;render_target") {
+    vr::render::AnimationFrameCoordinator<vr::ecs::Dim3> coordinator{};
+
+    std::array<vr::ecs::SkeletalPoseOutputState<vr::ecs::Dim3>, 1U> skeletal_outputs{};
+    std::array<vr::ecs::VertexDeformOutputState, 1U> vertex_outputs{};
+    std::array<vr::ecs::MorphWeightOutputState, 1U> morph_outputs{};
+    std::array<vr::ecs::FrameSequenceOutputState, 1U> frame_outputs{};
+    coordinator.SetAnimationOutputs(skeletal_outputs.data(),
+                                    static_cast<std::uint32_t>(skeletal_outputs.size()),
+                                    vertex_outputs.data(),
+                                    static_cast<std::uint32_t>(vertex_outputs.size()),
+                                    morph_outputs.data(),
+                                    static_cast<std::uint32_t>(morph_outputs.size()),
+                                    frame_outputs.data(),
+                                    static_cast<std::uint32_t>(frame_outputs.size()));
+
+    FakeAnimatedSceneRecorderRenderer scene_renderer{};
+    FakeAnimatedShadowRecorderRenderer shadow_renderer{};
+    coordinator.ApplyToSceneRenderer(scene_renderer);
+    coordinator.ApplyToShadowRenderer(shadow_renderer);
+
+    VR_CHECK(scene_renderer.skeletal_outputs == skeletal_outputs.data());
+    VR_CHECK(scene_renderer.skeletal_output_count == 1U);
+    VR_CHECK(scene_renderer.vertex_deform_outputs == vertex_outputs.data());
+    VR_CHECK(scene_renderer.morph_outputs == morph_outputs.data());
+    VR_CHECK(scene_renderer.frame_sequence_outputs == frame_outputs.data());
+    VR_CHECK(shadow_renderer.skeletal_outputs == skeletal_outputs.data());
+    VR_CHECK(shadow_renderer.frame_sequence_outputs == frame_outputs.data());
+    VR_CHECK(coordinator.Stats().apply_scene_call_count == 1U);
+    VR_CHECK(coordinator.Stats().apply_shadow_call_count == 1U);
+}
+
 VR_TEST_CASE(SceneRecorder3D_records_opaque_stage_before_transparent_stage,
              "unit;core;render_target") {
     vr::render::SceneRecorder3D recorder{};
@@ -597,6 +697,49 @@ VR_TEST_CASE(SceneRecorder3D_shadow_registration_and_lighting_binding_are_propag
     VR_CHECK(lit_renderer.shadow_atlas_binding != nullptr);
     VR_CHECK(lit_renderer.shadow_frame == nullptr);
     VR_CHECK(lit_renderer.shadow_atlas == nullptr);
+}
+
+VR_TEST_CASE(SceneRecorder3D_animation_binding_is_propagated_to_scene_and_shadow_renderers,
+             "unit;core;render_target") {
+    vr::render::SceneRecorder3D recorder{};
+    recorder.Initialize({});
+
+    FakeAnimatedSceneRecorderRenderer scene_renderer{};
+    FakeAnimatedShadowRecorderRenderer shadow_renderer{};
+    vr::render::AnimationFrameCoordinator<vr::ecs::Dim3> animation_frame_coordinator{};
+
+    std::array<vr::ecs::SkeletalPoseOutputState<vr::ecs::Dim3>, 1U> skeletal_outputs{};
+    std::array<vr::ecs::VertexDeformOutputState, 1U> vertex_outputs{};
+    std::array<vr::ecs::MorphWeightOutputState, 1U> morph_outputs{};
+    std::array<vr::ecs::FrameSequenceOutputState, 1U> frame_outputs{};
+    animation_frame_coordinator.SetAnimationOutputs(skeletal_outputs.data(),
+                                                    static_cast<std::uint32_t>(skeletal_outputs.size()),
+                                                    vertex_outputs.data(),
+                                                    static_cast<std::uint32_t>(vertex_outputs.size()),
+                                                    morph_outputs.data(),
+                                                    static_cast<std::uint32_t>(morph_outputs.size()),
+                                                    frame_outputs.data(),
+                                                    static_cast<std::uint32_t>(frame_outputs.size()));
+
+    recorder.BindAnimationFrameCoordinator(&animation_frame_coordinator);
+    recorder.RegisterOpaqueSceneRenderer(scene_renderer, vr::render::SceneRenderPassRole::single);
+    recorder.RegisterPreSceneRenderer(shadow_renderer);
+
+    VR_CHECK(scene_renderer.skeletal_outputs == skeletal_outputs.data());
+    VR_CHECK(scene_renderer.vertex_deform_outputs == vertex_outputs.data());
+    VR_CHECK(scene_renderer.morph_outputs == morph_outputs.data());
+    VR_CHECK(scene_renderer.frame_sequence_outputs == frame_outputs.data());
+    VR_CHECK(shadow_renderer.skeletal_outputs == skeletal_outputs.data());
+    VR_CHECK(shadow_renderer.frame_sequence_outputs == frame_outputs.data());
+    VR_CHECK(recorder.Stats().animation_binding_refresh_count > 0U);
+
+    recorder.ClearAnimationFrameBinding();
+    VR_CHECK(scene_renderer.skeletal_outputs == nullptr);
+    VR_CHECK(scene_renderer.vertex_deform_outputs == nullptr);
+    VR_CHECK(scene_renderer.morph_outputs == nullptr);
+    VR_CHECK(scene_renderer.frame_sequence_outputs == nullptr);
+    VR_CHECK(shadow_renderer.skeletal_outputs == nullptr);
+    VR_CHECK(shadow_renderer.frame_sequence_outputs == nullptr);
 }
 
 } // namespace

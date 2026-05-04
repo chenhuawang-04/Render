@@ -1,5 +1,6 @@
 #include "vr/shadow/shadow_renderer_3d.hpp"
 
+#include "vr/ecs/system/spatial_math.hpp"
 #include "vr/shadow/generated/shadow_depth_3d_vert_spv.hpp"
 #include "vr/vulkan_context.hpp"
 
@@ -94,6 +95,48 @@ ShadowRenderer3D::DepthMode ShadowRenderer3D::ResolveDepthMode(
         : DepthMode::forward;
 }
 
+ecs::Matrix4x4 ShadowRenderer3D::ComposeEffectiveWorldMatrix(
+    const ecs::Matrix4x4& base_world_matrix_,
+    const ecs::Geometry<ecs::Dim3>& geometry_component_,
+    std::uint32_t component_index_,
+    const ecs::SkeletalPoseOutputState<ecs::Dim3>* skeletal_outputs_,
+    std::uint32_t skeletal_output_count_) noexcept {
+    if ((geometry_component_.mesh.flags & vr::ecs::geometry_mesh_skeletal_root_motion_flag) == 0U ||
+        skeletal_outputs_ == nullptr ||
+        component_index_ >= skeletal_output_count_) {
+        return base_world_matrix_;
+    }
+
+    const ecs::SkeletalPoseOutputState<ecs::Dim3>& output = skeletal_outputs_[component_index_];
+    if (output.joints == nullptr || output.sampled_joint_count == 0U || output.joint_count == 0U) {
+        return base_world_matrix_;
+    }
+
+    const ecs::SkeletalJointPose<ecs::Dim3>& root = output.joints[0U];
+    const ecs::Matrix4x4 root_motion = ecs::spatial_math::ComposeMatrix4x4Trs(root.position,
+                                                                               root.rotation,
+                                                                               root.scale);
+    return ecs::spatial_math::MultiplyMatrix4x4(base_world_matrix_, root_motion);
+}
+
+std::uint32_t ShadowRenderer3D::ResolveAnimatedSubmeshIndex(
+    const ecs::Geometry<ecs::Dim3>& geometry_component_,
+    std::uint32_t component_index_,
+    const ecs::FrameSequenceOutputState* frame_sequence_outputs_,
+    std::uint32_t frame_sequence_output_count_) noexcept {
+    if ((geometry_component_.mesh.flags & vr::ecs::geometry_mesh_frame_sequence_submesh_flag) == 0U ||
+        frame_sequence_outputs_ == nullptr ||
+        component_index_ >= frame_sequence_output_count_) {
+        return geometry_component_.mesh.submesh_index;
+    }
+
+    const ecs::FrameSequenceOutputState& output = frame_sequence_outputs_[component_index_];
+    if (output.frame_count == 0U) {
+        return geometry_component_.mesh.submesh_index;
+    }
+    return geometry_component_.mesh.submesh_index + output.frame_index_a;
+}
+
 std::size_t ShadowRenderer3D::LowerBoundAtlasRequestIndex(
     const ShadowRenderer3DMcVector<AtlasRequestAggregate>& entries_,
     std::uint32_t namespace_id_) noexcept {
@@ -134,6 +177,10 @@ void ShadowRenderer3D::Initialize(const ShadowRenderer3DCreateInfo& create_info_
     geometry_components = nullptr;
     geometry_transforms = nullptr;
     geometry_component_count = 0U;
+    skeletal_outputs = nullptr;
+    skeletal_output_count = 0U;
+    frame_sequence_outputs = nullptr;
+    frame_sequence_output_count = 0U;
     geometry_resource_host = nullptr;
 
     context = nullptr;
@@ -181,6 +228,10 @@ void ShadowRenderer3D::Shutdown(VulkanContext& context_) {
     geometry_components = nullptr;
     geometry_transforms = nullptr;
     geometry_component_count = 0U;
+    skeletal_outputs = nullptr;
+    skeletal_output_count = 0U;
+    frame_sequence_outputs = nullptr;
+    frame_sequence_output_count = 0U;
     geometry_resource_host = nullptr;
 
     context = nullptr;
@@ -234,6 +285,17 @@ void ShadowRenderer3D::SetGeometryData(ecs::Geometry<ecs::Dim3>* geometry_compon
     geometry_transforms = geometry_transforms_;
     geometry_component_count = geometry_component_count_;
     frame_coordinator.SetCasterBounds(caster_bounds, geometry_component_count);
+}
+
+void ShadowRenderer3D::SetAnimationOutputs(
+    const ecs::SkeletalPoseOutputState<ecs::Dim3>* skeletal_outputs_,
+    std::uint32_t skeletal_output_count_,
+    const ecs::FrameSequenceOutputState* frame_sequence_outputs_,
+    std::uint32_t frame_sequence_output_count_) noexcept {
+    skeletal_outputs = skeletal_outputs_;
+    skeletal_output_count = skeletal_output_count_;
+    frame_sequence_outputs = frame_sequence_outputs_;
+    frame_sequence_output_count = frame_sequence_output_count_;
 }
 
 void ShadowRenderer3D::SetShadowDirtyHint(const std::uint32_t* dirty_component_indices_,
@@ -844,7 +906,10 @@ void ShadowRenderer3D::RecordOneAtlas(const render::FrameRecordContext& record_c
                 continue;
             }
 
-            const std::uint32_t submesh_index = geometry_component.mesh.submesh_index;
+            const std::uint32_t submesh_index = ResolveAnimatedSubmeshIndex(geometry_component,
+                                                                            caster_index,
+                                                                            frame_sequence_outputs,
+                                                                            frame_sequence_output_count);
             if (submesh_index >= mesh_record->submeshes.size()) {
                 ++stats.skipped_invalid_submesh_count;
                 continue;
@@ -906,7 +971,11 @@ void ShadowRenderer3D::RecordOneAtlas(const render::FrameRecordContext& record_c
 
             PushConstants push_constants{};
             push_constants.view_projection = view_record.view_projection_matrix;
-            push_constants.world = geometry_transforms[caster_index].runtime.world_matrix;
+            push_constants.world = ComposeEffectiveWorldMatrix(geometry_transforms[caster_index].runtime.world_matrix,
+                                                               geometry_component,
+                                                               caster_index,
+                                                               skeletal_outputs,
+                                                               skeletal_output_count);
             vkCmdPushConstants(command_buffer,
                                pipeline_layout,
                                VK_SHADER_STAGE_VERTEX_BIT,

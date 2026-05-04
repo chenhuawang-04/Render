@@ -19,6 +19,7 @@ void SceneRecorder3D::Initialize(const SceneRecorder3DCreateInfo& create_info_) 
     render_target_host = nullptr;
     render_target_pool = nullptr;
     light_frame_coordinator = nullptr;
+    animation_frame_coordinator = nullptr;
     shadow_frame_coordinator = nullptr;
     shadow_atlas_host = nullptr;
     frame_packet = nullptr;
@@ -43,6 +44,7 @@ void SceneRecorder3D::Shutdown(VulkanContext& context_) noexcept {
     render_target_host = nullptr;
     render_target_pool = nullptr;
     light_frame_coordinator = nullptr;
+    animation_frame_coordinator = nullptr;
     shadow_frame_coordinator = nullptr;
     shadow_atlas_host = nullptr;
     frame_packet = nullptr;
@@ -75,6 +77,12 @@ void SceneRecorder3D::BindLightFrameCoordinator(
     RefreshSceneLightingBindings();
 }
 
+void SceneRecorder3D::BindAnimationFrameCoordinator(
+    render::AnimationFrameCoordinator<ecs::Dim3>* animation_frame_coordinator_) noexcept {
+    animation_frame_coordinator = animation_frame_coordinator_;
+    RefreshAnimationBindings();
+}
+
 void SceneRecorder3D::BindShadowRuntime(render::ShadowFrameCoordinator<ecs::Dim3>* shadow_frame_coordinator_,
                                         shadow::ShadowAtlasHost* shadow_atlas_host_) noexcept {
     shadow_frame_coordinator = shadow_frame_coordinator_;
@@ -86,6 +94,10 @@ void SceneRecorder3D::BindShadowRuntime(render::ShadowFrameCoordinator<ecs::Dim3
 
 void SceneRecorder3D::ClearShadowRuntimeBinding() noexcept {
     BindShadowRuntime(nullptr, nullptr);
+}
+
+void SceneRecorder3D::ClearAnimationFrameBinding() noexcept {
+    BindAnimationFrameCoordinator(nullptr);
 }
 
 void SceneRecorder3D::SetFramePacket(const RenderScenePacket3D* frame_packet_) noexcept {
@@ -134,6 +146,9 @@ void SceneRecorder3D::PrepareFrame(const RuntimePrepareContext& prepare_context_
     (void)targets.PrepareFrame(prepare_context_);
 
     for (const PreSceneRendererEntry& entry : pre_scene_renderer_entries) {
+        if (entry.configure_animation_fn != nullptr && entry.renderer != nullptr) {
+            entry.configure_animation_fn(entry.renderer, animation_frame_coordinator);
+        }
         if (entry.prepare_fn != nullptr && entry.renderer != nullptr) {
             entry.prepare_fn(entry.renderer, prepare_context_);
         }
@@ -152,6 +167,10 @@ void SceneRecorder3D::PrepareFrame(const RuntimePrepareContext& prepare_context_
                                          &shadow_atlas_binding_coordinator,
                                          shadow_frame_coordinator,
                                          shadow_atlas_host);
+        }
+        if (entry_.configure_animation_fn != nullptr &&
+            IsFirstSceneRendererEntryForRenderer(entry_)) {
+            entry_.configure_animation_fn(entry_.renderer, animation_frame_coordinator);
         }
     };
     ForEachSceneRendererInStageOrder(configure_scene_renderer);
@@ -294,6 +313,10 @@ void SceneRecorder3D::OnSwapchainRecreated(std::uint32_t image_count_,
                                          shadow_frame_coordinator,
                                          shadow_atlas_host);
         }
+        if (entry_.configure_animation_fn != nullptr &&
+            IsFirstSceneRendererEntryForRenderer(entry_)) {
+            entry_.configure_animation_fn(entry_.renderer, animation_frame_coordinator);
+        }
     };
     ForEachSceneRendererInStageOrder(reconfigure_scene_renderer);
     (void)post_stack.Targets().ConfigureSceneConsumer(post_stack.Bloom());
@@ -351,11 +374,13 @@ void SceneRecorder3D::UpsertPreSceneRendererEntry(const PreSceneRendererEntry& e
     for (PreSceneRendererEntry& entry : pre_scene_renderer_entries) {
         if (entry.renderer == entry_.renderer) {
             entry = entry_;
+            RefreshAnimationBindings();
             RefreshRendererCounts();
             return;
         }
     }
     pre_scene_renderer_entries.push_back(entry_);
+    RefreshAnimationBindings();
     RefreshRendererCounts();
 }
 
@@ -364,12 +389,14 @@ void SceneRecorder3D::UpsertSceneRendererEntry(const SceneRendererEntry& entry_)
         if (entry.renderer == entry_.renderer && entry.stage == entry_.stage) {
             entry = entry_;
             RefreshSceneLightingBindings();
+            RefreshAnimationBindings();
             RefreshRendererCounts();
             return;
         }
     }
     scene_renderer_entries.push_back(entry_);
     RefreshSceneLightingBindings();
+    RefreshAnimationBindings();
     RefreshRendererCounts();
 }
 
@@ -417,6 +444,26 @@ void SceneRecorder3D::RefreshSceneLightingBindings() noexcept {
                                      shadow_atlas_host);
     };
     ForEachSceneRendererInStageOrder(configure_lighting);
+}
+
+void SceneRecorder3D::RefreshAnimationBindings() noexcept {
+    for (const PreSceneRendererEntry& entry : pre_scene_renderer_entries) {
+        if (entry.renderer == nullptr || entry.configure_animation_fn == nullptr) {
+            continue;
+        }
+        entry.configure_animation_fn(entry.renderer, animation_frame_coordinator);
+    }
+
+    auto configure_animation = [&](const SceneRendererEntry& entry_) {
+        if (entry_.renderer == nullptr ||
+            entry_.configure_animation_fn == nullptr ||
+            !IsFirstSceneRendererEntryForRenderer(entry_)) {
+            return;
+        }
+        entry_.configure_animation_fn(entry_.renderer, animation_frame_coordinator);
+    };
+    ForEachSceneRendererInStageOrder(configure_animation);
+    ++stats.animation_binding_refresh_count;
 }
 
 void SceneRecorder3D::RefreshRendererCounts() noexcept {

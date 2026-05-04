@@ -174,6 +174,11 @@ struct Geometry3DGpuInstance final {
     float deform_param1_y;
     float deform_param1_z;
     float deform_param1_w;
+
+    float morph_weight0;
+    float morph_weight1;
+    float morph_weight_reserved0;
+    float morph_weight_reserved1;
 };
 
 struct Geometry3DDrawBatch final {
@@ -197,11 +202,15 @@ struct Geometry3DRuntimeBuildHint final {
     std::uint64_t external_visible_set_signature = 0U;
     const std::uint32_t* transform_dirty_component_indices = nullptr;
     const std::uint32_t* visible_component_indices = nullptr;
+    const SkeletalPoseOutputState<Dim3>* skeletal_outputs = nullptr;
     const VertexDeformOutputState* vertex_deform_outputs = nullptr;
+    const MorphWeightOutputState* morph_outputs = nullptr;
     const FrameSequenceOutputState* frame_sequence_outputs = nullptr;
     std::uint32_t transform_dirty_component_count = 0U;
     std::uint32_t visible_component_count = 0U;
+    std::uint32_t skeletal_output_count = 0U;
     std::uint32_t vertex_deform_output_count = 0U;
+    std::uint32_t morph_output_count = 0U;
     std::uint32_t frame_sequence_output_count = 0U;
     std::uint8_t use_external_geometry_signature = 0U;
     std::uint8_t use_external_transform_signature = 0U;
@@ -215,8 +224,12 @@ struct Geometry3DRuntimeBuildStats final {
     std::uint32_t emitted_instance_count = 0U;
     std::uint32_t emitted_batch_count = 0U;
     std::uint32_t transform_rewritten_instance_count = 0U;
+    std::uint32_t skeletal_rewritten_instance_count = 0U;
+    std::uint32_t skeletal_animated_instance_count = 0U;
     std::uint32_t vertex_deform_rewritten_instance_count = 0U;
     std::uint32_t vertex_deform_animated_instance_count = 0U;
+    std::uint32_t morph_rewritten_instance_count = 0U;
+    std::uint32_t morph_animated_instance_count = 0U;
     std::uint32_t frame_sequence_animated_instance_count = 0U;
     std::uint32_t depth_test_batch_count = 0U;
     std::uint32_t depth_write_batch_count = 0U;
@@ -225,7 +238,9 @@ struct Geometry3DRuntimeBuildStats final {
     std::uint64_t geometry_signature = 0U;
     std::uint64_t transform_signature = 0U;
     std::uint64_t visible_set_signature = 0U;
+    std::uint64_t skeletal_signature = 0U;
     std::uint64_t vertex_deform_signature = 0U;
+    std::uint64_t morph_signature = 0U;
     std::uint64_t frame_sequence_signature = 0U;
     GeometryRuntimeCacheStatus cache_status = GeometryRuntimeCacheStatus::miss;
     GeometryRuntimeCacheMissReason cache_miss_reason = GeometryRuntimeCacheMissReason::none;
@@ -248,7 +263,9 @@ struct Geometry3DRuntimeCache final {
     std::uint64_t geometry_signature = 0U;
     std::uint64_t transform_signature = 0U;
     std::uint64_t visible_set_signature = 0U;
+    std::uint64_t skeletal_signature = 0U;
     std::uint64_t vertex_deform_signature = 0U;
+    std::uint64_t morph_signature = 0U;
     std::uint64_t frame_sequence_signature = 0U;
     std::uint32_t epoch = 0U;
     GeometryRuntimeMcVector<std::uint32_t> instance_world_revisions{};
@@ -854,9 +871,15 @@ public:
         const bool use_visible_component_indices = build_hint_.use_visible_component_indices != 0U;
         const bool use_external_visible_set_signature =
             build_hint_.use_external_visible_set_signature != 0U;
+        const bool use_skeletal_outputs =
+            build_hint_.skeletal_outputs != nullptr &&
+            build_hint_.skeletal_output_count > 0U;
         const bool use_vertex_deform_outputs =
             build_hint_.vertex_deform_outputs != nullptr &&
             build_hint_.vertex_deform_output_count > 0U;
+        const bool use_morph_outputs =
+            build_hint_.morph_outputs != nullptr &&
+            build_hint_.morph_output_count > 0U;
         const bool use_frame_sequence_outputs =
             build_hint_.frame_sequence_outputs != nullptr &&
             build_hint_.frame_sequence_output_count > 0U;
@@ -887,6 +910,15 @@ public:
                                         candidate_component_indices,
                                         candidate_component_count,
                                         use_visible_component_indices);
+        const std::uint64_t skeletal_signature = use_skeletal_outputs
+            ? ComputeSkeletalSignature(components_,
+                                       component_count_,
+                                       candidate_component_indices,
+                                       candidate_component_count,
+                                       use_visible_component_indices,
+                                       build_hint_.skeletal_outputs,
+                                       build_hint_.skeletal_output_count)
+            : 0U;
         const std::uint64_t vertex_deform_signature = use_vertex_deform_outputs
             ? ComputeVertexDeformSignature(components_,
                                            component_count_,
@@ -895,6 +927,15 @@ public:
                                            use_visible_component_indices,
                                            build_hint_.vertex_deform_outputs,
                                            build_hint_.vertex_deform_output_count)
+            : 0U;
+        const std::uint64_t morph_signature = use_morph_outputs
+            ? ComputeMorphSignature(components_,
+                                    component_count_,
+                                    candidate_component_indices,
+                                    candidate_component_count,
+                                    use_visible_component_indices,
+                                    build_hint_.morph_outputs,
+                                    build_hint_.morph_output_count)
             : 0U;
         const std::uint64_t frame_sequence_signature = use_frame_sequence_outputs
             ? ComputeFrameSequenceSignature(components_,
@@ -909,7 +950,9 @@ public:
         stats.geometry_signature = geometry_signature;
         stats.transform_signature = transform_signature;
         stats.visible_set_signature = visible_set_signature;
+        stats.skeletal_signature = skeletal_signature;
         stats.vertex_deform_signature = vertex_deform_signature;
+        stats.morph_signature = morph_signature;
         stats.frame_sequence_signature = frame_sequence_signature;
         stats.used_visible_component_indices = use_visible_component_indices;
         stats.geometry_signature_from_hint = use_external_geometry_signature;
@@ -927,19 +970,25 @@ public:
         stats.cache_key_matched = cache_probe.key_matched;
         if (cache_probe.key_matched) {
             if (scratch_.cache.transform_signature == transform_signature &&
-                scratch_.cache.vertex_deform_signature == vertex_deform_signature) {
+                scratch_.cache.skeletal_signature == skeletal_signature &&
+                scratch_.cache.vertex_deform_signature == vertex_deform_signature &&
+                scratch_.cache.morph_signature == morph_signature) {
                 stats = scratch_.cache.last_stats;
                 stats.geometry_signature = geometry_signature;
                 stats.transform_signature = transform_signature;
                 stats.visible_set_signature = visible_set_signature;
+                stats.skeletal_signature = skeletal_signature;
                 stats.vertex_deform_signature = vertex_deform_signature;
+                stats.morph_signature = morph_signature;
                 stats.frame_sequence_signature = frame_sequence_signature;
                 stats.cache_status = GeometryRuntimeCacheStatus::hit_reused;
                 stats.cache_miss_reason = GeometryRuntimeCacheMissReason::none;
                 stats.cache_reused = true;
                 stats.transform_only_update = false;
                 stats.transform_rewritten_instance_count = 0U;
+                stats.skeletal_rewritten_instance_count = 0U;
                 stats.vertex_deform_rewritten_instance_count = 0U;
+                stats.morph_rewritten_instance_count = 0U;
                 stats.used_visible_component_indices = use_visible_component_indices;
                 stats.candidate_component_count = candidate_component_count;
                 stats.cache_valid_before_build = true;
@@ -954,38 +1003,57 @@ public:
 
             stats = scratch_.cache.last_stats;
             bool used_dirty_hint = false;
+            const bool skeletal_changed = scratch_.cache.skeletal_signature != skeletal_signature;
             stats.transform_rewritten_instance_count =
                 UpdateInstanceWorldMatrices(scratch_.instances,
                                             scratch_.cache.instance_world_revisions,
                                             scratch_.cache.component_to_instance_index,
+                                            components_,
                                             transforms_,
                                             component_count_,
+                                            build_hint_.skeletal_outputs,
+                                            build_hint_.skeletal_output_count,
                                             build_hint_.transform_dirty_component_indices,
                                             build_hint_.transform_dirty_component_count,
+                                            skeletal_changed,
                                             used_dirty_hint);
+            stats.skeletal_rewritten_instance_count = stats.transform_rewritten_instance_count;
             stats.vertex_deform_rewritten_instance_count =
                 UpdateInstanceVertexDeformParameters(scratch_.instances,
                                                     components_,
                                                     component_count_,
                                                     build_hint_.vertex_deform_outputs,
                                                     build_hint_.vertex_deform_output_count);
+            stats.morph_rewritten_instance_count =
+                UpdateInstanceMorphWeights(scratch_.instances,
+                                           components_,
+                                           component_count_,
+                                           build_hint_.morph_outputs,
+                                           build_hint_.morph_output_count);
             scratch_.cache.transform_signature = transform_signature;
+            scratch_.cache.skeletal_signature = skeletal_signature;
             scratch_.cache.vertex_deform_signature = vertex_deform_signature;
+            scratch_.cache.morph_signature = morph_signature;
             stats.geometry_signature = geometry_signature;
             stats.transform_signature = transform_signature;
             stats.visible_set_signature = visible_set_signature;
+            stats.skeletal_signature = skeletal_signature;
             stats.vertex_deform_signature = vertex_deform_signature;
+            stats.morph_signature = morph_signature;
             stats.frame_sequence_signature = frame_sequence_signature;
             stats.cache_status =
                 (stats.transform_rewritten_instance_count > 0U ||
-                 stats.vertex_deform_rewritten_instance_count > 0U)
+                 stats.vertex_deform_rewritten_instance_count > 0U ||
+                 stats.morph_rewritten_instance_count > 0U)
                     ? GeometryRuntimeCacheStatus::hit_partial_update
                     : GeometryRuntimeCacheStatus::hit_reused;
             stats.cache_miss_reason = GeometryRuntimeCacheMissReason::none;
             stats.cache_reused = true;
             stats.transform_only_update =
-                stats.transform_rewritten_instance_count > 0U &&
-                stats.vertex_deform_rewritten_instance_count == 0U;
+                (stats.transform_rewritten_instance_count > 0U ||
+                 stats.skeletal_rewritten_instance_count > 0U) &&
+                stats.vertex_deform_rewritten_instance_count == 0U &&
+                stats.morph_rewritten_instance_count == 0U;
             stats.used_visible_component_indices = use_visible_component_indices;
             stats.candidate_component_count = candidate_component_count;
             stats.cache_valid_before_build = true;
@@ -1023,7 +1091,9 @@ public:
             stats.geometry_signature = geometry_signature;
             stats.transform_signature = transform_signature;
             stats.visible_set_signature = visible_set_signature;
+            stats.skeletal_signature = skeletal_signature;
             stats.vertex_deform_signature = vertex_deform_signature;
+            stats.morph_signature = morph_signature;
             stats.frame_sequence_signature = frame_sequence_signature;
             stats.used_visible_component_indices = use_visible_component_indices;
             stats.candidate_component_count = candidate_component_count;
@@ -1042,7 +1112,9 @@ public:
                             geometry_signature,
                             transform_signature,
                             visible_set_signature,
+                            skeletal_signature,
                             vertex_deform_signature,
+                            morph_signature,
                             frame_sequence_signature,
                             candidate_component_count,
                             build_config_,
@@ -1064,6 +1136,11 @@ public:
             if (transforms_ != nullptr && item.component_index < component_count_) {
                 world_matrix = transforms_[item.component_index].runtime.world_matrix;
             }
+            world_matrix = ComposeEffectiveWorldMatrix(world_matrix,
+                                                       component,
+                                                       item.component_index,
+                                                       build_hint_.skeletal_outputs,
+                                                       build_hint_.skeletal_output_count);
 
             Geometry3DGpuInstance instance{};
             WriteWorldMatrixToInstance(instance, world_matrix);
@@ -1101,6 +1178,20 @@ public:
             WriteVertexDeformParamsToInstance(instance, deform_params);
             if (deform_params.enabled) {
                 ++stats.vertex_deform_animated_instance_count;
+            }
+            const MorphInstanceWeights morph_weights = ResolveMorphInstanceWeights(component,
+                                                                                  item.component_index,
+                                                                                  build_hint_.morph_outputs,
+                                                                                  build_hint_.morph_output_count);
+            WriteMorphWeightsToInstance(instance, morph_weights);
+            if (morph_weights.enabled) {
+                ++stats.morph_animated_instance_count;
+            }
+            if (IsSkeletalRootMotionAnimated(component,
+                                             item.component_index,
+                                             build_hint_.skeletal_outputs,
+                                             build_hint_.skeletal_output_count)) {
+                ++stats.skeletal_animated_instance_count;
             }
             if (IsFrameSequenceAnimated(component,
                                         item.component_index,
@@ -1140,11 +1231,15 @@ public:
         stats.emitted_instance_count = static_cast<std::uint32_t>(scratch_.instances.size());
         stats.emitted_batch_count = static_cast<std::uint32_t>(scratch_.draw_batches.size());
         stats.transform_rewritten_instance_count = stats.emitted_instance_count;
+        stats.skeletal_rewritten_instance_count = stats.skeletal_animated_instance_count;
         stats.vertex_deform_rewritten_instance_count = stats.vertex_deform_animated_instance_count;
+        stats.morph_rewritten_instance_count = stats.morph_animated_instance_count;
         stats.geometry_signature = geometry_signature;
         stats.transform_signature = transform_signature;
         stats.visible_set_signature = visible_set_signature;
+        stats.skeletal_signature = skeletal_signature;
         stats.vertex_deform_signature = vertex_deform_signature;
+        stats.morph_signature = morph_signature;
         stats.frame_sequence_signature = frame_sequence_signature;
         stats.cache_status = GeometryRuntimeCacheStatus::miss;
         stats.cache_miss_reason = cache_probe.miss_reason;
@@ -1166,7 +1261,9 @@ public:
                         geometry_signature,
                         transform_signature,
                         visible_set_signature,
+                        skeletal_signature,
                         vertex_deform_signature,
+                        morph_signature,
                         frame_sequence_signature,
                         candidate_component_count,
                         build_config_,
@@ -1199,7 +1296,9 @@ private:
         cache_.geometry_signature = 0U;
         cache_.transform_signature = 0U;
         cache_.visible_set_signature = 0U;
+        cache_.skeletal_signature = 0U;
         cache_.vertex_deform_signature = 0U;
+        cache_.morph_signature = 0U;
         cache_.frame_sequence_signature = 0U;
         cache_.epoch = 0U;
         cache_.instance_world_revisions.clear();
@@ -1214,7 +1313,9 @@ private:
                                 std::uint64_t geometry_signature_,
                                 std::uint64_t transform_signature_,
                                 std::uint64_t visible_set_signature_,
+                                std::uint64_t skeletal_signature_,
                                 std::uint64_t vertex_deform_signature_,
+                                std::uint64_t morph_signature_,
                                 std::uint64_t frame_sequence_signature_,
                                 std::uint32_t candidate_component_count_,
                                 const Geometry3DRuntimeBuildConfig& build_config_,
@@ -1226,7 +1327,9 @@ private:
         cache_.geometry_signature = geometry_signature_;
         cache_.transform_signature = transform_signature_;
         cache_.visible_set_signature = visible_set_signature_;
+        cache_.skeletal_signature = skeletal_signature_;
         cache_.vertex_deform_signature = vertex_deform_signature_;
+        cache_.morph_signature = morph_signature_;
         cache_.frame_sequence_signature = frame_sequence_signature_;
         cache_.build_config = build_config_;
         cache_.epoch = NextRuntimeCacheEpoch(cache_.epoch);
@@ -1402,12 +1505,26 @@ private:
         bool enabled = false;
     };
 
+    struct MorphInstanceWeights final {
+        float weight0 = 0.0F;
+        float weight1 = 0.0F;
+        bool enabled = false;
+    };
+
     [[nodiscard]] static bool IsVertexDeformEnabled(const GeometryType& component_) noexcept {
         return (component_.mesh.flags & geometry_mesh_vertex_deform_shader_flag) != 0U;
     }
 
     [[nodiscard]] static bool IsFrameSequenceSubmeshEnabled(const GeometryType& component_) noexcept {
         return (component_.mesh.flags & geometry_mesh_frame_sequence_submesh_flag) != 0U;
+    }
+
+    [[nodiscard]] static bool IsSkeletalRootMotionEnabled(const GeometryType& component_) noexcept {
+        return (component_.mesh.flags & geometry_mesh_skeletal_root_motion_flag) != 0U;
+    }
+
+    [[nodiscard]] static bool IsMorphEnabled(const GeometryType& component_) noexcept {
+        return (component_.mesh.flags & geometry_mesh_morph_targets_flag) != 0U;
     }
 
     [[nodiscard]] static const VertexDeformOutputState* ResolveVertexDeformOutput(
@@ -1428,6 +1545,61 @@ private:
             return nullptr;
         }
         return outputs_ + component_index_;
+    }
+
+    [[nodiscard]] static const SkeletalPoseOutputState<Dim3>* ResolveSkeletalOutput(
+        std::uint32_t component_index_,
+        const SkeletalPoseOutputState<Dim3>* outputs_,
+        std::uint32_t output_count_) noexcept {
+        if (outputs_ == nullptr || component_index_ >= output_count_) {
+            return nullptr;
+        }
+        return outputs_ + component_index_;
+    }
+
+    [[nodiscard]] static bool IsSkeletalRootMotionAnimated(
+        const GeometryType& component_,
+        std::uint32_t component_index_,
+        const SkeletalPoseOutputState<Dim3>* outputs_,
+        std::uint32_t output_count_) noexcept {
+        if (!IsSkeletalRootMotionEnabled(component_)) {
+            return false;
+        }
+        const SkeletalPoseOutputState<Dim3>* output = ResolveSkeletalOutput(component_index_,
+                                                                            outputs_,
+                                                                            output_count_);
+        return output != nullptr &&
+               output->joints != nullptr &&
+               output->sampled_joint_count > 0U &&
+               output->joint_count > 0U;
+    }
+
+    [[nodiscard]] static Matrix4x4 ComposeSkeletalRootMotionMatrix(
+        const SkeletalPoseOutputState<Dim3>& output_) noexcept {
+        if (output_.joints == nullptr || output_.sampled_joint_count == 0U || output_.joint_count == 0U) {
+            return spatial_math::IdentityMatrix4x4();
+        }
+        const SkeletalJointPose<Dim3>& root = output_.joints[0U];
+        return spatial_math::ComposeMatrix4x4Trs(root.position, root.rotation, root.scale);
+    }
+
+    [[nodiscard]] static Matrix4x4 ComposeEffectiveWorldMatrix(
+        const Matrix4x4& base_world_matrix_,
+        const GeometryType& component_,
+        std::uint32_t component_index_,
+        const SkeletalPoseOutputState<Dim3>* skeletal_outputs_,
+        std::uint32_t skeletal_output_count_) noexcept {
+        if (!IsSkeletalRootMotionEnabled(component_)) {
+            return base_world_matrix_;
+        }
+        const SkeletalPoseOutputState<Dim3>* output = ResolveSkeletalOutput(component_index_,
+                                                                            skeletal_outputs_,
+                                                                            skeletal_output_count_);
+        if (output == nullptr || output->joints == nullptr || output->sampled_joint_count == 0U || output->joint_count == 0U) {
+            return base_world_matrix_;
+        }
+        const Matrix4x4 root_motion = ComposeSkeletalRootMotionMatrix(*output);
+        return spatial_math::MultiplyMatrix4x4(base_world_matrix_, root_motion);
     }
 
     [[nodiscard]] static DeformInstanceParams ResolveVertexDeformInstanceParams(
@@ -1498,6 +1670,38 @@ private:
         instance_.deform_param1_w = params_.params1.w;
     }
 
+    [[nodiscard]] static MorphInstanceWeights ResolveMorphInstanceWeights(
+        const GeometryType& component_,
+        std::uint32_t component_index_,
+        const MorphWeightOutputState* outputs_,
+        std::uint32_t output_count_) noexcept {
+        MorphInstanceWeights result{};
+        if (!IsMorphEnabled(component_)) {
+            return result;
+        }
+        if (outputs_ == nullptr || component_index_ >= output_count_) {
+            return result;
+        }
+        const MorphWeightOutputState& output = outputs_[component_index_];
+        if (output.weights == nullptr || output.sampled_weight_count == 0U || output.weight_count == 0U) {
+            return result;
+        }
+        result.weight0 = output.weights[0U];
+        if (output.sampled_weight_count > 1U && output.weight_count > 1U) {
+            result.weight1 = output.weights[1U];
+        }
+        result.enabled = (result.weight0 != 0.0F) || (result.weight1 != 0.0F);
+        return result;
+    }
+
+    static void WriteMorphWeightsToInstance(Geometry3DGpuInstance& instance_,
+                                            const MorphInstanceWeights& weights_) noexcept {
+        instance_.morph_weight0 = weights_.weight0;
+        instance_.morph_weight1 = weights_.weight1;
+        instance_.morph_weight_reserved0 = 0.0F;
+        instance_.morph_weight_reserved1 = 0.0F;
+    }
+
     [[nodiscard]] static bool InstanceVertexDeformParamsEqual(const Geometry3DGpuInstance& instance_,
                                                               const DeformInstanceParams& params_) noexcept {
         return instance_.deform_param0_x == params_.params0.x &&
@@ -1508,6 +1712,12 @@ private:
                instance_.deform_param1_y == params_.params1.y &&
                instance_.deform_param1_z == params_.params1.z &&
                instance_.deform_param1_w == params_.params1.w;
+    }
+
+    [[nodiscard]] static bool InstanceMorphWeightsEqual(const Geometry3DGpuInstance& instance_,
+                                                        const MorphInstanceWeights& weights_) noexcept {
+        return instance_.morph_weight0 == weights_.weight0 &&
+               instance_.morph_weight1 == weights_.weight1;
     }
 
     [[nodiscard]] static std::uint64_t ComputeGeometrySignature(
@@ -1637,6 +1847,53 @@ private:
         return hash;
     }
 
+    [[nodiscard]] static std::uint64_t ComputeMorphSignature(
+        const GeometryType* components_,
+        std::uint32_t component_count_,
+        const std::uint32_t* candidate_component_indices_,
+        std::uint32_t candidate_component_count_,
+        bool use_candidate_indices_,
+        const MorphWeightOutputState* outputs_,
+        std::uint32_t output_count_) noexcept {
+        std::uint64_t hash = 0xb15f4d80c3e27a91ULL;
+        if (components_ == nullptr || component_count_ == 0U || outputs_ == nullptr || output_count_ == 0U) {
+            return hash;
+        }
+
+        const auto hash_component = [&](std::uint32_t component_index_) noexcept {
+            if (component_index_ >= component_count_) {
+                return;
+            }
+            const GeometryType& component = components_[component_index_];
+            if (component.runtime.route.visible == 0U || !IsMorphEnabled(component)) {
+                return;
+            }
+            const MorphInstanceWeights weights = ResolveMorphInstanceWeights(component,
+                                                                            component_index_,
+                                                                            outputs_,
+                                                                            output_count_);
+            HashCombine(hash, static_cast<std::uint64_t>(component_index_));
+            HashCombine(hash, static_cast<std::uint64_t>(FloatBits(weights.weight0)));
+            HashCombine(hash, static_cast<std::uint64_t>(FloatBits(weights.weight1)));
+        };
+
+        if (!use_candidate_indices_) {
+            for (std::uint32_t i = 0U; i < component_count_; ++i) {
+                hash_component(i);
+            }
+            return hash;
+        }
+
+        HashCombine(hash, static_cast<std::uint64_t>(candidate_component_count_));
+        if (candidate_component_indices_ == nullptr) {
+            return hash;
+        }
+        for (std::uint32_t i = 0U; i < candidate_component_count_; ++i) {
+            hash_component(candidate_component_indices_[i]);
+        }
+        return hash;
+    }
+
     [[nodiscard]] static std::uint64_t ComputeFrameSequenceSignature(
         const GeometryType* components_,
         std::uint32_t component_count_,
@@ -1671,6 +1928,67 @@ private:
             HashCombine(hash, static_cast<std::uint64_t>(output->frame_index_b));
             HashCombine(hash, static_cast<std::uint64_t>(output->frame_count));
             HashCombine(hash, static_cast<std::uint64_t>(FloatBits(output->blend_alpha)));
+        };
+
+        if (!use_candidate_indices_) {
+            for (std::uint32_t i = 0U; i < component_count_; ++i) {
+                hash_component(i);
+            }
+            return hash;
+        }
+
+        HashCombine(hash, static_cast<std::uint64_t>(candidate_component_count_));
+        if (candidate_component_indices_ == nullptr) {
+            return hash;
+        }
+        for (std::uint32_t i = 0U; i < candidate_component_count_; ++i) {
+            hash_component(candidate_component_indices_[i]);
+        }
+        return hash;
+    }
+
+    [[nodiscard]] static std::uint64_t ComputeSkeletalSignature(
+        const GeometryType* components_,
+        std::uint32_t component_count_,
+        const std::uint32_t* candidate_component_indices_,
+        std::uint32_t candidate_component_count_,
+        bool use_candidate_indices_,
+        const SkeletalPoseOutputState<Dim3>* outputs_,
+        std::uint32_t output_count_) noexcept {
+        std::uint64_t hash = 0x6f13c2a9d4875be1ULL;
+        if (components_ == nullptr || component_count_ == 0U || outputs_ == nullptr || output_count_ == 0U) {
+            return hash;
+        }
+
+        const auto hash_component = [&](std::uint32_t component_index_) noexcept {
+            if (component_index_ >= component_count_) {
+                return;
+            }
+            const GeometryType& component = components_[component_index_];
+            if (component.runtime.route.visible == 0U || !IsSkeletalRootMotionEnabled(component)) {
+                return;
+            }
+            const SkeletalPoseOutputState<Dim3>* output = ResolveSkeletalOutput(component_index_,
+                                                                                outputs_,
+                                                                                output_count_);
+            HashCombine(hash, static_cast<std::uint64_t>(component_index_));
+            if (output == nullptr || output->joints == nullptr || output->sampled_joint_count == 0U || output->joint_count == 0U) {
+                HashCombine(hash, 0xffffffffffffffffULL);
+                return;
+            }
+            const SkeletalJointPose<Dim3>& root = output->joints[0U];
+            HashCombine(hash, static_cast<std::uint64_t>(output->sampled_joint_count));
+            HashCombine(hash, static_cast<std::uint64_t>(output->revision));
+            HashCombine(hash, static_cast<std::uint64_t>(FloatBits(root.position.x)));
+            HashCombine(hash, static_cast<std::uint64_t>(FloatBits(root.position.y)));
+            HashCombine(hash, static_cast<std::uint64_t>(FloatBits(root.position.z)));
+            HashCombine(hash, static_cast<std::uint64_t>(FloatBits(root.rotation.x)));
+            HashCombine(hash, static_cast<std::uint64_t>(FloatBits(root.rotation.y)));
+            HashCombine(hash, static_cast<std::uint64_t>(FloatBits(root.rotation.z)));
+            HashCombine(hash, static_cast<std::uint64_t>(FloatBits(root.rotation.w)));
+            HashCombine(hash, static_cast<std::uint64_t>(FloatBits(root.scale.x)));
+            HashCombine(hash, static_cast<std::uint64_t>(FloatBits(root.scale.y)));
+            HashCombine(hash, static_cast<std::uint64_t>(FloatBits(root.scale.z)));
         };
 
         if (!use_candidate_indices_) {
@@ -1740,10 +2058,14 @@ private:
         GeometryRuntimeMcVector<Geometry3DGpuInstance>& instances_,
         GeometryRuntimeMcVector<std::uint32_t>& cached_revisions_,
         const GeometryRuntimeMcVector<std::uint32_t>& component_to_instance_index_,
+        const GeometryType* components_,
         const TransformType* transforms_,
         std::uint32_t component_count_,
+        const SkeletalPoseOutputState<Dim3>* skeletal_outputs_,
+        std::uint32_t skeletal_output_count_,
         const std::uint32_t* transform_dirty_component_indices_,
         std::uint32_t transform_dirty_component_count_,
+        bool force_skeletal_rewrite_,
         bool& used_dirty_hint_) {
         used_dirty_hint_ = false;
         if (cached_revisions_.size() != instances_.size()) {
@@ -1756,7 +2078,8 @@ private:
         const Matrix4x4 identity = spatial_math::IdentityMatrix4x4();
         const bool has_transforms = transforms_ != nullptr;
         std::uint32_t rewritten_count = 0U;
-        if (transform_dirty_component_indices_ != nullptr &&
+        if (!force_skeletal_rewrite_ &&
+            transform_dirty_component_indices_ != nullptr &&
             transform_dirty_component_count_ > 0U &&
             component_to_instance_index_.size() == static_cast<std::size_t>(component_count_)) {
             used_dirty_hint_ = true;
@@ -1780,10 +2103,20 @@ private:
 
                 Geometry3DGpuInstance& instance = instances_[instance_index];
                 if (has_transforms) {
-                    WriteWorldMatrixToInstance(instance,
-                                               transforms_[component_index].runtime.world_matrix);
+                    const Matrix4x4 effective_world = ComposeEffectiveWorldMatrix(
+                        transforms_[component_index].runtime.world_matrix,
+                        components_[component_index],
+                        component_index,
+                        skeletal_outputs_,
+                        skeletal_output_count_);
+                    WriteWorldMatrixToInstance(instance, effective_world);
                 } else {
-                    WriteWorldMatrixToInstance(instance, identity);
+                    const Matrix4x4 effective_world = ComposeEffectiveWorldMatrix(identity,
+                                                                                  components_[component_index],
+                                                                                  component_index,
+                                                                                  skeletal_outputs_,
+                                                                                  skeletal_output_count_);
+                    WriteWorldMatrixToInstance(instance, effective_world);
                 }
                 cached_revisions_[instance_index] = current_revision;
                 return 1U;
@@ -1809,10 +2142,20 @@ private:
                 }
 
                 if (has_transforms) {
-                    WriteWorldMatrixToInstance(instance,
-                                               transforms_[component_index].runtime.world_matrix);
+                    const Matrix4x4 effective_world = ComposeEffectiveWorldMatrix(
+                        transforms_[component_index].runtime.world_matrix,
+                        components_[component_index],
+                        component_index,
+                        skeletal_outputs_,
+                        skeletal_output_count_);
+                    WriteWorldMatrixToInstance(instance, effective_world);
                 } else {
-                    WriteWorldMatrixToInstance(instance, identity);
+                    const Matrix4x4 effective_world = ComposeEffectiveWorldMatrix(identity,
+                                                                                  components_[component_index],
+                                                                                  component_index,
+                                                                                  skeletal_outputs_,
+                                                                                  skeletal_output_count_);
+                    WriteWorldMatrixToInstance(instance, effective_world);
                 }
                 cached_revisions_[instance_index] = current_revision;
                 ++rewritten_count;
@@ -1828,13 +2171,18 @@ private:
                 const std::uint32_t current_revision = valid_component_index
                     ? transforms_[component_index].runtime.world_revision
                     : 0U;
-                if (cached_revisions_[index] == current_revision) {
+                if (!force_skeletal_rewrite_ && cached_revisions_[index] == current_revision) {
                     continue;
                 }
 
                 if (valid_component_index) {
-                    WriteWorldMatrixToInstance(instance,
-                                               transforms_[component_index].runtime.world_matrix);
+                    const Matrix4x4 effective_world = ComposeEffectiveWorldMatrix(
+                        transforms_[component_index].runtime.world_matrix,
+                        components_[component_index],
+                        component_index,
+                        skeletal_outputs_,
+                        skeletal_output_count_);
+                    WriteWorldMatrixToInstance(instance, effective_world);
                 } else {
                     WriteWorldMatrixToInstance(instance, identity);
                 }
@@ -1879,6 +2227,35 @@ private:
                 continue;
             }
             WriteVertexDeformParamsToInstance(instance, params);
+            ++rewritten_count;
+        }
+        return rewritten_count;
+    }
+
+    [[nodiscard]] static std::uint32_t UpdateInstanceMorphWeights(
+        GeometryRuntimeMcVector<Geometry3DGpuInstance>& instances_,
+        const GeometryType* components_,
+        std::uint32_t component_count_,
+        const MorphWeightOutputState* outputs_,
+        std::uint32_t output_count_) {
+        if (instances_.empty() || components_ == nullptr || outputs_ == nullptr || output_count_ == 0U) {
+            return 0U;
+        }
+
+        std::uint32_t rewritten_count = 0U;
+        for (Geometry3DGpuInstance& instance : instances_) {
+            if (instance.component_index >= component_count_) {
+                continue;
+            }
+            const GeometryType& component = components_[instance.component_index];
+            const MorphInstanceWeights weights = ResolveMorphInstanceWeights(component,
+                                                                             instance.component_index,
+                                                                             outputs_,
+                                                                             output_count_);
+            if (InstanceMorphWeightsEqual(instance, weights)) {
+                continue;
+            }
+            WriteMorphWeightsToInstance(instance, weights);
             ++rewritten_count;
         }
         return rewritten_count;
