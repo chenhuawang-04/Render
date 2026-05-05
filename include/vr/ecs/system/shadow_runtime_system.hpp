@@ -813,34 +813,74 @@ private:
 
     static Matrix4x4 BuildDirectionalViewProjection(const Float3& light_direction_,
                                                     const Float3& center_,
-                                                    float radius_,
-                                                    float depth_padding_,
+                                                    float half_width_,
+                                                    float half_height_,
+                                                    float depth_extent_,
+                                                    float near_padding_,
+                                                    float far_padding_,
                                                     bool reverse_z_,
                                                     Matrix4x4& out_view_,
                                                     Matrix4x4& out_projection_) {
         const Float3 direction = spatial_math::Normalize3(light_direction_, Float3{.x = 0.0F, .y = -1.0F, .z = 0.0F});
-        const float radius = std::max(radius_, 1.0F);
-        const float depth_padding = std::max(depth_padding_, 1.0F);
+        const float half_width = std::max(half_width_, 1.0F);
+        const float half_height = std::max(half_height_, 1.0F);
+        const float depth_extent = std::max(depth_extent_, 1.0F);
+        const float near_padding = std::max(near_padding_, 0.05F);
+        const float far_padding = std::max(far_padding_, 0.5F);
 
         const Float3 eye{
-            .x = center_.x - direction.x * (radius + depth_padding),
-            .y = center_.y - direction.y * (radius + depth_padding),
-            .z = center_.z - direction.z * (radius + depth_padding),
+            .x = center_.x - direction.x * (depth_extent + far_padding),
+            .y = center_.y - direction.y * (depth_extent + far_padding),
+            .z = center_.z - direction.z * (depth_extent + far_padding),
         };
         const Float3 up_hint = (std::abs(direction.y) > 0.95F)
             ? Float3{.x = 0.0F, .y = 0.0F, .z = 1.0F}
             : Float3{.x = 0.0F, .y = 1.0F, .z = 0.0F};
 
         out_view_ = spatial_math::BuildLookAtViewRh(eye, center_, up_hint);
-        const float near_plane = 0.1F;
-        const float far_plane = std::max(near_plane + 1e-3F, 2.0F * radius + depth_padding * 2.0F);
-        out_projection_ = spatial_math::BuildOrthographicProjection(-radius,
-                                                                    radius,
-                                                                    -radius,
-                                                                    radius,
+        const float near_plane = near_padding;
+        const float far_plane = std::max(near_plane + 1e-3F,
+                                         near_padding + 2.0F * depth_extent + far_padding);
+        out_projection_ = spatial_math::BuildOrthographicProjection(-half_width,
+                                                                    half_width,
+                                                                    -half_height,
+                                                                    half_height,
                                                                     reverse_z_ ? far_plane : near_plane,
                                                                     reverse_z_ ? near_plane : far_plane);
         return spatial_math::MultiplyMatrix4x4(out_projection_, out_view_);
+    }
+
+    static Float3 SnapDirectionalShadowCenter(const Float3& center_,
+                                              const Float3& light_direction_,
+                                              float texel_world_size_x_,
+                                              float texel_world_size_y_) noexcept {
+        const float texel_world_size_x = std::max(texel_world_size_x_, 1e-6F);
+        const float texel_world_size_y = std::max(texel_world_size_y_, 1e-6F);
+        const Float3 direction = spatial_math::Normalize3(light_direction_,
+                                                          Float3{.x = 0.0F, .y = -1.0F, .z = 0.0F});
+        const Float3 up_hint = (std::abs(direction.y) > 0.95F)
+            ? Float3{.x = 0.0F, .y = 0.0F, .z = 1.0F}
+            : Float3{.x = 0.0F, .y = 1.0F, .z = 0.0F};
+        const Float3 z_axis = spatial_math::Normalize3(
+            Float3{.x = -direction.x, .y = -direction.y, .z = -direction.z},
+            Float3{.x = 0.0F, .y = 0.0F, .z = 1.0F});
+        Float3 x_axis = spatial_math::Cross3(up_hint, z_axis);
+        x_axis = spatial_math::Normalize3(x_axis, Float3{.x = 1.0F, .y = 0.0F, .z = 0.0F});
+        Float3 y_axis = spatial_math::Cross3(z_axis, x_axis);
+        y_axis = spatial_math::Normalize3(y_axis, Float3{.x = 0.0F, .y = 1.0F, .z = 0.0F});
+
+        const float center_x = spatial_math::Dot3(x_axis, center_);
+        const float center_y = spatial_math::Dot3(y_axis, center_);
+        const float snapped_x = std::floor(center_x / texel_world_size_x + 0.5F) * texel_world_size_x;
+        const float snapped_y = std::floor(center_y / texel_world_size_y + 0.5F) * texel_world_size_y;
+        const float delta_x = snapped_x - center_x;
+        const float delta_y = snapped_y - center_y;
+
+        return Float3{
+            .x = center_.x + x_axis.x * delta_x + y_axis.x * delta_y,
+            .y = center_.y + x_axis.y * delta_x + y_axis.y * delta_y,
+            .z = center_.z + x_axis.z * delta_x + y_axis.z * delta_y,
+        };
     }
 
     static Matrix4x4 BuildSpotViewProjection(const Float3& light_position_,
@@ -1050,22 +1090,63 @@ private:
         const Float3 camera_forward = ExtractCameraForward(camera_component_);
 
         const float cascade_center_distance = (split_near_ + split_far_) * 0.5F;
-        const Float3 center{
+        Float3 center{
             .x = camera_pos.x + camera_forward.x * cascade_center_distance,
             .y = camera_pos.y + camera_forward.y * cascade_center_distance,
             .z = camera_pos.z + camera_forward.z * cascade_center_distance,
         };
 
-        const float radius = std::max(2.0F, split_far_ - split_near_ + derived_style_.far_plane_offset);
-        const float depth_padding = radius + derived_style_.far_plane_offset;
+        float half_width = 2.0F;
+        float half_height = 2.0F;
+        if (camera_component_ != nullptr) {
+            if (camera_component_->style.projection_mode == CameraProjectionMode::orthographic) {
+                half_height = std::max(1e-3F, 0.5F * camera_component_->style.orthographic_height);
+                half_width = half_height * std::max(1e-6F, camera_component_->style.aspect_ratio);
+            } else {
+                const float aspect_ratio = std::max(1e-6F, camera_component_->style.aspect_ratio);
+                const float tan_half_fov = std::tan(
+                    0.5F * std::clamp(camera_component_->style.vertical_fov_radians, 1e-3F, 3.13F));
+                half_height = std::max(1.0F, tan_half_fov * std::max(split_far_, split_near_));
+                half_width = std::max(1.0F, half_height * aspect_ratio);
+            }
+        }
+
+        const float half_split_depth = std::max(0.5F, 0.5F * (split_far_ - split_near_));
+        const bool use_stable_fit = component_.style.fit_mode == ShadowFitMode::stable;
+        if (use_stable_fit) {
+            const float square_extent = std::max(half_width, half_height);
+            half_width = square_extent;
+            half_height = square_extent;
+        }
+
+        const float depth_extent = use_stable_fit
+            ? std::max(std::max(half_width, half_height), half_split_depth)
+            : std::max(half_split_depth, 0.5F * std::max(half_width, half_height));
+        const float near_padding = std::max(0.05F, derived_style_.near_plane_offset);
+        const float far_padding = std::max(0.5F, derived_style_.far_plane_offset);
+        if (component_.style.stabilize != 0U) {
+            const float texel_world_size_x = (atlas_rect_.width > 0U)
+                ? ((half_width * 2.0F) / static_cast<float>(atlas_rect_.width))
+                : 0.0F;
+            const float texel_world_size_y = (atlas_rect_.height > 0U)
+                ? ((half_height * 2.0F) / static_cast<float>(atlas_rect_.height))
+                : texel_world_size_x;
+            center = SnapDirectionalShadowCenter(center,
+                                                 ExtractDirectionFromGeom(geom_),
+                                                 texel_world_size_x,
+                                                 texel_world_size_y);
+        }
 
         Matrix4x4 view{};
         Matrix4x4 projection{};
         out_record_.view_projection_matrix = BuildDirectionalViewProjection(
             ExtractDirectionFromGeom(geom_),
             center,
-            radius,
-            depth_padding,
+            half_width,
+            half_height,
+            depth_extent,
+            near_padding,
+            far_padding,
             derived_style_.reverse_z != 0U,
             view,
             projection);
@@ -1073,9 +1154,13 @@ private:
         out_record_.projection_matrix = projection;
         out_record_.split_near = split_near_;
         out_record_.split_far = split_far_;
-        out_record_.texel_world_size = (atlas_rect_.width > 0U)
-            ? ((radius * 2.0F) / static_cast<float>(atlas_rect_.width))
+        const float texel_world_size_x = (atlas_rect_.width > 0U)
+            ? ((half_width * 2.0F) / static_cast<float>(atlas_rect_.width))
             : 0.0F;
+        const float texel_world_size_y = (atlas_rect_.height > 0U)
+            ? ((half_height * 2.0F) / static_cast<float>(atlas_rect_.height))
+            : texel_world_size_x;
+        out_record_.texel_world_size = std::max(texel_world_size_x, texel_world_size_y);
         FillCommonViewFields(out_record_,
                              component_index_,
                              cascade_index_,
