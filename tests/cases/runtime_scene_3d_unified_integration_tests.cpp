@@ -16,10 +16,12 @@
 #include "vr/geometry/geometry_resource_host.hpp"
 #include "vr/geometry/geometry_upload_host.hpp"
 #include "vr/render/animation_frame_coordinator.hpp"
+#include "vr/render/ibl_bake_coordinator.hpp"
 #include "vr/render/light_frame_coordinator.hpp"
 #include "vr/render/render_runtime_host.hpp"
 #include "vr/render/render_view_submission_utils.hpp"
 #include "vr/render/scene_recorder_3d.hpp"
+#include "vr/render/skybox_renderer.hpp"
 #include "vr/shadow/shadow_renderer_3d.hpp"
 #include "vr/surface/surface_image_host.hpp"
 #include "vr/surface/surface_renderer_3d.hpp"
@@ -152,6 +154,32 @@ void FillGradientTexture(std::uint32_t* pixels_,
     }
 }
 
+void FillHdrEnvironmentEquirect(vr::ecs::Float4* pixels_,
+                                std::uint32_t width_,
+                                std::uint32_t height_) {
+    if (pixels_ == nullptr || width_ == 0U || height_ == 0U) {
+        return;
+    }
+
+    for (std::uint32_t y = 0U; y < height_; ++y) {
+        const float v = (static_cast<float>(y) + 0.5F) / static_cast<float>(height_);
+        const float upper_t = std::clamp(1.0F - v * 1.25F, 0.0F, 1.0F);
+        const float horizon_t = std::exp(-32.0F * (v - 0.48F) * (v - 0.48F));
+        for (std::uint32_t x = 0U; x < width_; ++x) {
+            const float u = (static_cast<float>(x) + 0.5F) / static_cast<float>(width_);
+            const float wrapped_du = std::fabs(u - 0.16F);
+            const float sun_du = std::min(wrapped_du, 1.0F - wrapped_du);
+            const float sun_dv = v - 0.32F;
+            const float sun_t = std::exp(-(sun_du * sun_du * 640.0F + sun_dv * sun_dv * 900.0F));
+            auto& pixel = pixels_[static_cast<std::size_t>(y) * width_ + x];
+            pixel.x = 0.02F + 0.18F * (1.0F - upper_t) + 0.45F * horizon_t + 11.0F * sun_t;
+            pixel.y = 0.03F + 0.30F * horizon_t + 0.62F * upper_t + 8.5F * sun_t;
+            pixel.z = 0.08F + 1.85F * upper_t + 4.5F * sun_t;
+            pixel.w = 1.0F;
+        }
+    }
+}
+
 [[nodiscard]] std::string FindTestFontPath() {
     namespace fs = std::filesystem;
 
@@ -208,6 +236,9 @@ void InitializeShadowComponent(Shadow3D& component_,
     ShadowSystem3D::SetProjectionKind(component_, vr::ecs::ShadowProjectionKind::spot);
     ShadowSystem3D::SetCascadeConfig(component_, 1U, 0.5F);
     ShadowSystem3D::SetMapResolution(component_, 1024U, 1024U);
+    ShadowSystem3D::SetFilterKernel(component_, vr::ecs::ShadowFilterKernel::pcf5x5);
+    ShadowSystem3D::SetBias(component_, 0.0012F, 0.00035F);
+    ShadowSystem3D::SetDepthSlopeBias(component_, 1.75F);
     ShadowSystem3D::SetLightComponentIndex(component_, light_component_index_);
     ShadowSystem3D::SetTransformComponentIndex(component_, 0U);
     ShadowSystem3D::SetCameraComponentIndex(component_, 0U);
@@ -284,6 +315,7 @@ VR_TEST_CASE(RuntimeIntegration_unified_scene_3d_bloom_post_stack_smoke,
     vr::surface::SurfaceUploadHost surface_upload_host{};
     vr::surface::SurfaceImageHost surface_image_host{};
     vr::render::SceneRecorder3D recorder{};
+    vr::render::SkyboxRenderer skybox_renderer{};
     vr::geometry::GeometryRenderer3D geometry_renderer{};
     vr::shadow::ShadowRenderer3D shadow_renderer{};
     vr::render::LightFrameCoordinator<vr::ecs::Dim3> light_frame_coordinator{};
@@ -297,6 +329,7 @@ VR_TEST_CASE(RuntimeIntegration_unified_scene_3d_bloom_post_stack_smoke,
     bool geometry_material_host_initialized = false;
     bool surface_upload_host_initialized = false;
     bool surface_image_host_initialized = false;
+    bool skybox_renderer_initialized = false;
     bool geometry_renderer_initialized = false;
     bool shadow_renderer_initialized = false;
     bool surface_renderer_initialized = false;
@@ -304,14 +337,20 @@ VR_TEST_CASE(RuntimeIntegration_unified_scene_3d_bloom_post_stack_smoke,
 
     constexpr std::uint32_t texture_width = 64U;
     constexpr std::uint32_t texture_height = 64U;
+    constexpr std::uint32_t ibl_equirect_width = 32U;
+    constexpr std::uint32_t ibl_equirect_height = 16U;
     std::array<std::uint32_t, texture_width * texture_height> geometry_pixels{};
     std::array<std::uint32_t, texture_width * texture_height> surface_pixels{};
+    std::array<vr::ecs::Float4, ibl_equirect_width * ibl_equirect_height> ibl_equirect_pixels{};
     FillCheckerTexture(geometry_pixels.data(),
                        texture_width,
                        texture_height,
                        PackRgba8(242U, 210U, 164U, 255U),
                        PackRgba8(108U, 74U, 54U, 255U));
     FillGradientTexture(surface_pixels.data(), texture_width, texture_height);
+    FillHdrEnvironmentEquirect(ibl_equirect_pixels.data(),
+                               ibl_equirect_width,
+                               ibl_equirect_height);
 
     std::array<vr::geometry::GeometryMeshVertex, 4U> mesh_vertices{
         vr::geometry::GeometryMeshVertex{.position_x = -0.5F, .position_y = -0.5F, .position_z = 0.0F, .normal_x = 0.0F, .normal_y = 0.0F, .normal_z = 1.0F, .uv_u = 0.0F, .uv_v = 0.0F, .morph0_position_delta_z = -0.18F, .morph1_position_delta_x = -0.08F, .joint_index0 = 0U, .joint_weight0 = 1.0F},
@@ -334,6 +373,7 @@ VR_TEST_CASE(RuntimeIntegration_unified_scene_3d_bloom_post_stack_smoke,
         create_info.platform.instance.enable_validation = false;
         create_info.platform.device.required_vulkan13_features.dynamicRendering = VK_TRUE;
         create_info.platform.device.required_vulkan13_features.synchronization2 = VK_TRUE;
+        create_info.modules.enable_ibl_bake_host = true;
         create_info.render_loop.swapchain.enable_vsync = false;
         create_info.render_loop.swapchain.preferred_image_count = 2U;
         create_info.render_loop.commands.initial_primary_per_frame = 2U;
@@ -345,6 +385,11 @@ VR_TEST_CASE(RuntimeIntegration_unified_scene_3d_bloom_post_stack_smoke,
         recorder.Initialize(BuildUnifiedSceneRecorderCreateInfo());
         recorder.BindRuntime(runtime);
         recorder.BindLightFrameCoordinator(&light_frame_coordinator);
+
+        vr::render::SkyboxRendererCreateInfo skybox_renderer_create_info{};
+        skybox_renderer_create_info.clear_swapchain = false;
+        skybox_renderer.Initialize(skybox_renderer_create_info);
+        skybox_renderer_initialized = true;
 
         vr::geometry::GeometryResourceHostCreateInfo geometry_resource_create_info{};
         geometry_resource_create_info.reserve_mesh_count = 16U;
@@ -554,6 +599,25 @@ VR_TEST_CASE(RuntimeIntegration_unified_scene_3d_bloom_post_stack_smoke,
         TransformSystem3D::UpdateHierarchy(&camera_transform, 1U);
         CameraSystem3D::MarkViewDirty(camera);
         CameraSystem3D::Update(camera, camera_transform);
+        skybox_renderer.SetCameraData(&camera, &camera_transform);
+
+        vr::render::IblBakeCoordinator ibl_bake_coordinator{};
+        vr::render::IblBakeRequest ibl_bake_request{};
+        ibl_bake_request.source.kind = vr::render::IblBakeSourceKind::equirectangular;
+        ibl_bake_request.source.equirect.pixels = ibl_equirect_pixels.data();
+        ibl_bake_request.source.equirect.width = ibl_equirect_width;
+        ibl_bake_request.source.equirect.height = ibl_equirect_height;
+        ibl_bake_request.skybox_cube_size = 16U;
+        ibl_bake_request.specular_cube_size = 16U;
+        ibl_bake_request.specular_sample_count = 96U;
+        ibl_bake_request.sh_sample_count = 768U;
+        ibl_bake_request.brdf_lut_size = 32U;
+        ibl_bake_request.brdf_sample_count = 192U;
+        ibl_bake_request.intensity = 1.15F;
+        ibl_bake_request.rotation_y_radians = 0.42F;
+        ibl_bake_request.tint_color = {1.0F, 0.98F, 1.04F};
+        ibl_bake_request.set_active_environment = true;
+        ibl_bake_coordinator.SetRequest(ibl_bake_request);
 
         std::array<vr::ecs::SkeletalJointPose<vr::ecs::Dim3>, 1U> skeletal_joint_storage{
             vr::ecs::SkeletalJointPose<vr::ecs::Dim3>{
@@ -714,8 +778,10 @@ VR_TEST_CASE(RuntimeIntegration_unified_scene_3d_bloom_post_stack_smoke,
                                      &geometry_bounds);
         shadow_renderer.SetGeometryData(&geometry_component, &geometry_transform, 1U);
         recorder.BindAnimationFrameCoordinator(&animation_frame_coordinator);
+        recorder.RegisterPreSceneRenderer(ibl_bake_coordinator);
         recorder.RegisterShadowRenderer(shadow_renderer);
-        recorder.RegisterOpaqueSceneRenderer(geometry_renderer, vr::render::SceneRenderPassRole::first);
+        recorder.RegisterOpaqueSceneRenderer(skybox_renderer, vr::render::SceneRenderPassRole::first);
+        recorder.RegisterOpaqueSceneRenderer(geometry_renderer, vr::render::SceneRenderPassRole::middle);
         recorder.RegisterTransparentSceneRenderer(surface_renderer, vr::render::SceneRenderPassRole::middle);
         recorder.RegisterTransparentSceneRenderer(text_renderer, vr::render::SceneRenderPassRole::last);
 
@@ -731,7 +797,10 @@ VR_TEST_CASE(RuntimeIntegration_unified_scene_3d_bloom_post_stack_smoke,
 
         std::uint32_t submitted_frames = 0U;
         std::uint32_t max_geometry_draw_calls = 0U;
+        std::uint32_t max_skybox_draw_calls = 0U;
+        std::uint32_t max_skybox_descriptor_binds = 0U;
         std::uint32_t max_surface_draw_calls = 0U;
+        std::uint32_t max_surface_ibl_descriptor_binds = 0U;
         std::uint32_t max_text_draw_calls = 0U;
         std::uint32_t max_combine_draw_calls = 0U;
         std::uint32_t max_blur_draw_calls = 0U;
@@ -739,6 +808,7 @@ VR_TEST_CASE(RuntimeIntegration_unified_scene_3d_bloom_post_stack_smoke,
         std::uint32_t max_shadow_view_count = 0U;
         std::uint32_t max_linked_light_count = 0U;
         std::uint32_t max_light_descriptor_binds = 0U;
+        std::uint32_t max_ibl_descriptor_binds = 0U;
         std::uint32_t max_shadow_draw_calls = 0U;
         std::uint32_t max_shadow_atlas_passes = 0U;
         std::uint32_t max_text_instances = 0U;
@@ -859,14 +929,20 @@ VR_TEST_CASE(RuntimeIntegration_unified_scene_3d_bloom_post_stack_smoke,
                 ++submitted_frames;
             }
 
+            const auto skybox_stats = skybox_renderer.Stats();
             const auto geometry_stats = geometry_renderer.Stats();
             const auto surface_stats = surface_renderer.Stats();
             const auto text_stats = text_renderer.Stats();
             const auto bloom_stats = recorder.PostStack().Stats();
             const auto shadow_stats = shadow_renderer.Stats();
 
+            max_skybox_draw_calls = std::max(max_skybox_draw_calls, skybox_stats.draw_call_count);
+            max_skybox_descriptor_binds =
+                std::max(max_skybox_descriptor_binds, skybox_stats.descriptor_set_bind_count);
             max_geometry_draw_calls = std::max(max_geometry_draw_calls, geometry_stats.draw_call_count);
             max_surface_draw_calls = std::max(max_surface_draw_calls, surface_stats.draw_call_count);
+            max_surface_ibl_descriptor_binds =
+                std::max(max_surface_ibl_descriptor_binds, surface_stats.ibl_descriptor_set_bind_count);
             max_text_draw_calls = std::max(max_text_draw_calls, text_stats.draw_call_count);
             max_combine_draw_calls = std::max(max_combine_draw_calls, bloom_stats.combine_draw_call_count);
             max_blur_draw_calls = std::max(max_blur_draw_calls, bloom_stats.blur_draw_call_count);
@@ -876,6 +952,8 @@ VR_TEST_CASE(RuntimeIntegration_unified_scene_3d_bloom_post_stack_smoke,
                 std::max(max_linked_light_count, geometry_stats.light_shadow_linked_count);
             max_light_descriptor_binds =
                 std::max(max_light_descriptor_binds, geometry_stats.light_descriptor_set_bind_count);
+            max_ibl_descriptor_binds =
+                std::max(max_ibl_descriptor_binds, geometry_stats.ibl_descriptor_set_bind_count);
             max_shadow_draw_calls = std::max(max_shadow_draw_calls, shadow_stats.draw_call_count);
             max_shadow_atlas_passes =
                 std::max(max_shadow_atlas_passes, shadow_stats.atlas_layer_draw_pass_count);
@@ -894,8 +972,11 @@ VR_TEST_CASE(RuntimeIntegration_unified_scene_3d_bloom_post_stack_smoke,
         }
 
         VR_REQUIRE(submitted_frames > 0U);
+        VR_CHECK(max_skybox_draw_calls > 0U);
+        VR_CHECK(max_skybox_descriptor_binds > 0U);
         VR_CHECK(max_geometry_draw_calls > 0U);
         VR_CHECK(max_surface_draw_calls > 0U);
+        VR_CHECK(max_surface_ibl_descriptor_binds > 0U);
         VR_CHECK(max_text_draw_calls > 0U);
         VR_CHECK(max_combine_draw_calls > 0U);
         VR_CHECK(max_blur_draw_calls > 0U);
@@ -903,6 +984,7 @@ VR_TEST_CASE(RuntimeIntegration_unified_scene_3d_bloom_post_stack_smoke,
         VR_CHECK(max_shadow_view_count > 0U);
         VR_CHECK(max_linked_light_count > 0U);
         VR_CHECK(max_light_descriptor_binds > 0U);
+        VR_CHECK(max_ibl_descriptor_binds > 0U);
         VR_CHECK(max_shadow_draw_calls > 0U);
         VR_CHECK(max_shadow_atlas_passes > 0U);
         VR_CHECK(max_geometry_instances > 0U);
@@ -912,7 +994,7 @@ VR_TEST_CASE(RuntimeIntegration_unified_scene_3d_bloom_post_stack_smoke,
         VR_CHECK(max_geometry_vertex_deform_instances > 0U);
         VR_CHECK(max_geometry_morph_instances > 0U);
         VR_CHECK(max_shadow_morph_draw_calls > 0U);
-        VR_CHECK(recorder.Stats().pre_scene_renderer_count == 1U);
+        VR_CHECK(recorder.Stats().pre_scene_renderer_count == 2U);
         VR_CHECK(recorder.Stats().animation_binding_refresh_count > 0U);
         VR_CHECK(recorder.Stats().frame_packet_bind_count >= 1U);
         VR_CHECK(recorder.Stats().frame_packet_prepare_count > 0U);
@@ -923,6 +1005,17 @@ VR_TEST_CASE(RuntimeIntegration_unified_scene_3d_bloom_post_stack_smoke,
         VR_CHECK(recorder.ActiveView()->camera == &camera);
         VR_CHECK(runtime.TargetPool().Stats().acquire_count > 0U);
         VR_CHECK(runtime.TargetPool().Stats().reuse_hit_count > 0U);
+        VR_CHECK(runtime.Ibl().Stats().prepared_frame_count > 0U);
+        VR_CHECK(runtime.Ibl().Stats().environment_count == 1U);
+        VR_CHECK(runtime.Ibl().Stats().descriptor_update_count <= submitted_frames + 2U);
+        VR_CHECK(runtime.IblBake().Stats().baked_environment_count == 1U);
+        VR_CHECK(runtime.IblBake().Stats().generated_texture_count >= 3U);
+        VR_CHECK(ibl_bake_coordinator.HasBakedResult());
+        VR_CHECK(ibl_bake_coordinator.Result().environment_id.IsValid());
+        VR_CHECK(ibl_bake_coordinator.Result().skybox_cube.IsValid());
+        VR_CHECK(ibl_bake_coordinator.Result().specular_cube.IsValid());
+        VR_CHECK(ibl_bake_coordinator.Result().brdf_lut.IsValid());
+        VR_CHECK(ibl_bake_coordinator.Stats().bake_count == 1U);
         VR_CHECK(runtime.RenderTarget().ResolveView(recorder.PostStack().Targets().ColorTarget()).state ==
                  vr::render::RenderTargetStateKind::shader_read);
         VR_CHECK(runtime.RenderTarget().ResolveView(recorder.PostStack().Targets().DepthTarget()).state ==
@@ -932,6 +1025,8 @@ VR_TEST_CASE(RuntimeIntegration_unified_scene_3d_bloom_post_stack_smoke,
         VR_CHECK(animation_frame_coordinator.Stats().apply_shadow_call_count > 0U);
 
         recorder.Shutdown(runtime.Context());
+        skybox_renderer.Shutdown(runtime.Context());
+        skybox_renderer_initialized = false;
         shadow_renderer.Shutdown(runtime.Context());
         shadow_renderer_initialized = false;
         text_renderer.Shutdown(runtime.Context());
@@ -957,6 +1052,10 @@ VR_TEST_CASE(RuntimeIntegration_unified_scene_3d_bloom_post_stack_smoke,
     } catch (const std::exception& exception_) {
         if (runtime_initialized && runtime.IsInitialized() && recorder.IsInitialized()) {
             recorder.Shutdown(runtime.Context());
+        }
+        if (skybox_renderer_initialized && runtime_initialized && runtime.IsInitialized()) {
+            skybox_renderer.Shutdown(runtime.Context());
+            skybox_renderer_initialized = false;
         }
         if (shadow_renderer_initialized && runtime_initialized && runtime.IsInitialized()) {
             shadow_renderer.Shutdown(runtime.Context());

@@ -362,6 +362,7 @@ VR_TEST_CASE(RuntimeIntegration_surface_renderer_3d_bloom_post_stack_smoke,
         std::uint32_t max_surface_draw_batches = 0U;
         std::uint32_t max_surface_instances = 0U;
         std::uint32_t max_surface_descriptor_updates = 0U;
+        std::uint32_t max_surface_ibl_descriptor_binds = 0U;
         std::uint32_t max_surface_depth_test_batches = 0U;
         std::uint32_t max_surface_depth_write_batches = 0U;
         std::uint32_t max_surface_culling_visible_count = 0U;
@@ -410,6 +411,8 @@ VR_TEST_CASE(RuntimeIntegration_surface_renderer_3d_bloom_post_stack_smoke,
             max_surface_instances = std::max(max_surface_instances, surface_stats.instance_count);
             max_surface_descriptor_updates =
                 std::max(max_surface_descriptor_updates, surface_stats.descriptor_set_update_count);
+            max_surface_ibl_descriptor_binds =
+                std::max(max_surface_ibl_descriptor_binds, surface_stats.ibl_descriptor_set_bind_count);
             max_surface_depth_test_batches =
                 std::max(max_surface_depth_test_batches, surface_stats.depth_test_batch_count);
             max_surface_depth_write_batches =
@@ -433,6 +436,7 @@ VR_TEST_CASE(RuntimeIntegration_surface_renderer_3d_bloom_post_stack_smoke,
         VR_CHECK(max_surface_draw_batches > 0U);
         VR_CHECK(max_surface_instances > 0U);
         VR_CHECK(max_surface_descriptor_updates > 0U);
+        VR_CHECK(max_surface_ibl_descriptor_binds > 0U);
         VR_CHECK(max_surface_depth_test_batches > 0U);
         VR_CHECK(max_surface_depth_write_batches > 0U);
         VR_CHECK(max_surface_culling_visible_count > 0U);
@@ -453,6 +457,7 @@ VR_TEST_CASE(RuntimeIntegration_surface_renderer_3d_bloom_post_stack_smoke,
         VR_CHECK(surface_image_host.Stats().image_count >= 2U);
         VR_CHECK(runtime.TargetPool().Stats().acquire_count > 0U);
         VR_CHECK(runtime.TargetPool().Stats().reuse_hit_count > 0U);
+        VR_CHECK(runtime.Ibl().Stats().prepared_frame_count > 0U);
 
         recorder.Shutdown(runtime.Context());
         surface_renderer.Shutdown(runtime.Context());

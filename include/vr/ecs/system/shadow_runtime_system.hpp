@@ -985,11 +985,12 @@ private:
         out_record_.cascade_index = cascade_index_;
         out_record_.flags = 0U;
         if (component_.style.stabilize != 0U) {
-            out_record_.flags |= (1U << 0U);
+            out_record_.flags |= shadow_view_flag_stabilize;
         }
         if (component_.style.reverse_z != 0U) {
-            out_record_.flags |= (1U << 1U);
+            out_record_.flags |= shadow_view_flag_reverse_z;
         }
+        out_record_.flags |= EncodeShadowViewFilterKernelFlags(component_.style.filter_kernel);
     }
 
     static void Build2DViewRecord(const ShadowType& component_,

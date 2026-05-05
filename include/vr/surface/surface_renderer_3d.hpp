@@ -27,6 +27,7 @@ namespace vr::render {
 struct RuntimePrepareContext;
 struct FrameRecordContext;
 class UploadHost;
+class IblHost;
 }
 
 namespace vr::resource {
@@ -74,6 +75,7 @@ struct SurfaceRenderer3DStats final {
     std::uint32_t uploaded_patch_count = 0U;
     std::uint32_t descriptor_set_bind_count = 0U;
     std::uint32_t descriptor_set_update_count = 0U;
+    std::uint32_t ibl_descriptor_set_bind_count = 0U;
     std::uint32_t culling_input_count = 0U;
     std::uint32_t culling_visible_count = 0U;
     std::uint32_t culling_culled_count = 0U;
@@ -145,6 +147,7 @@ public:
 private:
     struct PushConstants final {
         ecs::Matrix4x4 view_projection;
+        ecs::Float4 camera_position;
         std::uint32_t params;
         std::uint32_t reserved0;
         std::uint32_t reserved1;
@@ -184,7 +187,7 @@ private:
         VkDescriptorSet descriptor_set = VK_NULL_HANDLE;
     };
 
-    static_assert(sizeof(PushConstants) == 80U);
+    static_assert(sizeof(PushConstants) == 96U);
 
     [[nodiscard]] static bool IsDepthFormatSupported(VulkanContext& context_, VkFormat format_) noexcept;
     [[nodiscard]] static bool DepthFormatHasStencil(VkFormat format_) noexcept;
@@ -268,6 +271,7 @@ private:
     render::UploadHost* upload_host = nullptr;
     render::DescriptorHost* descriptor_host = nullptr;
     render::PipelineHost* pipeline_host = nullptr;
+    render::IblHost* ibl_host = nullptr;
     resource::GpuMemoryHost* gpu_memory_host = nullptr;
     resource::SamplerHost* sampler_host = nullptr;
 
@@ -293,6 +297,7 @@ private:
     resource::ImageResource fallback_texture{};
     resource::SamplerId fallback_sampler_id{};
     VkImageLayout fallback_texture_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    VkDescriptorSet active_ibl_descriptor_set = VK_NULL_HANDLE;
     SurfaceRenderer3DMcVector<std::uint8_t> image_initialized{};
 
     std::uint32_t active_frame_index = 0U;

@@ -94,6 +94,59 @@ VR_TEST_CASE(EcsShadowRuntimeSystem_dim3_full_and_transform_update, "unit;core;e
     VR_CHECK(transform_stats.view_upload_range_count >= 1U);
 }
 
+VR_TEST_CASE(EcsShadowRuntimeSystem_dim3_view_flags_encode_filter_kernel, "unit;core;ecs;shadow;runtime") {
+    using Shadow3D = vr::ecs::Shadow<vr::ecs::Dim3>;
+    using ShadowSystem3D = vr::ecs::ShadowSystem<vr::ecs::Dim3>;
+    using Transform3D = vr::ecs::Transform<vr::ecs::Dim3>;
+    using TransformSystem3D = vr::ecs::TransformSystem<vr::ecs::Dim3>;
+    using Camera3D = vr::ecs::Camera<vr::ecs::Dim3>;
+    using CameraSystem3D = vr::ecs::CameraSystem<vr::ecs::Dim3>;
+    using RuntimeSystem3D = vr::ecs::ShadowRuntimeSystem<vr::ecs::Dim3>;
+    using RuntimeScratch3D = vr::ecs::ShadowRuntimeScratch<vr::ecs::Dim3>;
+
+    std::array<Shadow3D, 1U> shadows{};
+    std::array<Transform3D, 1U> transforms{};
+    ShadowSystem3D::Initialize(shadows[0U]);
+    ShadowSystem3D::SetProjectionKind(shadows[0U], vr::ecs::ShadowProjectionKind::directional);
+    ShadowSystem3D::SetCascadeConfig(shadows[0U], 2U, 0.6F);
+    ShadowSystem3D::SetFilterKernel(shadows[0U], vr::ecs::ShadowFilterKernel::pcf5x5);
+    ShadowSystem3D::SetStabilize(shadows[0U], false);
+    ShadowSystem3D::SetReverseZ(shadows[0U], true);
+
+    TransformSystem3D::Initialize(transforms[0U]);
+    TransformSystem3D::SetLocalPosition(transforms[0U],
+                                        vr::ecs::Float3{.x = 0.0F, .y = 8.0F, .z = -4.0F});
+    TransformSystem3D::SetLocalRotationEulerXyz(transforms[0U], -0.65F, 0.0F, 0.0F);
+    TransformSystem3D::UpdateHierarchy(transforms.data(), static_cast<std::uint32_t>(transforms.size()));
+
+    Camera3D camera{};
+    Transform3D camera_transform{};
+    CameraSystem3D::Initialize(camera);
+    TransformSystem3D::Initialize(camera_transform);
+    TransformSystem3D::SetLocalPosition(camera_transform,
+                                        vr::ecs::Float3{.x = 0.0F, .y = 3.0F, .z = 10.0F});
+    TransformSystem3D::SetLocalRotationEulerXyz(camera_transform, 0.0F, 3.1415926F, 0.0F);
+    TransformSystem3D::UpdateHierarchy(&camera_transform, 1U);
+    CameraSystem3D::MarkDirty(camera, vr::ecs::camera_dirty_projection_flag | vr::ecs::camera_dirty_runtime_flag);
+    CameraSystem3D::MarkViewDirty(camera);
+    CameraSystem3D::Update(camera, camera_transform);
+
+    RuntimeScratch3D runtime_scratch{};
+    const auto stats = RuntimeSystem3D::Build(shadows.data(),
+                                              transforms.data(),
+                                              &camera,
+                                              static_cast<std::uint32_t>(shadows.size()),
+                                              runtime_scratch);
+
+    VR_CHECK(stats.generated_view_count == 2U);
+    const vr::ecs::ShadowViewGpuRecord* view_records = RuntimeSystem3D::ViewRecords(runtime_scratch);
+    VR_REQUIRE(view_records != nullptr);
+    VR_CHECK((view_records[0U].flags & vr::ecs::shadow_view_flag_stabilize) == 0U);
+    VR_CHECK((view_records[0U].flags & vr::ecs::shadow_view_flag_reverse_z) != 0U);
+    VR_CHECK(vr::ecs::DecodeShadowViewFilterKernelFlags(view_records[0U].flags) ==
+             vr::ecs::ShadowFilterKernel::pcf5x5);
+}
+
 VR_TEST_CASE(EcsShadowRuntimeSystem_dim2_build_views, "unit;core;ecs;shadow;runtime") {
     using Shadow2D = vr::ecs::Shadow<vr::ecs::Dim2>;
     using ShadowSystem2D = vr::ecs::ShadowSystem<vr::ecs::Dim2>;

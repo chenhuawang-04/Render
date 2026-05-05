@@ -36,6 +36,7 @@ class VulkanContext;
 namespace vr::render {
 struct RuntimePrepareContext;
 struct FrameRecordContext;
+class IblHost;
 }
 
 namespace vr::geometry {
@@ -122,6 +123,7 @@ struct GeometryRenderer3DStats {
     std::uint32_t light_cluster_index_count = 0U;
     std::uint32_t light_buffer_upload_count = 0U;
     std::uint32_t light_descriptor_set_bind_count = 0U;
+    std::uint32_t ibl_descriptor_set_bind_count = 0U;
     std::uint32_t light_descriptor_set_reuse_hit_count = 0U;
     std::uint32_t light_shadow_atlas_binding_cache_hit_count = 0U;
     std::uint32_t light_shadow_linked_count = 0U;
@@ -501,6 +503,7 @@ private:
     std::uint32_t material_host_revision_seen = 0U;
     std::uint32_t image_host_revision_seen = 0U;
     render::LightFrameCoordinator<ecs::Dim3>* light_frame_coordinator = nullptr;
+    render::IblHost* ibl_host = nullptr;
     render::LightShadowLinkCoordinator3D* light_shadow_link_coordinator = nullptr;
     render::LightShadowLinkCoordinator3D local_light_shadow_link_coordinator{};
     render::ShadowAtlasBindingCoordinator* shadow_atlas_binding_coordinator = nullptr;

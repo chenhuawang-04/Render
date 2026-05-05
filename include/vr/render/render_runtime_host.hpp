@@ -1,5 +1,9 @@
 #pragma once
 
+#include "vr/asset/texture_host.hpp"
+#include "vr/render/frame_composer_host.hpp"
+#include "vr/render/ibl_bake_host.hpp"
+#include "vr/render/ibl_host.hpp"
 #include "vr/platform/render_host.hpp"
 #include "vr/render/descriptor_host.hpp"
 #include "vr/render/pipeline_host.hpp"
@@ -24,6 +28,10 @@
 namespace vr::render {
 
 struct RuntimeModulesCreateInfo {
+    bool enable_texture_host = true;
+    bool enable_frame_composer_host = true;
+    bool enable_ibl_host = true;
+    bool enable_ibl_bake_host = false;
     bool enable_upload_host = true;
     bool enable_descriptor_host = true;
     bool enable_pipeline_host = true;
@@ -55,6 +63,10 @@ struct RuntimeFrameDiagnostics {
     bool upload_enabled = false;
     bool upload_uses_cross_queue = false;
     UploadFrameStats upload{};
+    asset::TextureHostStats texture{};
+    FrameComposerHostStats frame_composer{};
+    IblHostStats ibl{};
+    IblBakeHostStats ibl_bake{};
     std::uint32_t descriptor_total_pool_count = 0U;
     std::uint32_t descriptor_frame_pool_count = 0U;
     std::uint32_t descriptor_total_allocated_set_count = 0U;
@@ -97,6 +109,10 @@ public:
         RenderLoopCreateInfo render_loop{};
 
         resource::GpuMemoryHostCreateInfo gpu_memory{};
+        asset::TextureHostCreateInfo texture{};
+        FrameComposerHostCreateInfo frame_composer{};
+        IblHostCreateInfo ibl{};
+        IblBakeHostCreateInfo ibl_bake{};
         UploadHostCreateInfo upload{};
         DescriptorHostCreateInfo descriptor{};
         PipelineHostCreateInfo pipeline{};
@@ -151,6 +167,13 @@ public:
             gpu_memory_host.Initialize(platform_host.Context(), create_info_cache.gpu_memory);
             gpu_memory_initialized = true;
 
+            if (create_info_cache.modules.enable_texture_host) {
+                texture_host.Initialize(platform_host.Context(),
+                                        gpu_memory_host,
+                                        create_info_cache.texture);
+                texture_initialized = true;
+            }
+
             if (create_info_cache.modules.enable_sampler_host) {
                 sampler_host.Initialize(platform_host.Context(), create_info_cache.sampler);
                 sampler_initialized = true;
@@ -177,9 +200,64 @@ public:
                 descriptor_initialized = true;
             }
 
+            if (create_info_cache.modules.enable_ibl_host) {
+                if (!texture_initialized) {
+                    throw std::runtime_error(
+                        "RenderRuntimeHost::Initialize requires TextureHost when ibl_host is enabled");
+                }
+                if (!sampler_initialized) {
+                    throw std::runtime_error(
+                        "RenderRuntimeHost::Initialize requires SamplerHost when ibl_host is enabled");
+                }
+                if (!descriptor_initialized) {
+                    throw std::runtime_error(
+                        "RenderRuntimeHost::Initialize requires DescriptorHost when ibl_host is enabled");
+                }
+                IblHostCreateInfo ibl_info = create_info_cache.ibl;
+                ibl_info.frames_in_flight = frames_in_flight_v;
+                ibl_host.Initialize(platform_host.Context(),
+                                    texture_host,
+                                    descriptor_host,
+                                    sampler_host,
+                                    ibl_info);
+                ibl_initialized = true;
+            }
+
+            if (create_info_cache.modules.enable_ibl_bake_host) {
+                if (!texture_initialized) {
+                    throw std::runtime_error(
+                        "RenderRuntimeHost::Initialize requires TextureHost when ibl_bake_host is enabled");
+                }
+                ibl_bake_host.Initialize(texture_host,
+                                         ibl_initialized ? &ibl_host : nullptr,
+                                         create_info_cache.ibl_bake);
+                ibl_bake_initialized = true;
+            }
+
             if (create_info_cache.modules.enable_pipeline_host) {
                 pipeline_host.Initialize(platform_host.Context(), create_info_cache.pipeline);
                 pipeline_initialized = true;
+            }
+
+            if (create_info_cache.modules.enable_frame_composer_host) {
+                if (!render_target_initialized && !create_info_cache.modules.enable_render_target_host) {
+                    throw std::runtime_error(
+                        "RenderRuntimeHost::Initialize requires RenderTargetHost when frame_composer_host is enabled");
+                }
+                if (!descriptor_initialized) {
+                    throw std::runtime_error(
+                        "RenderRuntimeHost::Initialize requires DescriptorHost when frame_composer_host is enabled");
+                }
+                if (!pipeline_initialized) {
+                    throw std::runtime_error(
+                        "RenderRuntimeHost::Initialize requires PipelineHost when frame_composer_host is enabled");
+                }
+                if (!sampler_initialized) {
+                    throw std::runtime_error(
+                        "RenderRuntimeHost::Initialize requires SamplerHost when frame_composer_host is enabled");
+                }
+                frame_composer_host.Initialize(create_info_cache.frame_composer);
+                frame_composer_initialized = true;
             }
 
             if (create_info_cache.modules.enable_render_target_host) {
@@ -246,6 +324,22 @@ public:
             if (glyph_upload_initialized) {
                 glyph_upload_host.Shutdown(platform_host.Context());
                 glyph_upload_initialized = false;
+            }
+            if (frame_composer_initialized) {
+                frame_composer_host.Shutdown(platform_host.Context());
+                frame_composer_initialized = false;
+            }
+            if (ibl_initialized) {
+                ibl_host.Shutdown(platform_host.Context());
+                ibl_initialized = false;
+            }
+            if (ibl_bake_initialized) {
+                ibl_bake_host.Shutdown(platform_host.Context());
+                ibl_bake_initialized = false;
+            }
+            if (texture_initialized) {
+                texture_host.Shutdown(platform_host.Context());
+                texture_initialized = false;
             }
             if (render_target_pool_initialized) {
                 if (render_target_initialized) {
@@ -315,6 +409,26 @@ public:
         if (glyph_upload_initialized) {
             glyph_upload_host.Shutdown(platform_host.Context());
             glyph_upload_initialized = false;
+        }
+
+        if (frame_composer_initialized) {
+            frame_composer_host.Shutdown(platform_host.Context());
+            frame_composer_initialized = false;
+        }
+
+        if (ibl_initialized) {
+            ibl_host.Shutdown(platform_host.Context());
+            ibl_initialized = false;
+        }
+
+        if (ibl_bake_initialized) {
+            ibl_bake_host.Shutdown(platform_host.Context());
+            ibl_bake_initialized = false;
+        }
+
+        if (texture_initialized) {
+            texture_host.Shutdown(platform_host.Context());
+            texture_initialized = false;
         }
 
         if (render_target_pool_initialized) {
@@ -431,6 +545,11 @@ public:
             upload_host.BeginFrame(platform_host.Context(), frame_index);
         }
 
+        if (texture_initialized) {
+            texture_host.BeginFrame(platform_host.Context(),
+                                    render_loop.Sync().CompletedSubmitValue());
+        }
+
         if (render_target_initialized) {
             render_target_host.BeginFrame(platform_host.Context(),
                                           render_loop.Sync().CompletedSubmitValue());
@@ -450,8 +569,12 @@ public:
             prepare_context.swapchain_extent = swapchain.Extent();
             prepare_context.swapchain_format = swapchain.Format();
             prepare_context.gpu_memory_host = &gpu_memory_host;
+            prepare_context.texture_host = texture_initialized ? &texture_host : nullptr;
             prepare_context.upload_host = upload_initialized ? &upload_host : nullptr;
             prepare_context.descriptor_host = descriptor_initialized ? &descriptor_host : nullptr;
+            prepare_context.frame_composer_host = frame_composer_initialized ? &frame_composer_host : nullptr;
+            prepare_context.ibl_host = ibl_initialized ? &ibl_host : nullptr;
+            prepare_context.ibl_bake_host = ibl_bake_initialized ? &ibl_bake_host : nullptr;
             prepare_context.pipeline_host = pipeline_initialized ? &pipeline_host : nullptr;
             prepare_context.render_target_host = render_target_initialized ? &render_target_host : nullptr;
             prepare_context.render_target_pool = render_target_pool_initialized ? &render_target_pool : nullptr;
@@ -532,6 +655,22 @@ public:
 
     [[nodiscard]] bool IsRunning() const noexcept {
         return platform_host.IsRunning();
+    }
+
+    [[nodiscard]] bool HasTextureHost() const noexcept {
+        return texture_initialized;
+    }
+
+    [[nodiscard]] bool HasFrameComposerHost() const noexcept {
+        return frame_composer_initialized;
+    }
+
+    [[nodiscard]] bool HasIblHost() const noexcept {
+        return ibl_initialized;
+    }
+
+    [[nodiscard]] bool HasIblBakeHost() const noexcept {
+        return ibl_bake_initialized;
     }
 
     [[nodiscard]] bool HasUploadHost() const noexcept {
@@ -627,6 +766,62 @@ public:
 
     [[nodiscard]] const resource::GpuMemoryHost& GpuMemory() const noexcept {
         return gpu_memory_host;
+    }
+
+    [[nodiscard]] asset::TextureHost& Texture() {
+        if (!texture_initialized) {
+            throw std::runtime_error("RenderRuntimeHost::Texture requested but host is not initialized");
+        }
+        return texture_host;
+    }
+
+    [[nodiscard]] const asset::TextureHost& Texture() const {
+        if (!texture_initialized) {
+            throw std::runtime_error("RenderRuntimeHost::Texture requested but host is not initialized");
+        }
+        return texture_host;
+    }
+
+    [[nodiscard]] FrameComposerHost& FrameComposer() {
+        if (!frame_composer_initialized) {
+            throw std::runtime_error("RenderRuntimeHost::FrameComposer requested but host is not initialized");
+        }
+        return frame_composer_host;
+    }
+
+    [[nodiscard]] const FrameComposerHost& FrameComposer() const {
+        if (!frame_composer_initialized) {
+            throw std::runtime_error("RenderRuntimeHost::FrameComposer requested but host is not initialized");
+        }
+        return frame_composer_host;
+    }
+
+    [[nodiscard]] IblHost& Ibl() {
+        if (!ibl_initialized) {
+            throw std::runtime_error("RenderRuntimeHost::Ibl requested but host is not initialized");
+        }
+        return ibl_host;
+    }
+
+    [[nodiscard]] const IblHost& Ibl() const {
+        if (!ibl_initialized) {
+            throw std::runtime_error("RenderRuntimeHost::Ibl requested but host is not initialized");
+        }
+        return ibl_host;
+    }
+
+    [[nodiscard]] IblBakeHost& IblBake() {
+        if (!ibl_bake_initialized) {
+            throw std::runtime_error("RenderRuntimeHost::IblBake requested but host is not initialized");
+        }
+        return ibl_bake_host;
+    }
+
+    [[nodiscard]] const IblBakeHost& IblBake() const {
+        if (!ibl_bake_initialized) {
+            throw std::runtime_error("RenderRuntimeHost::IblBake requested but host is not initialized");
+        }
+        return ibl_bake_host;
     }
 
     [[nodiscard]] UploadHost& Upload() {
@@ -763,6 +958,17 @@ private:
                                                         runtime.render_target_host,
                                                         last_submitted_value_,
                                                         completed_submit_value_);
+            }
+            if (runtime.frame_composer_initialized && runtime.render_target_initialized) {
+                (void)runtime.frame_composer_host.OnSwapchainRecreated(
+                    runtime.platform_host.Context(),
+                    runtime.render_target_host,
+                    runtime.render_target_pool_initialized
+                        ? &runtime.render_target_pool
+                        : nullptr,
+                    extent_,
+                    last_submitted_value_,
+                    completed_submit_value_);
             }
 
             if constexpr (requires(RecorderT& recorder__,
@@ -915,6 +1121,18 @@ private:
         if (upload_initialized && result_.render.frame_index < upload_host.FramesInFlight()) {
             diagnostics.upload = upload_host.FrameStats(result_.render.frame_index);
         }
+        if (texture_initialized) {
+            diagnostics.texture = texture_host.Stats();
+        }
+        if (frame_composer_initialized) {
+            diagnostics.frame_composer = frame_composer_host.Stats();
+        }
+        if (ibl_initialized) {
+            diagnostics.ibl = ibl_host.Stats();
+        }
+        if (ibl_bake_initialized) {
+            diagnostics.ibl_bake = ibl_bake_host.Stats();
+        }
         if (descriptor_initialized) {
             diagnostics.descriptor_total_pool_count = descriptor_host.TotalPoolCount();
             diagnostics.descriptor_frame_pool_count = descriptor_host.FramePoolCount(result_.render.frame_index);
@@ -1017,6 +1235,10 @@ private:
     LoopType render_loop{};
 
     resource::GpuMemoryHost gpu_memory_host{};
+    asset::TextureHost texture_host{};
+    FrameComposerHost frame_composer_host{};
+    IblHost ibl_host{};
+    IblBakeHost ibl_bake_host{};
     UploadHost upload_host{};
     DescriptorHost descriptor_host{};
     PipelineHost pipeline_host{};
@@ -1033,6 +1255,10 @@ private:
     CreateInfo create_info_cache{};
     std::uint64_t swapchain_render_target_generation = 0U;
     bool gpu_memory_initialized = false;
+    bool texture_initialized = false;
+    bool frame_composer_initialized = false;
+    bool ibl_initialized = false;
+    bool ibl_bake_initialized = false;
     bool upload_initialized = false;
     bool descriptor_initialized = false;
     bool pipeline_initialized = false;

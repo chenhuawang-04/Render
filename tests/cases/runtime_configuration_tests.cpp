@@ -30,6 +30,10 @@ template<typename FnT>
 
 VR_TEST_CASE(RuntimeConfig_modules_default_to_enabled, "unit;core;runtime") {
     vr::render::RuntimeModulesCreateInfo modules{};
+    VR_CHECK(modules.enable_texture_host);
+    VR_CHECK(modules.enable_frame_composer_host);
+    VR_CHECK(modules.enable_ibl_host);
+    VR_CHECK(!modules.enable_ibl_bake_host);
     VR_CHECK(modules.enable_upload_host);
     VR_CHECK(modules.enable_descriptor_host);
     VR_CHECK(modules.enable_pipeline_host);
@@ -46,6 +50,10 @@ VR_TEST_CASE(RuntimeConfig_default_state_before_initialize_is_safe, "unit;core;r
 
     VR_CHECK(!runtime.IsInitialized());
     VR_CHECK(!runtime.IsRunning());
+    VR_CHECK(!runtime.HasTextureHost());
+    VR_CHECK(!runtime.HasFrameComposerHost());
+    VR_CHECK(!runtime.HasIblHost());
+    VR_CHECK(!runtime.HasIblBakeHost());
     VR_CHECK(!runtime.HasUploadHost());
     VR_CHECK(!runtime.HasDescriptorHost());
     VR_CHECK(!runtime.HasPipelineHost());
@@ -58,6 +66,10 @@ VR_TEST_CASE(RuntimeConfig_default_state_before_initialize_is_safe, "unit;core;r
 
     const Runtime::CreateInfo& config = runtime.Config();
     VR_CHECK(config.modules.enable_upload_host);
+    VR_CHECK(config.modules.enable_texture_host);
+    VR_CHECK(config.modules.enable_frame_composer_host);
+    VR_CHECK(config.modules.enable_ibl_host);
+    VR_CHECK(!config.modules.enable_ibl_bake_host);
     VR_CHECK(config.modules.enable_descriptor_host);
     VR_CHECK(config.modules.enable_pipeline_host);
     VR_CHECK(config.modules.enable_render_target_host);
@@ -87,6 +99,10 @@ VR_TEST_CASE(RuntimeConfig_unavailable_modules_throw_before_initialize, "unit;co
     Runtime runtime{};
 
     VR_CHECK(ThrowsAnyException([&]() { (void)runtime.GpuMemory(); }));
+    VR_CHECK(ThrowsAnyException([&]() { (void)runtime.Texture(); }));
+    VR_CHECK(ThrowsAnyException([&]() { (void)runtime.FrameComposer(); }));
+    VR_CHECK(ThrowsAnyException([&]() { (void)runtime.Ibl(); }));
+    VR_CHECK(ThrowsAnyException([&]() { (void)runtime.IblBake(); }));
     VR_CHECK(ThrowsAnyException([&]() { (void)runtime.Upload(); }));
     VR_CHECK(ThrowsAnyException([&]() { (void)runtime.Descriptor(); }));
     VR_CHECK(ThrowsAnyException([&]() { (void)runtime.Pipeline(); }));

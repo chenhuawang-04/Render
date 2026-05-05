@@ -14,11 +14,13 @@
 #include "vr/geometry/geometry_renderer_3d.hpp"
 #include "vr/geometry/geometry_resource_host.hpp"
 #include "vr/geometry/geometry_upload_host.hpp"
+#include "vr/render/ibl_bake_coordinator.hpp"
 #include "vr/render/animation_frame_coordinator.hpp"
 #include "vr/render/light_frame_coordinator.hpp"
 #include "vr/render/render_runtime_host.hpp"
 #include "vr/render/scene_recorder_3d.hpp"
 #include "vr/render/render_view_submission_utils.hpp"
+#include "vr/render/skybox_renderer.hpp"
 #include "vr/shadow/shadow_renderer_3d.hpp"
 #include "vr/surface/surface_image_host.hpp"
 #include "vr/surface/surface_renderer_3d.hpp"
@@ -111,6 +113,32 @@ void FillGradientTexture(std::uint32_t* pixels_,
             const std::uint8_t g = static_cast<std::uint8_t>(65.0F + 120.0F * (1.0F - fy));
             const std::uint8_t b = static_cast<std::uint8_t>(110.0F + 120.0F * fy);
             pixels_[index] = PackRgba8(r, g, b, 255U);
+        }
+    }
+}
+
+void FillHdrEnvironmentEquirect(vr::ecs::Float4* pixels_,
+                                std::uint32_t width_,
+                                std::uint32_t height_) {
+    if (pixels_ == nullptr || width_ == 0U || height_ == 0U) {
+        return;
+    }
+
+    for (std::uint32_t y = 0U; y < height_; ++y) {
+        const float v = (static_cast<float>(y) + 0.5F) / static_cast<float>(height_);
+        const float upper_t = std::clamp(1.0F - v * 1.25F, 0.0F, 1.0F);
+        const float horizon_t = std::exp(-32.0F * (v - 0.48F) * (v - 0.48F));
+        for (std::uint32_t x = 0U; x < width_; ++x) {
+            const float u = (static_cast<float>(x) + 0.5F) / static_cast<float>(width_);
+            const float wrapped_du = std::fabs(u - 0.16F);
+            const float sun_du = std::min(wrapped_du, 1.0F - wrapped_du);
+            const float sun_dv = v - 0.32F;
+            const float sun_t = std::exp(-(sun_du * sun_du * 640.0F + sun_dv * sun_dv * 900.0F));
+            auto& pixel = pixels_[static_cast<std::size_t>(y) * width_ + x];
+            pixel.x = 0.02F + 0.18F * (1.0F - upper_t) + 0.45F * horizon_t + 11.0F * sun_t;
+            pixel.y = 0.03F + 0.30F * horizon_t + 0.62F * upper_t + 8.5F * sun_t;
+            pixel.z = 0.08F + 1.85F * upper_t + 4.5F * sun_t;
+            pixel.w = 1.0F;
         }
     }
 }
@@ -266,6 +294,7 @@ int main(int argc_,
     vr::surface::SurfaceUploadHost surface_upload_host{};
     vr::surface::SurfaceImageHost surface_image_host{};
     vr::render::SceneRecorder3D recorder{};
+    vr::render::SkyboxRenderer skybox_renderer{};
     vr::geometry::GeometryRenderer3D geometry_renderer{};
     vr::shadow::ShadowRenderer3D shadow_renderer{};
     vr::render::LightFrameCoordinator<vr::ecs::Dim3> light_frame_coordinator{};
@@ -279,6 +308,7 @@ int main(int argc_,
     bool geometry_material_host_initialized = false;
     bool surface_upload_host_initialized = false;
     bool surface_image_host_initialized = false;
+    bool skybox_renderer_initialized = false;
     bool geometry_renderer_initialized = false;
     bool shadow_renderer_initialized = false;
     bool surface_renderer_initialized = false;
@@ -286,14 +316,20 @@ int main(int argc_,
 
     constexpr std::uint32_t texture_width = 64U;
     constexpr std::uint32_t texture_height = 64U;
+    constexpr std::uint32_t ibl_equirect_width = 32U;
+    constexpr std::uint32_t ibl_equirect_height = 16U;
     std::array<std::uint32_t, texture_width * texture_height> geometry_pixels{};
     std::array<std::uint32_t, texture_width * texture_height> surface_pixels{};
+    std::array<vr::ecs::Float4, ibl_equirect_width * ibl_equirect_height> ibl_equirect_pixels{};
     FillCheckerTexture(geometry_pixels.data(),
                        texture_width,
                        texture_height,
                        PackRgba8(242U, 210U, 164U, 255U),
                        PackRgba8(108U, 74U, 54U, 255U));
     FillGradientTexture(surface_pixels.data(), texture_width, texture_height);
+    FillHdrEnvironmentEquirect(ibl_equirect_pixels.data(),
+                               ibl_equirect_width,
+                               ibl_equirect_height);
 
     std::array<vr::geometry::GeometryMeshVertex, 4U> mesh_vertices{
         vr::geometry::GeometryMeshVertex{.position_x = -0.5F, .position_y = -0.5F, .position_z = 0.0F, .normal_x = 0.0F, .normal_y = 0.0F, .normal_z = 1.0F, .uv_u = 0.0F, .uv_v = 0.0F, .morph0_position_delta_z = -0.18F, .morph1_position_delta_x = -0.08F, .joint_index0 = 0U, .joint_weight0 = 1.0F},
@@ -316,6 +352,7 @@ int main(int argc_,
         create_info.platform.instance.enable_validation = true;
         create_info.platform.device.required_vulkan13_features.dynamicRendering = VK_TRUE;
         create_info.platform.device.required_vulkan13_features.synchronization2 = VK_TRUE;
+        create_info.modules.enable_ibl_bake_host = true;
         create_info.render_loop.swapchain.enable_vsync = true;
         create_info.render_loop.swapchain.preferred_image_count = 3U;
         create_info.render_loop.commands.initial_primary_per_frame = 2U;
@@ -327,6 +364,11 @@ int main(int argc_,
         recorder.Initialize(BuildUnifiedSceneRecorderCreateInfo());
         recorder.BindRuntime(runtime);
         recorder.BindLightFrameCoordinator(&light_frame_coordinator);
+
+        vr::render::SkyboxRendererCreateInfo skybox_renderer_create_info{};
+        skybox_renderer_create_info.clear_swapchain = false;
+        skybox_renderer.Initialize(skybox_renderer_create_info);
+        skybox_renderer_initialized = true;
 
         vr::geometry::GeometryResourceHostCreateInfo geometry_resource_create_info{};
         geometry_resource_create_info.reserve_mesh_count = 16U;
@@ -532,6 +574,25 @@ int main(int argc_,
         TransformSystem3D::UpdateHierarchy(&camera_transform, 1U);
         CameraSystem3D::MarkViewDirty(camera);
         CameraSystem3D::Update(camera, camera_transform);
+        skybox_renderer.SetCameraData(&camera, &camera_transform);
+
+        vr::render::IblBakeCoordinator ibl_bake_coordinator{};
+        vr::render::IblBakeRequest ibl_bake_request{};
+        ibl_bake_request.source.kind = vr::render::IblBakeSourceKind::equirectangular;
+        ibl_bake_request.source.equirect.pixels = ibl_equirect_pixels.data();
+        ibl_bake_request.source.equirect.width = ibl_equirect_width;
+        ibl_bake_request.source.equirect.height = ibl_equirect_height;
+        ibl_bake_request.skybox_cube_size = 32U;
+        ibl_bake_request.specular_cube_size = 32U;
+        ibl_bake_request.specular_sample_count = 128U;
+        ibl_bake_request.sh_sample_count = 1024U;
+        ibl_bake_request.brdf_lut_size = 64U;
+        ibl_bake_request.brdf_sample_count = 256U;
+        ibl_bake_request.intensity = 1.20F;
+        ibl_bake_request.rotation_y_radians = 0.45F;
+        ibl_bake_request.tint_color = {1.0F, 0.98F, 1.05F};
+        ibl_bake_request.set_active_environment = true;
+        ibl_bake_coordinator.SetRequest(ibl_bake_request);
 
         std::array<vr::ecs::SkeletalJointPose<vr::ecs::Dim3>, 1U> skeletal_joint_storage{
             vr::ecs::SkeletalJointPose<vr::ecs::Dim3>{
@@ -692,8 +753,10 @@ int main(int argc_,
                                      &geometry_bounds);
         shadow_renderer.SetGeometryData(&geometry_component, &geometry_transform, 1U);
         recorder.BindAnimationFrameCoordinator(&animation_frame_coordinator);
+        recorder.RegisterPreSceneRenderer(ibl_bake_coordinator);
         recorder.RegisterShadowRenderer(shadow_renderer);
-        recorder.RegisterOpaqueSceneRenderer(geometry_renderer, vr::render::SceneRenderPassRole::first);
+        recorder.RegisterOpaqueSceneRenderer(skybox_renderer, vr::render::SceneRenderPassRole::first);
+        recorder.RegisterOpaqueSceneRenderer(geometry_renderer, vr::render::SceneRenderPassRole::middle);
         recorder.RegisterTransparentSceneRenderer(surface_renderer, vr::render::SceneRenderPassRole::middle);
         recorder.RegisterTransparentSceneRenderer(text_renderer, vr::render::SceneRenderPassRole::last);
 
@@ -708,7 +771,7 @@ int main(int argc_,
                                                            frame_index);
         recorder.SetFramePacket(&main_scene_packet);
 
-        std::cout << "sdl_scene_3d_unified_demo running (geometry + surface + text share transient scene target + bloom post stack). Close window to exit.\n";
+        std::cout << "sdl_scene_3d_unified_demo running (baked IBL skybox + geometry + surface + text share transient scene target + bloom post stack). Close window to exit.\n";
 
         std::uint64_t fps_window_begin_ticks = SDL_GetTicks();
         std::uint32_t fps_window_frame_count = 0U;
@@ -836,6 +899,7 @@ int main(int argc_,
                        static_cast<float>(fps_window_elapsed))
                     : 0.0F;
                 const auto geometry_stats = geometry_renderer.Stats();
+                const auto skybox_stats = skybox_renderer.Stats();
                 const auto surface_stats = surface_renderer.Stats();
                 const auto text_stats = text_renderer.Stats();
                 const auto bloom_stats = recorder.PostStack().Stats();
@@ -843,6 +907,7 @@ int main(int argc_,
                 const auto pool_stats = runtime.TargetPool().Stats();
                 std::cout << "FPS:" << fps
                           << " Frame:" << frame_index
+                          << " | Sky Draw:" << skybox_stats.draw_call_count
                           << " | G Draw:" << geometry_stats.draw_call_count
                           << " Inst:" << geometry_stats.instance_count
                           << " Light:" << geometry_stats.visible_light_count
@@ -866,6 +931,8 @@ int main(int argc_,
         }
 
         recorder.Shutdown(runtime.Context());
+        skybox_renderer.Shutdown(runtime.Context());
+        skybox_renderer_initialized = false;
         shadow_renderer.Shutdown(runtime.Context());
         shadow_renderer_initialized = false;
         text_renderer.Shutdown(runtime.Context());
@@ -897,6 +964,10 @@ int main(int argc_,
         if (shadow_renderer_initialized && runtime_initialized && runtime.IsInitialized()) {
             shadow_renderer.Shutdown(runtime.Context());
             shadow_renderer_initialized = false;
+        }
+        if (skybox_renderer_initialized && runtime_initialized && runtime.IsInitialized()) {
+            skybox_renderer.Shutdown(runtime.Context());
+            skybox_renderer_initialized = false;
         }
         if (text_renderer_initialized && runtime_initialized && runtime.IsInitialized()) {
             text_renderer.Shutdown(runtime.Context());

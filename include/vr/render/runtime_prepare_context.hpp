@@ -7,10 +7,17 @@
 namespace vr::render {
 class UploadHost;
 class DescriptorHost;
+class FrameComposerHost;
+class IblHost;
+class IblBakeHost;
 class PipelineHost;
 class RenderTargetHost;
 class RenderTargetPool;
 } // namespace vr::render
+
+namespace vr::asset {
+class TextureHost;
+}
 
 namespace vr::resource {
 class GpuMemoryHost;
@@ -33,8 +40,12 @@ struct RuntimePrepareContext {
     VkExtent2D swapchain_extent{};
     VkFormat swapchain_format = VK_FORMAT_UNDEFINED;
     resource::GpuMemoryHost* gpu_memory_host = nullptr;
+    asset::TextureHost* texture_host = nullptr;
     UploadHost* upload_host = nullptr;
     DescriptorHost* descriptor_host = nullptr;
+    FrameComposerHost* frame_composer_host = nullptr;
+    IblHost* ibl_host = nullptr;
+    IblBakeHost* ibl_bake_host = nullptr;
     PipelineHost* pipeline_host = nullptr;
     RenderTargetHost* render_target_host = nullptr;
     RenderTargetPool* render_target_pool = nullptr;

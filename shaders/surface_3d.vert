@@ -18,6 +18,7 @@ layout(location = 14) in uint in_texture_flags;
 
 layout(push_constant) uniform Surface3DPushConstants {
     mat4 view_projection;
+    vec4 camera_position;
     uint params;
     uint reserved0;
     uint reserved1;
@@ -34,6 +35,8 @@ layout(location = 6) flat out uint out_component_index;
 layout(location = 7) flat out uint out_user_data;
 layout(location = 8) flat out uint out_uv_set;
 layout(location = 9) flat out uint out_texture_flags;
+layout(location = 10) out vec3 out_world_position;
+layout(location = 11) out vec3 out_normal_world;
 
 vec2 corner01_for_vertex(uint vertex_index) {
     switch (vertex_index) {
@@ -63,6 +66,7 @@ void main() {
     mat4 world = mat4(in_world_row0, in_world_row1, in_world_row2, in_world_row3);
     vec4 world_position = world * vec4(local, 0.0, 1.0);
     gl_Position = pc.view_projection * world_position;
+    vec3 normal_world = mat3(world) * vec3(0.0, 0.0, 1.0);
 
     vec4 tint = unpack_rgba8(in_tint_rgba8);
     out_uv = uv;
@@ -75,5 +79,6 @@ void main() {
     out_user_data = in_user_data;
     out_uv_set = in_uv_set;
     out_texture_flags = in_texture_flags;
+    out_world_position = world_position.xyz;
+    out_normal_world = normal_world;
 }
-

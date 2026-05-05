@@ -78,6 +78,16 @@ layout(set = 1, binding = 5, std140) uniform LightingParamsBuffer {
     vec4 framebuffer_shadow_views;
 } lighting_params;
 
+layout(set = 2, binding = 0, std140) uniform IblParamsBuffer {
+    vec4 ibl_sh9[9];
+    vec4 ibl_tint_intensity;
+    vec4 ibl_rotation_max_lod_flags;
+} ibl_params;
+
+layout(set = 2, binding = 1) uniform samplerCube ibl_specular_cube;
+layout(set = 2, binding = 2) uniform sampler2D ibl_brdf_lut;
+layout(set = 2, binding = 3) uniform samplerCube ibl_skybox_cube;
+
 layout(location = 0) out vec4 out_color;
 
 const uint k_light_kind_global = 0u;
@@ -90,6 +100,13 @@ const uint k_shadow_projection_spot = 1u;
 const uint k_shadow_projection_point = 2u;
 
 const uint k_invalid_shadow_view_begin = 0xFFFFFFFFu;
+const uint k_shadow_view_flag_stabilize = 1u << 0u;
+const uint k_shadow_view_flag_reverse_z = 1u << 1u;
+const uint k_shadow_view_flag_filter_kernel_shift = 2u;
+const uint k_shadow_view_flag_filter_kernel_mask = 0x3u << k_shadow_view_flag_filter_kernel_shift;
+const uint k_shadow_filter_hard = 0u;
+const uint k_shadow_filter_pcf3x3 = 1u;
+const uint k_shadow_filter_pcf5x5 = 2u;
 
 uint unpack_shadow_view_count(uint shadow_meta_) {
     return shadow_meta_ & 0xFFFFu;
@@ -138,7 +155,32 @@ uint compute_cluster_index(vec2 frag_coord, float depth_distance) {
     return z_index * (cluster_count_x * cluster_count_y) + y_index * cluster_count_x + x_index;
 }
 
-float sample_shadow_view_pcf(uint view_index_, vec3 world_position_) {
+uint unpack_shadow_filter_kernel(uint flags_) {
+    return (flags_ & k_shadow_view_flag_filter_kernel_mask) >> k_shadow_view_flag_filter_kernel_shift;
+}
+
+int resolve_shadow_kernel_radius(uint flags_) {
+    uint filter_kernel = unpack_shadow_filter_kernel(flags_);
+    if (filter_kernel == k_shadow_filter_pcf5x5) {
+        return 2;
+    }
+    if (filter_kernel == k_shadow_filter_hard) {
+        return 0;
+    }
+    return 1;
+}
+
+float compute_shadow_receiver_bias(ShadowViewRecord view_record_,
+                                   float n_dot_l_) {
+    float slope_scaled_bias = max(view_record_.slope_texel.x, 0.0);
+    float texel_world_size = max(view_record_.slope_texel.y, 0.0);
+    float grazing_factor = 1.0 - clamp(n_dot_l_, 0.0, 1.0);
+    return max(0.0, slope_scaled_bias * texel_world_size * grazing_factor * 0.25);
+}
+
+float sample_shadow_view_pcf(uint view_index_,
+                             vec3 world_position_,
+                             float n_dot_l_) {
     uint max_shadow_views = uint(max(0.0, lighting_params.framebuffer_shadow_views.z));
     if (view_index_ >= max_shadow_views) {
         return 1.0;
@@ -157,24 +199,55 @@ float sample_shadow_view_pcf(uint view_index_, vec3 world_position_) {
     }
 
     float depth_value = ndc.z;
+    if (depth_value <= 0.0 || depth_value >= 1.0) {
+        return 1.0;
+    }
     ivec3 atlas_size = textureSize(shadow_atlas_texture, 0);
     vec2 atlas_size_f = vec2(max(atlas_size.x, 1), max(atlas_size.y, 1));
     vec2 rect_origin = vec2(view_record.atlas_rect.x, view_record.atlas_rect.y);
     vec2 rect_extent = vec2(max(view_record.atlas_rect.z, 1u), max(view_record.atlas_rect.w, 1u));
     vec2 atlas_uv = (rect_origin + uv * rect_extent) / atlas_size_f;
+    vec2 rect_min_uv = rect_origin / atlas_size_f;
+    vec2 rect_max_uv = (rect_origin + rect_extent - vec2(1.0, 1.0)) / atlas_size_f;
     float layer = float(view_record.layer_view_cascade_flags.x);
 
     vec2 texel_size = 1.0 / atlas_size_f;
-    float depth_bias = view_record.split_bias.z;
-    float normal_bias = view_record.split_bias.w;
-    float combined_bias = max(0.0, depth_bias + normal_bias);
-    bool reverse_z = (view_record.layer_view_cascade_flags.w & (1u << 1u)) != 0u;
+    int kernel_radius = resolve_shadow_kernel_radius(view_record.layer_view_cascade_flags.w);
+    vec2 border_guard = texel_size * (float(kernel_radius) + 0.5);
+    if (atlas_uv.x <= rect_min_uv.x + border_guard.x ||
+        atlas_uv.y <= rect_min_uv.y + border_guard.y ||
+        atlas_uv.x >= rect_max_uv.x - border_guard.x ||
+        atlas_uv.y >= rect_max_uv.y - border_guard.y) {
+        return 1.0;
+    }
+
+    float normal_bias = max(view_record.split_bias.w, 0.0);
+    float receiver_bias = compute_shadow_receiver_bias(view_record, n_dot_l_);
+    float combined_bias = max(0.0, normal_bias + receiver_bias);
+    bool reverse_z = (view_record.layer_view_cascade_flags.w & k_shadow_view_flag_reverse_z) != 0u;
+
+    if (kernel_radius == 0) {
+        float stored_depth = texture(shadow_atlas_texture, vec3(atlas_uv, layer)).r;
+        if (!reverse_z) {
+            return (depth_value - combined_bias > stored_depth) ? 0.0 : 1.0;
+        }
+        return (depth_value + combined_bias < stored_depth) ? 0.0 : 1.0;
+    }
 
     float shadow_sum = 0.0;
     float sample_count = 0.0;
-    for (int y = -1; y <= 1; ++y) {
-        for (int x = -1; x <= 1; ++x) {
+    for (int y = -2; y <= 2; ++y) {
+        for (int x = -2; x <= 2; ++x) {
+            if (abs(x) > kernel_radius || abs(y) > kernel_radius) {
+                continue;
+            }
             vec2 tap_uv = atlas_uv + vec2(float(x), float(y)) * texel_size;
+            if (tap_uv.x < rect_min_uv.x || tap_uv.y < rect_min_uv.y ||
+                tap_uv.x > rect_max_uv.x || tap_uv.y > rect_max_uv.y) {
+                shadow_sum += 1.0;
+                sample_count += 1.0;
+                continue;
+            }
             float stored_depth = texture(shadow_atlas_texture, vec3(tap_uv, layer)).r;
             float visible = 1.0;
             if (!reverse_z) {
@@ -249,6 +322,8 @@ int pick_point_shadow_view(uint view_begin_, uint view_count_, vec3 light_to_fra
 
 float evaluate_shadow_factor(LightRecord3D light_record_,
                              vec3 world_position_,
+                             vec3 normal_world_,
+                             vec3 light_dir_,
                              float depth_distance_) {
     bool cast_shadow = (light_record_.flags & 0x1u) != 0u;
     uint shadow_view_begin = light_record_.shadow_view_begin;
@@ -275,7 +350,76 @@ float evaluate_shadow_factor(LightRecord3D light_record_,
     if (shadow_view_index < 0) {
         return 1.0;
     }
-    return sample_shadow_view_pcf(uint(shadow_view_index), world_position_);
+    float n_dot_l = max(dot(normalize(normal_world_), normalize(light_dir_)), 0.0);
+    return sample_shadow_view_pcf(uint(shadow_view_index), world_position_, n_dot_l);
+}
+
+vec3 rotate_environment_direction(vec3 direction_) {
+    float sin_y = ibl_params.ibl_rotation_max_lod_flags.x;
+    float cos_y = ibl_params.ibl_rotation_max_lod_flags.y;
+    vec3 rotated = vec3(
+        cos_y * direction_.x + sin_y * direction_.z,
+        direction_.y,
+        -sin_y * direction_.x + cos_y * direction_.z);
+    float length_sq = dot(rotated, rotated);
+    if (length_sq <= 1e-6) {
+        return direction_;
+    }
+    return rotated * inversesqrt(length_sq);
+}
+
+vec3 evaluate_sh9_irradiance(vec3 normal_) {
+    vec3 n = rotate_environment_direction(normalize(normal_));
+    float x = n.x;
+    float y = n.y;
+    float z = n.z;
+
+    float basis[9];
+    basis[0] = 0.282095;
+    basis[1] = 0.488603 * y;
+    basis[2] = 0.488603 * z;
+    basis[3] = 0.488603 * x;
+    basis[4] = 1.092548 * x * y;
+    basis[5] = 1.092548 * y * z;
+    basis[6] = 0.315392 * (3.0 * z * z - 1.0);
+    basis[7] = 1.092548 * x * z;
+    basis[8] = 0.546274 * (x * x - y * y);
+
+    vec3 irradiance = vec3(0.0);
+    for (int i = 0; i < 9; ++i) {
+        irradiance += ibl_params.ibl_sh9[i].rgb * basis[i];
+    }
+    return max(irradiance, vec3(0.0));
+}
+
+vec3 evaluate_ibl(vec3 base_albedo_,
+                  vec3 normal_world_,
+                  vec3 view_dir_) {
+    float ibl_intensity = max(ibl_params.ibl_tint_intensity.w, 0.0);
+    if (ibl_intensity <= 1e-6) {
+        return vec3(0.0);
+    }
+
+    float metallic = clamp(in_material_params.x, 0.0, 1.0);
+    float roughness = clamp(in_material_params.y, 0.04, 1.0);
+    vec3 tint = ibl_params.ibl_tint_intensity.rgb;
+    vec3 diffuse_color = base_albedo_ * (1.0 - metallic);
+    vec3 f0 = mix(vec3(0.04), base_albedo_, metallic);
+
+    vec3 diffuse_irradiance = evaluate_sh9_irradiance(normal_world_);
+    vec3 diffuse_ibl = diffuse_irradiance * diffuse_color;
+
+    vec3 reflection_dir = rotate_environment_direction(reflect(-view_dir_, normal_world_));
+    float max_specular_lod = max(ibl_params.ibl_rotation_max_lod_flags.z, 0.0);
+    vec3 prefiltered_specular = textureLod(ibl_specular_cube,
+                                           reflection_dir,
+                                           roughness * max_specular_lod).rgb;
+    float n_dot_v = max(dot(normal_world_, view_dir_), 0.0);
+    vec2 brdf = texture(ibl_brdf_lut, vec2(n_dot_v, roughness)).rg;
+    vec3 fresnel = f0 + (vec3(1.0) - f0) * pow(1.0 - n_dot_v, 5.0);
+    vec3 specular_ibl = prefiltered_specular * (fresnel * brdf.x + brdf.y);
+
+    return (diffuse_ibl + specular_ibl) * tint * ibl_intensity;
 }
 
 void evaluate_light(LightRecord3D light_record_,
@@ -317,8 +461,12 @@ void evaluate_light(LightRecord3D light_record_,
         }
     }
 
-    float shadow_factor = evaluate_shadow_factor(light_record_, world_position_, depth_distance_);
     float n_dot_l = max(dot(normal_world_, light_dir), 0.0);
+    float shadow_factor = evaluate_shadow_factor(light_record_,
+                                                 world_position_,
+                                                 normal_world_,
+                                                 light_dir,
+                                                 depth_distance_);
     float diffuse = n_dot_l * intensity * attenuation * shadow_factor;
 
     vec3 half_vector = normalize(view_dir_ + light_dir);
@@ -393,6 +541,7 @@ void main() {
         ambient = 0.0;
     }
 
-    vec3 lit_color = base_albedo.rgb * (ambient + lit_accum);
+    vec3 ibl_accum = unlit ? vec3(0.0) : evaluate_ibl(base_albedo.rgb, normal_world, view_dir);
+    vec3 lit_color = base_albedo.rgb * (ambient + lit_accum) + ibl_accum;
     out_color = vec4(lit_color, base_albedo.a);
 }

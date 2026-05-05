@@ -1164,7 +1164,7 @@ void ShadowRenderer3D::RecordOneAtlas(const render::FrameRecordContext& record_c
         vkCmdSetViewport(command_buffer, 0U, 1U, &viewport);
         vkCmdSetScissor(command_buffer, 0U, 1U, &scissor);
         vkCmdSetDepthBias(command_buffer,
-                          view_record.depth_bias + view_record.normal_bias,
+                          view_record.depth_bias,
                           0.0F,
                           view_record.slope_scaled_bias);
 

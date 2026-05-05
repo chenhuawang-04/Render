@@ -3,6 +3,7 @@
 #include "vr/ecs/system/transparency_render_policy.hpp"
 #include "vr/ecs/system/spatial_math.hpp"
 #include "vr/render/color_blend_state.hpp"
+#include "vr/render/ibl_host.hpp"
 #include "vr/render/render_loop_host.hpp"
 #include "vr/render/runtime_prepare_context.hpp"
 #include "vr/render/upload_host.hpp"
@@ -173,6 +174,7 @@ void SurfaceRenderer3D::Initialize(const SurfaceRenderer3DCreateInfo& create_inf
     fallback_texture = {};
     fallback_sampler_id = {};
     fallback_texture_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    active_ibl_descriptor_set = VK_NULL_HANDLE;
     output_target_config = {};
     depth_output_target_config = {};
     image_initialized.clear();
@@ -193,6 +195,7 @@ void SurfaceRenderer3D::Initialize(const SurfaceRenderer3DCreateInfo& create_inf
     upload_host = nullptr;
     descriptor_host = nullptr;
     pipeline_host = nullptr;
+    ibl_host = nullptr;
     gpu_memory_host = nullptr;
     sampler_host = nullptr;
 
@@ -238,6 +241,7 @@ void SurfaceRenderer3D::Shutdown(VulkanContext& context_) {
     upload_host = nullptr;
     descriptor_host = nullptr;
     pipeline_host = nullptr;
+    ibl_host = nullptr;
     gpu_memory_host = nullptr;
     sampler_host = nullptr;
 
@@ -275,6 +279,7 @@ void SurfaceRenderer3D::Shutdown(VulkanContext& context_) {
     descriptor_buffer_write_scratch.clear();
     descriptor_texel_write_scratch.clear();
     fallback_texture_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    active_ibl_descriptor_set = VK_NULL_HANDLE;
     output_target_config = {};
     depth_output_target_config = {};
     image_initialized.clear();
@@ -375,6 +380,7 @@ void SurfaceRenderer3D::PrepareFrame(const render::RuntimePrepareContext& prepar
         prepare_context_.upload_host == nullptr ||
         prepare_context_.descriptor_host == nullptr ||
         prepare_context_.pipeline_host == nullptr ||
+        prepare_context_.ibl_host == nullptr ||
         prepare_context_.gpu_memory_host == nullptr ||
         prepare_context_.sampler_host == nullptr) {
         throw std::runtime_error("SurfaceRenderer3D::PrepareFrame missing runtime dependencies");
@@ -387,6 +393,7 @@ void SurfaceRenderer3D::PrepareFrame(const render::RuntimePrepareContext& prepar
     upload_host = prepare_context_.upload_host;
     descriptor_host = prepare_context_.descriptor_host;
     pipeline_host = prepare_context_.pipeline_host;
+    ibl_host = prepare_context_.ibl_host;
     gpu_memory_host = prepare_context_.gpu_memory_host;
     sampler_host = prepare_context_.sampler_host;
     active_frame_index = prepare_context_.frame_index;
@@ -402,6 +409,11 @@ void SurfaceRenderer3D::PrepareFrame(const render::RuntimePrepareContext& prepar
         surface_image_host->BeginFrame(*context, completed_submit_value_seen);
     }
     EnsureFallbackTexture(*context, *upload_host, active_frame_index);
+    ibl_host->PrepareFrame(prepare_context_);
+    active_ibl_descriptor_set = ibl_host->ActiveDescriptorSet(active_frame_index);
+    if (active_ibl_descriptor_set == VK_NULL_HANDLE) {
+        throw std::runtime_error("SurfaceRenderer3D::PrepareFrame failed to resolve IBL descriptor set");
+    }
 
     if (active_frame_index >= frame_texture_sets.size()) {
         frame_texture_sets.resize(active_frame_index + 1U);
@@ -673,6 +685,16 @@ void SurfaceRenderer3D::RecordInternal(const render::FrameRecordContext& record_
         } else {
             push_constants.view_projection = ecs::spatial_math::IdentityMatrix4x4();
         }
+        if (camera_transform != nullptr) {
+            push_constants.camera_position = ecs::Float4{
+                .x = camera_transform->runtime.world_matrix.m[12],
+                .y = camera_transform->runtime.world_matrix.m[13],
+                .z = camera_transform->runtime.world_matrix.m[14],
+                .w = 1.0F
+            };
+        } else {
+            push_constants.camera_position = ecs::Float4{.x = 0.0F, .y = 0.0F, .z = 0.0F, .w = 1.0F};
+        }
         push_constants.params = 0U;
         push_constants.reserved0 = 0U;
         push_constants.reserved1 = 0U;
@@ -680,6 +702,7 @@ void SurfaceRenderer3D::RecordInternal(const render::FrameRecordContext& record_
 
         render::GraphicsPipelineId bound_pipeline{};
         VkDescriptorSet bound_descriptor_set = VK_NULL_HANDLE;
+        VkDescriptorSet bound_ibl_descriptor_set = VK_NULL_HANDLE;
         for (const ecs::Surface3DDrawBatch& batch : runtime_scratch.draw_batches) {
             if (filter_by_pass_bucket_ &&
                 ecs::SurfaceSystem<ecs::Dim3>::ExtractPassBucket(batch.sort_key) != pass_bucket_) {
@@ -720,12 +743,13 @@ void SurfaceRenderer3D::RecordInternal(const render::FrameRecordContext& record_
                                   pipeline_host->GetGraphicsPipeline(pipeline_id));
                 vkCmdPushConstants(record_context_.command_buffer,
                                    pipeline_host->GetPipelineLayout(pipeline_layout_id),
-                                   VK_SHADER_STAGE_VERTEX_BIT,
+                                   VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                                    0U,
                                    sizeof(PushConstants),
                                    &push_constants);
                 bound_pipeline = pipeline_id;
                 bound_descriptor_set = VK_NULL_HANDLE;
+                bound_ibl_descriptor_set = VK_NULL_HANDLE;
             }
 
             if (bound_descriptor_set != descriptor_set) {
@@ -739,6 +763,18 @@ void SurfaceRenderer3D::RecordInternal(const render::FrameRecordContext& record_
                                         nullptr);
                 bound_descriptor_set = descriptor_set;
                 ++stats.descriptor_set_bind_count;
+            }
+            if (bound_ibl_descriptor_set != active_ibl_descriptor_set) {
+                vkCmdBindDescriptorSets(record_context_.command_buffer,
+                                        VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                        pipeline_host->GetPipelineLayout(pipeline_layout_id),
+                                        1U,
+                                        1U,
+                                        &active_ibl_descriptor_set,
+                                        0U,
+                                        nullptr);
+                bound_ibl_descriptor_set = active_ibl_descriptor_set;
+                ++stats.ibl_descriptor_set_bind_count;
             }
 
             vkCmdDraw(record_context_.command_buffer,
@@ -858,10 +894,14 @@ void SurfaceRenderer3D::EnsurePipelineObjects(VulkanContext& context_,
         shader_fragment_id = pipeline_host_.RegisterShaderModule(context_, shader_info);
     }
     if (!pipeline_layout_id.IsValid()) {
+        if (ibl_host == nullptr || !ibl_host->DescriptorLayoutId().IsValid()) {
+            throw std::runtime_error("SurfaceRenderer3D requires initialized IBL descriptor layout");
+        }
         render::PipelineLayoutDesc layout_desc{};
         layout_desc.set_layouts.push_back(descriptor_host_.GetLayout(descriptor_layout_id));
+        layout_desc.set_layouts.push_back(descriptor_host_.GetLayout(ibl_host->DescriptorLayoutId()));
         layout_desc.push_constant_ranges.push_back({
-            .stage_flags = VK_SHADER_STAGE_VERTEX_BIT,
+            .stage_flags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
             .offset = 0U,
             .size = sizeof(PushConstants)
         });
