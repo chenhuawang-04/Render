@@ -13,6 +13,7 @@
 #include <limits>
 #include <numeric>
 #include <optional>
+#include <random>
 #include <sstream>
 #include <stdexcept>
 #include <unordered_map>
@@ -269,6 +270,14 @@ struct ParsedArguments {
             parsed.options.verbose = true;
             continue;
         }
+        if (arg == "--shuffle") {
+            parsed.options.shuffle = true;
+            continue;
+        }
+        if (arg == "--stop-on-failure") {
+            parsed.options.stop_on_failure = true;
+            continue;
+        }
         if (arg == "--require-baseline-match") {
             parsed.options.require_baseline_match = true;
             continue;
@@ -427,6 +436,34 @@ struct ParsedArguments {
             parsed.options.report_json_path = std::string(value.value());
             continue;
         }
+        if (arg == "--repeat-suite") {
+            const auto value = require_value(arg);
+            if (!value.has_value()) {
+                return parsed;
+            }
+            std::uint32_t parsed_value = 0U;
+            if (!ParseUnsigned32(value.value(), parsed_value) || parsed_value == 0U) {
+                parsed.ok = false;
+                parsed.error = "--repeat-suite must be >= 1";
+                return parsed;
+            }
+            parsed.options.suite_repetitions = parsed_value;
+            continue;
+        }
+        if (arg == "--seed") {
+            const auto value = require_value(arg);
+            if (!value.has_value()) {
+                return parsed;
+            }
+            std::uint64_t parsed_seed = 0U;
+            if (!ParseUnsigned64(value.value(), parsed_seed)) {
+                parsed.ok = false;
+                parsed.error = "Invalid unsigned integer for --seed";
+                return parsed;
+            }
+            parsed.options.shuffle_seed = parsed_seed;
+            continue;
+        }
 
         parsed.ok = false;
         parsed.error = std::string("Unknown option: ") + std::string(arg);
@@ -451,6 +488,10 @@ void PrintHelp() {
         << "  --filter <pattern>                Name filter (substring or glob with * ?)\n"
         << "  --include-tag <tag>               Include only benchmarks with this tag (repeatable)\n"
         << "  --exclude-tag <tag>               Exclude benchmarks with this tag (repeatable)\n"
+        << "  --shuffle                         Shuffle selected benchmark order\n"
+        << "  --seed <n>                        Shuffle seed (default 0 = fixed deterministic seed)\n"
+        << "  --repeat-suite <n>                Repeat full selected suite n times (default: 1)\n"
+        << "  --stop-on-failure                 Stop suite execution after first failed benchmark\n"
         << "  --iterations <n>                  Fixed iterations per run (0 = auto calibrate)\n"
         << "  --min-iterations <n>              Lower bound for auto-calibrated iterations (default: 8)\n"
         << "  --warmup <n>                      Warmup run count (default: 2)\n"
@@ -1142,6 +1183,10 @@ void WriteJsonReport(const std::string& path_,
     out << "{\n";
     out << "  \"options\": {\n";
     out << "    \"filter\": \"" << EscapeJson(options_.filter) << "\",\n";
+    out << "    \"shuffle\": " << (options_.shuffle ? "true" : "false") << ",\n";
+    out << "    \"shuffle_seed\": " << options_.shuffle_seed << ",\n";
+    out << "    \"repeat_suite\": " << options_.suite_repetitions << ",\n";
+    out << "    \"stop_on_failure\": " << (options_.stop_on_failure ? "true" : "false") << ",\n";
     out << "    \"iterations\": " << options_.iterations << ",\n";
     out << "    \"min_calibrated_iterations\": " << options_.min_calibrated_iterations << ",\n";
     out << "    \"warmup_runs\": " << options_.warmup_runs << ",\n";
@@ -1357,6 +1402,12 @@ int RunAllBenchmarksMain(int argc_, char** argv_) {
               [](const auto& lhs_, const auto& rhs_) {
                   return lhs_.first->name < rhs_.first->name;
               });
+    if (parsed.options.shuffle) {
+        std::mt19937_64 rng(parsed.options.shuffle_seed);
+        std::shuffle(selected.begin(), selected.end(), rng);
+        std::cout << "[vr_bench] shuffle=on seed=" << parsed.options.shuffle_seed
+                  << " repeat-suite=" << parsed.options.suite_repetitions << '\n';
+    }
     summary.selected_count = static_cast<std::uint32_t>(selected.size());
 
     if (parsed.options.list_only) {
@@ -1385,64 +1436,83 @@ int RunAllBenchmarksMain(int argc_, char** argv_) {
 
     const auto run_start = std::chrono::steady_clock::now();
 
-    for (const auto& selected_case : selected) {
-        const BenchmarkCaseDefinition& definition = *selected_case.first;
-        BenchmarkCaseResult case_result{};
-        case_result.name = definition.name;
-        case_result.tags = selected_case.second;
-        case_result.outcome = BenchmarkOutcome::completed;
+    bool stop_due_to_failure = false;
+    for (std::uint32_t suite_index = 0U;
+         suite_index < parsed.options.suite_repetitions;
+         ++suite_index) {
+        for (const auto& selected_case : selected) {
+            const BenchmarkCaseDefinition& definition = *selected_case.first;
+            BenchmarkCaseResult case_result{};
+            case_result.name = definition.name;
+            if (parsed.options.suite_repetitions > 1U) {
+                case_result.name += "#r" + std::to_string(static_cast<unsigned long long>(suite_index + 1U));
+            }
+            case_result.tags = selected_case.second;
+            case_result.outcome = BenchmarkOutcome::completed;
 
-        try {
-            std::cout << "[RUN  ] " << definition.name << " calibrating..." << std::endl;
-            const std::uint64_t iterations = CalibrateIterations(definition, parsed.options);
-            std::cout << "[RUN  ] " << definition.name
-                      << " iterations=" << iterations
-                      << " warmup=" << parsed.options.warmup_runs
-                      << " measured=" << parsed.options.measured_runs
-                      << std::endl;
-            for (std::uint32_t warmup_index = 0U;
-                 warmup_index < parsed.options.warmup_runs;
-                 ++warmup_index) {
-                if (parsed.options.verbose) {
-                    std::cout << "    warmup " << (warmup_index + 1U)
-                              << "/" << parsed.options.warmup_runs
-                              << std::endl;
+            try {
+                std::cout << "[RUN  ] " << case_result.name << " calibrating..." << std::endl;
+                const std::uint64_t iterations = CalibrateIterations(definition, parsed.options);
+                std::cout << "[RUN  ] " << case_result.name
+                          << " iterations=" << iterations
+                          << " warmup=" << parsed.options.warmup_runs
+                          << " measured=" << parsed.options.measured_runs
+                          << std::endl;
+                for (std::uint32_t warmup_index = 0U;
+                     warmup_index < parsed.options.warmup_runs;
+                     ++warmup_index) {
+                    if (parsed.options.verbose) {
+                        std::cout << "    warmup " << (warmup_index + 1U)
+                                  << "/" << parsed.options.warmup_runs
+                                  << std::endl;
+                    }
+                    (void)ExecuteSample(definition, iterations);
                 }
-                (void)ExecuteSample(definition, iterations);
-            }
 
-            case_result.samples.reserve(parsed.options.measured_runs);
-            for (std::uint32_t run_index = 0U;
-                 run_index < parsed.options.measured_runs;
-                 ++run_index) {
-                if (parsed.options.verbose) {
-                    std::cout << "    sample " << (run_index + 1U)
-                              << "/" << parsed.options.measured_runs
-                              << std::endl;
+                case_result.samples.reserve(parsed.options.measured_runs);
+                for (std::uint32_t run_index = 0U;
+                     run_index < parsed.options.measured_runs;
+                     ++run_index) {
+                    if (parsed.options.verbose) {
+                        std::cout << "    sample " << (run_index + 1U)
+                                  << "/" << parsed.options.measured_runs
+                                  << std::endl;
+                    }
+                    case_result.samples.push_back(ExecuteSample(definition, iterations));
                 }
-                case_result.samples.push_back(ExecuteSample(definition, iterations));
+
+                case_result.metrics = ComputeMetrics(case_result.samples, iterations);
+
+                if (baseline_loaded) {
+                    CompareCaseWithBaseline(parsed.options,
+                                            baseline_snapshots,
+                                            case_result,
+                                            summary);
+                }
+            } catch (const SkipBenchmark& skip_benchmark) {
+                case_result.outcome = BenchmarkOutcome::skipped;
+                case_result.message = skip_benchmark.what();
+            } catch (const std::exception& exception_) {
+                case_result.outcome = BenchmarkOutcome::failed;
+                case_result.message = exception_.what();
+            } catch (...) {
+                case_result.outcome = BenchmarkOutcome::failed;
+                case_result.message = "unknown non-standard exception";
             }
 
-            case_result.metrics = ComputeMetrics(case_result.samples, iterations);
-
-            if (baseline_loaded) {
-                CompareCaseWithBaseline(parsed.options,
-                                        baseline_snapshots,
-                                        case_result,
-                                        summary);
+            if (parsed.options.stop_on_failure &&
+                case_result.outcome == BenchmarkOutcome::failed) {
+                stop_due_to_failure = true;
             }
-        } catch (const SkipBenchmark& skip_benchmark) {
-            case_result.outcome = BenchmarkOutcome::skipped;
-            case_result.message = skip_benchmark.what();
-        } catch (const std::exception& exception_) {
-            case_result.outcome = BenchmarkOutcome::failed;
-            case_result.message = exception_.what();
-        } catch (...) {
-            case_result.outcome = BenchmarkOutcome::failed;
-            case_result.message = "unknown non-standard exception";
+
+            summary.results.push_back(std::move(case_result));
+            if (stop_due_to_failure) {
+                break;
+            }
         }
-
-        summary.results.push_back(std::move(case_result));
+        if (stop_due_to_failure) {
+            break;
+        }
     }
 
     const auto run_end = std::chrono::steady_clock::now();

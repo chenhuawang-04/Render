@@ -11,6 +11,7 @@
 #include <iostream>
 #include <limits>
 #include <optional>
+#include <random>
 #include <sstream>
 #include <stdexcept>
 #include <utility>
@@ -201,6 +202,27 @@ struct ParsedArguments {
     return true;
 }
 
+[[nodiscard]] bool ParseUnsigned64Arg(std::string_view value_,
+                                      std::uint64_t& out_value_) {
+    if (value_.empty()) {
+        return false;
+    }
+    std::uint64_t accumulator = 0U;
+    for (const char ch : value_) {
+        if (ch < '0' || ch > '9') {
+            return false;
+        }
+        const std::uint64_t digit = static_cast<std::uint64_t>(ch - '0');
+        if (accumulator >
+            (std::numeric_limits<std::uint64_t>::max() - digit) / 10U) {
+            return false;
+        }
+        accumulator = accumulator * 10U + digit;
+    }
+    out_value_ = accumulator;
+    return true;
+}
+
 [[nodiscard]] ParsedArguments ParseArguments(int argc_, char** argv_) {
     ParsedArguments parsed{};
 
@@ -220,6 +242,14 @@ struct ParsedArguments {
         }
         if (arg == "--fail-on-empty-selection") {
             parsed.options.fail_on_empty_selection = true;
+            continue;
+        }
+        if (arg == "--shuffle") {
+            parsed.options.shuffle = true;
+            continue;
+        }
+        if (arg == "--stop-on-failure") {
+            parsed.options.stop_on_failure = true;
             continue;
         }
 
@@ -279,6 +309,36 @@ struct ParsedArguments {
             parsed.options.return_on_all_skipped = parsed_code;
             continue;
         }
+        if (arg == "--repeat") {
+            const auto value = require_value(arg);
+            if (!value.has_value()) {
+                return parsed;
+            }
+            std::uint64_t parsed_value = 0U;
+            if (!ParseUnsigned64Arg(value.value(), parsed_value) ||
+                parsed_value == 0U ||
+                parsed_value > static_cast<std::uint64_t>(std::numeric_limits<std::uint32_t>::max())) {
+                parsed.ok = false;
+                parsed.error = "--repeat must be a positive integer";
+                return parsed;
+            }
+            parsed.options.repeat_count = static_cast<std::uint32_t>(parsed_value);
+            continue;
+        }
+        if (arg == "--seed") {
+            const auto value = require_value(arg);
+            if (!value.has_value()) {
+                return parsed;
+            }
+            std::uint64_t parsed_seed = 0U;
+            if (!ParseUnsigned64Arg(value.value(), parsed_seed)) {
+                parsed.ok = false;
+                parsed.error = "Invalid unsigned integer for --seed";
+                return parsed;
+            }
+            parsed.options.shuffle_seed = parsed_seed;
+            continue;
+        }
 
         parsed.ok = false;
         parsed.error = std::string("Unknown option: ") + std::string(arg);
@@ -299,6 +359,10 @@ void PrintHelp() {
         << "  --report-json <path>          Write machine-readable JSON report\n"
         << "  --return-on-all-skipped <n>   Exit code when all selected tests were skipped\n"
         << "  --fail-on-empty-selection     Return non-zero when selection is empty\n"
+        << "  --repeat <n>                  Repeat each selected test case n times\n"
+        << "  --shuffle                     Shuffle selected test execution order\n"
+        << "  --seed <n>                    Shuffle seed (default 0 = fixed deterministic seed)\n"
+        << "  --stop-on-failure             Stop execution at first failed test\n"
         << "  --verbose                     Emit extra pass details\n";
 }
 
@@ -374,6 +438,10 @@ void WriteJsonReport(const std::string& path_,
     out << "    \"filter\": \"" << EscapeJson(options_.filter) << "\",\n";
     out << "    \"list_only\": " << (options_.list_only ? "true" : "false") << ",\n";
     out << "    \"fail_on_empty_selection\": " << (options_.fail_on_empty_selection ? "true" : "false") << ",\n";
+    out << "    \"shuffle\": " << (options_.shuffle ? "true" : "false") << ",\n";
+    out << "    \"shuffle_seed\": " << options_.shuffle_seed << ",\n";
+    out << "    \"repeat_count\": " << options_.repeat_count << ",\n";
+    out << "    \"stop_on_failure\": " << (options_.stop_on_failure ? "true" : "false") << ",\n";
     out << "    \"return_on_all_skipped\": " << options_.return_on_all_skipped << "\n";
     out << "  },\n";
     out << "  \"summary\": {\n";
@@ -576,6 +644,12 @@ int RunAllTestsMain(int argc_, char** argv_) {
               [](const auto& lhs_, const auto& rhs_) {
                   return lhs_.first->name < rhs_.first->name;
               });
+    if (parsed.options.shuffle) {
+        std::mt19937_64 rng(parsed.options.shuffle_seed);
+        std::shuffle(selected.begin(), selected.end(), rng);
+        std::cout << "[vr_tests] shuffle=on seed=" << parsed.options.shuffle_seed
+                  << " repeat=" << parsed.options.repeat_count << '\n';
+    }
 
     summary.selected_count = static_cast<std::uint32_t>(selected.size());
 
@@ -605,45 +679,63 @@ int RunAllTestsMain(int argc_, char** argv_) {
 
     const auto run_start = std::chrono::steady_clock::now();
 
+    bool stop_due_to_failure = false;
     for (const auto& selected_case : selected) {
         const TestCaseDefinition& definition = *selected_case.first;
-        const auto case_start = std::chrono::steady_clock::now();
+        for (std::uint32_t repeat_index = 0U;
+             repeat_index < parsed.options.repeat_count;
+             ++repeat_index) {
+            const auto case_start = std::chrono::steady_clock::now();
 
-        TestContext test_context(definition.name);
-        TestCaseResult case_result{};
-        case_result.name = definition.name;
-        case_result.tags = selected_case.second;
-        case_result.outcome = TestOutcome::passed;
+            TestContext test_context(definition.name);
+            TestCaseResult case_result{};
+            case_result.name = definition.name;
+            if (parsed.options.repeat_count > 1U) {
+                case_result.name += "#r" + std::to_string(static_cast<unsigned long long>(repeat_index + 1U));
+            }
+            case_result.tags = selected_case.second;
+            case_result.outcome = TestOutcome::passed;
 
-        try {
-            definition.function(test_context);
-        } catch (const SkipSignal& skip_signal) {
-            case_result.outcome = TestOutcome::skipped;
-            case_result.message = skip_signal.what();
-        } catch (const RequirementFailure&) {
-            case_result.outcome = TestOutcome::failed;
-            case_result.message = "fatal requirement failed";
-        } catch (const std::exception& exception_) {
-            case_result.outcome = TestOutcome::failed;
-            case_result.message = exception_.what();
-        } catch (...) {
-            case_result.outcome = TestOutcome::failed;
-            case_result.message = "unknown non-standard exception";
-        }
+            try {
+                definition.function(test_context);
+            } catch (const SkipSignal& skip_signal) {
+                case_result.outcome = TestOutcome::skipped;
+                case_result.message = skip_signal.what();
+            } catch (const RequirementFailure&) {
+                case_result.outcome = TestOutcome::failed;
+                case_result.message = "fatal requirement failed";
+            } catch (const std::exception& exception_) {
+                case_result.outcome = TestOutcome::failed;
+                case_result.message = exception_.what();
+            } catch (...) {
+                case_result.outcome = TestOutcome::failed;
+                case_result.message = "unknown non-standard exception";
+            }
 
-        case_result.check_count = test_context.CheckCount();
-        case_result.failure_count = test_context.FailureCount();
-        case_result.failed_assertions = test_context.Assertions();
-        if (case_result.outcome == TestOutcome::passed && case_result.failure_count > 0U) {
-            case_result.outcome = TestOutcome::failed;
-            if (case_result.message.empty()) {
-                case_result.message = "one or more non-fatal checks failed";
+            case_result.check_count = test_context.CheckCount();
+            case_result.failure_count = test_context.FailureCount();
+            case_result.failed_assertions = test_context.Assertions();
+            if (case_result.outcome == TestOutcome::passed && case_result.failure_count > 0U) {
+                case_result.outcome = TestOutcome::failed;
+                if (case_result.message.empty()) {
+                    case_result.message = "one or more non-fatal checks failed";
+                }
+            }
+
+            const auto case_end = std::chrono::steady_clock::now();
+            case_result.duration_ms = std::chrono::duration<double, std::milli>(case_end - case_start).count();
+
+            if (parsed.options.stop_on_failure && case_result.outcome == TestOutcome::failed) {
+                stop_due_to_failure = true;
+            }
+            summary.results.push_back(std::move(case_result));
+            if (stop_due_to_failure) {
+                break;
             }
         }
-
-        const auto case_end = std::chrono::steady_clock::now();
-        case_result.duration_ms = std::chrono::duration<double, std::milli>(case_end - case_start).count();
-        summary.results.push_back(std::move(case_result));
+        if (stop_due_to_failure) {
+            break;
+        }
     }
 
     const auto run_end = std::chrono::steady_clock::now();

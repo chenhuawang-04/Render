@@ -1,0 +1,166 @@
+{
+  "version": 1,
+  "variables": {
+    "build_dir": "${repo_root}/build",
+    "report_dir": "${build_dir}/reports",
+    "tests_bin": "${build_dir}/vr_tests.exe",
+    "bench_bin": "${build_dir}/vr_bench_runner.exe",
+    "bench_gate_bin": "${repo_root}/build_preset/qa_relwithdebinfo/bench/vr_bench_runner.exe",
+    "bench_baseline_geometry": "${repo_root}/bench/baselines/ecs_geometry_runtime_gate_gold_2026-05-07.json"
+  },
+  "profiles": {
+    "test_unit": {
+      "description": "Run unit tests only (fast, deterministic).",
+      "steps": [
+        {
+          "name": "vr_tests_unit",
+          "command": [
+            "${tests_bin}",
+            "--exclude-tag",
+            "integration",
+            "--report-json",
+            "${report_dir}/tests_unit.json"
+          ],
+          "allow_exit_codes": [0]
+        }
+      ]
+    },
+    "test_integration": {
+      "description": "Run GPU/SDL integration tests. 125 means all selected tests were skipped.",
+      "steps": [
+        {
+          "name": "vr_tests_integration",
+          "command": [
+            "${tests_bin}",
+            "--include-tag",
+            "integration",
+            "--return-on-all-skipped",
+            "125",
+            "--report-json",
+            "${report_dir}/tests_integration.json"
+          ],
+          "allow_exit_codes": [0, 125]
+        }
+      ]
+    },
+    "bench_smoke": {
+      "description": "Fast benchmark smoke sanity checks.",
+      "steps": [
+        {
+          "name": "vr_bench_smoke",
+          "command": [
+            "${bench_bin}",
+            "--filter",
+            "FrameSyncHost_advance_frame_ring",
+            "--warmup",
+            "1",
+            "--runs",
+            "3",
+            "--min-duration-ms",
+            "5",
+            "--report-json",
+            "${report_dir}/bench_smoke.json"
+          ],
+          "allow_exit_codes": [0]
+        }
+      ]
+    },
+    "bench_gate_geometry": {
+      "description": "Performance regression gate for geometry runtime hot path.",
+      "steps": [
+        {
+          "name": "vr_bench_geometry_gate",
+          "command": [
+            "${bench_gate_bin}",
+            "--filter",
+            "EcsGeometryRuntimeSystem",
+            "--iterations",
+            "512",
+            "--warmup",
+            "2",
+            "--runs",
+            "9",
+            "--baseline-json",
+            "${bench_baseline_geometry}",
+            "--baseline-metric",
+            "mean_ns_per_iteration",
+            "--fail-on-regression-percent",
+            "8",
+            "--report-json",
+            "${report_dir}/bench_geometry_gate.json"
+          ],
+          "allow_exit_codes": [0]
+        }
+      ]
+    },
+    "quality_full": {
+      "description": "Recommended full pipeline: unit + geometry gate + smoke bench + integration.",
+      "steps": [
+        {
+          "name": "vr_tests_unit",
+          "command": [
+            "${tests_bin}",
+            "--exclude-tag",
+            "integration",
+            "--report-json",
+            "${report_dir}/tests_unit.json"
+          ],
+          "allow_exit_codes": [0]
+        },
+        {
+          "name": "vr_bench_geometry_gate",
+          "command": [
+            "${bench_gate_bin}",
+            "--filter",
+            "EcsGeometryRuntimeSystem",
+            "--iterations",
+            "512",
+            "--warmup",
+            "2",
+            "--runs",
+            "9",
+            "--baseline-json",
+            "${bench_baseline_geometry}",
+            "--baseline-metric",
+            "mean_ns_per_iteration",
+            "--fail-on-regression-percent",
+            "8",
+            "--report-json",
+            "${report_dir}/bench_geometry_gate.json"
+          ],
+          "allow_exit_codes": [0]
+        },
+        {
+          "name": "vr_bench_smoke",
+          "command": [
+            "${bench_bin}",
+            "--filter",
+            "FrameSyncHost_advance_frame_ring",
+            "--warmup",
+            "1",
+            "--runs",
+            "3",
+            "--min-duration-ms",
+            "5",
+            "--report-json",
+            "${report_dir}/bench_smoke.json"
+          ],
+          "allow_exit_codes": [0]
+        },
+        {
+          "name": "vr_tests_integration",
+          "command": [
+            "${tests_bin}",
+            "--include-tag",
+            "integration",
+            "--return-on-all-skipped",
+            "125",
+            "--report-json",
+            "${report_dir}/tests_integration.json"
+          ],
+          "allow_exit_codes": [0, 125]
+        }
+      ]
+    }
+  }
+}

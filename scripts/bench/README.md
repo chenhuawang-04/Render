@@ -1,5 +1,7 @@
 # Bench 脚本说明
 
+---
+
 ## 1) 生成黄金基线
 
 ```powershell
@@ -12,7 +14,7 @@
   -force_overwrite
 ```
 
-默认对比 metric 固定为 `mean_ns_per_iteration`。
+默认对比 metric 为 `mean_ns_per_iteration`。
 
 ---
 
@@ -33,5 +35,14 @@
 返回码：
 
 - `0`：门禁通过
-- 非 `0`：门禁失败（可直接给 CI 拦截）
+- 非 `0`：门禁失败（可直接用于 CI 拦截）
 
+---
+
+## 3) 推荐
+
+后续建议优先使用统一编排器：
+
+```powershell
+python scripts/testing/vr_quality_runner.py --profile bench_gate_geometry
+```

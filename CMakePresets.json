@@ -36,6 +36,37 @@
         "VR_BUILD_TESTS": "OFF",
         "VR_BUILD_BENCHMARKS": "OFF"
       }
+    },
+    {
+      "name": "qa-debug",
+      "displayName": "QA Debug (Tests + Benchmarks)",
+      "description": "Build both vr_tests and vr_bench_runner for local quality validation.",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build_preset/qa_debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "VR_ENABLE_SHADER_REFLECTION": "ON",
+        "VR_ENABLE_SHADER_ABI_CHECK": "ON",
+        "VR_ENABLE_SHADER_OPTIMIZATION": "OFF",
+        "VR_BUILD_TESTS": "ON",
+        "VR_BUILD_BENCHMARKS": "ON"
+      }
+    },
+    {
+      "name": "qa-relwithdebinfo",
+      "displayName": "QA RelWithDebInfo (Tests + Benchmarks)",
+      "description": "Balanced preset for benchmark reproducibility and diagnostics.",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build_preset/qa_relwithdebinfo",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "VR_ENABLE_SHADER_REFLECTION": "ON",
+        "VR_ENABLE_SHADER_ABI_CHECK": "ON",
+        "VR_ENABLE_SHADER_OPTIMIZATION": "ON",
+        "VR_SHADER_OPTIMIZATION_LEVEL": "-O",
+        "VR_BUILD_TESTS": "ON",
+        "VR_BUILD_BENCHMARKS": "ON"
+      }
     }
   ],
   "buildPresets": [
@@ -54,7 +85,73 @@
       "targets": [
         "vr_generated_shaders"
       ]
+    },
+    {
+      "name": "build-qa-debug-all",
+      "displayName": "Build QA Debug (All)",
+      "configurePreset": "qa-debug"
+    },
+    {
+      "name": "build-qa-relwithdebinfo-all",
+      "displayName": "Build QA RelWithDebInfo (All)",
+      "configurePreset": "qa-relwithdebinfo"
+    },
+    {
+      "name": "build-qa-debug-tests",
+      "displayName": "Build QA Debug Tests",
+      "configurePreset": "qa-debug",
+      "targets": [
+        "vr_tests"
+      ]
+    },
+    {
+      "name": "build-qa-debug-bench",
+      "displayName": "Build QA Debug Benchmarks",
+      "configurePreset": "qa-debug",
+      "targets": [
+        "vr_bench_runner"
+      ]
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "qa-unit",
+      "displayName": "QA Unit Tests",
+      "configurePreset": "qa-debug",
+      "output": {
+        "outputOnFailure": true
+      },
+      "filter": {
+        "include": {
+          "name": "vr_tests.unit"
+        }
+      }
+    },
+    {
+      "name": "qa-integration",
+      "displayName": "QA Integration Tests",
+      "configurePreset": "qa-debug",
+      "output": {
+        "outputOnFailure": true
+      },
+      "filter": {
+        "include": {
+          "name": "vr_tests.integration"
+        }
+      }
+    },
+    {
+      "name": "qa-bench-smoke",
+      "displayName": "QA Benchmark Smoke",
+      "configurePreset": "qa-debug",
+      "output": {
+        "outputOnFailure": true
+      },
+      "filter": {
+        "include": {
+          "name": "vr_bench.smoke"
+        }
+      }
     }
   ]
 }
-

@@ -1,16 +1,10 @@
-# VulkanRender_New Bench 框架说明
+# VulkanRender_New Benchmark Framework
 
-## 目标
-
-`bench/` 提供一套轻量、可扩展、可脚本化的 Benchmark Runner，用于：
-
-- 追踪 CPU 热路径性能
-- 做基线对比（baseline compare）
-- 在 CI 中启用性能回退门禁
+`bench/` 提供项目原生性能基准框架，用于热点回归监控与性能门禁。
 
 ---
 
-## 目录结构
+## 1. 结构
 
 ```text
 bench/
@@ -20,125 +14,70 @@ bench/
     bench_crash_tracer.hpp
     bench_crash_tracer.cpp
   cases/
-    *.cpp
+    *_bench.cpp
   bench_main.cpp
   CMakeLists.txt
 ```
 
 ---
 
-## 核心能力
+## 2. 核心能力
 
-### 1) 用例注册
-
-```cpp
-VR_BENCHMARK_CASE(MyHotPath, "core;cpu") {
-    std::uint64_t sum = 0U;
-    for (std::uint64_t i = 0U; i < bench_context_.Iterations(); ++i) {
-        sum += i;
-    }
-    bench_context_.AddItems(bench_context_.Iterations());
-    vr::bench::BenchmarkContext::DoNotOptimize(sum);
-}
-```
-
-### 2) 统计指标
-
-- 时延：`min / max / mean / median / p95 / stddev`（ms）
-- 归一化时延：`min/max/mean/median/p95/stddev_ns_per_iteration`
-- 吞吐：`items_per_second`、`bytes_per_second`
-
-> 推荐对比时优先看 `mean_ns_per_iteration`，可避免 auto-calibrate 导致的“迭代数不同”误判。
-
-### 3) 基线回归比较
-
-支持按以下 metric 做回归判定：
-
-- `mean_ns_per_iteration`（默认，推荐）
-- `mean_ms`
-- `items_per_second`
-- `bytes_per_second`
-
-其中：
-
-- 时延类（`mean_ns_per_iteration` / `mean_ms`）为 **越小越好**
-- 吞吐类（`items_per_second` / `bytes_per_second`）为 **越大越好**
+- 静态注册：`VR_BENCHMARK_CASE(Name, "tag1;tag2")`
+- 自动校准迭代 / 固定迭代
+- 统计指标：
+  - `min/max/mean/median/p95/stddev`（ms）
+  - `*_ns_per_iteration`
+  - `items_per_second` / `bytes_per_second`
+- 基线比较：
+  - `--baseline-json`
+  - `--baseline-metric`（`mean_ns_per_iteration` 等）
+  - `--fail-on-regression-percent`
+  - `--require-baseline-match`
+- JSON 报告：
+  - `--report-json <path>`
 
 ---
 
-## CLI
-
-```text
---help, -h
---list
---filter <pattern>
---include-tag <tag>
---exclude-tag <tag>
---iterations <n>                 # 0 = auto calibrate
---min-iterations <n>             # auto-calibrate 下迭代次数下限，默认 8
---warmup <n>
---runs <n>
---min-duration-ms <n>
---baseline-json <path>
---baseline-metric <name>         # mean_ns_per_iteration (default) / mean_ms / items_per_second / bytes_per_second
---fail-on-regression-percent <n>
---require-baseline-match
---fail-on-empty-selection
---report-json <path>
---verbose
-```
-
----
-
-## 常用命令
+## 3. 常用命令
 
 ```powershell
-# 列出所有 benchmark
-.\build\bench\vr_bench_runner.exe --list
+# 列出 benchmark
+.\build\vr_bench_runner.exe --list
 
-# 跑指定用例
-.\build\bench\vr_bench_runner.exe --filter EcsGeometryRuntimeSystem --runs 9 --warmup 2 --min-duration-ms 40
+# 指定 case 运行
+.\build\vr_bench_runner.exe --filter EcsGeometryRuntimeSystem --runs 9 --warmup 2 --min-duration-ms 40
 
-# Auto calibrate 但至少 64 iterations（降低小迭代噪声）
-.\build\bench\vr_bench_runner.exe --filter EcsGeometryRuntimeSystem --min-iterations 64 --runs 9 --warmup 2
+# 固定迭代做 A/B 对比
+.\build\vr_bench_runner.exe --filter EcsGeometryRuntimeSystem --iterations 512 --runs 9 --warmup 2
 
-# 固定迭代（做严格 A/B 对比）
-.\build\bench\vr_bench_runner.exe --filter EcsGeometryRuntimeSystem --iterations 512 --runs 9 --warmup 2
-
-# 输出报告
-.\build\bench\vr_bench_runner.exe --filter EcsGeometryRuntimeSystem --report-json .\bench\baselines\report.json
-
-# 与 baseline 做门禁（推荐按 ns/iter）
-.\build\bench\vr_bench_runner.exe `
+# 基线门禁
+.\build\vr_bench_runner.exe `
   --filter EcsGeometryRuntimeSystem `
-  --baseline-json .\bench\baselines\baseline.json `
+  --iterations 512 `
+  --warmup 2 `
+  --runs 9 `
+  --baseline-json .\bench\baselines\ecs_geometry_runtime_gold.json `
   --baseline-metric mean_ns_per_iteration `
   --fail-on-regression-percent 8 `
-  --report-json .\bench\baselines\current.json
+  --report-json .\build\reports\bench_geometry_gate.json
 ```
 
 ---
 
-## CI 建议
+## 4. 推荐执行入口
 
-建议分两步：
+建议通过统一编排器执行：
 
-1. 固定机器/驱动/电源策略，生成并提交 baseline
-2. PR 上做对比并设门禁
-
-推荐参数：
-
-- `--baseline-metric mean_ns_per_iteration`
-- `--fail-on-regression-percent 5~10`
-- `--require-baseline-match`
+```powershell
+python scripts/testing/vr_quality_runner.py --profile bench_smoke
+python scripts/testing/vr_quality_runner.py --profile bench_gate_geometry
+```
 
 ---
 
-## 一键脚本（推荐）
-
-仓库已提供脚本：
+## 5. 脚本
 
 - `scripts/bench/new_golden_baseline.ps1`：生成黄金基线
-- `scripts/bench/run_bench_gate.ps1`：执行性能门禁
-
-详见：`scripts/bench/README.md`
+- `scripts/bench/run_bench_gate.ps1`：执行单项门禁
+- `scripts/testing/vr_quality_runner.py`：统一执行 test + bench profile

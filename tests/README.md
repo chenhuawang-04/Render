@@ -1,16 +1,10 @@
-# VulkanRender_New 测试框架说明
+# VulkanRender_New Test Framework
 
-## 目标
-
-该目录提供一个**无第三方依赖**的轻量测试框架，重点满足：
-
-- 可维护：注册、执行、报告职责分离；
-- 可扩展：支持标签筛选、名称筛选、JSON 报告；
-- 可集成：可直接接入 CTest（unit / integration 分流）。
+本目录是项目的原生单元/集成测试框架（无第三方测试库依赖）。
 
 ---
 
-## 目录结构
+## 1. 结构
 
 ```text
 tests/
@@ -18,72 +12,87 @@ tests/
     test_framework.hpp
     test_framework.cpp
   cases/
-    *.cpp
+    *_tests.cpp
   test_main.cpp
   CMakeLists.txt
 ```
 
 ---
 
-## 核心能力
+## 2. 能力
 
-- `VR_TEST_CASE(name, "tag1;tag2")`：静态注册测试
+- 静态注册：`VR_TEST_CASE(Name, "tag1;tag2")`
 - 断言宏：
   - `VR_CHECK(expr)`
   - `VR_CHECK_MSG(expr, msg)`
   - `VR_REQUIRE(expr)`
   - `VR_REQUIRE_MSG(expr, msg)`
   - `VR_SKIP(reason)`
-- CLI 筛选：
-  - `--filter <pattern>`（支持子串和 `* ?` 通配）
-  - `--include-tag <tag>`
-  - `--exclude-tag <tag>`
+- 过滤执行：
+  - `--filter <pattern>`（子串或 `* ?` 通配）
+  - `--include-tag <tag>`（可重复）
+  - `--exclude-tag <tag>`（可重复）
+- 结果输出：
+  - 终端可读 summary
+  - `--report-json <path>` 机器可读报告
+- CI 友好：
   - `--fail-on-empty-selection`
-- 报告：
-  - 终端人类可读
-  - `--report-json <path>` 机器可读
-- CTest：
-  - `vr_tests.unit`：排除 integration 标签
-  - `vr_tests.integration`：仅 integration，支持 `SKIP_RETURN_CODE`
+  - `--return-on-all-skipped <code>`
 
 ---
 
-## 新增测试用例
+## 3. CTest 分流
+
+- `vr_tests.unit`：`--exclude-tag integration`
+- `vr_tests.integration`：`--include-tag integration --return-on-all-skipped 125`
+  - CTest 设置了 `SKIP_RETURN_CODE 125`
+
+---
+
+## 4. 新增测试用例
 
 1. 在 `tests/cases/` 新建 `xxx_tests.cpp`
-2. 包含头文件：
+2. 包含框架头：
 
 ```cpp
 #include "support/test_framework.hpp"
 ```
 
-3. 添加用例：
+3. 声明用例：
 
 ```cpp
-VR_TEST_CASE(MyFeature_basic_path, "unit;core") {
+VR_TEST_CASE(MyFeature_basic_path, "unit;core;my-module") {
     VR_CHECK(true);
 }
 ```
 
-4. 在 `tests/CMakeLists.txt` 将该文件加入 `vr_tests` 源列表
+4. 在 `tests/CMakeLists.txt` 中将该文件加入 `vr_tests` 源列表
 
 ---
 
-## 常用命令
+## 5. 常用命令
 
 ```powershell
 # 列出测试
-.\build\tests\vr_tests.exe --list
+.\build\vr_tests.exe --list
 
-# 只跑 unit
-.\build\tests\vr_tests.exe --exclude-tag integration
+# 仅跑 unit
+.\build\vr_tests.exe --exclude-tag integration
 
-# 只跑 integration（全部 skip 时返回 125）
-.\build\tests\vr_tests.exe --include-tag integration --return-on-all-skipped 125
+# 仅跑 integration（全 skip 时返回 125）
+.\build\vr_tests.exe --include-tag integration --return-on-all-skipped 125
 
-# 生成 JSON 报告
-.\build\tests\vr_tests.exe --report-json .\build\reports\tests.json
+# 输出 JSON 报告
+.\build\vr_tests.exe --report-json .\build\reports\tests.json
+```
 
-# 当筛选后没有测试时返回非零（适合 CI）
-.\build\tests\vr_tests.exe --filter "NoSuchCase*" --fail-on-empty-selection
+---
+
+## 6. 推荐执行入口
+
+推荐通过统一编排器执行（含 test + bench）：
+
+```powershell
+python scripts/testing/vr_quality_runner.py --profile test_unit
+python scripts/testing/vr_quality_runner.py --profile test_integration
 ```

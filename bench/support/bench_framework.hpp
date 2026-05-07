@@ -100,6 +100,8 @@ enum class BaselineMetricKind : std::uint8_t {
 struct BenchmarkRunnerOptions {
     bool list_only = false;
     bool verbose = false;
+    bool shuffle = false;
+    bool stop_on_failure = false;
     std::string filter{};
     std::vector<std::string> include_tags{};
     std::vector<std::string> exclude_tags{};
@@ -114,6 +116,8 @@ struct BenchmarkRunnerOptions {
     bool require_baseline_match = false;
     bool fail_on_empty_selection = false;
     std::string report_json_path{};
+    std::uint32_t suite_repetitions = 1U;
+    std::uint64_t shuffle_seed = 0U;
 };
 
 enum class BaselineComparisonStatus : std::uint8_t {

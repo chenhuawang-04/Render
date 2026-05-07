@@ -68,11 +68,15 @@ struct TestRunnerOptions {
     bool list_only = false;
     bool verbose = false;
     bool fail_on_empty_selection = false;
+    bool shuffle = false;
+    bool stop_on_failure = false;
     std::string filter{};
     std::vector<std::string> include_tags{};
     std::vector<std::string> exclude_tags{};
     std::string report_json_path{};
     int return_on_all_skipped = -1;
+    std::uint32_t repeat_count = 1U;
+    std::uint64_t shuffle_seed = 0U;
 };
 
 struct TestCaseResult {
