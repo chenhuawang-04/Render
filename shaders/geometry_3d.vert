@@ -72,6 +72,18 @@ vec3 apply_vertex_deform(vec3 local_position, vec3 local_normal) {
     return local_position + axis * wave + local_normal * normal_offset;
 }
 
+uint skeletal_component_count() {
+    return uint(skeletal_components.length());
+}
+
+uint skeletal_matrix_count() {
+    return uint(skeletal_matrices.length());
+}
+
+bool has_valid_skeletal_component() {
+    return in_component_index < skeletal_component_count();
+}
+
 vec3 apply_morph_position(vec3 local_position) {
     return local_position +
            in_morph0_position_delta * in_morph_weights.x +
@@ -87,15 +99,26 @@ vec3 apply_morph_normal(vec3 local_normal) {
 }
 
 bool skeletal_enabled() {
-    return (skeletal_components[in_component_index].flags & 1u) != 0u;
+    return has_valid_skeletal_component() &&
+           (skeletal_components[in_component_index].flags & 1u) != 0u;
 }
 
 mat4 fetch_joint_matrix(uint joint_index) {
-    SkeletalComponentGpu component = skeletal_components[in_component_index];
-    if ((component.flags & 1u) == 0u || joint_index >= component.joint_count) {
+    if (!has_valid_skeletal_component()) {
         return mat4(1.0);
     }
-    return skeletal_matrices[component.matrix_offset + joint_index];
+    SkeletalComponentGpu component = skeletal_components[in_component_index];
+    uint matrix_count = skeletal_matrix_count();
+    if ((component.flags & 1u) == 0u ||
+        joint_index >= component.joint_count ||
+        component.matrix_offset >= matrix_count) {
+        return mat4(1.0);
+    }
+    uint matrix_index = component.matrix_offset + joint_index;
+    if (matrix_index < component.matrix_offset || matrix_index >= matrix_count) {
+        return mat4(1.0);
+    }
+    return skeletal_matrices[matrix_index];
 }
 
 vec3 apply_skinning_position(vec3 local_position) {

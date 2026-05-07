@@ -96,6 +96,7 @@ private:
     ecs::Transform<ecs::Dim3>* camera_transform = nullptr;
 
     DescriptorSetLayoutId descriptor_layout_id{};
+    DescriptorSetLayoutId pipeline_layout_descriptor_layout_id{};
     PipelineLayoutId pipeline_layout_id{};
     ShaderModuleId shader_vertex_id{};
     ShaderModuleId shader_fragment_id{};

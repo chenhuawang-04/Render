@@ -435,6 +435,20 @@ void AppendMissingVulkan13NamedFeatures(std::ostringstream& stream_,
     return false;
 }
 
+[[nodiscard]] bool ShouldAppendVulkan12Features(
+    const VkPhysicalDeviceVulkan12Features& required_features_,
+    VulkanFeatureChainPolicy policy_) noexcept {
+    return policy_ == VulkanFeatureChainPolicy::explicit_vulkan12_vulkan13 ||
+           HasRequiredVulkan12Features(required_features_);
+}
+
+[[nodiscard]] bool ShouldAppendVulkan13Features(
+    const VkPhysicalDeviceVulkan13Features& required_features_,
+    VulkanFeatureChainPolicy policy_) noexcept {
+    return policy_ == VulkanFeatureChainPolicy::explicit_vulkan12_vulkan13 ||
+           HasRequiredVulkan13Features(required_features_);
+}
+
 [[nodiscard]] QueueFamilyIndices FindQueueFamilies(VkPhysicalDevice physical_device_, VkSurfaceKHR surface_) {
     uint32_t family_count = 0U;
     vkGetPhysicalDeviceQueueFamilyProperties(physical_device_, &family_count, nullptr);
@@ -979,8 +993,12 @@ void VulkanContext::PickPhysicalDevice(const VulkanDeviceCreateInfo& create_info
     required_vulkan13_features.pNext = nullptr;
     NormalizeVulkan13FeatureBits(required_vulkan13_features);
 
-    const bool needs_vulkan12_features = HasRequiredVulkan12Features(required_vulkan12_features);
-    const bool needs_vulkan13_features = HasRequiredVulkan13Features(required_vulkan13_features);
+    const bool needs_vulkan12_features =
+        ShouldAppendVulkan12Features(required_vulkan12_features,
+                                     create_info_.feature_chain_policy);
+    const bool needs_vulkan13_features =
+        ShouldAppendVulkan13Features(required_vulkan13_features,
+                                     create_info_.feature_chain_policy);
     const auto get_features2_fn = reinterpret_cast<PFN_vkGetPhysicalDeviceFeatures2>(
         vkGetInstanceProcAddr(instance, "vkGetPhysicalDeviceFeatures2"));
     if (get_features2_fn == nullptr &&
@@ -1032,6 +1050,12 @@ void VulkanContext::PickPhysicalDevice(const VulkanDeviceCreateInfo& create_info
                        << ", synchronization2="
                        << (required_vulkan13_features.synchronization2 == VK_TRUE ? "1" : "0")
                        << "}\n";
+    diagnostics_stream << "  feature_chain_policy="
+                       << (create_info_.feature_chain_policy ==
+                                   VulkanFeatureChainPolicy::explicit_vulkan12_vulkan13
+                               ? "explicit_vulkan12_vulkan13"
+                               : "minimal_required")
+                       << '\n';
 
     auto queue_family_to_string = [](const std::optional<uint32_t>& value_) -> std::string {
         return value_.has_value() ? std::to_string(value_.value()) : std::string("none");
@@ -1287,10 +1311,12 @@ void VulkanContext::CreateLogicalDevice(const VulkanDeviceCreateInfo& create_inf
         feature_chain_next = &node_->pNext;
     };
 
-    if (HasRequiredVulkan12Features(enabled_vulkan12_features_local)) {
+    if (ShouldAppendVulkan12Features(enabled_vulkan12_features_local,
+                                     create_info_.feature_chain_policy)) {
         append_feature_chain(reinterpret_cast<VkBaseOutStructure*>(&enabled_vulkan12_features_local));
     }
-    if (HasRequiredVulkan13Features(enabled_vulkan13_features_local)) {
+    if (ShouldAppendVulkan13Features(enabled_vulkan13_features_local,
+                                     create_info_.feature_chain_policy)) {
         append_feature_chain(reinterpret_cast<VkBaseOutStructure*>(&enabled_vulkan13_features_local));
     }
     if (create_info_.required_features_pnext != nullptr) {

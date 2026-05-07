@@ -1,6 +1,7 @@
 #include "support/test_framework.hpp"
 #include "vr/render/render_runtime_host.hpp"
 #include "vr/text/text_runtime_contract.hpp"
+#include "vr/vulkan_context.hpp"
 
 #include <functional>
 #include <stdexcept>
@@ -93,6 +94,20 @@ VR_TEST_CASE(RuntimeConfig_text_runtime_feature_contract_enables_dynamic_renderi
         vr::text::MakeDefaultTextRuntimeCreateInfo<Runtime::CreateInfo>();
     VR_CHECK(default_text_create_info.platform.device.required_vulkan13_features.dynamicRendering == VK_TRUE);
     VR_CHECK(default_text_create_info.platform.device.required_vulkan13_features.synchronization2 == VK_TRUE);
+    VR_CHECK(default_text_create_info.platform.device.feature_chain_policy ==
+             vr::VulkanFeatureChainPolicy::minimal_required);
+}
+
+VR_TEST_CASE(RuntimeConfig_vulkan_device_feature_chain_policy_defaults_to_minimal_required,
+             "unit;core;runtime;vulkan") {
+    vr::VulkanDeviceCreateInfo device_create_info{};
+    VR_CHECK(device_create_info.feature_chain_policy ==
+             vr::VulkanFeatureChainPolicy::minimal_required);
+
+    device_create_info.feature_chain_policy =
+        vr::VulkanFeatureChainPolicy::explicit_vulkan12_vulkan13;
+    VR_CHECK(device_create_info.feature_chain_policy ==
+             vr::VulkanFeatureChainPolicy::explicit_vulkan12_vulkan13);
 }
 
 VR_TEST_CASE(RuntimeConfig_unavailable_modules_throw_before_initialize, "unit;core;runtime") {

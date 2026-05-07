@@ -50,6 +50,7 @@ void SkyboxRenderer::Initialize(const SkyboxRendererCreateInfo& create_info_) no
     camera_component = nullptr;
     camera_transform = nullptr;
     descriptor_layout_id = {};
+    pipeline_layout_descriptor_layout_id = {};
     pipeline_layout_id = {};
     shader_vertex_id = {};
     shader_fragment_id = {};
@@ -75,6 +76,7 @@ void SkyboxRenderer::Shutdown(VulkanContext& context_) noexcept {
     camera_component = nullptr;
     camera_transform = nullptr;
     descriptor_layout_id = {};
+    pipeline_layout_descriptor_layout_id = {};
     pipeline_layout_id = {};
     shader_vertex_id = {};
     shader_fragment_id = {};
@@ -256,6 +258,15 @@ void SkyboxRenderer::EnsurePipelineObjects(VulkanContext& context_,
         throw std::runtime_error("SkyboxRenderer::EnsurePipelineObjects requires a valid IBL descriptor layout");
     }
 
+    if (pipeline_layout_id.IsValid() &&
+        pipeline_layout_descriptor_layout_id.value != descriptor_layout_id.value) {
+        pipeline_layout_id = {};
+        pipeline_id = {};
+        pipeline_layout_descriptor_layout_id = {};
+        pipeline_color_format = VK_FORMAT_UNDEFINED;
+        pipeline_depth_format = VK_FORMAT_UNDEFINED;
+    }
+
     if (!shader_vertex_id.IsValid()) {
         ShaderModuleCreateInfo shader_create_info{};
         shader_create_info.code_words = generated::k_render_target_composite_vert_spv;
@@ -278,6 +289,7 @@ void SkyboxRenderer::EnsurePipelineObjects(VulkanContext& context_,
             .size = sizeof(PushConstants),
         });
         pipeline_layout_id = pipeline_host_.RegisterPipelineLayout(context_, layout_desc);
+        pipeline_layout_descriptor_layout_id = descriptor_layout_id;
     }
 
     if (pipeline_id.IsValid() &&

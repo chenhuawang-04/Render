@@ -556,6 +556,16 @@ void EvaluateSh9Basis(const Float3Value& direction_,
     return VK_FORMAT_UNDEFINED;
 }
 
+[[nodiscard]] VkFormat ResolveEnvironmentCubeFormat(VulkanContext& context_) noexcept {
+    if (asset::TextureHost::SupportsSampledFormat(context_, VK_FORMAT_R16G16B16A16_SFLOAT)) {
+        return VK_FORMAT_R16G16B16A16_SFLOAT;
+    }
+    if (asset::TextureHost::SupportsSampledFormat(context_, VK_FORMAT_R8G8B8A8_UNORM)) {
+        return VK_FORMAT_R8G8B8A8_UNORM;
+    }
+    return VK_FORMAT_UNDEFINED;
+}
+
 void ValidateImageView(const IblCpuImageView& view_,
                        const char* label_) {
     if (view_.pixels == nullptr) {
@@ -595,28 +605,57 @@ void ValidateSource(const IblBakeSourceDesc& source_) {
     }
 }
 
-void BuildSkyboxFacePixels(const IblBakeSourceDesc& source_,
+void BuildSkyboxFacePixels(VkFormat format_,
+                           const IblBakeSourceDesc& source_,
                            std::uint32_t face_size_,
                            std::uint32_t face_index_,
                            IblBakeMcVector<std::uint8_t>& out_bytes_) {
-    out_bytes_.resize(static_cast<std::size_t>(face_size_) * face_size_ * 8U);
+    switch (format_) {
+    case VK_FORMAT_R16G16B16A16_SFLOAT:
+        out_bytes_.resize(static_cast<std::size_t>(face_size_) * face_size_ * 8U);
+        break;
+    case VK_FORMAT_R8G8B8A8_UNORM:
+        out_bytes_.resize(static_cast<std::size_t>(face_size_) * face_size_ * 4U);
+        break;
+    default:
+        throw std::runtime_error("IblBakeHost::BuildSkyboxFacePixels encountered unsupported format");
+    }
     for (std::uint32_t y = 0U; y < face_size_; ++y) {
         for (std::uint32_t x = 0U; x < face_size_; ++x) {
             const Float3Value direction = CubeTexelDirection(face_index_, x, y, face_size_);
             const Float3Value sample = SampleSource(source_, direction);
             const std::size_t texel_index = static_cast<std::size_t>(y) * face_size_ + x;
-            WriteRgba16f(out_bytes_, texel_index, sample, 1.0F);
+            switch (format_) {
+            case VK_FORMAT_R16G16B16A16_SFLOAT:
+                WriteRgba16f(out_bytes_, texel_index, sample, 1.0F);
+                break;
+            case VK_FORMAT_R8G8B8A8_UNORM:
+                WriteRgba8(out_bytes_, texel_index, sample, 1.0F);
+                break;
+            default:
+                break;
+            }
         }
     }
 }
 
-void BuildPrefilteredFacePixels(const IblBakeSourceDesc& source_,
+void BuildPrefilteredFacePixels(VkFormat format_,
+                                const IblBakeSourceDesc& source_,
                                 std::uint32_t face_size_,
                                 std::uint32_t face_index_,
                                 float roughness_,
                                 std::uint32_t sample_count_,
                                 IblBakeMcVector<std::uint8_t>& out_bytes_) {
-    out_bytes_.resize(static_cast<std::size_t>(face_size_) * face_size_ * 8U);
+    switch (format_) {
+    case VK_FORMAT_R16G16B16A16_SFLOAT:
+        out_bytes_.resize(static_cast<std::size_t>(face_size_) * face_size_ * 8U);
+        break;
+    case VK_FORMAT_R8G8B8A8_UNORM:
+        out_bytes_.resize(static_cast<std::size_t>(face_size_) * face_size_ * 4U);
+        break;
+    default:
+        throw std::runtime_error("IblBakeHost::BuildPrefilteredFacePixels encountered unsupported format");
+    }
     for (std::uint32_t y = 0U; y < face_size_; ++y) {
         for (std::uint32_t x = 0U; x < face_size_; ++x) {
             const Float3Value direction = CubeTexelDirection(face_index_, x, y, face_size_);
@@ -625,7 +664,16 @@ void BuildPrefilteredFacePixels(const IblBakeSourceDesc& source_,
                                                             roughness_,
                                                             sample_count_);
             const std::size_t texel_index = static_cast<std::size_t>(y) * face_size_ + x;
-            WriteRgba16f(out_bytes_, texel_index, sample, 1.0F);
+            switch (format_) {
+            case VK_FORMAT_R16G16B16A16_SFLOAT:
+                WriteRgba16f(out_bytes_, texel_index, sample, 1.0F);
+                break;
+            case VK_FORMAT_R8G8B8A8_UNORM:
+                WriteRgba8(out_bytes_, texel_index, sample, 1.0F);
+                break;
+            default:
+                break;
+            }
         }
     }
 }
@@ -682,12 +730,13 @@ void BuildBrdfLutPixels(VkFormat format_,
 
 [[nodiscard]] asset::TextureCreateInfo BuildCubeTextureCreateInfo(asset::TextureId texture_id_,
                                                                   std::uint32_t face_size_,
-                                                                  std::uint32_t mip_levels_) noexcept {
+                                                                  std::uint32_t mip_levels_,
+                                                                  VkFormat format_) noexcept {
     asset::TextureCreateInfo create_info{};
     create_info.texture_id = texture_id_;
     create_info.image_flags = VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
     create_info.default_view_type = VK_IMAGE_VIEW_TYPE_CUBE;
-    create_info.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+    create_info.format = format_;
     create_info.extent = VkExtent3D{face_size_, face_size_, 1U};
     create_info.mip_levels = mip_levels_;
     create_info.array_layers = 6U;
@@ -855,6 +904,10 @@ IblBakeResult IblBakeHost::BakeEnvironment(const RuntimePrepareContext& prepare_
         request_.sh_sample_count > 0U
             ? request_.sh_sample_count
             : create_info_cache.default_sh_sample_count;
+    const VkFormat environment_cube_format = ResolveEnvironmentCubeFormat(*prepare_context_.context);
+    if (environment_cube_format == VK_FORMAT_UNDEFINED) {
+        throw std::runtime_error("IblBakeHost::BakeEnvironment could not resolve a sampled environment cubemap format");
+    }
 
     if (request_.bake_brdf_lut) {
         result.brdf_lut_size = request_.brdf_lut_size > 0U
@@ -887,7 +940,11 @@ IblBakeResult IblBakeHost::BakeEnvironment(const RuntimePrepareContext& prepare_
         face_bytes.resize(6U);
         subresources.resize(6U);
         for (std::uint32_t face_index = 0U; face_index < 6U; ++face_index) {
-            BuildSkyboxFacePixels(request_.source, skybox_size, face_index, face_bytes[face_index]);
+            BuildSkyboxFacePixels(environment_cube_format,
+                                 request_.source,
+                                 skybox_size,
+                                 face_index,
+                                 face_bytes[face_index]);
             subresources[face_index].pixels = face_bytes[face_index].data();
             subresources[face_index].size_bytes = static_cast<VkDeviceSize>(face_bytes[face_index].size());
             subresources[face_index].mip_level = 0U;
@@ -897,7 +954,10 @@ IblBakeResult IblBakeHost::BakeEnvironment(const RuntimePrepareContext& prepare_
         }
 
         asset::TextureUploadInfo upload_info{};
-        upload_info.create = BuildCubeTextureCreateInfo(result.skybox_cube, skybox_size, 1U);
+        upload_info.create = BuildCubeTextureCreateInfo(result.skybox_cube,
+                                                        skybox_size,
+                                                        1U,
+                                                        environment_cube_format);
         upload_info.subresources = subresources.data();
         upload_info.subresource_count = 6U;
 
@@ -925,7 +985,8 @@ IblBakeResult IblBakeHost::BakeEnvironment(const RuntimePrepareContext& prepare_
                 ? static_cast<float>(mip_level) / static_cast<float>(specular_mip_levels - 1U)
                 : 0.0F;
             for (std::uint32_t face_index = 0U; face_index < 6U; ++face_index, ++subresource_index) {
-                BuildPrefilteredFacePixels(request_.source,
+                BuildPrefilteredFacePixels(environment_cube_format,
+                                           request_.source,
                                            mip_size,
                                            face_index,
                                            roughness,
@@ -944,7 +1005,8 @@ IblBakeResult IblBakeHost::BakeEnvironment(const RuntimePrepareContext& prepare_
         asset::TextureUploadInfo upload_info{};
         upload_info.create = BuildCubeTextureCreateInfo(result.specular_cube,
                                                         specular_size,
-                                                        specular_mip_levels);
+                                                        specular_mip_levels,
+                                                        environment_cube_format);
         upload_info.subresources = subresources.data();
         upload_info.subresource_count = total_subresource_count;
 

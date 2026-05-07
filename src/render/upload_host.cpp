@@ -88,6 +88,14 @@ VkPipelineStageFlags2 UploadHost::SanitizeStageMaskForSubmitQueue(
     return VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
 }
 
+VkPipelineStageFlags UploadHost::SanitizeLegacyStageMaskForSubmitQueue(
+    VkPipelineStageFlags stage_mask_) const noexcept {
+    const VkPipelineStageFlags2 promoted_stage_mask = PromoteLegacyStageMask(stage_mask_);
+    const VkPipelineStageFlags2 sanitized_stage_mask =
+        SanitizeStageMaskForSubmitQueue(promoted_stage_mask);
+    return static_cast<VkPipelineStageFlags>(sanitized_stage_mask);
+}
+
 VkAccessFlags2 UploadHost::SanitizeAccessMaskForStage(VkPipelineStageFlags2 stage_mask_,
                                                       VkAccessFlags2 access_mask_) noexcept {
     if (stage_mask_ == 0U || stage_mask_ == VK_PIPELINE_STAGE_2_NONE) {
@@ -483,6 +491,59 @@ UploadEndFrameResult UploadHost::EndFrameAndSubmit(VulkanContext& context_,
 
     CheckVk("vkResetFences(upload frame)", vkResetFences(context_.Device(), 1U, &slot.in_flight_fence));
 
+    const VkPipelineStageFlags wait_stage_mask = submit_info_.wait_stage_mask == 0U
+        ? VK_PIPELINE_STAGE_TRANSFER_BIT
+        : submit_info_.wait_stage_mask;
+    const VkPipelineStageFlags sanitized_wait_stage_mask =
+        SanitizeLegacyStageMaskForSubmitQueue(wait_stage_mask);
+    VkPipelineStageFlags2 sanitized_wait_stage_mask2 =
+        SanitizeStageMaskForSubmitQueue(PromoteLegacyStageMask(wait_stage_mask));
+    if (sanitized_wait_stage_mask2 == 0U || sanitized_wait_stage_mask2 == VK_PIPELINE_STAGE_2_NONE) {
+        sanitized_wait_stage_mask2 = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+    }
+
+    if (synchronization2_enabled) {
+        VkSemaphoreSubmitInfo wait_info{};
+        if (submit_info_.wait_semaphore != VK_NULL_HANDLE) {
+            wait_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
+            wait_info.semaphore = submit_info_.wait_semaphore;
+            wait_info.value = 0U;
+            wait_info.stageMask = sanitized_wait_stage_mask2;
+            wait_info.deviceIndex = 0U;
+        }
+
+        VkCommandBufferSubmitInfo command_buffer_info{};
+        command_buffer_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO;
+        command_buffer_info.commandBuffer = slot.command_buffer;
+        command_buffer_info.deviceMask = 0U;
+
+        VkSemaphoreSubmitInfo signal_info{};
+        if (submit_info_.signal_semaphore != VK_NULL_HANDLE) {
+            signal_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
+            signal_info.semaphore = submit_info_.signal_semaphore;
+            signal_info.value = 0U;
+            signal_info.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+            signal_info.deviceIndex = 0U;
+        }
+
+        VkSubmitInfo2 submit2{};
+        submit2.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2;
+        submit2.flags = 0U;
+        submit2.waitSemaphoreInfoCount = (submit_info_.wait_semaphore != VK_NULL_HANDLE) ? 1U : 0U;
+        submit2.pWaitSemaphoreInfos = (submit2.waitSemaphoreInfoCount > 0U) ? &wait_info : nullptr;
+        submit2.commandBufferInfoCount = 1U;
+        submit2.pCommandBufferInfos = &command_buffer_info;
+        submit2.signalSemaphoreInfoCount = (submit_info_.signal_semaphore != VK_NULL_HANDLE) ? 1U : 0U;
+        submit2.pSignalSemaphoreInfos = (submit2.signalSemaphoreInfoCount > 0U) ? &signal_info : nullptr;
+
+        const VkResult submit_result = vkQueueSubmit2(submit_queue, 1U, &submit2, slot.in_flight_fence);
+        CheckVk("vkQueueSubmit2(upload frame)", submit_result);
+        return {
+            .result = submit_result,
+            .submitted = true
+        };
+    }
+
     VkSubmitInfo submit{};
     submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
     submit.waitSemaphoreCount = (submit_info_.wait_semaphore != VK_NULL_HANDLE) ? 1U : 0U;
@@ -490,7 +551,7 @@ UploadEndFrameResult UploadHost::EndFrameAndSubmit(VulkanContext& context_,
         ? &submit_info_.wait_semaphore
         : nullptr;
     submit.pWaitDstStageMask = (submit.waitSemaphoreCount > 0U)
-        ? &submit_info_.wait_stage_mask
+        ? &sanitized_wait_stage_mask
         : nullptr;
     submit.commandBufferCount = 1U;
     submit.pCommandBuffers = &slot.command_buffer;
@@ -607,6 +668,13 @@ VkDeviceSize UploadHost::NextPow2(VkDeviceSize value_) noexcept {
         result <<= 1U;
     }
     return result;
+}
+
+VkPipelineStageFlags2 UploadHost::PromoteLegacyStageMask(VkPipelineStageFlags stage_mask_) noexcept {
+    if (stage_mask_ == 0U) {
+        return VK_PIPELINE_STAGE_2_NONE;
+    }
+    return static_cast<VkPipelineStageFlags2>(stage_mask_);
 }
 
 UploadHost::UploadFrameSlot& UploadHost::SlotAt(uint32_t frame_index_) {

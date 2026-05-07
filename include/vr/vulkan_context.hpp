@@ -24,11 +24,25 @@ struct VulkanInstanceCreateInfo {
     McVector<const char*> validation_layers{};
 };
 
+enum class VulkanFeatureChainPolicy : std::uint8_t {
+    minimal_required = 0,
+    explicit_vulkan12_vulkan13 = 1
+};
+
 struct VulkanDeviceCreateInfo {
     McVector<const char*> required_extensions{};
     VkPhysicalDeviceFeatures required_features{};
     VkPhysicalDeviceVulkan12Features required_vulkan12_features{};
     VkPhysicalDeviceVulkan13Features required_vulkan13_features{};
+    // `minimal_required`：仅当对应 struct 中存在至少一个 VK_TRUE feature bit 时，
+    // 才把 Vulkan 1.2 / 1.3 feature struct 接入 vkCreateDevice 的 pNext 链。
+    // 这是默认策略，可保持 pNext 链最小化。
+    //
+    // `explicit_vulkan12_vulkan13`：即使所有 Vulkan 1.2 / 1.3 feature bit 都为 VK_FALSE，
+    // 也显式把两个 struct 接入 pNext 链。主要用于驱动兼容排查或需要稳定/可观测
+    // feature chain 结构的调试场景；不会改变 feature enable 结果，只改变链的显式性。
+    VulkanFeatureChainPolicy feature_chain_policy =
+        VulkanFeatureChainPolicy::minimal_required;
     const void* required_features_pnext = nullptr;
     bool require_dedicated_transfer_queue = false;
 };

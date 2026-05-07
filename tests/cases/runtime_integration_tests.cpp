@@ -1,5 +1,7 @@
 #include "support/test_framework.hpp"
 #include "vr/render/render_target_desc.hpp"
+#include "vr/render/render_target_format_utils.hpp"
+#include "vr/render/render_target_pass.hpp"
 #include "vr/render/render_runtime_host.hpp"
 
 #include <SDL3/SDL.h>
@@ -33,7 +35,7 @@ using Runtime = vr::render::RenderRuntimeHost<vr::platform::ActiveBackendTag, 2U
 }
 
 [[nodiscard]] bool IsEnvironmentSkipError(std::string_view message_) {
-    constexpr std::array<std::string_view, 13U> patterns{
+    constexpr std::array<std::string_view, 15U> patterns{
         "sdl_initsubsystem",
         "sdl_createwindow",
         "sdl_vulkan_getinstanceextensions",
@@ -46,7 +48,9 @@ using Runtime = vr::render::RenderRuntimeHost<vr::platform::ActiveBackendTag, 2U
         "vkcreatedevice",
         "vkgetphysicaldevicesurfacesupportkhr",
         "vkgetphysicaldevicesurfaceformatskhr",
-        "vkgetphysicaldevicesurfacepresentmodeskhr"
+        "vkgetphysicaldevicesurfacepresentmodeskhr",
+        "dynamicrendering",
+        "synchronization2"
     };
 
     for (const auto pattern : patterns) {
@@ -177,6 +181,15 @@ private:
         }
     }
     return VK_FORMAT_UNDEFINED;
+}
+
+[[nodiscard]] VkFormat ResolveDepthTargetFormat(vr::VulkanContext& context_) {
+    constexpr std::array<VkFormat, 3U> candidates{
+        VK_FORMAT_D32_SFLOAT,
+        VK_FORMAT_D24_UNORM_S8_UINT,
+        VK_FORMAT_D32_SFLOAT_S8_UINT
+    };
+    return vr::render::ResolveFirstSupportedDepthStencilFormat(context_, candidates);
 }
 
 class TransientPoolRecorder final {
@@ -324,6 +337,131 @@ private:
     std::uint32_t payload_bytes = 0U;
 };
 
+class ColorDepthFinalStateRecorder final {
+public:
+    void PrepareFrame(const vr::render::RuntimePrepareContext& prepare_context_) {
+        ++prepare_count;
+        render_target_host = prepare_context_.render_target_host;
+        context = prepare_context_.context;
+        if (render_target_host == nullptr || context == nullptr) {
+            return;
+        }
+
+        if (color_format == VK_FORMAT_UNDEFINED) {
+            color_format = SelectTransientColorFormat(*context);
+        }
+        if (depth_format == VK_FORMAT_UNDEFINED) {
+            depth_format = ResolveDepthTargetFormat(*context);
+        }
+        if (color_format == VK_FORMAT_UNDEFINED || depth_format == VK_FORMAT_UNDEFINED) {
+            return;
+        }
+
+        if (!vr::render::IsValidRenderTargetHandle(color_target)) {
+            vr::render::RenderTargetDesc color_desc{};
+            color_desc.debug_name = "RuntimeIntegrationColorDepthFinalStateColor";
+            color_desc.dimension = vr::render::RenderTargetDimension::image_2d;
+            color_desc.lifetime = vr::render::RenderTargetLifetime::persistent;
+            color_desc.scale_mode = vr::render::RenderTargetScaleMode::absolute;
+            color_desc.width = 128U;
+            color_desc.height = 96U;
+            color_desc.depth = 1U;
+            color_desc.format = color_format;
+            color_desc.samples = VK_SAMPLE_COUNT_1_BIT;
+            color_desc.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+            color_desc.aspect = VK_IMAGE_ASPECT_COLOR_BIT;
+            color_desc.color_encoding = vr::render::RenderTargetColorEncoding::linear;
+            color_target = render_target_host->CreatePersistentTarget(*context, color_desc);
+        }
+
+        if (!vr::render::IsValidRenderTargetHandle(depth_target)) {
+            vr::render::RenderTargetDesc depth_desc{};
+            depth_desc.debug_name = "RuntimeIntegrationColorDepthFinalStateDepth";
+            depth_desc.dimension = vr::render::RenderTargetDimension::image_2d;
+            depth_desc.lifetime = vr::render::RenderTargetLifetime::persistent;
+            depth_desc.scale_mode = vr::render::RenderTargetScaleMode::absolute;
+            depth_desc.width = 128U;
+            depth_desc.height = 96U;
+            depth_desc.depth = 1U;
+            depth_desc.format = depth_format;
+            depth_desc.samples = VK_SAMPLE_COUNT_1_BIT;
+            depth_desc.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+            depth_desc.aspect = vr::render::DepthStencilAspectMask(depth_format);
+            depth_target = render_target_host->CreatePersistentTarget(*context, depth_desc);
+        }
+    }
+
+    void OnSwapchainRecreated(std::uint32_t image_count_,
+                              VkExtent2D extent_,
+                              VkFormat format_) {
+        clear_recorder.OnSwapchainRecreated(image_count_, extent_, format_);
+    }
+
+    void Record(const vr::render::FrameRecordContext& record_context_) {
+        if (render_target_host != nullptr &&
+            vr::render::IsValidRenderTargetHandle(color_target) &&
+            vr::render::IsValidRenderTargetHandle(depth_target)) {
+            VkClearColorValue clear_color{};
+            clear_color.float32[0] = 0.25F;
+            clear_color.float32[1] = 0.10F;
+            clear_color.float32[2] = 0.35F;
+            clear_color.float32[3] = 1.0F;
+
+            vr::render::RenderTargetColorOutputConfig color_output{};
+            color_output.color_target = color_target;
+            color_output.final_state = vr::render::RenderTargetStateKind::shader_read;
+            color_output.use_explicit_load_op = true;
+            color_output.load_op = VK_ATTACHMENT_LOAD_OP_CLEAR;
+            color_output.store_op = VK_ATTACHMENT_STORE_OP_STORE;
+            color_output.clear_color = clear_color;
+
+            vr::render::RenderTargetDepthOutputConfig depth_output{};
+            depth_output.depth_target = depth_target;
+            depth_output.final_state = vr::render::RenderTargetStateKind::depth_read_only;
+            depth_output.use_explicit_load_op = true;
+            depth_output.load_op = VK_ATTACHMENT_LOAD_OP_CLEAR;
+            depth_output.store_op = VK_ATTACHMENT_STORE_OP_STORE;
+            depth_output.stencil_load_op = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+            depth_output.stencil_store_op = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+            depth_output.clear_depth_stencil = VkClearDepthStencilValue{1.0F, 0U};
+
+            vr::render::ResolvedColorRenderPass pass = vr::render::BuildColorDepthRenderPass(
+                record_context_,
+                color_output,
+                depth_output,
+                false,
+                clear_color,
+                false,
+                false);
+            vkCmdBeginRendering(record_context_.command_buffer, pass.rendering_info.VkInfoPtr());
+            vkCmdEndRendering(record_context_.command_buffer);
+            vr::render::RecordEndColorDepthPass(record_context_, color_output, depth_output);
+
+            color_state_after_record = render_target_host->ResolveView(color_target).state;
+            depth_state_after_record = render_target_host->ResolveView(depth_target).state;
+            ++record_count;
+        }
+
+        clear_recorder.Record(record_context_);
+    }
+
+    vr::render::RenderTargetHandle color_target{};
+    vr::render::RenderTargetHandle depth_target{};
+    vr::render::RenderTargetStateKind color_state_after_record =
+        vr::render::RenderTargetStateKind::undefined;
+    vr::render::RenderTargetStateKind depth_state_after_record =
+        vr::render::RenderTargetStateKind::undefined;
+    std::uint32_t prepare_count = 0U;
+    std::uint32_t record_count = 0U;
+
+private:
+    ClearToPresentRecorder clear_recorder{};
+    vr::render::RenderTargetHost* render_target_host = nullptr;
+    vr::VulkanContext* context = nullptr;
+    VkFormat color_format = VK_FORMAT_UNDEFINED;
+    VkFormat depth_format = VK_FORMAT_UNDEFINED;
+};
+
 VR_TEST_CASE(RuntimeIntegration_initialize_tick_shutdown_smoke, "integration;gpu;sdl;runtime") {
     Runtime runtime{};
     Runtime::CreateInfo create_info{};
@@ -416,6 +554,49 @@ VR_TEST_CASE(RuntimeIntegration_render_target_pool_reuses_transient_targets, "in
     VR_CHECK(recorder.CreatedCount() > 0U);
     VR_CHECK(recorder.ReusedCount() > 0U);
     VR_CHECK(pool_stats.bucket_count >= 1U);
+}
+
+VR_TEST_CASE(RuntimeIntegration_render_target_pass_end_color_depth_transitions_apply_final_states,
+             "integration;gpu;sdl;runtime;render_target") {
+    Runtime runtime{};
+    Runtime::CreateInfo create_info{};
+    create_info.platform.window.title = "vr_tests_runtime_render_target_pass_end_depth_transition";
+    create_info.platform.window.width = 320;
+    create_info.platform.window.height = 240;
+    create_info.platform.window.resizable = false;
+    create_info.platform.window.high_pixel_density = false;
+    create_info.platform.instance.enable_validation = false;
+    create_info.platform.device.required_vulkan13_features.dynamicRendering = VK_TRUE;
+    create_info.platform.device.required_vulkan13_features.synchronization2 = VK_TRUE;
+    create_info.render_loop.swapchain.enable_vsync = false;
+    create_info.poll_events_each_tick = true;
+
+    ColorDepthFinalStateRecorder recorder{};
+    try {
+        runtime.Initialize(create_info);
+    } catch (const std::exception& exception_) {
+        if (IsEnvironmentSkipError(exception_.what())) {
+            VR_SKIP(exception_.what());
+        }
+        throw;
+    }
+
+    VR_REQUIRE(runtime.HasRenderTargetHost());
+    const Runtime::RuntimeTickResult tick_result = runtime.Tick(recorder);
+
+    VR_CHECK(tick_result.running);
+    VR_CHECK(recorder.prepare_count >= 1U);
+    VR_CHECK(recorder.record_count >= 1U);
+    VR_CHECK(vr::render::IsValidRenderTargetHandle(recorder.color_target));
+    VR_CHECK(vr::render::IsValidRenderTargetHandle(recorder.depth_target));
+    VR_CHECK(recorder.color_state_after_record == vr::render::RenderTargetStateKind::shader_read);
+    VR_CHECK(recorder.depth_state_after_record == vr::render::RenderTargetStateKind::depth_read_only);
+    VR_CHECK(runtime.RenderTarget().ResolveView(recorder.color_target).state ==
+             vr::render::RenderTargetStateKind::shader_read);
+    VR_CHECK(runtime.RenderTarget().ResolveView(recorder.depth_target).state ==
+             vr::render::RenderTargetStateKind::depth_read_only);
+
+    runtime.Shutdown();
 }
 
 VR_TEST_CASE(RuntimeIntegration_frame_diagnostics_capture_swapchain_state,

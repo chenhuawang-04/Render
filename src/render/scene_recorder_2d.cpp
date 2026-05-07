@@ -571,9 +571,11 @@ bool SceneRecorder2D::IsOverlayLayerVisibleForSubmission(std::uint32_t submissio
             (OverlayLayerMask() & submission_layer_mask_) != 0U);
 }
 
-void SceneRecorder2D::ConfigureSceneRenderersForTargets() noexcept {
+void SceneRecorder2D::ConfigureSceneRenderersForTargets() {
     const bool use_scene_targets = HasSceneConsumer() && IsPostProcessEnabledForSubmission();
     const bool use_explicit_scene_target = HasExplicitSceneTargetForSubmission();
+    const bool explicit_depth_target =
+        scene_view != nullptr && IsValidRenderTargetHandle(scene_view->targets.depth_target);
     for (const SceneRendererEntry& entry : scene_renderer_entries) {
         if (entry.renderer == nullptr) {
             continue;
@@ -582,7 +584,15 @@ void SceneRecorder2D::ConfigureSceneRenderersForTargets() noexcept {
             continue;
         }
         if (use_explicit_scene_target) {
-            if (entry.set_output_target_fn != nullptr) {
+            if (entry.configure_direct_scene_fn != nullptr) {
+                const RenderTargetDepthOutputConfig explicit_depth_output =
+                    BuildExplicitDepthOutputConfig(entry.pass_role);
+                entry.configure_direct_scene_fn(entry.renderer,
+                                                entry.pass_role,
+                                                BuildExplicitSceneOutputConfig(entry.pass_role),
+                                                explicit_depth_target ? &explicit_depth_output : nullptr,
+                                                explicit_depth_target);
+            } else if (entry.set_output_target_fn != nullptr) {
                 entry.set_output_target_fn(entry.renderer,
                                            BuildExplicitSceneOutputConfig(entry.pass_role));
             }
@@ -590,6 +600,14 @@ void SceneRecorder2D::ConfigureSceneRenderersForTargets() noexcept {
             if (entry.configure_scene_fn != nullptr) {
                 (void)entry.configure_scene_fn(entry.renderer, scene_targets, entry.pass_role);
             }
+        } else if (entry.configure_direct_scene_fn != nullptr) {
+            const RenderTargetDepthOutputConfig direct_depth_output =
+                BuildDirectDepthOutputConfig(entry.pass_role);
+            entry.configure_direct_scene_fn(entry.renderer,
+                                            entry.pass_role,
+                                            BuildDirectSceneOutputConfig(entry.pass_role),
+                                            create_info_cache.scene_target.enable_depth ? &direct_depth_output : nullptr,
+                                            false);
         } else if (entry.set_output_target_fn != nullptr) {
             entry.set_output_target_fn(entry.renderer,
                                        BuildDirectSceneOutputConfig(entry.pass_role));
@@ -605,7 +623,7 @@ void SceneRecorder2D::ConfigureSceneRenderersForTargets() noexcept {
     }
 }
 
-void SceneRecorder2D::ConfigureSceneConsumerForTargets() noexcept {
+void SceneRecorder2D::ConfigureSceneConsumerForTargets() {
     if (scene_consumer_entry.renderer == nullptr ||
         !IsLayerVisibleForSubmission(scene_consumer_entry.submission_layer_mask)) {
         return;
@@ -650,6 +668,39 @@ RenderTargetColorOutputConfig SceneRecorder2D::BuildExplicitSceneOutputConfig(
     if (HasExplicitSceneTargetForSubmission()) {
         output.color_target = scene_view->targets.color_target;
         output.final_state = scene_view->targets.color_final_state;
+    }
+    return output;
+}
+
+RenderTargetDepthOutputConfig SceneRecorder2D::BuildDirectDepthOutputConfig(
+    SceneRenderPassRole pass_role_) const noexcept {
+    RenderTargetDepthOutputConfig output{};
+    output.final_state = RenderTargetStateKind::depth_attachment;
+    output.use_explicit_load_op = true;
+    output.store_op = VK_ATTACHMENT_STORE_OP_STORE;
+    output.clear_depth_stencil.depth = create_info_cache.scene_target.clear_depth_value;
+    output.clear_depth_stencil.stencil = create_info_cache.scene_target.clear_stencil_value;
+
+    switch (pass_role_) {
+    case SceneRenderPassRole::single:
+    case SceneRenderPassRole::first:
+        output.load_op = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        break;
+    case SceneRenderPassRole::middle:
+    case SceneRenderPassRole::last:
+    default:
+        output.load_op = VK_ATTACHMENT_LOAD_OP_LOAD;
+        break;
+    }
+    return output;
+}
+
+RenderTargetDepthOutputConfig SceneRecorder2D::BuildExplicitDepthOutputConfig(
+    SceneRenderPassRole pass_role_) const noexcept {
+    RenderTargetDepthOutputConfig output = BuildDirectDepthOutputConfig(pass_role_);
+    if (scene_view != nullptr && IsValidRenderTargetHandle(scene_view->targets.depth_target)) {
+        output.depth_target = scene_view->targets.depth_target;
+        output.final_state = scene_view->targets.depth_final_state;
     }
     return output;
 }

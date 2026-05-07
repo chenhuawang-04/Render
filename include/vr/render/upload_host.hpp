@@ -159,6 +159,7 @@ private:
     static void CheckVk(const char* stage_, VkResult result_);
     static VkDeviceSize AlignUp(VkDeviceSize value_, VkDeviceSize alignment_);
     static VkDeviceSize NextPow2(VkDeviceSize value_) noexcept;
+    static VkPipelineStageFlags2 PromoteLegacyStageMask(VkPipelineStageFlags stage_mask_) noexcept;
 
     UploadFrameSlot& SlotAt(uint32_t frame_index_);
     const UploadFrameSlot& SlotAt(uint32_t frame_index_) const;
@@ -179,6 +180,8 @@ private:
                                  VkDeviceSize size_) const;
     [[nodiscard]] VkPipelineStageFlags2 SanitizeStageMaskForSubmitQueue(
         VkPipelineStageFlags2 stage_mask_) const noexcept;
+    [[nodiscard]] VkPipelineStageFlags SanitizeLegacyStageMaskForSubmitQueue(
+        VkPipelineStageFlags stage_mask_) const noexcept;
     static bool HasUnsupportedStageForQueue(VkPipelineStageFlags2 stage_mask_,
                                             VkQueueFlags queue_flags_) noexcept;
     static VkAccessFlags2 SanitizeAccessMaskForStage(VkPipelineStageFlags2 stage_mask_,
