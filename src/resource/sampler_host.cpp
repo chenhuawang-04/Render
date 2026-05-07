@@ -150,11 +150,9 @@ SamplerId SamplerHost::RegisterSampler(VulkanContext& context_,
     }
 
     if (normalized.anisotropy_enable) {
-        VkPhysicalDeviceFeatures features{};
-        vkGetPhysicalDeviceFeatures(context_.PhysicalDevice(), &features);
-        if (features.samplerAnisotropy != VK_TRUE) {
+        if (context_.EnabledFeatures().samplerAnisotropy != VK_TRUE) {
             throw std::runtime_error(
-                "SamplerHost::RegisterSampler anisotropy enabled but GPU feature samplerAnisotropy is unavailable");
+                "SamplerHost::RegisterSampler anisotropy enabled but device feature samplerAnisotropy was not enabled");
         }
 
         VkPhysicalDeviceProperties props{};

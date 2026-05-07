@@ -131,6 +131,9 @@ void InitializeShadowComponent(Shadow3D& component_,
     ShadowSystem3D::SetProjectionKind(component_, vr::ecs::ShadowProjectionKind::spot);
     ShadowSystem3D::SetCascadeConfig(component_, 1U, 0.5F);
     ShadowSystem3D::SetMapResolution(component_, 1024U, 1024U);
+    ShadowSystem3D::SetFilterKernel(component_, vr::ecs::ShadowFilterKernel::pcf5x5);
+    ShadowSystem3D::SetBias(component_, 0.0012F, 0.00035F);
+    ShadowSystem3D::SetDepthSlopeBias(component_, 1.75F);
     ShadowSystem3D::SetLightComponentIndex(component_, light_component_index_);
     ShadowSystem3D::SetTransformComponentIndex(component_, 0U);
     ShadowSystem3D::SetCameraComponentIndex(component_, 0U);
@@ -857,6 +860,7 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_bloom_post_stack_smoke,
         std::uint32_t max_shadow_view_count = 0U;
         std::uint32_t max_linked_light_count = 0U;
         std::uint32_t max_light_descriptor_binds = 0U;
+        std::uint32_t max_ibl_descriptor_binds = 0U;
         std::uint32_t max_shadow_draw_calls = 0U;
         std::uint32_t max_shadow_atlas_passes = 0U;
         bool observed_bounds_culling = false;
@@ -936,6 +940,8 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_bloom_post_stack_smoke,
                                               renderer_stats.light_shadow_linked_count);
             max_light_descriptor_binds = std::max(max_light_descriptor_binds,
                                                   renderer_stats.light_descriptor_set_bind_count);
+            max_ibl_descriptor_binds = std::max(max_ibl_descriptor_binds,
+                                                renderer_stats.ibl_descriptor_set_bind_count);
             max_shadow_draw_calls = std::max(max_shadow_draw_calls,
                                              shadow_renderer.Stats().draw_call_count);
             max_shadow_atlas_passes = std::max(max_shadow_atlas_passes,
@@ -961,6 +967,7 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_bloom_post_stack_smoke,
         VR_CHECK(max_shadow_view_count > 0U);
         VR_CHECK(max_linked_light_count > 0U);
         VR_CHECK(max_light_descriptor_binds > 0U);
+        VR_CHECK(max_ibl_descriptor_binds > 0U);
         VR_CHECK(max_shadow_draw_calls > 0U);
         VR_CHECK(max_shadow_atlas_passes > 0U);
         VR_CHECK(observed_bounds_culling);
@@ -978,6 +985,7 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_bloom_post_stack_smoke,
         VR_CHECK(recorder.ActiveView()->camera == &camera);
         VR_CHECK(runtime.TargetPool().Stats().acquire_count > 0U);
         VR_CHECK(runtime.TargetPool().Stats().reuse_hit_count > 0U);
+        VR_CHECK(runtime.Ibl().Stats().prepared_frame_count > 0U);
         VR_CHECK(runtime.RenderTarget().ResolveView(recorder.PostStack().Targets().ColorTarget()).state ==
                  vr::render::RenderTargetStateKind::shader_read);
         VR_CHECK(runtime.RenderTarget().ResolveView(recorder.PostStack().Targets().DepthTarget()).state ==

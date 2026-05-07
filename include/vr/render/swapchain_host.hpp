@@ -31,7 +31,7 @@ struct SwapchainCreateInfo {
     VkColorSpaceKHR preferred_color_space = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
     VkImageUsageFlags image_usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
     VkCompositeAlphaFlagBitsKHR composite_alpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
-    // 在销毁旧 swapchain 前显式等待队列空闲（更保守，但会增加卡顿风险）。
+    // 在销毁旧 swapchain 前显式等待设备空闲（低频保守路径；重建/关闭时优先保证正确性）。
     bool wait_queue_idle_before_destroy = false;
     // 启用延迟回收：若提供 FrameRetireHost，则旧 swapchain / image view / framebuffer 延迟销毁。
     bool enable_deferred_retire = true;
@@ -507,6 +507,14 @@ private:
         }
     }
 
+    static void WaitDeviceIdleForDestroy(VulkanContext& context_) {
+        const VkDevice device_ = context_.Device();
+        if (device_ == VK_NULL_HANDLE) {
+            return;
+        }
+        CheckVk("vkDeviceWaitIdle(swapchain destroy fallback)", vkDeviceWaitIdle(device_));
+    }
+
     static void RetireOrDestroyResources(VulkanContext& context_,
                                          McVector<SwapchainImage>& images_,
                                          VkSwapchainKHR swapchain_,
@@ -541,11 +549,8 @@ private:
             return;
         }
 
-        if (create_info_.wait_queue_idle_before_destroy) {
-            CheckVk("vkQueueWaitIdle(graphics)", vkQueueWaitIdle(context_.GraphicsQueue()));
-            if (context_.PresentQueue() != context_.GraphicsQueue()) {
-                CheckVk("vkQueueWaitIdle(present)", vkQueueWaitIdle(context_.PresentQueue()));
-            }
+        if (!images_.empty() || swapchain_ != VK_NULL_HANDLE) {
+            WaitDeviceIdleForDestroy(context_);
         }
 
         DestroyImageResources(device_, images_);

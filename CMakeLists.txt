@@ -226,6 +226,7 @@ set(VR_SHADOW_2D_VERT_HEADER "${VR_GENERATED_SHADOW_SHADER_DIR}/shadow_depth_2d_
 set(VR_SHADOW_3D_VERT_HEADER "${VR_GENERATED_SHADOW_SHADER_DIR}/shadow_depth_3d_vert_spv.hpp")
 set(VR_RENDER_TARGET_COMPOSITE_VERT_HEADER "${VR_GENERATED_RENDER_SHADER_DIR}/render_target_composite_vert_spv.hpp")
 set(VR_RENDER_TARGET_COMPOSITE_FRAG_HEADER "${VR_GENERATED_RENDER_SHADER_DIR}/render_target_composite_frag_spv.hpp")
+set(VR_SKYBOX_FRAG_HEADER "${VR_GENERATED_RENDER_SHADER_DIR}/skybox_frag_spv.hpp")
 set(VR_RENDER_TARGET_BLOOM_PREFILTER_FRAG_HEADER "${VR_GENERATED_RENDER_SHADER_DIR}/render_target_bloom_prefilter_frag_spv.hpp")
 set(VR_RENDER_TARGET_BLOOM_BLUR_FRAG_HEADER "${VR_GENERATED_RENDER_SHADER_DIR}/render_target_bloom_blur_frag_spv.hpp")
 set(VR_RENDER_TARGET_BLOOM_COMBINE_FRAG_HEADER "${VR_GENERATED_RENDER_SHADER_DIR}/render_target_bloom_combine_frag_spv.hpp")
@@ -310,6 +311,11 @@ vr_compile_shader_to_header("${VR_SHADER_SOURCE_DIR}/render_target_composite.fra
                             "k_render_target_composite_frag_spv"
                             "${VR_RENDER_TARGET_COMPOSITE_FRAG_HEADER}"
                             "vr::render::generated")
+vr_compile_shader_to_header("${VR_SHADER_SOURCE_DIR}/skybox.frag"
+                            "frag"
+                            "k_skybox_frag_spv"
+                            "${VR_SKYBOX_FRAG_HEADER}"
+                            "vr::render::generated")
 vr_compile_shader_to_header("${VR_SHADER_SOURCE_DIR}/render_target_bloom_prefilter.frag"
                             "frag"
                             "k_render_target_bloom_prefilter_frag_spv"
@@ -344,6 +350,7 @@ add_custom_target(vr_generated_shaders
         "${VR_SHADOW_3D_VERT_HEADER}"
         "${VR_RENDER_TARGET_COMPOSITE_VERT_HEADER}"
         "${VR_RENDER_TARGET_COMPOSITE_FRAG_HEADER}"
+        "${VR_SKYBOX_FRAG_HEADER}"
         "${VR_RENDER_TARGET_BLOOM_PREFILTER_FRAG_HEADER}"
         "${VR_RENDER_TARGET_BLOOM_BLUR_FRAG_HEADER}"
         "${VR_RENDER_TARGET_BLOOM_COMBINE_FRAG_HEADER}"
@@ -378,7 +385,12 @@ add_library(vulkan_init STATIC
     src/animation/animation_path_host.cpp
     src/animation/animation_skeletal_host.cpp
     src/animation/animation_vertex_deform_host.cpp
+    src/asset/texture_host.cpp
     src/render/frame_command_host.cpp
+    src/render/frame_composer_host.cpp
+    src/render/ibl_bake_host.cpp
+    src/render/ibl_host.cpp
+    src/render/skybox_renderer.cpp
     src/render/upload_host.cpp
     src/render/descriptor_host.cpp
     src/render/pipeline_host.cpp

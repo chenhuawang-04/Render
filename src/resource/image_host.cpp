@@ -122,7 +122,7 @@ ImageResource ImageHost::CreateImage(VulkanContext& context_,
             Center::Memory::Vulkan::LifetimeHint::long_lived,
             host_access,
             false,
-            true);
+            false);
 
         resource.memory_host = &gpu_memory_host_;
         resource.memory_type_index = resource.allocation_slice.memory_type_index;

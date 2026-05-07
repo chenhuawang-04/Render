@@ -91,6 +91,28 @@ struct FakeSceneRecorderRenderer : FakeDepthRenderer {
     }
 };
 
+struct FakeColorSceneRecorderRenderer final : FakeColorRenderer {
+    std::uint32_t prepare_count = 0U;
+    std::uint32_t record_count = 0U;
+    std::uint32_t recreate_count = 0U;
+
+    void PrepareFrame(const vr::render::RuntimePrepareContext&) noexcept {
+        prepare_count += 1U;
+    }
+
+    void Record(const vr::render::FrameRecordContext&) noexcept {
+        record_count += 1U;
+    }
+
+    void OnSwapchainRecreated(std::uint32_t,
+                              VkExtent2D,
+                              VkFormat,
+                              std::uint64_t,
+                              std::uint64_t) noexcept {
+        recreate_count += 1U;
+    }
+};
+
 struct FakePreSceneRecorderRenderer final {
     std::uint32_t prepare_count = 0U;
     std::uint32_t record_count = 0U;
@@ -858,6 +880,109 @@ VR_TEST_CASE(SceneRecorder2D_explicit_scene_target_bypasses_scene_consumer_route
     VR_CHECK(world_renderer.color_output.final_state == vr::render::RenderTargetStateKind::shader_read);
     VR_CHECK(consumer.prepare_count == 0U);
     VR_CHECK(consumer.source_set == false);
+}
+
+VR_TEST_CASE(SceneRecorder2D_direct_depth_output_routes_to_depth_capable_renderer,
+             "unit;core;render_target") {
+    vr::render::SceneRecorder2D recorder{};
+    vr::render::SceneRecorder2DCreateInfo create_info{};
+    create_info.scene_target.enable_depth = true;
+    create_info.scene_target.clear_depth_value = 0.75F;
+    create_info.scene_target.clear_stencil_value = 3U;
+    recorder.Initialize(create_info);
+
+    FakeSceneRecorderRenderer world_renderer{};
+    recorder.RegisterSceneRenderer(world_renderer, vr::render::SceneRenderPassRole::first, 0x1U);
+
+    vr::render::RuntimePrepareContext prepare_context{};
+    recorder.PrepareFrame(prepare_context);
+
+    VR_CHECK(world_renderer.color_set);
+    VR_CHECK(world_renderer.depth_set);
+    VR_CHECK(world_renderer.depth_output.load_op == VK_ATTACHMENT_LOAD_OP_CLEAR);
+    VR_CHECK(world_renderer.depth_output.final_state == vr::render::RenderTargetStateKind::depth_attachment);
+    VR_CHECK(world_renderer.depth_output.clear_depth_stencil.depth == 0.75F);
+    VR_CHECK(world_renderer.depth_output.clear_depth_stencil.stencil == 3U);
+}
+
+VR_TEST_CASE(SceneRecorder2D_direct_depth_output_keeps_color_only_renderer_compatible,
+             "unit;core;render_target") {
+    vr::render::SceneRecorder2D recorder{};
+    vr::render::SceneRecorder2DCreateInfo create_info{};
+    create_info.scene_target.enable_depth = true;
+    recorder.Initialize(create_info);
+
+    FakeColorSceneRecorderRenderer world_renderer{};
+    recorder.RegisterSceneRenderer(world_renderer, vr::render::SceneRenderPassRole::single, 0x1U);
+
+    vr::render::RuntimePrepareContext prepare_context{};
+    recorder.PrepareFrame(prepare_context);
+
+    VR_CHECK(world_renderer.color_set);
+    VR_CHECK(world_renderer.prepare_count == 1U);
+}
+
+VR_TEST_CASE(SceneRecorder2D_explicit_scene_depth_target_routes_to_depth_capable_renderer,
+             "unit;core;render_target") {
+    vr::render::SceneRecorder2D recorder{};
+    recorder.Initialize({});
+
+    FakeSceneRecorderRenderer world_renderer{};
+    recorder.RegisterSceneRenderer(world_renderer, vr::render::SceneRenderPassRole::single, 0x1U);
+
+    vr::render::RenderView2D view{};
+    view.kind = vr::render::RenderViewKind::world;
+    view.flags = vr::render::render_view_postprocess_enabled_flag;
+    view.layer_mask = 0x1U;
+    view.targets.color_target = vr::render::RenderTargetHandle{21U, 1U};
+    view.targets.color_final_state = vr::render::RenderTargetStateKind::shader_read;
+    view.targets.depth_target = vr::render::RenderTargetHandle{22U, 5U};
+    view.targets.depth_final_state = vr::render::RenderTargetStateKind::depth_read_only;
+    vr::render::RefreshRenderViewSignature(view);
+
+    vr::render::RenderScenePacket2D packet =
+        vr::render::MakeSingleViewScenePacket(view, 88U);
+    recorder.SetFramePacket(&packet);
+
+    vr::render::RuntimePrepareContext prepare_context{};
+    recorder.PrepareFrame(prepare_context);
+
+    VR_CHECK(world_renderer.color_set);
+    VR_CHECK(world_renderer.depth_set);
+    VR_CHECK(world_renderer.color_output.color_target.index == 21U);
+    VR_CHECK(world_renderer.depth_output.depth_target.index == 22U);
+    VR_CHECK(world_renderer.depth_output.final_state == vr::render::RenderTargetStateKind::depth_read_only);
+}
+
+VR_TEST_CASE(SceneRecorder2D_explicit_scene_depth_target_requires_depth_capable_renderer,
+             "unit;core;render_target") {
+    vr::render::SceneRecorder2D recorder{};
+    recorder.Initialize({});
+
+    FakeColorSceneRecorderRenderer world_renderer{};
+    recorder.RegisterSceneRenderer(world_renderer, vr::render::SceneRenderPassRole::single, 0x1U);
+
+    vr::render::RenderView2D view{};
+    view.kind = vr::render::RenderViewKind::world;
+    view.flags = vr::render::render_view_postprocess_enabled_flag;
+    view.layer_mask = 0x1U;
+    view.targets.color_target = vr::render::RenderTargetHandle{31U, 1U};
+    view.targets.depth_target = vr::render::RenderTargetHandle{32U, 1U};
+    vr::render::RefreshRenderViewSignature(view);
+
+    vr::render::RenderScenePacket2D packet =
+        vr::render::MakeSingleViewScenePacket(view, 91U);
+    recorder.SetFramePacket(&packet);
+
+    vr::render::RuntimePrepareContext prepare_context{};
+    bool threw = false;
+    try {
+        recorder.PrepareFrame(prepare_context);
+    } catch (const std::runtime_error&) {
+        threw = true;
+    }
+
+    VR_CHECK(threw);
 }
 
 VR_TEST_CASE(SceneRecorder3D_registration_upserts_renderer_counts,

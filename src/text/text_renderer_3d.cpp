@@ -5,6 +5,7 @@
 #include "vr/render/runtime_prepare_context.hpp"
 #include "vr/render/upload_host.hpp"
 #include "vr/resource/gpu_memory_host.hpp"
+#include "vr/text/text_runtime_contract.hpp"
 #include "vr/text/generated/text_3d_frag_spv.hpp"
 #include "vr/text/generated/text_3d_vert_spv.hpp"
 #include "vr/vulkan_context.hpp"
@@ -366,16 +367,7 @@ void TextRenderer3D::PrepareFrame(const render::RuntimePrepareContext& prepare_c
     if (!initialized) {
         throw std::runtime_error("TextRenderer3D::PrepareFrame called before Initialize");
     }
-    if (prepare_context_.context == nullptr ||
-        prepare_context_.upload_host == nullptr ||
-        prepare_context_.descriptor_host == nullptr ||
-        prepare_context_.pipeline_host == nullptr ||
-        prepare_context_.gpu_memory_host == nullptr ||
-        prepare_context_.freetype_host == nullptr ||
-        prepare_context_.glyph_atlas_host == nullptr ||
-        prepare_context_.glyph_upload_host == nullptr) {
-        throw std::runtime_error("TextRenderer3D::PrepareFrame requires all runtime text modules enabled");
-    }
+    ValidateTextRuntimePrepareContext(prepare_context_, "TextRenderer3D::PrepareFrame");
 
     context = prepare_context_.context;
     upload_host = prepare_context_.upload_host;
@@ -577,20 +569,18 @@ void TextRenderer3D::PrepareFrame(const render::RuntimePrepareContext& prepare_c
                                           required_bytes,
                                           16U);
 
-    if (context->EnabledVulkan13Features().synchronization2 == VK_TRUE) {
-        VkBufferMemoryBarrier2 barrier{};
-        barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
-        barrier.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
-        barrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-        barrier.dstStageMask = VK_PIPELINE_STAGE_2_VERTEX_INPUT_BIT;
-        barrier.dstAccessMask = VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT;
-        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        barrier.buffer = frame_state.vertex_buffer.buffer;
-        barrier.offset = 0U;
-        barrier.size = required_bytes;
-        upload_host->RecordBufferBarrier2(active_frame_index, barrier);
-    }
+    VkBufferMemoryBarrier2 barrier{};
+    barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+    barrier.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+    barrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+    barrier.dstStageMask = VK_PIPELINE_STAGE_2_VERTEX_INPUT_BIT;
+    barrier.dstAccessMask = VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT;
+    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.buffer = frame_state.vertex_buffer.buffer;
+    barrier.offset = 0U;
+    barrier.size = required_bytes;
+    upload_host->RecordBufferBarrier2(active_frame_index, barrier);
 
     frame_state.uploaded_revision = runtime_geometry_revision;
     stats.uploaded_bytes = required_bytes;
@@ -1109,10 +1099,7 @@ void TextRenderer3D::EnsurePipelineObjects(VulkanContext& context_,
                                            render::PipelineHost& pipeline_host_,
                                            VkFormat color_format_,
                                            VkFormat depth_format_) {
-    if (context_.EnabledVulkan13Features().dynamicRendering != VK_TRUE) {
-        throw std::runtime_error(
-            "TextRenderer3D requires Vulkan 1.3 dynamicRendering feature (required_vulkan13_features.dynamicRendering)");
-    }
+    RequireTextRuntimeFeatures(context_, "TextRenderer3D::EnsurePipelineObjects");
 
     if (descriptor_layout_id.IsValid() &&
         descriptor_host_.CachedLayoutCount() < descriptor_layout_id.value) {

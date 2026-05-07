@@ -10,6 +10,21 @@ namespace vr::ecs {
 
 inline constexpr std::uint32_t max_shadow_cascade_count = 4U;
 inline constexpr std::uint32_t max_shadow_view_count = 6U;
+inline constexpr std::uint32_t shadow_view_flag_stabilize = 1U << 0U;
+inline constexpr std::uint32_t shadow_view_flag_reverse_z = 1U << 1U;
+inline constexpr std::uint32_t shadow_view_flag_filter_kernel_shift = 2U;
+inline constexpr std::uint32_t shadow_view_flag_filter_kernel_mask = 0x3U << shadow_view_flag_filter_kernel_shift;
+
+[[nodiscard]] constexpr std::uint32_t EncodeShadowViewFilterKernelFlags(
+    ShadowFilterKernel filter_kernel_) noexcept {
+    return (static_cast<std::uint32_t>(filter_kernel_) & 0x3U) << shadow_view_flag_filter_kernel_shift;
+}
+
+[[nodiscard]] constexpr ShadowFilterKernel DecodeShadowViewFilterKernelFlags(
+    std::uint32_t flags_) noexcept {
+    return static_cast<ShadowFilterKernel>(
+        (flags_ & shadow_view_flag_filter_kernel_mask) >> shadow_view_flag_filter_kernel_shift);
+}
 
 struct alignas(16) ShadowViewGpuRecord final {
     Matrix4x4 view_matrix;

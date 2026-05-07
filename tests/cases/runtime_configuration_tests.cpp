@@ -1,5 +1,7 @@
 #include "support/test_framework.hpp"
 #include "vr/render/render_runtime_host.hpp"
+#include "vr/text/text_runtime_contract.hpp"
+#include "vr/vulkan_context.hpp"
 
 #include <functional>
 #include <stdexcept>
@@ -29,6 +31,10 @@ template<typename FnT>
 
 VR_TEST_CASE(RuntimeConfig_modules_default_to_enabled, "unit;core;runtime") {
     vr::render::RuntimeModulesCreateInfo modules{};
+    VR_CHECK(modules.enable_texture_host);
+    VR_CHECK(modules.enable_frame_composer_host);
+    VR_CHECK(modules.enable_ibl_host);
+    VR_CHECK(!modules.enable_ibl_bake_host);
     VR_CHECK(modules.enable_upload_host);
     VR_CHECK(modules.enable_descriptor_host);
     VR_CHECK(modules.enable_pipeline_host);
@@ -45,6 +51,10 @@ VR_TEST_CASE(RuntimeConfig_default_state_before_initialize_is_safe, "unit;core;r
 
     VR_CHECK(!runtime.IsInitialized());
     VR_CHECK(!runtime.IsRunning());
+    VR_CHECK(!runtime.HasTextureHost());
+    VR_CHECK(!runtime.HasFrameComposerHost());
+    VR_CHECK(!runtime.HasIblHost());
+    VR_CHECK(!runtime.HasIblBakeHost());
     VR_CHECK(!runtime.HasUploadHost());
     VR_CHECK(!runtime.HasDescriptorHost());
     VR_CHECK(!runtime.HasPipelineHost());
@@ -57,6 +67,10 @@ VR_TEST_CASE(RuntimeConfig_default_state_before_initialize_is_safe, "unit;core;r
 
     const Runtime::CreateInfo& config = runtime.Config();
     VR_CHECK(config.modules.enable_upload_host);
+    VR_CHECK(config.modules.enable_texture_host);
+    VR_CHECK(config.modules.enable_frame_composer_host);
+    VR_CHECK(config.modules.enable_ibl_host);
+    VR_CHECK(!config.modules.enable_ibl_bake_host);
     VR_CHECK(config.modules.enable_descriptor_host);
     VR_CHECK(config.modules.enable_pipeline_host);
     VR_CHECK(config.modules.enable_render_target_host);
@@ -65,12 +79,45 @@ VR_TEST_CASE(RuntimeConfig_default_state_before_initialize_is_safe, "unit;core;r
     VR_CHECK(config.modules.enable_freetype_host);
     VR_CHECK(config.modules.enable_glyph_atlas_host);
     VR_CHECK(config.modules.enable_glyph_upload_host);
+    VR_CHECK(!config.diagnostics.enable_frame_diagnostics);
+}
+
+VR_TEST_CASE(RuntimeConfig_text_runtime_feature_contract_enables_dynamic_rendering_and_sync2,
+             "unit;core;runtime;text") {
+    Runtime::CreateInfo create_info{};
+    vr::text::ApplyTextRuntimeFeatureContract(create_info);
+
+    VR_CHECK(create_info.platform.device.required_vulkan13_features.dynamicRendering == VK_TRUE);
+    VR_CHECK(create_info.platform.device.required_vulkan13_features.synchronization2 == VK_TRUE);
+
+    const auto default_text_create_info =
+        vr::text::MakeDefaultTextRuntimeCreateInfo<Runtime::CreateInfo>();
+    VR_CHECK(default_text_create_info.platform.device.required_vulkan13_features.dynamicRendering == VK_TRUE);
+    VR_CHECK(default_text_create_info.platform.device.required_vulkan13_features.synchronization2 == VK_TRUE);
+    VR_CHECK(default_text_create_info.platform.device.feature_chain_policy ==
+             vr::VulkanFeatureChainPolicy::minimal_required);
+}
+
+VR_TEST_CASE(RuntimeConfig_vulkan_device_feature_chain_policy_defaults_to_minimal_required,
+             "unit;core;runtime;vulkan") {
+    vr::VulkanDeviceCreateInfo device_create_info{};
+    VR_CHECK(device_create_info.feature_chain_policy ==
+             vr::VulkanFeatureChainPolicy::minimal_required);
+
+    device_create_info.feature_chain_policy =
+        vr::VulkanFeatureChainPolicy::explicit_vulkan12_vulkan13;
+    VR_CHECK(device_create_info.feature_chain_policy ==
+             vr::VulkanFeatureChainPolicy::explicit_vulkan12_vulkan13);
 }
 
 VR_TEST_CASE(RuntimeConfig_unavailable_modules_throw_before_initialize, "unit;core;runtime") {
     Runtime runtime{};
 
     VR_CHECK(ThrowsAnyException([&]() { (void)runtime.GpuMemory(); }));
+    VR_CHECK(ThrowsAnyException([&]() { (void)runtime.Texture(); }));
+    VR_CHECK(ThrowsAnyException([&]() { (void)runtime.FrameComposer(); }));
+    VR_CHECK(ThrowsAnyException([&]() { (void)runtime.Ibl(); }));
+    VR_CHECK(ThrowsAnyException([&]() { (void)runtime.IblBake(); }));
     VR_CHECK(ThrowsAnyException([&]() { (void)runtime.Upload(); }));
     VR_CHECK(ThrowsAnyException([&]() { (void)runtime.Descriptor(); }));
     VR_CHECK(ThrowsAnyException([&]() { (void)runtime.Pipeline(); }));

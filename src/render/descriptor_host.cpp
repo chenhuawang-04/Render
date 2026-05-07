@@ -617,6 +617,25 @@ uint32_t DescriptorHost::FramePoolCount(uint32_t frame_index_) const {
     return static_cast<uint32_t>(ArenaAt(frame_index_).pools.size());
 }
 
+uint32_t DescriptorHost::TotalAllocatedSetCount() const noexcept {
+    uint32_t count = 0U;
+    for (const auto& arena : frame_arenas) {
+        for (const auto& pool_page : arena.pools) {
+            count += pool_page.allocated_sets;
+        }
+    }
+    return count;
+}
+
+uint32_t DescriptorHost::FrameAllocatedSetCount(uint32_t frame_index_) const {
+    const FramePoolArena& arena = ArenaAt(frame_index_);
+    uint32_t count = 0U;
+    for (const auto& pool_page : arena.pools) {
+        count += pool_page.allocated_sets;
+    }
+    return count;
+}
+
 bool DescriptorHost::ValidationEnabled() const noexcept {
 #if VR_ENABLE_DESCRIPTOR_VALIDATION
     return create_info_cache.enable_validation;

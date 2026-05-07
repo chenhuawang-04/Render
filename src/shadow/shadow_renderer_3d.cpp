@@ -8,6 +8,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <iterator>
 #include <limits>
 #include <memory>
@@ -21,6 +22,12 @@ namespace {
 struct ShadowMorphWeights final {
     float weight0 = 0.0F;
     float weight1 = 0.0F;
+    bool enabled = false;
+};
+
+struct ShadowVertexDeformParams final {
+    ecs::Float4 params0{};
+    ecs::Float4 params1{};
     bool enabled = false;
 };
 
@@ -47,6 +54,47 @@ struct ShadowMorphWeights final {
     }
     result.enabled = (result.weight0 != 0.0F) || (result.weight1 != 0.0F);
     return result;
+}
+
+[[nodiscard]] ShadowVertexDeformParams ResolveVertexDeformParams(
+    const ecs::Geometry<ecs::Dim3>& geometry_component_,
+    std::uint32_t component_index_,
+    const ecs::VertexDeformOutputState* vertex_deform_outputs_,
+    std::uint32_t vertex_deform_output_count_) noexcept {
+    ShadowVertexDeformParams result{};
+    if ((geometry_component_.mesh.flags & vr::ecs::geometry_mesh_vertex_deform_shader_flag) == 0U ||
+        vertex_deform_outputs_ == nullptr ||
+        component_index_ >= vertex_deform_output_count_) {
+        return result;
+    }
+
+    const ecs::VertexDeformOutputState& output = vertex_deform_outputs_[component_index_];
+    if (output.parameters == nullptr || output.sampled_parameter_count == 0U || output.parameter_count == 0U) {
+        return result;
+    }
+
+    result.params0 = output.parameters[0U];
+    if (output.sampled_parameter_count > 1U && output.parameter_count > 1U) {
+        result.params1 = output.parameters[1U];
+    }
+    result.enabled =
+        result.params0.x != 0.0F || result.params0.y != 0.0F ||
+        result.params0.z != 0.0F || result.params0.w != 0.0F ||
+        result.params1.x != 0.0F || result.params1.y != 0.0F ||
+        result.params1.z != 0.0F || result.params1.w != 0.0F;
+    return result;
+}
+
+void WriteVertexDeformGpu(ShadowDeformComponentGpu& out_gpu_,
+                          const ShadowVertexDeformParams& params_) noexcept {
+    out_gpu_.deform_param0[0] = params_.params0.x;
+    out_gpu_.deform_param0[1] = params_.params0.y;
+    out_gpu_.deform_param0[2] = params_.params0.z;
+    out_gpu_.deform_param0[3] = params_.params0.w;
+    out_gpu_.deform_param1[0] = params_.params1.x;
+    out_gpu_.deform_param1[1] = params_.params1.y;
+    out_gpu_.deform_param1[2] = params_.params1.z;
+    out_gpu_.deform_param1[3] = params_.params1.w;
 }
 
 void WriteAffineWorldMatrix(const ecs::Matrix4x4& world_matrix_,
@@ -230,6 +278,8 @@ void ShadowRenderer3D::Initialize(const ShadowRenderer3DCreateInfo& create_info_
     geometry_component_count = 0U;
     skeletal_outputs = nullptr;
     skeletal_output_count = 0U;
+    vertex_deform_outputs = nullptr;
+    vertex_deform_output_count = 0U;
     frame_sequence_outputs = nullptr;
     frame_sequence_output_count = 0U;
     geometry_resource_host = nullptr;
@@ -251,9 +301,10 @@ void ShadowRenderer3D::Initialize(const ShadowRenderer3DCreateInfo& create_info_
 
     last_prepare_result = {};
     atlas_requests.clear();
-    frame_skeletal_resources.clear();
+    frame_animation_resources.clear();
     skeletal_component_scratch.clear();
     skeletal_matrix_scratch.clear();
+    deform_component_scratch.clear();
 
     pipeline_layout_id = {};
     descriptor_layout_id = {};
@@ -288,6 +339,8 @@ void ShadowRenderer3D::Shutdown(VulkanContext& context_) {
     geometry_component_count = 0U;
     skeletal_outputs = nullptr;
     skeletal_output_count = 0U;
+    vertex_deform_outputs = nullptr;
+    vertex_deform_output_count = 0U;
     frame_sequence_outputs = nullptr;
     frame_sequence_output_count = 0U;
     geometry_resource_host = nullptr;
@@ -303,13 +356,15 @@ void ShadowRenderer3D::Shutdown(VulkanContext& context_) {
     std::construct_at(&frame_coordinator);
     last_prepare_result = {};
     atlas_requests.clear();
-    for (auto& frame_resources : frame_skeletal_resources) {
+    for (auto& frame_resources : frame_animation_resources) {
         resource::BufferHost::DestroyBuffer(context_, frame_resources.skeletal_components);
         resource::BufferHost::DestroyBuffer(context_, frame_resources.skeletal_matrices);
+        resource::BufferHost::DestroyBuffer(context_, frame_resources.deform_components);
     }
-    frame_skeletal_resources.clear();
+    frame_animation_resources.clear();
     skeletal_component_scratch.clear();
     skeletal_matrix_scratch.clear();
+    deform_component_scratch.clear();
 
     pipeline_layout_id = {};
     descriptor_layout_id = {};
@@ -359,12 +414,16 @@ void ShadowRenderer3D::SetGeometryData(ecs::Geometry<ecs::Dim3>* geometry_compon
 void ShadowRenderer3D::SetAnimationOutputs(
     const ecs::SkeletalPoseOutputState<ecs::Dim3>* skeletal_outputs_,
     std::uint32_t skeletal_output_count_,
+    const ecs::VertexDeformOutputState* vertex_deform_outputs_,
+    std::uint32_t vertex_deform_output_count_,
     const ecs::MorphWeightOutputState* morph_outputs_,
     std::uint32_t morph_output_count_,
     const ecs::FrameSequenceOutputState* frame_sequence_outputs_,
     std::uint32_t frame_sequence_output_count_) noexcept {
     skeletal_outputs = skeletal_outputs_;
     skeletal_output_count = skeletal_output_count_;
+    vertex_deform_outputs = vertex_deform_outputs_;
+    vertex_deform_output_count = vertex_deform_output_count_;
     morph_outputs = morph_outputs_;
     morph_output_count = morph_output_count_;
     frame_sequence_outputs = frame_sequence_outputs_;
@@ -445,15 +504,15 @@ void ShadowRenderer3D::PrepareFrame(const render::RuntimePrepareContext& prepare
     stats.skeletal_palette_component_count = 0U;
     stats.skeletal_palette_matrix_count = 0U;
 
-    if (active_frame_index >= frame_skeletal_resources.size()) {
-        frame_skeletal_resources.resize(active_frame_index + 1U);
+    if (active_frame_index >= frame_animation_resources.size()) {
+        frame_animation_resources.resize(active_frame_index + 1U);
     }
     {
-        FrameSkeletalResources& frame_resources = frame_skeletal_resources[active_frame_index];
+        FrameAnimationResources& frame_resources = frame_animation_resources[active_frame_index];
         frame_resources.descriptor_set = VK_NULL_HANDLE;
         frame_resources.descriptor_signature = 0U;
     }
-    PrepareSkeletalResourcesForFrame();
+    PrepareAnimationResourcesForFrame();
 
     if (pipeline_host != nullptr && create_info_cache.compile_required_pipelines_in_prepare) {
         EnsurePipelineObjects(*context, *pipeline_host, resolved_depth_format);
@@ -585,6 +644,12 @@ void ShadowRenderer3D::EnsureDescriptorObjects(VulkanContext& context_,
     binding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
     layout_desc.bindings.push_back(binding);
 
+    binding.binding = 2U;
+    binding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    binding.descriptorCount = 1U;
+    binding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    layout_desc.bindings.push_back(binding);
+
     descriptor_layout_id = descriptor_host_.RegisterLayout(context_, layout_desc);
 }
 
@@ -635,14 +700,29 @@ render::GraphicsPipelineId ShadowRenderer3D::EnsureGraphicsPipeline(VulkanContex
     attribute_desc.offset = offsetof(geometry::GeometryMeshVertex, position_x);
     desc.vertex_input.attributes.push_back(attribute_desc);
 
+    attribute_desc.location = 1U;
+    attribute_desc.format = VK_FORMAT_R32G32B32_SFLOAT;
+    attribute_desc.offset = offsetof(geometry::GeometryMeshVertex, normal_x);
+    desc.vertex_input.attributes.push_back(attribute_desc);
+
     attribute_desc.location = 12U;
     attribute_desc.format = VK_FORMAT_R32G32B32_SFLOAT;
     attribute_desc.offset = offsetof(geometry::GeometryMeshVertex, morph0_position_delta_x);
     desc.vertex_input.attributes.push_back(attribute_desc);
 
+    attribute_desc.location = 13U;
+    attribute_desc.format = VK_FORMAT_R32G32B32_SFLOAT;
+    attribute_desc.offset = offsetof(geometry::GeometryMeshVertex, morph0_normal_delta_x);
+    desc.vertex_input.attributes.push_back(attribute_desc);
+
     attribute_desc.location = 14U;
     attribute_desc.format = VK_FORMAT_R32G32B32_SFLOAT;
     attribute_desc.offset = offsetof(geometry::GeometryMeshVertex, morph1_position_delta_x);
+    desc.vertex_input.attributes.push_back(attribute_desc);
+
+    attribute_desc.location = 15U;
+    attribute_desc.format = VK_FORMAT_R32G32B32_SFLOAT;
+    attribute_desc.offset = offsetof(geometry::GeometryMeshVertex, morph1_normal_delta_x);
     desc.vertex_input.attributes.push_back(attribute_desc);
 
     attribute_desc.location = 17U;
@@ -809,18 +889,10 @@ void ShadowRenderer3D::CompileRequiredPipelinesForCurrentFrame(VulkanContext& co
     }
 }
 
-void ShadowRenderer3D::DestroySkeletalBuffer(resource::BufferResource& buffer_) noexcept {
-    if (context == nullptr || context->Device() == VK_NULL_HANDLE) {
-        buffer_ = {};
-        return;
-    }
-    resource::BufferHost::DestroyBuffer(*context, buffer_);
-}
-
-void ShadowRenderer3D::EnsureSkeletalBufferCapacity(resource::BufferResource& buffer_,
-                                                    VkDeviceSize required_bytes_) {
+void ShadowRenderer3D::EnsureStorageBufferCapacity(resource::BufferResource& buffer_,
+                                                   VkDeviceSize required_bytes_) {
     if (context == nullptr || gpu_memory_host == nullptr) {
-        throw std::runtime_error("ShadowRenderer3D::EnsureSkeletalBufferCapacity missing runtime hosts");
+        throw std::runtime_error("ShadowRenderer3D::EnsureStorageBufferCapacity missing runtime hosts");
     }
     if (required_bytes_ == 0U) {
         return;
@@ -847,12 +919,12 @@ void ShadowRenderer3D::EnsureSkeletalBufferCapacity(resource::BufferResource& bu
     buffer_ = resource::BufferHost::CreateBuffer(*context, create_info, *gpu_memory_host);
 }
 
-void ShadowRenderer3D::PrepareSkeletalResourcesForFrame() {
+void ShadowRenderer3D::PrepareAnimationResourcesForFrame() {
     if (context == nullptr || descriptor_host == nullptr) {
         return;
     }
 
-    FrameSkeletalResources& frame_resources = frame_skeletal_resources[active_frame_index];
+    FrameAnimationResources& frame_resources = frame_animation_resources[active_frame_index];
     const geometry::GeometrySkeletalPaletteBuildStats build_stats =
         geometry::GeometrySkeletalPaletteBuilder::Build(geometry_components,
                                                        geometry_component_count,
@@ -869,25 +941,54 @@ void ShadowRenderer3D::PrepareSkeletalResourcesForFrame() {
         skeletal_matrix_scratch[0U].matrix = ecs::spatial_math::IdentityMatrix4x4();
     }
 
+    deform_component_scratch.clear();
+    if (geometry_component_count == 0U) {
+        deform_component_scratch.resize(1U);
+        deform_component_scratch[0U] = {};
+    } else {
+        deform_component_scratch.resize(geometry_component_count);
+        for (std::uint32_t component_index = 0U; component_index < geometry_component_count; ++component_index) {
+            deform_component_scratch[component_index] = {};
+            const ShadowVertexDeformParams deform_params =
+                ResolveVertexDeformParams(geometry_components[component_index],
+                                          component_index,
+                                          vertex_deform_outputs,
+                                          vertex_deform_output_count);
+            if (!deform_params.enabled) {
+                continue;
+            }
+            WriteVertexDeformGpu(deform_component_scratch[component_index], deform_params);
+        }
+    }
+
     const std::uint32_t component_upload_count =
         static_cast<std::uint32_t>(skeletal_component_scratch.size());
     const std::uint32_t matrix_upload_count =
         static_cast<std::uint32_t>(skeletal_matrix_scratch.size());
+    const std::uint32_t deform_upload_count =
+        static_cast<std::uint32_t>(deform_component_scratch.size());
     const VkDeviceSize component_bytes =
         static_cast<VkDeviceSize>(component_upload_count) * sizeof(geometry::GeometrySkeletalComponentGpu);
     const VkDeviceSize matrix_bytes =
         static_cast<VkDeviceSize>(matrix_upload_count) * sizeof(geometry::GeometrySkeletalMatrixGpu);
+    const VkDeviceSize deform_bytes =
+        static_cast<VkDeviceSize>(deform_upload_count) * sizeof(ShadowDeformComponentGpu);
 
-    EnsureSkeletalBufferCapacity(frame_resources.skeletal_components, component_bytes);
-    EnsureSkeletalBufferCapacity(frame_resources.skeletal_matrices, matrix_bytes);
+    EnsureStorageBufferCapacity(frame_resources.skeletal_components, component_bytes);
+    EnsureStorageBufferCapacity(frame_resources.skeletal_matrices, matrix_bytes);
+    EnsureStorageBufferCapacity(frame_resources.deform_components, deform_bytes);
     std::memcpy(frame_resources.skeletal_components.mapped_ptr,
                 skeletal_component_scratch.data(),
                 static_cast<std::size_t>(component_bytes));
     std::memcpy(frame_resources.skeletal_matrices.mapped_ptr,
                 skeletal_matrix_scratch.data(),
                 static_cast<std::size_t>(matrix_bytes));
+    std::memcpy(frame_resources.deform_components.mapped_ptr,
+                deform_component_scratch.data(),
+                static_cast<std::size_t>(deform_bytes));
     frame_resources.skeletal_component_count = component_upload_count;
     frame_resources.skeletal_matrix_count = matrix_upload_count;
+    frame_resources.deform_component_count = deform_upload_count;
     frame_resources.skeletal_signature = build_stats.signature;
     stats.skeletal_palette_component_count = build_stats.skinned_component_count;
     stats.skeletal_palette_matrix_count = build_stats.matrix_count;
@@ -908,18 +1009,22 @@ void ShadowRenderer3D::PrepareSkeletalResourcesForFrame() {
     descriptor_signature *= 1099511628211ULL;
     descriptor_signature ^= static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(frame_resources.skeletal_matrices.buffer));
     descriptor_signature *= 1099511628211ULL;
+    descriptor_signature ^= static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(frame_resources.deform_components.buffer));
+    descriptor_signature *= 1099511628211ULL;
     descriptor_signature ^= frame_resources.skeletal_signature;
     descriptor_signature *= 1099511628211ULL;
     descriptor_signature ^= static_cast<std::uint64_t>(component_bytes);
     descriptor_signature *= 1099511628211ULL;
     descriptor_signature ^= static_cast<std::uint64_t>(matrix_bytes);
     descriptor_signature *= 1099511628211ULL;
+    descriptor_signature ^= static_cast<std::uint64_t>(deform_bytes);
+    descriptor_signature *= 1099511628211ULL;
     if (frame_resources.descriptor_signature == descriptor_signature) {
         return;
     }
 
     render::DescriptorMcVector<render::DescriptorBufferWrite> buffer_writes{};
-    buffer_writes.reserve(2U);
+    buffer_writes.reserve(3U);
     buffer_writes.push_back({
         .binding = 0U,
         .array_element = 0U,
@@ -935,6 +1040,14 @@ void ShadowRenderer3D::PrepareSkeletalResourcesForFrame() {
         .buffer = frame_resources.skeletal_matrices.buffer,
         .offset = 0U,
         .range = matrix_bytes
+    });
+    buffer_writes.push_back({
+        .binding = 2U,
+        .array_element = 0U,
+        .descriptor_type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+        .buffer = frame_resources.deform_components.buffer,
+        .offset = 0U,
+        .range = deform_bytes
     });
     render::DescriptorMcVector<render::DescriptorImageWrite> image_writes{};
     render::DescriptorMcVector<render::DescriptorTexelBufferWrite> texel_writes{};
@@ -1055,8 +1168,8 @@ void ShadowRenderer3D::RecordOneAtlas(const render::FrameRecordContext& record_c
         return;
     }
     const VkDescriptorSet skeletal_descriptor_set =
-        (active_frame_index < frame_skeletal_resources.size())
-            ? frame_skeletal_resources[active_frame_index].descriptor_set
+        (active_frame_index < frame_animation_resources.size())
+            ? frame_animation_resources[active_frame_index].descriptor_set
             : VK_NULL_HANDLE;
     if (skeletal_descriptor_set == VK_NULL_HANDLE) {
         return;
@@ -1164,7 +1277,7 @@ void ShadowRenderer3D::RecordOneAtlas(const render::FrameRecordContext& record_c
         vkCmdSetViewport(command_buffer, 0U, 1U, &viewport);
         vkCmdSetScissor(command_buffer, 0U, 1U, &scissor);
         vkCmdSetDepthBias(command_buffer,
-                          view_record.depth_bias + view_record.normal_bias,
+                          view_record.depth_bias,
                           0.0F,
                           view_record.slope_scaled_bias);
 

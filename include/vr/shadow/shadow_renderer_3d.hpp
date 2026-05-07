@@ -70,6 +70,13 @@ struct ShadowRenderer3DStats final {
     bool runtime_transform_only_update = false;
 };
 
+struct ShadowDeformComponentGpu final {
+    float deform_param0[4]{};
+    float deform_param1[4]{};
+};
+
+static_assert(sizeof(ShadowDeformComponentGpu) == 32U);
+
 class ShadowRenderer3D final {
 public:
     ShadowRenderer3D() = default;
@@ -95,6 +102,8 @@ public:
                          std::uint32_t geometry_component_count_) noexcept;
     void SetAnimationOutputs(const ecs::SkeletalPoseOutputState<ecs::Dim3>* skeletal_outputs_,
                              std::uint32_t skeletal_output_count_,
+                             const ecs::VertexDeformOutputState* vertex_deform_outputs_,
+                             std::uint32_t vertex_deform_output_count_,
                              const ecs::MorphWeightOutputState* morph_outputs_,
                              std::uint32_t morph_output_count_,
                              const ecs::FrameSequenceOutputState* frame_sequence_outputs_,
@@ -200,10 +209,9 @@ private:
                                                  render::PipelineHost& pipeline_host_,
                                                  VkFormat depth_format_);
     void BuildAtlasRequests();
-    void EnsureSkeletalBufferCapacity(resource::BufferResource& buffer_,
-                                      VkDeviceSize required_bytes_);
-    void DestroySkeletalBuffer(resource::BufferResource& buffer_) noexcept;
-    void PrepareSkeletalResourcesForFrame();
+    void EnsureStorageBufferCapacity(resource::BufferResource& buffer_,
+                                     VkDeviceSize required_bytes_);
+    void PrepareAnimationResourcesForFrame();
     void RecordAtlasTransition(VkCommandBuffer command_buffer_,
                                const ShadowAtlasHost::AtlasRecord& atlas_record_,
                                VkImageLayout old_layout_,
@@ -225,6 +233,8 @@ private:
     std::uint32_t geometry_component_count = 0U;
     const ecs::SkeletalPoseOutputState<ecs::Dim3>* skeletal_outputs = nullptr;
     std::uint32_t skeletal_output_count = 0U;
+    const ecs::VertexDeformOutputState* vertex_deform_outputs = nullptr;
+    std::uint32_t vertex_deform_output_count = 0U;
     const ecs::MorphWeightOutputState* morph_outputs = nullptr;
     std::uint32_t morph_output_count = 0U;
     const ecs::FrameSequenceOutputState* frame_sequence_outputs = nullptr;
@@ -252,19 +262,22 @@ private:
     VkFormat pipeline_depth_format = VK_FORMAT_UNDEFINED;
     VkFormat resolved_depth_format = VK_FORMAT_UNDEFINED;
 
-    struct FrameSkeletalResources final {
+    struct FrameAnimationResources final {
         resource::BufferResource skeletal_components{};
         resource::BufferResource skeletal_matrices{};
+        resource::BufferResource deform_components{};
         VkDescriptorSet descriptor_set = VK_NULL_HANDLE;
         std::uint32_t skeletal_component_count = 0U;
         std::uint32_t skeletal_matrix_count = 0U;
+        std::uint32_t deform_component_count = 0U;
         std::uint64_t skeletal_signature = 0U;
         std::uint64_t descriptor_signature = 0U;
     };
 
-    ShadowRenderer3DMcVector<FrameSkeletalResources> frame_skeletal_resources{};
+    ShadowRenderer3DMcVector<FrameAnimationResources> frame_animation_resources{};
     ShadowRenderer3DMcVector<geometry::GeometrySkeletalComponentGpu> skeletal_component_scratch{};
     ShadowRenderer3DMcVector<geometry::GeometrySkeletalMatrixGpu> skeletal_matrix_scratch{};
+    ShadowRenderer3DMcVector<ShadowDeformComponentGpu> deform_component_scratch{};
     std::uint32_t active_frame_index = 0U;
 
     bool initialized = false;

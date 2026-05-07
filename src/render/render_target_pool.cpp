@@ -1,5 +1,6 @@
 #include "vr/render/render_target_pool.hpp"
 
+#include <cstddef>
 #include <stdexcept>
 
 namespace vr::render {
@@ -22,17 +23,27 @@ namespace {
     return extent;
 }
 
+void HashCombine(std::uint64_t& hash_,
+                 std::uint64_t value_) noexcept {
+    hash_ ^= value_;
+    hash_ *= 1099511628211ULL;
+}
+
 } // namespace
 
 void RenderTargetPool::Initialize(const RenderTargetPoolCreateInfo& create_info_) {
     create_info_cache = create_info_;
     buckets.clear();
+    bucket_lookup.clear();
     targets.clear();
+    free_target_indices.clear();
     if (create_info_cache.reserve_bucket_count > 0U) {
         buckets.reserve(create_info_cache.reserve_bucket_count);
+        bucket_lookup.reserve(create_info_cache.reserve_bucket_count);
     }
     if (create_info_cache.reserve_live_target_count > 0U) {
         targets.reserve(create_info_cache.reserve_live_target_count);
+        free_target_indices.reserve(create_info_cache.reserve_live_target_count);
     }
     active_frame_index = 0U;
     completed_submit_value_seen = 0U;
@@ -46,7 +57,9 @@ void RenderTargetPool::Shutdown() noexcept {
         bucket.reusable_target_indices.clear();
     }
     buckets.clear();
+    bucket_lookup.clear();
     targets.clear();
+    free_target_indices.clear();
     create_info_cache = {};
     active_frame_index = 0U;
     completed_submit_value_seen = 0U;
@@ -82,6 +95,7 @@ void RenderTargetPool::EndFrame(std::uint32_t frame_index_,
         target.in_use = false;
         target.in_reusable_bucket = false;
         target.reusable_after_submit_value = last_submitted_value_;
+        target.last_released_frame_revision = stats.frame_revision;
     }
 
     frame_open = false;
@@ -126,6 +140,7 @@ AcquireTransientRenderTargetResult RenderTargetPool::AcquireTransientTarget(
         return result;
     }
 
+    CollectGarbage(context_, render_target_host_, completed_submit_value_seen);
     const RenderTargetHandle handle =
         render_target_host_.CreateTransientTarget(context_, transient_desc, reference_extent_);
     TargetRecord record{};
@@ -133,10 +148,15 @@ AcquireTransientRenderTargetResult RenderTargetPool::AcquireTransientTarget(
     record.key = key;
     record.bucket_index = bucket_index;
     record.reusable_after_submit_value = 0U;
+    record.last_released_frame_revision = stats.frame_revision;
     record.active = true;
     record.in_use = true;
     record.in_reusable_bucket = false;
-    targets.push_back(record);
+    const std::uint32_t slot_index = AllocateTargetSlot();
+    if (slot_index >= targets.size()) {
+        targets.resize(slot_index + 1U);
+    }
+    targets[slot_index] = record;
 
     result.handle = handle;
     result.created = true;
@@ -172,7 +192,9 @@ void RenderTargetPool::InvalidateAll(VulkanContext& context_,
         bucket.reusable_target_indices.clear();
     }
     buckets.clear();
+    bucket_lookup.clear();
     targets.clear();
+    free_target_indices.clear();
     frame_open = was_frame_open;
     completed_submit_value_seen = completed_submit_value_;
     RefreshStats();
@@ -226,10 +248,52 @@ bool RenderTargetPool::KeysEqual(const TransientTargetKey& lhs_,
            lhs_.allow_history == rhs_.allow_history;
 }
 
+std::uint64_t RenderTargetPool::HashKey(const TransientTargetKey& key_) noexcept {
+    std::uint64_t hash = 14695981039346656037ULL;
+    HashCombine(hash, static_cast<std::uint64_t>(key_.dimension));
+    HashCombine(hash, static_cast<std::uint64_t>(key_.extent.width));
+    HashCombine(hash, static_cast<std::uint64_t>(key_.extent.height));
+    HashCombine(hash, static_cast<std::uint64_t>(key_.extent.depth));
+    HashCombine(hash, static_cast<std::uint64_t>(key_.flags));
+    HashCombine(hash, static_cast<std::uint64_t>(key_.format));
+    HashCombine(hash, static_cast<std::uint64_t>(key_.samples));
+    HashCombine(hash, static_cast<std::uint64_t>(key_.usage));
+    HashCombine(hash, static_cast<std::uint64_t>(key_.aspect));
+    HashCombine(hash, static_cast<std::uint64_t>(key_.mip_levels));
+    HashCombine(hash, static_cast<std::uint64_t>(key_.array_layers));
+    HashCombine(hash, static_cast<std::uint64_t>(key_.color_encoding));
+    HashCombine(hash, static_cast<std::uint64_t>(key_.memory_policy));
+    HashCombine(hash, key_.allow_uav ? 1ULL : 0ULL);
+    HashCombine(hash, key_.allow_alias ? 1ULL : 0ULL);
+    HashCombine(hash, key_.allow_history ? 1ULL : 0ULL);
+    return hash;
+}
+
+std::size_t RenderTargetPool::LowerBoundBucketLookupIndex(std::uint64_t hash_) const noexcept {
+    std::size_t first = 0U;
+    std::size_t count = bucket_lookup.size();
+    while (count > 0U) {
+        const std::size_t step = count / 2U;
+        const std::size_t it = first + step;
+        if (bucket_lookup[it].hash < hash_) {
+            first = it + 1U;
+            count -= step + 1U;
+        } else {
+            count = step;
+        }
+    }
+    return first;
+}
+
 std::uint32_t RenderTargetPool::FindOrCreateBucket(const TransientTargetKey& key_) {
-    for (std::uint32_t index = 0U; index < buckets.size(); ++index) {
-        if (KeysEqual(buckets[index].key, key_)) {
-            return index;
+    const std::uint64_t hash = HashKey(key_);
+    const std::size_t insert_index = LowerBoundBucketLookupIndex(hash);
+    for (std::size_t lookup_index = insert_index;
+         lookup_index < bucket_lookup.size() && bucket_lookup[lookup_index].hash == hash;
+         ++lookup_index) {
+        const std::uint32_t bucket_index = bucket_lookup[lookup_index].bucket_index;
+        if (bucket_index < buckets.size() && KeysEqual(buckets[bucket_index].key, key_)) {
+            return bucket_index;
         }
     }
 
@@ -239,7 +303,22 @@ std::uint32_t RenderTargetPool::FindOrCreateBucket(const TransientTargetKey& key
         bucket.reusable_target_indices.reserve(create_info_cache.reserve_bucket_free_indices);
     }
     buckets.push_back(bucket);
-    return static_cast<std::uint32_t>(buckets.size() - 1U);
+    const std::uint32_t bucket_index = static_cast<std::uint32_t>(buckets.size() - 1U);
+    bucket_lookup.push_back(BucketLookupNode{.hash = hash, .bucket_index = bucket_index});
+    for (std::size_t index = bucket_lookup.size() - 1U; index > insert_index; --index) {
+        bucket_lookup[index] = bucket_lookup[index - 1U];
+    }
+    bucket_lookup[insert_index] = BucketLookupNode{.hash = hash, .bucket_index = bucket_index};
+    return bucket_index;
+}
+
+std::uint32_t RenderTargetPool::AllocateTargetSlot() {
+    if (!free_target_indices.empty()) {
+        const std::uint32_t target_index = free_target_indices.back();
+        free_target_indices.pop_back();
+        return target_index;
+    }
+    return static_cast<std::uint32_t>(targets.size());
 }
 
 std::uint32_t RenderTargetPool::FindReusableTargetIndex(std::uint32_t bucket_index_) noexcept {
@@ -265,6 +344,61 @@ std::uint32_t RenderTargetPool::FindReusableTargetIndex(std::uint32_t bucket_ind
     }
 
     return invalid_render_target_index;
+}
+
+void RenderTargetPool::CollectGarbage(VulkanContext& context_,
+                                      RenderTargetHost& render_target_host_,
+                                      std::uint64_t completed_submit_value_) {
+    if (!initialized) {
+        return;
+    }
+
+    for (std::uint32_t bucket_index = 0U; bucket_index < buckets.size(); ++bucket_index) {
+        BucketRecord& bucket = buckets[bucket_index];
+        std::uint32_t cached_target_count = 0U;
+
+        for (std::uint32_t target_index = 0U; target_index < targets.size(); ++target_index) {
+            TargetRecord& target = targets[target_index];
+            if (!target.active ||
+                target.in_use ||
+                target.bucket_index != bucket_index ||
+                target.reusable_after_submit_value == 0U ||
+                completed_submit_value_ < target.reusable_after_submit_value) {
+                continue;
+            }
+
+            ++cached_target_count;
+            const std::uint32_t idle_frames = stats.frame_revision - target.last_released_frame_revision;
+            const bool exceeds_bucket_budget =
+                create_info_cache.max_cached_targets_per_bucket > 0U &&
+                cached_target_count > create_info_cache.max_cached_targets_per_bucket;
+            const bool exceeds_idle_budget =
+                create_info_cache.max_idle_frames_before_collect > 0U &&
+                idle_frames > create_info_cache.max_idle_frames_before_collect;
+            if (!exceeds_bucket_budget && !exceeds_idle_budget) {
+                continue;
+            }
+
+            if (render_target_host_.DestroyTarget(context_,
+                                                  target.handle,
+                                                  completed_submit_value_,
+                                                  completed_submit_value_)) {
+                target = {};
+                free_target_indices.push_back(target_index);
+                ++stats.destroy_count;
+                ++stats.gc_destroy_count;
+            }
+        }
+
+        while (!bucket.reusable_target_indices.empty()) {
+            const std::uint32_t tail_target_index = bucket.reusable_target_indices.back();
+            if (tail_target_index >= targets.size() || !targets[tail_target_index].active) {
+                bucket.reusable_target_indices.pop_back();
+                continue;
+            }
+            break;
+        }
+    }
 }
 
 void RenderTargetPool::PromoteCompletedTargetsToReusable(std::uint64_t completed_submit_value_) noexcept {

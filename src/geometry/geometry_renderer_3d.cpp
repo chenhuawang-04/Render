@@ -3,6 +3,7 @@
 #include "vr/ecs/system/transparency_render_policy.hpp"
 #include "vr/geometry/generated/geometry_3d_frag_spv.hpp"
 #include "vr/geometry/generated/geometry_3d_vert_spv.hpp"
+#include "vr/render/ibl_host.hpp"
 #include "vr/render/color_blend_state.hpp"
 #include "vr/render/render_loop_host.hpp"
 #include "vr/render/runtime_prepare_context.hpp"
@@ -246,6 +247,7 @@ void GeometryRenderer3D::Initialize(const GeometryRenderer3DCreateInfo& create_i
     material_host_revision_seen = 0U;
     image_host_revision_seen = 0U;
     light_frame_coordinator = nullptr;
+    ibl_host = nullptr;
     shadow_frame_coordinator = nullptr;
     shadow_atlas_host = nullptr;
     appearance_prepare_bridge.Reset();
@@ -338,6 +340,7 @@ void GeometryRenderer3D::Shutdown(VulkanContext& context_) {
     geometry_material_host = nullptr;
     geometry_image_host = nullptr;
     light_frame_coordinator = nullptr;
+    ibl_host = nullptr;
     shadow_frame_coordinator = nullptr;
     shadow_atlas_host = nullptr;
     local_light_shadow_link_coordinator.Reset();
@@ -530,6 +533,7 @@ void GeometryRenderer3D::PrepareFrame(const render::RuntimePrepareContext& prepa
         prepare_context_.descriptor_host == nullptr ||
         prepare_context_.pipeline_host == nullptr ||
         prepare_context_.gpu_memory_host == nullptr ||
+        prepare_context_.ibl_host == nullptr ||
         prepare_context_.sampler_host == nullptr) {
         throw std::runtime_error("GeometryRenderer3D::PrepareFrame missing runtime dependencies");
     }
@@ -545,6 +549,7 @@ void GeometryRenderer3D::PrepareFrame(const render::RuntimePrepareContext& prepa
     descriptor_host = prepare_context_.descriptor_host;
     pipeline_host = prepare_context_.pipeline_host;
     gpu_memory_host = prepare_context_.gpu_memory_host;
+    ibl_host = prepare_context_.ibl_host;
     sampler_host = prepare_context_.sampler_host;
     active_frame_index = prepare_context_.frame_index;
     if (active_frame_index >= frame_lighting_resources.size()) {
@@ -621,6 +626,7 @@ void GeometryRenderer3D::PrepareFrame(const render::RuntimePrepareContext& prepa
     culling_stats = {};
     appearance_runtime_stats = {};
     appearance_link_stats = {};
+    ibl_host->PrepareFrame(prepare_context_);
     const auto appearance_prepare_result = appearance_prepare_bridge.PrepareGeometry(
         geometry_components,
         component_count,
@@ -946,6 +952,8 @@ void GeometryRenderer3D::RecordInternal(const render::FrameRecordContext& record
         (active_frame_index < frame_lighting_resources.size())
             ? frame_lighting_resources[active_frame_index].descriptor_set
             : VK_NULL_HANDLE;
+    const VkDescriptorSet frame_ibl_descriptor_set =
+        (ibl_host != nullptr) ? ibl_host->ActiveDescriptorSet(active_frame_index) : VK_NULL_HANDLE;
 
     if (pipeline_layout != VK_NULL_HANDLE && frame_lighting_descriptor_set != VK_NULL_HANDLE) {
         vkCmdBindDescriptorSets(record_context_.command_buffer,
@@ -957,6 +965,17 @@ void GeometryRenderer3D::RecordInternal(const render::FrameRecordContext& record
                                 0U,
                                 nullptr);
         ++stats.light_descriptor_set_bind_count;
+    }
+    if (pipeline_layout != VK_NULL_HANDLE && frame_ibl_descriptor_set != VK_NULL_HANDLE) {
+        vkCmdBindDescriptorSets(record_context_.command_buffer,
+                                VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                pipeline_layout,
+                                2U,
+                                1U,
+                                &frame_ibl_descriptor_set,
+                                0U,
+                                nullptr);
+        ++stats.ibl_descriptor_set_bind_count;
     }
 
     if (instance_range.buffer != VK_NULL_HANDLE && !runtime_scratch.draw_batches.empty()) {
@@ -1903,6 +1922,9 @@ void GeometryRenderer3D::EnsurePipelineObjects(VulkanContext& context_,
     if (descriptor_host == nullptr) {
         throw std::runtime_error("GeometryRenderer3D requires DescriptorHost");
     }
+    if (ibl_host == nullptr || !ibl_host->IsInitialized()) {
+        throw std::runtime_error("GeometryRenderer3D requires initialized IblHost");
+    }
 
     EnsureMaterialPipelineObjects(context_, *descriptor_host);
     EnsureLightingDescriptorObjects(context_, *descriptor_host);
@@ -1923,6 +1945,7 @@ void GeometryRenderer3D::EnsurePipelineObjects(VulkanContext& context_,
         render::PipelineLayoutDesc layout_desc{};
         layout_desc.set_layouts.push_back(descriptor_host->GetLayout(descriptor_layout_id));
         layout_desc.set_layouts.push_back(descriptor_host->GetLayout(lighting_descriptor_layout_id));
+        layout_desc.set_layouts.push_back(descriptor_host->GetLayout(ibl_host->DescriptorLayoutId()));
         layout_desc.push_constant_ranges.push_back({
             .stage_flags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
             .offset = 0U,

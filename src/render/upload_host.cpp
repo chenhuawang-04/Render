@@ -88,6 +88,14 @@ VkPipelineStageFlags2 UploadHost::SanitizeStageMaskForSubmitQueue(
     return VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
 }
 
+VkPipelineStageFlags UploadHost::SanitizeLegacyStageMaskForSubmitQueue(
+    VkPipelineStageFlags stage_mask_) const noexcept {
+    const VkPipelineStageFlags2 promoted_stage_mask = PromoteLegacyStageMask(stage_mask_);
+    const VkPipelineStageFlags2 sanitized_stage_mask =
+        SanitizeStageMaskForSubmitQueue(promoted_stage_mask);
+    return static_cast<VkPipelineStageFlags>(sanitized_stage_mask);
+}
+
 VkAccessFlags2 UploadHost::SanitizeAccessMaskForStage(VkPipelineStageFlags2 stage_mask_,
                                                       VkAccessFlags2 access_mask_) noexcept {
     if (stage_mask_ == 0U || stage_mask_ == VK_PIPELINE_STAGE_2_NONE) {
@@ -114,6 +122,9 @@ void UploadHost::Initialize(VulkanContext& context_,
     }
     if (create_info_cache.staging_buffer_size == 0U) {
         create_info_cache.staging_buffer_size = 1U;
+    }
+    if (create_info_cache.max_staging_page_count == 0U) {
+        create_info_cache.max_staging_page_count = 1U;
     }
 
     const auto& families = context_.QueueFamilies();
@@ -150,6 +161,7 @@ void UploadHost::Initialize(VulkanContext& context_,
     submit_queue_flags = queue_properties[queue_family_index].queueFlags;
 
     synchronization2_enabled = context_.EnabledVulkan13Features().synchronization2 == VK_TRUE;
+    context = &context_;
     memory_host = &gpu_memory_host_;
 
     slots.resize(create_info_cache.frames_in_flight);
@@ -164,6 +176,7 @@ void UploadHost::Initialize(VulkanContext& context_,
             DestroySlotResources(context_, slots[i]);
         }
         slots.clear();
+        context = nullptr;
         memory_host = nullptr;
         submit_queue = VK_NULL_HANDLE;
         throw;
@@ -186,6 +199,7 @@ void UploadHost::Shutdown(VulkanContext& context_) {
     }
     slots.clear();
 
+    context = nullptr;
     memory_host = nullptr;
     submit_queue = VK_NULL_HANDLE;
     queue_family_index = 0U;
@@ -219,11 +233,14 @@ void UploadHost::BeginFrame(VulkanContext& context_, uint32_t frame_index_) {
     CheckVk("vkBeginCommandBuffer(upload frame)",
             vkBeginCommandBuffer(slot.command_buffer, &begin_info));
 
-    slot.write_head = 0U;
+    for (auto& page : slot.pages) {
+        page.write_head = 0U;
+    }
     slot.recording_active = true;
     slot.recorded_work = false;
     slot.stats = {};
-    slot.stats.capacity_bytes = create_info_cache.staging_buffer_size;
+    slot.stats.capacity_bytes = SlotCapacityBytes(slot);
+    slot.stats.staging_page_count = static_cast<uint32_t>(slot.pages.size());
 }
 
 UploadAllocation UploadHost::Allocate(uint32_t frame_index_,
@@ -241,21 +258,19 @@ UploadAllocation UploadHost::Allocate(uint32_t frame_index_,
         throw std::runtime_error("UploadHost::Allocate requires BeginFrame before allocation");
     }
 
+    UploadStagingPage& page = AcquireWritablePage(slot, size_, alignment_);
     const VkDeviceSize safe_alignment = std::max<VkDeviceSize>(1U, alignment_);
-    const VkDeviceSize aligned_offset = AlignUp(slot.write_head, safe_alignment);
-    if (aligned_offset > create_info_cache.staging_buffer_size ||
-        size_ > create_info_cache.staging_buffer_size - aligned_offset) {
-        throw std::runtime_error("UploadHost staging ring exhausted; increase staging_buffer_size");
-    }
+    const VkDeviceSize previous_head = page.write_head;
+    const VkDeviceSize aligned_offset = AlignUp(previous_head, safe_alignment);
 
     UploadAllocation allocation{};
-    allocation.mapped_data = static_cast<void*>(static_cast<char*>(slot.mapped_ptr) + aligned_offset);
-    allocation.staging_buffer = slot.staging_buffer;
+    allocation.mapped_data = static_cast<void*>(static_cast<char*>(page.mapped_ptr) + aligned_offset);
+    allocation.staging_buffer = page.staging_buffer;
     allocation.staging_offset = aligned_offset;
     allocation.size = size_;
 
-    slot.write_head = aligned_offset + size_;
-    slot.stats.used_bytes = std::max(slot.stats.used_bytes, slot.write_head);
+    page.write_head = aligned_offset + size_;
+    slot.stats.used_bytes += (page.write_head - previous_head);
     return allocation;
 }
 
@@ -456,7 +471,9 @@ UploadEndFrameResult UploadHost::EndFrameAndSubmit(VulkanContext& context_,
         throw std::runtime_error("UploadHost::EndFrameAndSubmit requires active recording frame");
     }
 
-    FlushAllocationIfNeeded(context_, slot, 0U, slot.write_head);
+    for (const auto& page : slot.pages) {
+        FlushAllocationIfNeeded(context_, page, 0U, page.write_head);
+    }
     CheckVk("vkEndCommandBuffer(upload frame)", vkEndCommandBuffer(slot.command_buffer));
     slot.recording_active = false;
 
@@ -474,6 +491,59 @@ UploadEndFrameResult UploadHost::EndFrameAndSubmit(VulkanContext& context_,
 
     CheckVk("vkResetFences(upload frame)", vkResetFences(context_.Device(), 1U, &slot.in_flight_fence));
 
+    const VkPipelineStageFlags wait_stage_mask = submit_info_.wait_stage_mask == 0U
+        ? VK_PIPELINE_STAGE_TRANSFER_BIT
+        : submit_info_.wait_stage_mask;
+    const VkPipelineStageFlags sanitized_wait_stage_mask =
+        SanitizeLegacyStageMaskForSubmitQueue(wait_stage_mask);
+    VkPipelineStageFlags2 sanitized_wait_stage_mask2 =
+        SanitizeStageMaskForSubmitQueue(PromoteLegacyStageMask(wait_stage_mask));
+    if (sanitized_wait_stage_mask2 == 0U || sanitized_wait_stage_mask2 == VK_PIPELINE_STAGE_2_NONE) {
+        sanitized_wait_stage_mask2 = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+    }
+
+    if (synchronization2_enabled) {
+        VkSemaphoreSubmitInfo wait_info{};
+        if (submit_info_.wait_semaphore != VK_NULL_HANDLE) {
+            wait_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
+            wait_info.semaphore = submit_info_.wait_semaphore;
+            wait_info.value = 0U;
+            wait_info.stageMask = sanitized_wait_stage_mask2;
+            wait_info.deviceIndex = 0U;
+        }
+
+        VkCommandBufferSubmitInfo command_buffer_info{};
+        command_buffer_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO;
+        command_buffer_info.commandBuffer = slot.command_buffer;
+        command_buffer_info.deviceMask = 0U;
+
+        VkSemaphoreSubmitInfo signal_info{};
+        if (submit_info_.signal_semaphore != VK_NULL_HANDLE) {
+            signal_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
+            signal_info.semaphore = submit_info_.signal_semaphore;
+            signal_info.value = 0U;
+            signal_info.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+            signal_info.deviceIndex = 0U;
+        }
+
+        VkSubmitInfo2 submit2{};
+        submit2.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2;
+        submit2.flags = 0U;
+        submit2.waitSemaphoreInfoCount = (submit_info_.wait_semaphore != VK_NULL_HANDLE) ? 1U : 0U;
+        submit2.pWaitSemaphoreInfos = (submit2.waitSemaphoreInfoCount > 0U) ? &wait_info : nullptr;
+        submit2.commandBufferInfoCount = 1U;
+        submit2.pCommandBufferInfos = &command_buffer_info;
+        submit2.signalSemaphoreInfoCount = (submit_info_.signal_semaphore != VK_NULL_HANDLE) ? 1U : 0U;
+        submit2.pSignalSemaphoreInfos = (submit2.signalSemaphoreInfoCount > 0U) ? &signal_info : nullptr;
+
+        const VkResult submit_result = vkQueueSubmit2(submit_queue, 1U, &submit2, slot.in_flight_fence);
+        CheckVk("vkQueueSubmit2(upload frame)", submit_result);
+        return {
+            .result = submit_result,
+            .submitted = true
+        };
+    }
+
     VkSubmitInfo submit{};
     submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
     submit.waitSemaphoreCount = (submit_info_.wait_semaphore != VK_NULL_HANDLE) ? 1U : 0U;
@@ -481,7 +551,7 @@ UploadEndFrameResult UploadHost::EndFrameAndSubmit(VulkanContext& context_,
         ? &submit_info_.wait_semaphore
         : nullptr;
     submit.pWaitDstStageMask = (submit.waitSemaphoreCount > 0U)
-        ? &submit_info_.wait_stage_mask
+        ? &sanitized_wait_stage_mask
         : nullptr;
     submit.commandBufferCount = 1U;
     submit.pCommandBuffers = &slot.command_buffer;
@@ -554,7 +624,10 @@ const UploadFrameStats& UploadHost::FrameStats(uint32_t frame_index_) const {
 }
 
 VkDeviceSize UploadHost::CapacityBytes() const noexcept {
-    return create_info_cache.staging_buffer_size;
+    if (slots.empty()) {
+        return 0U;
+    }
+    return SlotCapacityBytes(slots.front());
 }
 
 void UploadHost::ThrowVk(const char* stage_, VkResult result_) {
@@ -582,6 +655,28 @@ VkDeviceSize UploadHost::AlignUp(VkDeviceSize value_, VkDeviceSize alignment_) {
     return value_ + padding;
 }
 
+VkDeviceSize UploadHost::NextPow2(VkDeviceSize value_) noexcept {
+    if (value_ <= 1U) {
+        return 1U;
+    }
+
+    VkDeviceSize result = 1U;
+    while (result < value_) {
+        if (result > (std::numeric_limits<VkDeviceSize>::max() >> 1U)) {
+            return std::numeric_limits<VkDeviceSize>::max();
+        }
+        result <<= 1U;
+    }
+    return result;
+}
+
+VkPipelineStageFlags2 UploadHost::PromoteLegacyStageMask(VkPipelineStageFlags stage_mask_) noexcept {
+    if (stage_mask_ == 0U) {
+        return VK_PIPELINE_STAGE_2_NONE;
+    }
+    return static_cast<VkPipelineStageFlags2>(stage_mask_);
+}
+
 UploadHost::UploadFrameSlot& UploadHost::SlotAt(uint32_t frame_index_) {
     if (frame_index_ >= slots.size()) {
         throw std::out_of_range("UploadHost frame_index out of range");
@@ -602,35 +697,12 @@ void UploadHost::CreateSlotResources(VulkanContext& context_, UploadFrameSlot& s
     }
 
     const VkDevice device = context_.Device();
-
-    VkBufferCreateInfo buffer_info{};
-    buffer_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    buffer_info.size = create_info_cache.staging_buffer_size;
-    buffer_info.usage = create_info_cache.staging_buffer_usage;
-    buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    buffer_info.queueFamilyIndexCount = 0U;
-    buffer_info.pQueueFamilyIndices = nullptr;
-    CheckVk("vkCreateBuffer(upload staging)",
-            vkCreateBuffer(device, &buffer_info, nullptr, &slot_.staging_buffer));
+    slot_.pages.clear();
+    slot_.pages.reserve(create_info_cache.max_staging_page_count);
 
     try {
-        VkMemoryRequirements requirements{};
-        vkGetBufferMemoryRequirements(device, slot_.staging_buffer, &requirements);
-
-        slot_.allocation_slice = memory_host->AllocateAndBindBuffer(
-            slot_.staging_buffer,
-            requirements,
-            create_info_cache.staging_memory_properties,
-            create_info_cache.staging_memory_properties,
-            true,
-            Center::Memory::Vulkan::LifetimeHint::frame_local,
-            Center::Memory::Vulkan::HostAccess::sequential_write,
-            false,
-            false);
-        slot_.mapped_ptr = slot_.allocation_slice.mapped_ptr;
-        if (slot_.mapped_ptr == nullptr) {
-            throw std::runtime_error("UploadHost::CreateSlotResources staging allocation is not mapped");
-        }
+        slot_.pages.resize(1U);
+        CreateStagingPage(context_, slot_.pages[0U], create_info_cache.staging_buffer_size);
 
         VkCommandPoolCreateInfo pool_info{};
         pool_info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
@@ -657,11 +729,11 @@ void UploadHost::CreateSlotResources(VulkanContext& context_, UploadFrameSlot& s
         throw;
     }
 
-    slot_.write_head = 0U;
     slot_.recording_active = false;
     slot_.recorded_work = false;
     slot_.stats = {};
-    slot_.stats.capacity_bytes = create_info_cache.staging_buffer_size;
+    slot_.stats.capacity_bytes = SlotCapacityBytes(slot_);
+    slot_.stats.staging_page_count = static_cast<uint32_t>(slot_.pages.size());
 }
 
 void UploadHost::DestroySlotResources(VulkanContext& context_, UploadFrameSlot& slot_) {
@@ -677,37 +749,148 @@ void UploadHost::DestroySlotResources(VulkanContext& context_, UploadFrameSlot& 
             slot_.command_pool = VK_NULL_HANDLE;
         }
 
-        if (slot_.staging_buffer != VK_NULL_HANDLE) {
-            vkDestroyBuffer(device, slot_.staging_buffer, nullptr);
-            slot_.staging_buffer = VK_NULL_HANDLE;
-        }
     }
 
-    if (memory_host != nullptr && slot_.allocation_slice.valid()) {
-        memory_host->Deallocate(slot_.allocation_slice);
+    for (auto& page : slot_.pages) {
+        DestroyStagingPage(context_, page);
     }
 
-    slot_.allocation_slice = {};
-    slot_.mapped_ptr = nullptr;
+    slot_.pages.clear();
     slot_.command_buffer = VK_NULL_HANDLE;
-    slot_.write_head = 0U;
     slot_.recording_active = false;
     slot_.recorded_work = false;
     slot_.stats = {};
 }
 
+void UploadHost::CreateStagingPage(VulkanContext& context_,
+                                   UploadStagingPage& page_,
+                                   VkDeviceSize capacity_bytes_) {
+    if (memory_host == nullptr) {
+        throw std::runtime_error("UploadHost::CreateStagingPage missing GpuMemoryHost");
+    }
+
+    const VkDevice device = context_.Device();
+    VkBufferCreateInfo buffer_info{};
+    buffer_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    buffer_info.size = capacity_bytes_;
+    buffer_info.usage = create_info_cache.staging_buffer_usage;
+    buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    buffer_info.queueFamilyIndexCount = 0U;
+    buffer_info.pQueueFamilyIndices = nullptr;
+    CheckVk("vkCreateBuffer(upload staging page)",
+            vkCreateBuffer(device, &buffer_info, nullptr, &page_.staging_buffer));
+
+    try {
+        VkMemoryRequirements requirements{};
+        vkGetBufferMemoryRequirements(device, page_.staging_buffer, &requirements);
+
+        page_.allocation_slice = memory_host->AllocateAndBindBuffer(
+            page_.staging_buffer,
+            requirements,
+            create_info_cache.staging_memory_properties,
+            create_info_cache.staging_memory_properties,
+            true,
+            Center::Memory::Vulkan::LifetimeHint::frame_local,
+            Center::Memory::Vulkan::HostAccess::sequential_write,
+            false,
+            false);
+        page_.mapped_ptr = page_.allocation_slice.mapped_ptr;
+        if (page_.mapped_ptr == nullptr) {
+            throw std::runtime_error("UploadHost::CreateStagingPage allocation is not mapped");
+        }
+        page_.capacity_bytes = capacity_bytes_;
+        page_.write_head = 0U;
+    } catch (...) {
+        DestroyStagingPage(context_, page_);
+        throw;
+    }
+}
+
+void UploadHost::DestroyStagingPage(VulkanContext& context_, UploadStagingPage& page_) {
+    const VkDevice device = context_.Device();
+    if (device != VK_NULL_HANDLE && page_.staging_buffer != VK_NULL_HANDLE) {
+        vkDestroyBuffer(device, page_.staging_buffer, nullptr);
+    }
+    if (memory_host != nullptr && page_.allocation_slice.valid()) {
+        memory_host->Deallocate(page_.allocation_slice);
+    }
+    page_.staging_buffer = VK_NULL_HANDLE;
+    page_.allocation_slice = {};
+    page_.mapped_ptr = nullptr;
+    page_.capacity_bytes = 0U;
+    page_.write_head = 0U;
+}
+
+UploadHost::UploadStagingPage& UploadHost::AcquireWritablePage(UploadFrameSlot& slot_,
+                                                               VkDeviceSize size_,
+                                                               VkDeviceSize alignment_) {
+    if (context == nullptr) {
+        throw std::runtime_error("UploadHost::AcquireWritablePage missing VulkanContext");
+    }
+    if (slot_.pages.empty()) {
+        throw std::runtime_error("UploadHost::AcquireWritablePage has no staging pages");
+    }
+
+    const VkDeviceSize safe_alignment = std::max<VkDeviceSize>(1U, alignment_);
+    for (auto& page : slot_.pages) {
+        const VkDeviceSize aligned_offset = AlignUp(page.write_head, safe_alignment);
+        if (aligned_offset <= page.capacity_bytes &&
+            size_ <= page.capacity_bytes - aligned_offset) {
+            return page;
+        }
+    }
+
+    if (!create_info_cache.allow_staging_page_growth ||
+        slot_.pages.size() >= create_info_cache.max_staging_page_count) {
+        const UploadStagingPage& current_page = slot_.pages.back();
+        const VkDeviceSize aligned_offset = AlignUp(current_page.write_head, safe_alignment);
+        std::ostringstream oss{};
+        oss << "UploadHost staging capacity exhausted; requested="
+            << size_
+            << " aligned_offset="
+            << aligned_offset
+            << " current_page_capacity="
+            << current_page.capacity_bytes
+            << " used_bytes="
+            << slot_.stats.used_bytes
+            << " total_capacity="
+            << SlotCapacityBytes(slot_)
+            << " page_count="
+            << slot_.pages.size();
+        throw std::runtime_error(oss.str());
+    }
+
+    UploadStagingPage new_page{};
+    const VkDeviceSize new_page_capacity =
+        std::max(create_info_cache.staging_buffer_size, NextPow2(size_));
+    CreateStagingPage(*context, new_page, new_page_capacity);
+    slot_.pages.push_back(new_page);
+    slot_.stats.capacity_bytes += new_page_capacity;
+    slot_.stats.staging_page_count = static_cast<uint32_t>(slot_.pages.size());
+    slot_.stats.staging_page_growth_count += 1U;
+    return slot_.pages.back();
+}
+
+VkDeviceSize UploadHost::SlotCapacityBytes(const UploadFrameSlot& slot_) const noexcept {
+    VkDeviceSize total_capacity = 0U;
+    for (const auto& page : slot_.pages) {
+        total_capacity += page.capacity_bytes;
+    }
+    return total_capacity;
+}
+
 void UploadHost::FlushAllocationIfNeeded(VulkanContext& context_,
-                                         const UploadFrameSlot& slot_,
+                                         const UploadStagingPage& page_,
                                          VkDeviceSize offset_,
                                          VkDeviceSize size_) const {
     (void)context_;
     if (size_ == 0U) {
         return;
     }
-    if (memory_host == nullptr || !slot_.allocation_slice.valid()) {
+    if (memory_host == nullptr || !page_.allocation_slice.valid()) {
         throw std::runtime_error("UploadHost::FlushAllocationIfNeeded invalid MemoryCenter staging slice");
     }
-    if (!memory_host->FlushSlice(slot_.allocation_slice, offset_, size_)) {
+    if (!memory_host->FlushSlice(page_.allocation_slice, offset_, size_)) {
         throw std::runtime_error("UploadHost::FlushAllocationIfNeeded failed in MemoryCenter path");
     }
 }

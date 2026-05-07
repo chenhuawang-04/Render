@@ -134,6 +134,7 @@ public:
             .record_fn = &RecordRenderer<RendererT>,
             .swapchain_recreated_fn = &OnSwapchainRecreatedRenderer<RendererT>,
             .configure_scene_fn = &ConfigureSceneRendererBinding<RendererT>,
+            .configure_direct_scene_fn = &ConfigureDirectSceneRendererBinding<RendererT>,
             .configure_lighting_fn = &ConfigureSceneLightingBinding<RendererT>,
             .set_output_target_fn = &SetOverlayOutputTarget<RendererT>,
         };
@@ -219,6 +220,11 @@ private:
                                           std::uint64_t,
                                           std::uint64_t);
     using ConfigureSceneFn = bool (*)(void*, const SceneRenderTargetSet&, SceneRenderPassRole);
+    using ConfigureDirectSceneFn = void (*)(void*,
+                                            SceneRenderPassRole,
+                                            const RenderTargetColorOutputConfig&,
+                                            const RenderTargetDepthOutputConfig*,
+                                            bool);
     using ConfigureSceneConsumerFn = bool (*)(void*, const SceneRenderTargetSet&);
     using ConfigureLightingFn = void (*)(void*,
                                          render::LightFrameCoordinator<ecs::Dim2>*,
@@ -252,6 +258,7 @@ private:
         RecordFn record_fn = nullptr;
         SwapchainRecreatedFn swapchain_recreated_fn = nullptr;
         ConfigureSceneFn configure_scene_fn = nullptr;
+        ConfigureDirectSceneFn configure_direct_scene_fn = nullptr;
         ConfigureLightingFn configure_lighting_fn = nullptr;
         SetOverlayOutputFn set_output_target_fn = nullptr;
     };
@@ -352,6 +359,29 @@ private:
         return target_set_.ConfigureSceneRenderer(*static_cast<RendererT*>(renderer_), pass_role_);
     }
 
+    template<typename RendererT>
+    static void ConfigureDirectSceneRendererBinding(
+        void* renderer_,
+        SceneRenderPassRole,
+        const RenderTargetColorOutputConfig& color_output_target_config_,
+        const RenderTargetDepthOutputConfig* depth_output_target_config_,
+        bool require_depth_support_) {
+        RendererT& renderer_ref = *static_cast<RendererT*>(renderer_);
+        renderer_ref.SetOutputTargetConfig(color_output_target_config_);
+        if (depth_output_target_config_ == nullptr) {
+            return;
+        }
+        if constexpr (requires(RendererT& candidate_,
+                               const RenderTargetDepthOutputConfig& depth_output_target_config_ref_) {
+                          candidate_.SetDepthTargetConfig(depth_output_target_config_ref_);
+                      }) {
+            renderer_ref.SetDepthTargetConfig(*depth_output_target_config_);
+        } else if (require_depth_support_) {
+            throw std::runtime_error(
+                "SceneRecorder2D direct scene output requires depth target support");
+        }
+    }
+
     template<typename ConsumerT>
     static bool ConfigureSceneConsumerBinding(void* renderer_,
                                               const SceneRenderTargetSet& target_set_) {
@@ -421,11 +451,15 @@ private:
     [[nodiscard]] bool IsPostProcessEnabledForSubmission() const noexcept;
     [[nodiscard]] bool IsLayerVisibleForSubmission(std::uint32_t submission_layer_mask_) const noexcept;
     [[nodiscard]] bool IsOverlayLayerVisibleForSubmission(std::uint32_t submission_layer_mask_) const noexcept;
-    void ConfigureSceneRenderersForTargets() noexcept;
-    void ConfigureSceneConsumerForTargets() noexcept;
+    void ConfigureSceneRenderersForTargets();
+    void ConfigureSceneConsumerForTargets();
     [[nodiscard]] RenderTargetColorOutputConfig BuildDirectSceneOutputConfig(
         SceneRenderPassRole pass_role_) const noexcept;
+    [[nodiscard]] RenderTargetDepthOutputConfig BuildDirectDepthOutputConfig(
+        SceneRenderPassRole pass_role_) const noexcept;
     [[nodiscard]] RenderTargetColorOutputConfig BuildExplicitSceneOutputConfig(
+        SceneRenderPassRole pass_role_) const noexcept;
+    [[nodiscard]] RenderTargetDepthOutputConfig BuildExplicitDepthOutputConfig(
         SceneRenderPassRole pass_role_) const noexcept;
     [[nodiscard]] RenderTargetColorOutputConfig BuildOverlayOutputConfig(
         const RenderTargetColorOutputConfig& fallback_output_target_config_) const noexcept;

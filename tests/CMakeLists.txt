@@ -58,10 +58,13 @@ add_executable(${VR_TEST_TARGET}
     cases/freetype_host_tests.cpp
     cases/glyph_atlas_host_tests.cpp
     cases/runtime_configuration_tests.cpp
+    cases/runtime_ibl_bake_host_integration_tests.cpp
+    cases/runtime_ibl_host_integration_tests.cpp
     cases/runtime_integration_tests.cpp
     cases/runtime_text_renderer_integration_tests.cpp
     cases/runtime_text_renderer_3d_integration_tests.cpp
     cases/runtime_geometry_material_host_tests.cpp
+    cases/runtime_texture_host_integration_tests.cpp
     cases/runtime_geometry_image_host_integration_tests.cpp
     cases/surface_upload_host_policy_tests.cpp
     cases/runtime_surface_upload_host_integration_tests.cpp
