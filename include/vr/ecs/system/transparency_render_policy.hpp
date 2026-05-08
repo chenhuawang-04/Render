@@ -2,6 +2,7 @@
 
 #include "vr/ecs/component/appearance_component.hpp"
 #include "vr/ecs/component/geometry_component.hpp"
+#include "vr/ecs/component/particle_component.hpp"
 #include "vr/ecs/component/surface_component.hpp"
 #include "vr/ecs/component/text_component.hpp"
 
@@ -35,6 +36,13 @@ struct PassHintTraits<SurfaceRenderPassHint> final {
     static constexpr SurfaceRenderPassHint opaque = SurfaceRenderPassHint::opaque;
     static constexpr SurfaceRenderPassHint transparent = SurfaceRenderPassHint::transparent;
     static constexpr SurfaceRenderPassHint overlay = SurfaceRenderPassHint::overlay;
+};
+
+template<>
+struct PassHintTraits<ParticleRenderPassHint> final {
+    static constexpr ParticleRenderPassHint opaque = ParticleRenderPassHint::opaque;
+    static constexpr ParticleRenderPassHint transparent = ParticleRenderPassHint::transparent;
+    static constexpr ParticleRenderPassHint overlay = ParticleRenderPassHint::overlay;
 };
 
 template<>
@@ -143,6 +151,22 @@ inline constexpr std::uint32_t surface3d_runtime_blend_shift = 11U;
     case Surface2DBlendMode::multiply: return RuntimeBlendPreset::multiply;
     case Surface2DBlendMode::screen: return RuntimeBlendPreset::screen;
     case Surface2DBlendMode::alpha:
+    default:
+        return premultiplied_alpha_
+            ? RuntimeBlendPreset::premultiplied_alpha
+            : RuntimeBlendPreset::alpha;
+    }
+}
+
+[[nodiscard]] constexpr RuntimeBlendPreset ResolveRuntimeBlendPreset(
+    ParticleBlendMode blend_mode_,
+    bool premultiplied_alpha_) noexcept {
+    switch (blend_mode_) {
+    case ParticleBlendMode::additive: return RuntimeBlendPreset::additive;
+    case ParticleBlendMode::multiply: return RuntimeBlendPreset::multiply;
+    case ParticleBlendMode::screen: return RuntimeBlendPreset::screen;
+    case ParticleBlendMode::premultiplied_alpha: return RuntimeBlendPreset::premultiplied_alpha;
+    case ParticleBlendMode::alpha:
     default:
         return premultiplied_alpha_
             ? RuntimeBlendPreset::premultiplied_alpha

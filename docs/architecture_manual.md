@@ -29,9 +29,16 @@
 │  │ Appearance   │ Light        │ Shadow       │ Light-Shadow Link  │ │
 │  │ Coordinator  │ Coordinator  │ Coordinator  │ Coordinator        │ │
 │  ├──────────────┼──────────────┼──────────────┼────────────────────┤ │
-│  │ Shadow Atlas │                                                                     │
-│  │ Coordinator  │                                                                     │
-│  └──────────────┴──────────────────────────────────────────────────┘ │
+│  │ Shadow Atlas │ Animation    │ IBL Bake     │                    │ │
+│  │ Coordinator  │ Coordinator  │ Coordinator  │                    │ │
+│  └──────────────┴──────────────┴──────────────┴────────────────────┘ │
+├──────────────────────────────────────────────────────────────────────┤
+│                    Scene Submission Layer                              │
+│  ┌──────────────────┬──────────────────┬──────────────────────────┐  │
+│  │  RenderView<Dim>  │  ScenePacket<Dim>│  SceneRecorder2D/3D      │  │
+│  ├──────────────────┼──────────────────┼──────────────────────────┤  │
+│  │  SceneRenderStage │  FrameComposer   │  ViewSubmissionUtils     │  │
+│  └──────────────────┴──────────────────┴──────────────────────────┘  │
 ├──────────────────────────────────────────────────────────────────────┤
 │                    ECS (Entity Component System)                      │
 │  ┌──────────┬──────────┬──────────┬──────────┬──────────────────┐   │
@@ -48,6 +55,12 @@
 │  ├──────────┼──────────┼──────────┼──────────┼──────────────────┤   │
 │  │ Appear.   │ Appear.  │ Appear.  │ Surface  │                  │   │
 │  │ System    │ Link     │ Runtime  │ Upload   │                  │   │
+│  ├──────────┼──────────┼──────────┼──────────┼──────────────────┤   │
+│  │ Animation │ Anim.    │ Anim.    │ Anim.    │ Anim.            │   │
+│  │ Clock     │ Property  │ Material │ Camera   │ Skeletal/Morph   │   │
+│  ├──────────┼──────────┼──────────┼──────────┼──────────────────┤   │
+│  │ Anim.     │ Anim.    │ Anim.    │ Anim.    │                  │   │
+│  │ Path      │ Vertex   │ FrameSeq │ Resource │                  │   │
 │  └──────────┴──────────┴──────────┴──────────┴──────────────────┘   │
 ├──────────────────────────────────────────────────────────────────────┤
 │                    Renderer Backends                                  │
@@ -126,7 +139,7 @@
 
 ### 3.3 Render 层 (`vr/render`)
 
-**职责**: 帧循环、交换链管理、命令缓冲、描述符/管线管理、上传系统、帧协调器。
+**职责**: 帧循环、交换链管理、命令缓冲、描述符/管线管理、上传系统、帧协调器、场景提交与录制、IBL 环境光照、天空盒、帧合成。
 
 #### 3.3.1 帧循环核心
 
@@ -148,7 +161,27 @@
 | `UploadHost` | Staging Buffer 上传：Allocate/Write/RecordCopy。支持 Transfer Queue 异步上传 (带 Semaphore 跨队列同步)。支持 Synchronization2 barrier。 |
 | `RuntimePrepareContext` | 帧准备上下文结构体，聚合所有运行时子系统指针，传递至 `PrepareFrame` 回调。包含 VulkanContext、帧索引、提交值、GpuMemoryHost、UploadHost、DescriptorHost、PipelineHost、SamplerHost、FreeTypeHost、GlyphAtlasHost、GlyphUploadHost。 |
 
-#### 3.3.3 帧协调器 (Frame Coordinators)
+#### 3.3.3 Render Target / 离屏渲染系统
+
+**职责**: 管理离屏渲染目标 (Render Target) 的完整生命周期，包括创建、复用、后处理 (Bloom) 和最终合成至 Swapchain。
+
+| 组件 | 说明 |
+|------|------|
+| `RenderTargetTypes` | 渲染目标基础类型定义。Image 句柄、View 描述符、Pool 槽位标识。 |
+| `RenderTargetDesc` | 渲染目标描述符。格式 (颜色/深度/模板)、分辨率、MSAA 采样数、mip 层级、layer 数。 |
+| `RenderTargetFormatUtils` | 格式工具类。颜色/深度格式查询、格式族兼容性判断。 |
+| `RenderTargetView` | 渲染目标视图。封装 Vulkan ImageView 和附件引用，支持多子资源。 |
+| `RenderTargetHost` | 渲染目标管理器。创建/缓存/销毁 RenderTarget、附件生命周期、格式协商、与 GpuMemoryHost 集成。 |
+| `RenderTargetPool` | 渲染目标对象池。按尺寸预设分组，空闲/占用槽位管理，延迟回收 (与 FrameRetire 联动)。 |
+| `RenderTargetPass` | 渲染通道 (VkRenderPass) 封装。Load/Store Op、附件 Clear Value、子通道依赖自动配置。 |
+| `ColorBlendState` | 颜色混合状态。Attachment Blend 参数 (srcFactor/dstFactor/blendOp)、Logic Op、Write Mask。与 TransparencyRenderPolicy 协同工作。 |
+| `RenderPassPreset` | 渲染通道预设库。预定义常用配置 (颜色清除/加载、深度模板读写、多附件布局)。 |
+| `SceneRenderTargetSet` | 场景渲染目标集。将场景所需的颜色/深度/中间目标打包为一个完整配置，管理多附件 RenderPass。 |
+| `SceneBloomPostStack` | Scene Bloom 后处理栈。Bloom 强度/阈值/半径参数、多级降采样金字塔、最终合成逻辑。 |
+| `RenderTargetBloomRenderer` | Bloom 渲染器。三阶段管线：Prefilter (亮度提取) → Blur (多级降采样+升采样模糊) → Combine (与源图混合)。 |
+| `RenderTargetCompositeRenderer` | 合成渲染器。将最终离屏渲染目标通过全屏四边形合成至 Swapchain Backbuffer。 |
+
+#### 3.3.4 帧协调器 (Frame Coordinators)
 
 帧协调器是位于 RenderRuntimeHost 和 ECS 系统之间的编排层，负责每帧的数据准备、排序、缓存和跨系统协调。
 
@@ -160,7 +193,7 @@
 | `LightShadowLinkCoordinator` | Light-Shadow 链接协调。建立光源与阴影投射器之间的关联关系。 |
 | `ShadowAtlasBindingCoordinator` | Shadow Atlas 绑定协调。管理 Shadow Map Atlas 的纹理绑定和描述符更新。 |
 
-#### 3.3.4 准备阶段 (Prepare Stages)
+#### 3.3.5 准备阶段 (Prepare Stages)
 
 | 阶段 | 说明 |
 |------|------|
@@ -169,6 +202,38 @@
 | `LightPrepareStage` | Light 准备阶段：执行光源数据的帧级准备。 |
 | `LightShadowLinkStage` | Light-Shadow 链接阶段：执行光源-阴影关联的帧级操作。 |
 | `ShadowPrepareStage` | Shadow 准备阶段：执行阴影数据的帧级准备。 |
+
+#### 3.3.6 场景提交与录制 (Scene Submission & Recorders)
+
+| 组件 | 说明 |
+|------|------|
+| `RenderView<Dim>` | 渲染视图。定义 active/scene/overlay/reflection/custom view kind，管理目标/视口/清除策略与 layer mask。 |
+| `RenderScenePacket<Dim>` | 场景提交包。将 ECS 场景数据打包为统一提交结构，通过 `SceneSubmissionPolicy` 路由分发。 |
+| `RenderViewSubmissionUtils` | View 提交工具。Multi-view packet 解析、Layer mask 分流、typed view kind→recorder 路由。 |
+| `SceneRecorder2D` | 2D 场景录制器。编排 Scene→Consumer→Present 或 Offscreen 路径，支持 UI-only/Mixed packet。 |
+| `SceneRecorder3D` | 3D 场景录制器。编排 Light/Shadow/Scene/PostProcess 管线，支持 Multi-view packet、Reflection/Custom view、Animation 集成。 |
+| `SceneRenderStage` | 场景渲染阶段。Opaque→Transparent 阶段顺序、Bloom 编排、后处理策略路由。 |
+
+#### 3.3.7 IBL / 环境光照
+
+| 组件 | 说明 |
+|------|------|
+| `IBLHost` | IBL 宿主。管理 Irradiance Diffuse IBL、Specular Prefiltered Environment Map、BRDF Integration LUT。接收外部 HDR/Cubemap 数据。 |
+| `IBLBakeHost` | IBL 烘焙宿主。将 HDR 环境贴图离线烘焙为 Irradiance Map + Prefiltered Mipmap + BRDF LUT。Compute Shader 驱动。 |
+| `IBLBakeCoordinator` | IBL 烘焙协调器。管理烘焙 Pass 编排、描述符更新、与 RenderTarget/Pipeline 的集成。 |
+
+#### 3.3.8 天空盒与帧合成
+
+| 组件 | 说明 |
+|------|------|
+| `SkyboxRenderer` | 天空盒渲染器。立方体贴图/HDR 等距矩形输入、与 IBL 环境图联动。 |
+| `FrameComposerHost` | 帧合成宿主。管理最终帧合成 Pass：Scene Target + 后处理栈 + UI Overlay → Swapchain。 |
+
+#### 3.3.9 动画帧协调器
+
+| 组件 | 说明 |
+|------|------|
+| `AnimationFrameCoordinator<Dim>` | 动画帧协调。统一协调 AnimationClock、Evaluation、Host 的每帧更新，将动画输出注入 SceneRecorder 和渲染管线。 |
 
 ### 3.4 ECS 层 (`vr/ecs`)
 
@@ -194,6 +259,7 @@
 | **Light** | 2D point light (position+radius+color) | 3D point/spot/directional | intensity, color, range, shadow flags, culling mask |
 | **Shadow** | 2D shadow caster (occluder shape) | 3D shadow caster (mesh route) | shadow map slot, bias, filter mode, depth format |
 | **Appearance** | 2D visibility+link group | 3D visibility+link group | appearance record, dirty tracking, link handle |
+| **Animation** | 2D animation clock/track | 3D animation clock/track | clock state, Property/Material/Camera/Path/Skeletal/Morph/VertexDeform/FrameSequence tracks, clip route, evaluation state |
 
 #### 3.4.3 ECS 系统
 
@@ -261,6 +327,26 @@
 | `AppearanceLinkSystem` | Appearance 链接 | 链接 Geometry/Surface 到 Appearance 记录、跨渲染器协调 |
 | `AppearanceRuntimeSystem<Dim>` | Appearance 运行时 | 运行时 appearance 数据生成、缓存、与渲染器批量对接 |
 
+##### 动画系统组 (Phase 1 完整实现)
+
+| 系统 | 职责 | 关键特性 |
+|------|------|---------|
+| `AnimationClockSystem<Dim>` | 动画时钟 | 时间推进 (delta/time scale)、播放状态 (Play/Pause/Stop)、循环/单次/乒乓模式 |
+| `AnimationCurveSystem<Dim>` | 动画曲线 | 关键帧曲线采样 (Linear/Step/CubicSpline)、时间→值映射 |
+| `AnimationPropertyTrackSystem<Dim>` | Property 轨道 | 采样 Position/Rotation/Scale/Color/Float 轨道 |
+| `AnimationPropertyEvaluationSystem<Dim>` | Property 求值 | 将 Property 轨道输出写入 Transform、Appearance 组件 |
+| `AnimationMaterialTrackSystem` | Material 轨道 | 采样 Albedo/Metallic/Roughness/Emissive 材质动画轨道 |
+| `AnimationMaterialEvaluationSystem` | Material 求值 | 将 Material 轨道输出写入 Appearance/Material 组件 |
+| `AnimationCameraTrackSystem<Dim>` | Camera 轨道 | 采样 FOV/Near/Far/Position/LookAt 动画轨道 |
+| `AnimationCameraEvaluationSystem<Dim>` | Camera 求值 | 同步 Camera 轨道输出到 Camera 组件 |
+| `AnimationPathMotionSystem<Dim>` | 路径运动 | Position/Rotation/Scale 路径曲线采样、路径约束 (Follow/LookAt) |
+| `AnimationPathEvaluationSystem<Dim>` | 路径求值 | 将 Path Motion 输出写入 Transform 组件 |
+| `AnimationSkeletalEvaluationSystem<Dim>` | 骨骼求值 | 骨骼轨道采样、Joint Palette 更新、Root Motion 提取 |
+| `AnimationMorphEvaluationSystem<Dim>` | 变形求值 | Morph Target 权重采样、变形缓冲区构建 |
+| `AnimationVertexDeformEvaluationSystem<Dim>` | 顶点变形求值 | Vertex Deform 轨道采样、顶点负载输出 |
+| `AnimationFrameSequenceEvaluationSystem<Dim>` | 帧序列求值 | Frame Sequence 轨道采样、A/B 帧混合、子网格帧索引路由 |
+| `AnimationResourceTrackSystem` | 资源轨道 | 动画资源轨道生命周期管理和路由 |
+
 ### 3.5 渲染器模块
 
 #### 3.5.1 Text 渲染器 (`vr/text`)
@@ -300,19 +386,47 @@
 | `LightShadowUploadHost` | Light-Shadow 数据上传：光源数据 (UBO)、阴影矩阵、Atlas 引用的 GPU 上传。 |
 | `ShadowAtlasHost` | Shadow Map Atlas 管理：Atlas 页面分配、阴影贴图打包、脏页追踪。 |
 | `ShadowRenderer2D` | 2D 阴影渲染器：2D 遮挡物深度图渲染、光源关联。 |
-| `ShadowRenderer3D` | 3D 阴影渲染器：3D Shadow Map 渲染、深度管线。 |
+| `ShadowRenderer3D` | 3D 阴影渲染器：3D Shadow Map 渲染、深度管线、Directional Shadow Fit + 骨骼动画阴影支持。 |
+
+#### 3.5.5 动画 Host 层 (`vr/animation`)
+
+| 组件 | 说明 |
+|------|------|
+| `AnimationClipHost<Dim>` | 动画片段管理器。Clip 生命周期 (Create/Destroy)、轨道收集、采样求值。支持循环/单次/乒乓模式。 |
+| `AnimationSkeletalHost<Dim>` | 骨骼动画宿主。关节层级、Joint Palette 构建、GPU Skinning 矩阵上传、Root Motion 提取。 |
+| `AnimationMorphHost<Dim>` | 变形目标 (Morph Target) 宿主。变形目标权重管理、GPU 缓冲区上传、Blend Shape 支持。 |
+| `AnimationPathHost<Dim>` | 路径动画宿主。路径曲线管理、路径采样与运动合成。 |
+| `AnimationVertexDeformHost<Dim>` | 顶点变形宿主。GPU 顶点变形缓冲区管理、Deform Payload 上传。 |
+| `AnimationFrameSequenceHost<Dim>` | 帧序列动画宿主。子网格帧序列播放、A/B 帧混合、帧索引路由。 |
+
+#### 3.5.6 资产纹理 (`vr/asset`)
+
+| 组件 | 说明 |
+|------|------|
+| `TextureHost` | 资产纹理宿主。接收外部已解码像素数据、创建/接管 GPU Image、Mipmap 生成。不包含 PNG/KTX2 解码，仅消费已准备数据。 |
+
+#### 3.5.7 GPU 骨骼蒙皮 (`vr/geometry`)
+
+| 组件 | 说明 |
+|------|------|
+| `GeometrySkeletalPaletteBuilder` | GPU 骨骼调色板构建器。从 `AnimationSkeletalHost` 消费 Joint Palette，构建用于顶点着色器骨骼蒙皮的矩阵 UBO/SSBO。 |
 
 ---
 
 ## 4. 帧协调器管线流程
 
-Appearance、Light、Shadow 三套协调器协同工作，形成完整的每帧渲染准备管线：
+Appearance、Light、Shadow、Animation 四套协调器协同工作，形成完整的每帧渲染准备管线：
 
 ```
 RenderRuntime::Tick()
   │
   ├── FrameSync::Acquire  → 获取下一帧槽位
   ├── FrameCommand::Begin  → 开始命令录制
+  │
+  ├── AnimationFrameCoordinator::Prepare
+  │   ├── AnimationClockSystem::Advance    (推进时间)
+  │   ├── AnimationEvaluationSystems      (Property/Material/Camera/Skeletal/Morph 求值)
+  │   └── AnimationHost::Update           (更新 GPU 端骨骼/变形/帧序列数据)
   │
   ├── AppearanceFrameCoordinator::Prepare
   │   ├── AppearancePrepareStage    (扫描脏记录)
@@ -326,7 +440,15 @@ RenderRuntime::Tick()
   ├── ShadowFrameCoordinator::Prepare
   │   └── ShadowAtlasBindingCoordinator  (Atlas 绑定)
   │
-  ├── Renderer::Render  (Text/Geometry/Surface/Shadow)
+  ├── SceneRecorder3D::Record       (Multi-view packet 路由 → 场景 Pass)
+  │   ├── SceneRenderStage           (Opaque → Transparent 阶段)
+  │   └── SkyboxRenderer::Render    (天空盒)
+  │
+  ├── IBLHost::Bind                  (绑定 Irradiance/Specular/BRDF LUT)
+  ├── SceneRenderTargetSet::Acquire  (获取场景渲染目标)
+  ├── Renderer::Render               (Text/Geometry/Surface/Shadow → 离屏目标)
+  ├── SceneBloomPostStack::Process   (Bloom 后处理)
+  ├── FrameComposerHost::Compose     (场景 + 后处理 + UI overlay → Swapchain)
   │
   ├── FrameSync::Submit  → 提交命令
   └── FrameRetire::Collect  → 延迟回收
@@ -350,6 +472,11 @@ RenderRuntime::Tick()
 | `surface_3d.vert/.frag` | 3D Surface (纹理 + 过滤) |
 | `shadow_depth_2d.vert` | 2D 阴影深度 (遮挡物深度图) |
 | `shadow_depth_3d.vert` | 3D 阴影深度 (深度管线) |
+| `render_target_composite.vert/.frag` | 离屏合成 (全屏四边形 + 渲染目标采样) |
+| `render_target_bloom_prefilter.frag` | Bloom Prefilter (亮度阈值提取) |
+| `render_target_bloom_blur.frag` | Bloom Blur (多级降采样/升采样高斯模糊) |
+| `render_target_bloom_combine.frag` | Bloom Combine (模糊结果与源图混合) |
+| `skybox.frag` | Skybox 片段着色器 (立方体贴图/HDR 等距矩形采样) |
 
 ### 5.2 共享 GLSL 头文件 (`shaders/include/`)
 
@@ -446,14 +573,17 @@ vr.types
 
 ### 8.1 测试 (`tests/`)
 
-基于自定义轻量框架 (`test_framework.hpp/cpp`)。约 41 个测试文件，覆盖：
-- ECS 组件/系统单元测试 (Transform, Camera, Bounds, Culling, Geometry, Surface, Text, Light, Shadow, Appearance)
+基于自定义轻量框架 (`test_framework.hpp/cpp`)。约 55 个测试文件，覆盖：
+- ECS 组件/系统单元测试 (Transform, Camera, Bounds, Culling, Geometry, Surface, Text, Light, Shadow, Appearance, Animation)
+- 动画系统单元测试 (Clock/Curve/Property/Material/Camera/Path/Skeletal/Morph/VertexDeform/FrameSequence)
+- 动画 Host 单元测试 (Clip/Skeletal/Morph/VertexDeform/FrameSequence)
 - 运行时集成测试
 - GPU 资源类型测试
 - FreeType/Glyph 渲染测试
 - FrameRetire 回收测试
 - Light/Shadow 协调器测试
 - Appearance 协调器测试
+- IBL/IBLBake/FrameComposer/TextureHost 集成测试
 - Shadow Renderer 生命周期测试
 
 ### 8.2 基准测试 (`bench/`)
@@ -478,4 +608,12 @@ vr.types
 8. **着色器合约校验**: 通过 `spv_reflect_to_json.py` 反射 SPIR-V 接口信息，`shader_contract_check.py` 与 C++ 端管线定义交叉验证，确保 Descriptor Set Layout 和 Push Constant 的一致性。
 9. **BackendTag 编译期多态**: 平台后端通过标签分发，易于扩展新窗口系统。
 10. **帧协调器模式**: Appearance/Light/Shadow 使用独立的帧协调器 (Frame Coordinator) 进行每帧数据编排，每套协调器有自己的 Prepare Stage 和特定的数据流程。
-11. **C++20 模块**: `feature/cpp20-modules` 分支已迁移所有 10 个核心库为 `.cppm` 接口单元。使用 `vr_module_fwd.hpp` 统一全局片段以实现零重复。`vr.ecs` 模块通过模板声明模式避免了与 `vr.text` 的循环依赖。
+11. **离屏渲染 / Render Target**: 场景渲染先输出到离屏渲染目标 (Scene Render Target Set)，然后通过 Bloom Post Stack 后处理，最终由 Composite Renderer 合成至 Swapchain。RenderTargetPool 按尺寸预设复用目标，避免每帧重新创建。
+12. **Bloom 后处理栈**: 三阶段 Bloom 管线 — Prefilter (亮度阈值) → Blur (多级降采样/升采样) → Combine (混合)。通过 SceneBloomPostStack 封装参数配置和 Pass 编排。
+13. **透明排序与混合**: `TransparencyRenderPolicy` 统一管理跨渲染器的透明排序策略。结合按帧材质路由 (`AppearanceRuntimeSystem`) 和 `ColorBlendState` 实现 64 位排序键中的 pass 位驱动分层透明/不透明渲染。
+14. **C++20 模块**: `feature/cpp20-modules` 分支已迁移所有 10 个核心库为 `.cppm` 接口单元。使用 `vr_module_fwd.hpp` 统一全局片段以实现零重复。`vr.ecs` 模块通过模板声明模式避免了与 `vr.text` 的循环依赖。
+15. **统一场景提交**: 通过 `RenderView<Dim>` + `RenderScenePacket<Dim>` + `SceneRecorder<Dim>` 三层结构统一场景提交路径。2D 和 3D 共享相同 packet/view 概念，但 Recorder 独立实现 (避免过早合并)。
+16. **动画 ECS Phase 1**: 完整的 7 类动画轨道 (Property/Material/Camera/Path/Skeletal/Morph/VertexDeform/FrameSequence) + 时钟 + 曲线 + 求值系统。通过 `AnimationFrameCoordinator` 统一注入 SceneRecorder 和渲染管线。GPU Skinning 通过 `SkeletalPaletteBuilder` 上传 Joint Palette 至顶点着色器。
+17. **IBL 环境光照**: IBL 分为在线宿主 (IBLHost) 和离线烘焙宿主 (IBLBakeHost)。Irradiance Map + Prefiltered Environment Map (多级 mip) + BRDF Integration LUT 三件套。通过 Compute Shader 驱动烘焙流程。
+18. **Text 运行时契约**: `TextRuntimeContract` 定义 Text 系统与 Renderer 之间的资源契约和上传策略，消除隐式依赖，使字形页面调度可诊断。
+19. **Directional Shadow Fit & Stabilization**: 3D Shadow Renderer 支持 Directional Light 的 CSM 风格阴影贴合 (Shadow Fit) 和坐标稳定化，减少阴影抖动。

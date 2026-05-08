@@ -24,6 +24,7 @@ add_executable(${VR_TEST_TARGET}
     cases/ecs_animation_vertex_frame_evaluation_system_tests.cpp
     cases/vulkan_types_tests.cpp
     cases/frame_retire_host_tests.cpp
+    cases/particle_simulation_host_tests.cpp
     cases/ecs_geometry_component_tests.cpp
     cases/ecs_geometry_batch_system_tests.cpp
     cases/ecs_geometry_runtime_system_tests.cpp
@@ -32,6 +33,7 @@ add_executable(${VR_TEST_TARGET}
     cases/ecs_animation_system_tests.cpp
     cases/ecs_shadow_component_tests.cpp
     cases/ecs_surface_component_tests.cpp
+    cases/ecs_particle_component_tests.cpp
     cases/ecs_appearance_component_tests.cpp
     cases/ecs_appearance_system_tests.cpp
     cases/ecs_appearance_runtime_system_tests.cpp
@@ -50,6 +52,7 @@ add_executable(${VR_TEST_TARGET}
     cases/ecs_transform_camera_system_tests.cpp
     cases/ecs_text_render_3d_system_tests.cpp
     cases/ecs_text_runtime_system_tests.cpp
+    cases/ecs_particle_runtime_system_tests.cpp
     cases/ecs_light_runtime_system_tests.cpp
     cases/ecs_light_culling_system_tests.cpp
     cases/ecs_shadow_runtime_system_tests.cpp
@@ -68,6 +71,8 @@ add_executable(${VR_TEST_TARGET}
     cases/runtime_geometry_image_host_integration_tests.cpp
     cases/surface_upload_host_policy_tests.cpp
     cases/runtime_surface_upload_host_integration_tests.cpp
+    cases/runtime_particle_renderer_2d_integration_tests.cpp
+    cases/runtime_particle_renderer_3d_integration_tests.cpp
     cases/runtime_surface_renderer_3d_integration_tests.cpp
     cases/runtime_geometry_renderer_2d_integration_tests.cpp
     cases/runtime_geometry_renderer_3d_integration_tests.cpp

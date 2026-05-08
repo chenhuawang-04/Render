@@ -37,6 +37,7 @@ add_executable(${VR_BENCH_TARGET}
     cases/ecs_appearance_runtime_system_bench.cpp
     cases/ecs_surface_upload_plan_system_bench.cpp
     cases/ecs_text_runtime_system_bench.cpp
+    cases/ecs_particle_runtime_system_bench.cpp
     cases/freetype_host_bench.cpp
     cases/glyph_atlas_host_bench.cpp
     cases/render_light_shadow_link_coordinator_bench.cpp

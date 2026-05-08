@@ -1,0 +1,353 @@
+﻿#version 460
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+struct ParticleGpuStateRecord {
+    float position_x;
+    float position_y;
+    float position_z;
+    float age_s;
+    float velocity_x;
+    float velocity_y;
+    float velocity_z;
+    float lifetime_s;
+    float start_size;
+    float end_size;
+    float rotation_radians;
+    float angular_velocity_radians;
+    uint start_color_rgba8;
+    uint end_color_rgba8;
+    uint texture_id;
+    uint material_id;
+    uint component_index;
+    uint user_data;
+    uint packed_flags;
+    uint reserved0;
+    float drag_coefficient;
+    float gravity_scale;
+    float soft_particle_distance;
+    float stretch_velocity_scale;
+};
+
+struct ParticleGpuAliveEntry {
+    uint compacted_instance_index;
+    uint state_index;
+};
+
+struct ParticleGpuSpawnPacket {
+    uint component_index;
+    uint spawn_count;
+    uint random_seed;
+    uint spawn_cursor;
+    uint state_range_begin;
+    uint state_range_count;
+    uint simulation_space;
+    uint emitter_shape;
+    uint packed_flags;
+    float delta_time_s;
+    float emitter_time_s;
+    float lifetime_min_s;
+    float lifetime_max_s;
+    float speed_min;
+    float speed_max;
+    float start_size_min;
+    float start_size_max;
+    float end_size_min;
+    float end_size_max;
+    float rotation_min_radians;
+    float rotation_max_radians;
+    float angular_velocity_min;
+    float angular_velocity_max;
+    float drag_coefficient;
+    float gravity_scale;
+    float emission_extent_x;
+    float emission_extent_y;
+    float emission_extent_z;
+    float emission_radius;
+    float emission_axis_x;
+    float emission_axis_y;
+    float emission_axis_z;
+    float cone_half_angle_radians;
+    float spread_angle_radians;
+    float transform_x0;
+    float transform_x1;
+    float transform_x2;
+    float transform_x3;
+    float transform_y0;
+    float transform_y1;
+    float transform_y2;
+    float transform_y3;
+    float transform_z0;
+    float transform_z1;
+    float transform_z2;
+    float transform_z3;
+};
+
+struct ParticleGpuIndirectCommand {
+    uint vertexCount;
+    uint instanceCount;
+    uint firstVertex;
+    uint firstInstance;
+    uint live_particle_count;
+    uint reserved0;
+};
+
+layout(push_constant) uniform ParticleBuildPushConstants {
+    uint record_count;
+    uint spawn_packet_count;
+    float delta_time_s;
+    uint flags;
+    float sort_origin_x;
+    float sort_origin_y;
+    float sort_origin_z;
+    float sort_direction_x;
+    float sort_direction_y;
+    float sort_direction_z;
+} pc;
+
+layout(set = 0, binding = 0, std430) readonly buffer ParticleStateInBuffer {
+    ParticleGpuStateRecord records_in[];
+} state_in_buffer;
+
+layout(set = 0, binding = 1, std430) writeonly buffer ParticleStateOutBuffer {
+    ParticleGpuStateRecord records_out[];
+} state_out_buffer;
+
+layout(set = 0, binding = 2, std430) writeonly buffer ParticleAliveBuffer {
+    ParticleGpuAliveEntry alive_entries[];
+} alive_buffer;
+
+layout(set = 0, binding = 3, std430) writeonly buffer ParticleDeadBuffer {
+    ParticleGpuAliveEntry dead_entries[];
+} dead_buffer;
+
+layout(set = 0, binding = 4, std430) buffer ParticleSpawnPacketBuffer {
+    ParticleGpuSpawnPacket packets[];
+} spawn_packet_buffer;
+
+layout(set = 0, binding = 5, std430) buffer ParticleIndirectBuffer {
+    ParticleGpuIndirectCommand commands[];
+} indirect_buffer;
+
+const uint PARTICLE_GPU_FLAG_ALIVE = 1u << 0u;
+const uint PARTICLE_BUILD_FLAG_BATCH_COUNT_MASK = 0x7fffffffu;
+const uint PARTICLE_EMITTER_SHAPE_POINT = 0u;
+const uint PARTICLE_EMITTER_SHAPE_BOX = 1u;
+const uint PARTICLE_EMITTER_SHAPE_CIRCLE = 2u;
+const uint PARTICLE_EMITTER_SHAPE_SPHERE = 3u;
+const uint PARTICLE_EMITTER_SHAPE_CONE = 4u;
+const float PI = 3.14159265358979323846;
+
+uint next_random(inout uint state_) {
+    state_ ^= (state_ << 13u);
+    state_ ^= (state_ >> 17u);
+    state_ ^= (state_ << 5u);
+    state_ = state_ == 0u ? 1u : state_;
+    return state_;
+}
+
+float random01(inout uint state_) {
+    return float(next_random(state_)) * (1.0 / 4294967295.0);
+}
+
+float random_range(inout uint state_, float min_value_, float max_value_) {
+    if (max_value_ <= min_value_) {
+        return min_value_;
+    }
+    return min_value_ + (max_value_ - min_value_) * random01(state_);
+}
+
+vec3 normalize_safe(vec3 value_, vec3 fallback_) {
+    float length_sq = dot(value_, value_);
+    if (length_sq <= 1e-12) {
+        return fallback_;
+    }
+    return value_ * inversesqrt(length_sq);
+}
+
+vec3 sample_cone_direction(vec3 axis_, float half_angle_radians_, inout uint random_state_) {
+    vec3 axis = normalize_safe(axis_, vec3(0.0, 1.0, 0.0));
+    if (half_angle_radians_ <= 1e-6) {
+        return axis;
+    }
+
+    float cos_theta = random_range(random_state_, cos(half_angle_radians_), 1.0);
+    float sin_theta = sqrt(max(0.0, 1.0 - cos_theta * cos_theta));
+    float phi = random_range(random_state_, 0.0, 2.0 * PI);
+
+    vec3 tangent = abs(axis.y) < 0.99 ? vec3(-axis.z, 0.0, axis.x) : vec3(1.0, 0.0, 0.0);
+    tangent = normalize_safe(tangent, vec3(1.0, 0.0, 0.0));
+    vec3 bitangent = normalize_safe(cross(axis, tangent), vec3(0.0, 0.0, 1.0));
+
+    return normalize_safe(axis * cos_theta +
+                          tangent * (cos(phi) * sin_theta) +
+                          bitangent * (sin(phi) * sin_theta),
+                          axis);
+}
+
+vec3 jitter_direction(vec3 axis_, float spread_angle_radians_, inout uint random_state_) {
+    float base_angle = atan(axis_.y, axis_.x);
+    float offset = random_range(random_state_, -spread_angle_radians_, spread_angle_radians_);
+    return vec3(cos(base_angle + offset), sin(base_angle + offset), 0.0);
+}
+
+void sample_spawn_shape(in ParticleGpuSpawnPacket packet_,
+                        inout uint random_state_,
+                        out vec3 out_position_,
+                        out vec3 out_direction_) {
+    vec3 axis = normalize_safe(vec3(packet_.emission_axis_x,
+                                    packet_.emission_axis_y,
+                                    packet_.emission_axis_z),
+                               vec3(0.0, 1.0, 0.0));
+    out_position_ = vec3(0.0);
+    out_direction_ = axis;
+
+    switch (packet_.emitter_shape) {
+    case PARTICLE_EMITTER_SHAPE_BOX:
+        out_position_ = vec3(
+            random_range(random_state_, -packet_.emission_extent_x, packet_.emission_extent_x),
+            random_range(random_state_, -packet_.emission_extent_y, packet_.emission_extent_y),
+            0.0);
+        out_direction_ = jitter_direction(axis, packet_.spread_angle_radians, random_state_);
+        break;
+    case PARTICLE_EMITTER_SHAPE_CIRCLE: {
+        float angle = random_range(random_state_, 0.0, 2.0 * PI);
+        float radius = sqrt(random01(random_state_)) * packet_.emission_radius;
+        out_position_ = vec3(cos(angle) * radius, sin(angle) * radius, 0.0);
+        out_direction_ = jitter_direction(axis, packet_.spread_angle_radians, random_state_);
+        break;
+    }
+    case PARTICLE_EMITTER_SHAPE_SPHERE: {
+        float u = random_range(random_state_, -1.0, 1.0);
+        float theta = random_range(random_state_, 0.0, 2.0 * PI);
+        float radius = pow(max(random01(random_state_), 0.0), 1.0 / 3.0) * packet_.emission_radius;
+        float r_xy = sqrt(max(0.0, 1.0 - u * u));
+        out_position_ = vec3(radius * r_xy * cos(theta), radius * u, radius * r_xy * sin(theta));
+        out_direction_ = normalize_safe(out_position_, axis);
+        break;
+    }
+    case PARTICLE_EMITTER_SHAPE_CONE:
+        out_direction_ = sample_cone_direction(axis, packet_.cone_half_angle_radians, random_state_);
+        break;
+    case PARTICLE_EMITTER_SHAPE_POINT:
+    default:
+        out_direction_ = jitter_direction(axis, packet_.spread_angle_radians, random_state_);
+        break;
+    }
+
+    out_position_.z = 0.0;
+    out_direction_.z = 0.0;
+    out_direction_ = normalize_safe(out_direction_, vec3(0.0, 1.0, 0.0));
+}
+
+vec3 transform_point(in ParticleGpuSpawnPacket packet_, vec3 local_point_) {
+    return vec3(packet_.transform_x0, packet_.transform_y0, packet_.transform_z0) * local_point_.x +
+           vec3(packet_.transform_x1, packet_.transform_y1, packet_.transform_z1) * local_point_.y +
+           vec3(packet_.transform_x2, packet_.transform_y2, packet_.transform_z2) * local_point_.z +
+           vec3(packet_.transform_x3, packet_.transform_y3, packet_.transform_z3);
+}
+
+vec3 transform_vector(in ParticleGpuSpawnPacket packet_, vec3 local_vector_) {
+    return vec3(packet_.transform_x0, packet_.transform_y0, packet_.transform_z0) * local_vector_.x +
+           vec3(packet_.transform_x1, packet_.transform_y1, packet_.transform_z1) * local_vector_.y +
+           vec3(packet_.transform_x2, packet_.transform_y2, packet_.transform_z2) * local_vector_.z;
+}
+
+void main() {
+    uint index = gl_GlobalInvocationID.x;
+    if (index >= pc.record_count) {
+        return;
+    }
+
+    ParticleGpuStateRecord record = state_in_buffer.records_in[index];
+    ParticleGpuAliveEntry alive_entry;
+    alive_entry.compacted_instance_index = 0u;
+    alive_entry.state_index = 0u;
+    ParticleGpuAliveEntry dead_entry;
+    dead_entry.compacted_instance_index = 0u;
+    dead_entry.state_index = 0u;
+
+    bool alive = (record.packed_flags & PARTICLE_GPU_FLAG_ALIVE) != 0u;
+    float dt = max(pc.delta_time_s, 0.0);
+    if (alive && dt > 0.0) {
+        record.age_s += dt;
+        if (record.age_s >= record.lifetime_s) {
+            record.age_s = record.lifetime_s;
+            record.packed_flags &= ~PARTICLE_GPU_FLAG_ALIVE;
+            record.velocity_x = 0.0;
+            record.velocity_y = 0.0;
+            record.velocity_z = 0.0;
+            alive = false;
+        } else {
+            float gravity_y = -9.81 * record.gravity_scale;
+            float drag_scale = max(0.0, 1.0 - record.drag_coefficient * dt);
+            record.velocity_y = (record.velocity_y + gravity_y * dt) * drag_scale;
+            record.velocity_x *= drag_scale;
+            record.velocity_z *= drag_scale;
+            record.position_x += record.velocity_x * dt;
+            record.position_y += record.velocity_y * dt;
+            record.position_z += record.velocity_z * dt;
+            record.rotation_radians += record.angular_velocity_radians * dt;
+        }
+    }
+
+    if (!alive && record.component_index < pc.spawn_packet_count) {
+        ParticleGpuSpawnPacket packet = spawn_packet_buffer.packets[record.component_index];
+        if (packet.spawn_count > 0u && packet.state_range_count > 0u) {
+            uint claim_index = atomicAdd(spawn_packet_buffer.packets[record.component_index].spawn_cursor, 1u);
+            if (claim_index < packet.spawn_count) {
+                uint random_state = packet.random_seed ^ ((index + 1u) * 747796405u) ^ ((claim_index + 1u) * 2891336453u);
+                random_state ^= floatBitsToUint(packet.emitter_time_s) ^ (record.component_index * 277803737u);
+                random_state = random_state == 0u ? 1u : random_state;
+
+                vec3 spawn_position_local;
+                vec3 spawn_direction_local;
+                sample_spawn_shape(packet, random_state, spawn_position_local, spawn_direction_local);
+                float speed = random_range(random_state, packet.speed_min, packet.speed_max);
+                float lifetime_s = random_range(random_state, packet.lifetime_min_s, packet.lifetime_max_s);
+                float start_size = random_range(random_state, packet.start_size_min, packet.start_size_max);
+                float end_size = random_range(random_state, packet.end_size_min, packet.end_size_max);
+                float rotation_radians = random_range(random_state, packet.rotation_min_radians, packet.rotation_max_radians);
+                float angular_velocity_radians = random_range(random_state, packet.angular_velocity_min, packet.angular_velocity_max);
+                vec3 spawn_velocity_local = spawn_direction_local * speed;
+                vec3 spawn_position = transform_point(packet, spawn_position_local);
+                vec3 spawn_velocity = transform_vector(packet, spawn_velocity_local);
+
+                record.position_x = spawn_position.x;
+                record.position_y = spawn_position.y;
+                record.position_z = spawn_position.z;
+                record.age_s = 0.0;
+                record.velocity_x = spawn_velocity.x;
+                record.velocity_y = spawn_velocity.y;
+                record.velocity_z = spawn_velocity.z;
+                record.lifetime_s = lifetime_s;
+                record.start_size = start_size;
+                record.end_size = end_size;
+                record.rotation_radians = rotation_radians;
+                record.angular_velocity_radians = angular_velocity_radians;
+                record.drag_coefficient = packet.drag_coefficient;
+                record.gravity_scale = packet.gravity_scale;
+                record.packed_flags |= PARTICLE_GPU_FLAG_ALIVE;
+                alive = true;
+            }
+        }
+    }
+
+    if (alive) {
+        uint batch_index = record.reserved0;
+        uint batch_count = pc.flags & PARTICLE_BUILD_FLAG_BATCH_COUNT_MASK;
+        if (batch_index < batch_count) {
+            uint local_index = atomicAdd(indirect_buffer.commands[batch_index].instanceCount, 1u);
+            atomicAdd(indirect_buffer.commands[batch_index].live_particle_count, 1u);
+            alive_entry.compacted_instance_index = indirect_buffer.commands[batch_index].firstInstance + local_index + 1u;
+            alive_entry.state_index = index + 1u;
+        }
+    } else {
+        dead_entry.compacted_instance_index = index + 1u;
+        dead_entry.state_index = record.component_index + 1u;
+    }
+
+    state_out_buffer.records_out[index] = record;
+    alive_buffer.alive_entries[index] = alive_entry;
+    dead_buffer.dead_entries[index] = dead_entry;
+}

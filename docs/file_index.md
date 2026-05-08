@@ -1,6 +1,6 @@
 # VulkanRender_New 代码文件索引
 
-> 统计 (当前分支 `ecs_font_quality_optimization`): 约 90 个头文件, 28 个源文件, 14 个着色器 + 2 个 GLSL 头文件, 9 个示例, 41 个测试文件, 17 个基准文件, 11 个文档, 3 个脚本, 4 个工具, 1 个 CMake Presets
+> 统计 (当前分支 `ecs_font_quality_optimization`, commit `0fbfae2`): 约 135 个头文件, 47 个源文件, 20 个着色器 + 2 个 GLSL 头文件, 11 个示例, 55 个测试文件, 17 个基准文件, 13 个文档, 3 个脚本, 4 个工具, 1 个 CMake Presets
 
 ---
 
@@ -60,7 +60,25 @@
 | `upload_host.hpp` | `UploadHost`, `UploadHostCreateInfo`, `UploadAllocation`, `UploadSubmitInfo`, `UploadEndFrameResult`, `UploadFrameStats` | Staging Buffer 上传。Allocate/Write/RecordCopyBuffer/RecordCopyImage + Barrier。支持 Transfer Queue 异步上传、Synchronization2。 |
 | `runtime_prepare_context.hpp` | `RuntimePrepareContext` | 帧准备上下文结构体，聚合所有运行时子系统指针，传递至 Recorder 的 PrepareFrame 回调。 |
 
-#### 2.4.3 帧协调器 (Frame Coordinators)
+#### 2.4.3 Render Target / 离屏渲染
+
+| 文件 | 类/结构 | 说明 |
+|------|---------|------|
+| `render_target_types.hpp` | `RenderTargetImage`, `RenderTargetViewDesc`, `RenderTargetPoolSlot` | 渲染目标基础类型。Image 包装、View 描述符、Pool 槽位。 |
+| `render_target_desc.hpp` | `RenderTargetDesc` | 渲染目标描述符。格式、分辨率、MSAA、mip、分层渲染等配置。 |
+| `render_target_format_utils.hpp` | `RenderTargetFormatUtils` | 格式工具。颜色/深度格式查询、格式兼容性检查。 |
+| `render_target_view.hpp` | `RenderTargetView` | 渲染目标视图。封装 VkImageView 和附件引用。 |
+| `render_target_host.hpp` | `RenderTargetHost` | 渲染目标管理器。创建/销毁/缓存 RenderTarget、管理附件资源、格式协商。 |
+| `render_target_pool.hpp` | `RenderTargetPool` | 渲染目标池。多尺寸预设池、空闲/占用槽位管理、延迟回收。 |
+| `render_target_pass.hpp` | `RenderTargetPass` | 渲染通道封装。Load/Store Op、Clear Value、附件配置。 |
+| `render_target_composite_renderer.hpp` | `RenderTargetCompositeRenderer` | 合成渲染器。将离屏渲染目标合成至 Swapchain (全屏四边形)。 |
+| `render_target_bloom_renderer.hpp` | `RenderTargetBloomRenderer` | Bloom 后处理渲染器。Prefilter → Blur (多级) → Combine 管线。 |
+| `scene_render_target_set.hpp` | `SceneRenderTargetSet` | 场景渲染目标集。管理场景所需的颜色/深度/中间目标集合。 |
+| `scene_bloom_post_stack.hpp` | `SceneBloomPostStack` | 场景 Bloom 后处理栈。Bloom 参数配置、多级金字塔、最终合成。 |
+| `render_pass_preset.hpp` | `RenderPassPreset` | RenderPass 预设。预定义常用渲染通道配置 (颜色清除/加载、深度模板等)。 |
+| `color_blend_state.hpp` | `ColorBlendState` | 颜色混合状态封装。Attachment Blend + Logic Op 等 VkPipelineColorBlendState 配置。 |
+
+#### 2.4.4 帧协调器 (Frame Coordinators)
 
 | 文件 | 类/结构 | 说明 |
 |------|---------|------|
@@ -75,6 +93,38 @@
 | `light_shadow_link_stage.hpp` | `LightShadowLinkStage` | Light-Shadow 链接阶段。执行光源-阴影关联的帧级操作。 |
 | `shadow_atlas_binding_coordinator.hpp` | `ShadowAtlasBindingCoordinator` | Shadow Atlas 绑定协调器。管理 Shadow Map Atlas 的纹理绑定和描述符更新。 |
 | `render_runtime_host.hpp` | `RenderRuntimeHost<BackendTag, framesInFlight>`, `RuntimeModulesCreateInfo`, `RuntimeTickResult`, `RuntimeFramePreparer` concept | 顶层运行时。组合所有子系统，统一 Init/Shutdown 顺序。Tick() 协调 Upload、Pipeline 编译、RenderLoop、prepare 回调。可选启用各模块。 |
+
+#### 2.4.5 场景提交 (Scene Submission)
+
+| 文件 | 类/结构 | 说明 |
+|------|---------|------|
+| `render_view.hpp` | `RenderView<Dim>`, `RenderViewKind`, `RenderViewDesc`, `RenderViewSet` | 渲染视图。定义场景绘制的目标/视口/清除策略，支持 active/scene/overlay/reflection/custom 等 view kind。 |
+| `scene_submission.hpp` | `RenderScenePacket<Dim>`, `SceneSubmissionPolicy`, `SceneSubmissionRoute` | 场景提交包。将 ECS 场景数据打包为统一的提交结构，通过 policy 路由分发至 Recorder。 |
+| `render_view_submission_utils.hpp` | `RenderViewSubmissionUtils` | 渲染视图提交工具。View kind 解析、Packet 类型推导、Layer mask 分流、Multi-view 协调。 |
+| `scene_render_stage.hpp` | `SceneRenderStage`, `SceneRenderStagePolicy` | 场景渲染阶段。管理 opaque → transparent 阶段顺序、bloom 编排、后处理策略路由。 |
+
+#### 2.4.6 场景录制器 (Scene Recorders)
+
+| 文件 | 类/结构 | 说明 |
+|------|---------|------|
+| `scene_recorder_2d.hpp` | `SceneRecorder2D` | 2D 场景录制器。统一编排 2D Scene → Consumer → Present 或 Offscreen 路径。支持 UI-only/Mixed packet、Scene layer 分流。 |
+| `scene_recorder_3d.hpp` | `SceneRecorder3D` | 3D 场景录制器。统一编排 Light/Shadow/Scene/PostProcess 管线，支持 Multi-view packet、Reflection/Custom view routing、Postprocess policy、Animation 集成。 |
+
+#### 2.4.7 IBL / 环境光照
+
+| 文件 | 类/结构 | 说明 |
+|------|---------|------|
+| `ibl_host.hpp` | `IBLHost`, `IBLHostCreateInfo`, `IBLProbeRoute`, `IBLEnvironmentMap` | IBL 宿主。Irradiance Diffuse IBL、Specular Prefilter + BRDF LUT 管理。接收外部 HDR/cubemap 数据或已预卷积数据。 |
+| `ibl_bake_host.hpp` | `IBLBakeHost`, `IBLBakeHostCreateInfo`, `IBLBakeConfig` | IBL 烘焙宿主。将 HDR 环境贴图烘焙为 Irradiance Map + Prefiltered Environment Map + BRDF Integration LUT。 |
+| `ibl_bake_coordinator.hpp` | `IBLBakeCoordinator` | IBL 烘焙协调器。管理烘焙 Pass 编排、描述符更新、与 RenderTarget 和 Pipeline 的集成。 |
+
+#### 2.4.8 天空盒 / 帧合成
+
+| 文件 | 类/结构 | 说明 |
+|------|---------|------|
+| `skybox_renderer.hpp` | `SkyboxRenderer`, `SkyboxRendererCreateInfo` | 天空盒渲染器。立方体贴图天空盒、HDR/等距矩形输入支持、与 IBL 环境图联动。 |
+| `frame_composer_host.hpp` | `FrameComposerHost`, `FrameComposerCreateInfo` | 帧合成宿主。管理最终帧的合成 Pass：场景渲染目标 + 后处理栈 + UI overlay → Swapchain。 |
+| `animation_frame_coordinator.hpp` | `AnimationFrameCoordinator<Dim>` | 动画帧协调器。统一协调 AnimationClock、Evaluation、Host 的每帧更新，将动画输出注入 SceneRecorder。 |
 
 ### 2.5 ECS 概念层 (`include/vr/ecs/concept/`)
 
@@ -96,6 +146,7 @@
 | `light_component.hpp` | `Light<Dim2/3>`, `LightStyle2D/3D`, `LightRuntimeData` | 光源组件 (POD)。2D: 点光源 (position+radius+color)。3D: 点/聚光/方向光。强度、颜色、范围、阴影标志、裁剪掩码。 |
 | `shadow_component.hpp` | `Shadow<Dim2/3>`, `ShadowStyle2D/3D`, `ShadowRuntimeData` | 阴影组件 (POD)。2D: 遮挡器形状。3D: 网格路由。Shadow Map 槽、偏移、过滤模式、深度格式。 |
 | `appearance_component.hpp` | `Appearance<Dim2/3>`, `AppearanceStyle`, `AppearanceRuntimeRecord` | Appearance 组件 (POD)。可见性记录、link 组、脏追踪、与 Geometry/Surface 渲染器的桥接句柄。 |
+| `animation_component.hpp` | `Animation<Dim2/3>`, `AnimationStyle`, `AnimationRuntime`, `AnimationTrack`, `AnimationPropertyValue`, `AnimationClockState`, `AnimationKind` (Property/Material/Path/Skeletal/Morph/VertexDeform/FrameSequence) | 动画组件 (POD)。动画时钟状态、轨道路由、Property 轨道 (position/rotation/scale/color/float)、Material 轨道、Skeletal 轨道 (骨骼引用 + Joint Weights)、Morph 轨道 (变形目标引用 + 权重)、VertexDeform 轨道、FrameSequence 轨道。支持 Clip 引用 + 播放回调。Phase 1 完整实现。 |
 
 ### 2.7 ECS 系统层 (`include/vr/ecs/system/`)
 
@@ -155,13 +206,40 @@
 | `shadow_runtime_system.hpp` | `ShadowRuntimeSystem<Dim>` | 阴影运行时系统。Shadow Map 渲染调度、深度变换矩阵生成。 |
 | `shadow_gpu_layout.hpp` | `ShadowGpuLayout` | 阴影 GPU Layout 定义。Shadow Map 相关 GPU 内存布局。 |
 
-#### 2.7.7 Appearance 系统组
+#### 2.7.7 透明度与混合系统
+
+| 文件 | 主要类/结构 | 说明 |
+|------|------------|------|
+| `transparency_render_policy.hpp` | `TransparencyRenderPolicy` | 透明度渲染策略。统一管理跨渲染器 (Text/Geometry/Surface) 的透明排序、混合模式路由、Blend State 策略。结合 Appearance 材质路由实现分层透明渲染。 |
+
+#### 2.7.8 Appearance 系统组
 
 | 文件 | 主要类/结构 | 说明 |
 |------|------------|------|
 | `appearance_system.hpp` | `AppearanceSystem<Dim>` | Appearance 基础系统。可见性记录、脏标记、link 句柄。 |
 | `appearance_link_system.hpp` | `AppearanceLinkSystem` | Appearance 链接系统。链接 Geometry/Surface 到 Appearance 记录、跨渲染器协调。 |
 | `appearance_runtime_system.hpp` | `AppearanceRuntimeSystem<Dim>` | Appearance 运行时系统。运行时 appearance 数据生成、缓存、与渲染器批量对接。 |
+
+#### 2.7.9 动画系统组
+
+| 文件 | 主要类/结构 | 说明 |
+|------|------------|------|
+| `animation_clock_system.hpp` | `AnimationClockSystem<Dim>` | 动画时钟系统。管理动画时间推进 (delta/time scale)、播放状态 (Play/Pause/Stop)、循环/单次/乒乓模式、时间范围钳制。 |
+| `animation_evaluation_context.hpp` | `AnimationEvaluationContext<Dim>` | 动画求值上下文。聚合动画求值所需的所有子系统和资源句柄。 |
+| `animation_curve_system.hpp` | `AnimationCurveSystem<Dim>` | 动画曲线系统。关键帧曲线采样 (Linear/Step/CubicSpline)、时间→值映射、曲线缓存。 |
+| `animation_property_track_system.hpp` | `AnimationPropertyTrackSystem<Dim>` | Property 轨道系统。采样 Property Track (position/rotation/scale/color/float)、输出属性值到组件。 |
+| `animation_property_evaluation_system.hpp` | `AnimationPropertyEvaluationSystem<Dim>` | Property 求值系统。将 Property Track 输出写入 Transform 和 Appearance 组件。 |
+| `animation_material_track_system.hpp` | `AnimationMaterialTrackSystem` | Material 轨道系统。采样 Material Track (albedo/metallic/roughness/emissive 等材质参数动画)。 |
+| `animation_material_evaluation_system.hpp` | `AnimationMaterialEvaluationSystem` | Material 求值系统。将 Material Track 输出写入 Appearance/Material 组件。 |
+| `animation_camera_track_system.hpp` | `AnimationCameraTrackSystem<Dim>` | Camera 轨道系统。采样 Camera Track (fov/near/far/position/look-at 动画)。 |
+| `animation_camera_evaluation_system.hpp` | `AnimationCameraEvaluationSystem<Dim>` | Camera 求值系统。将 Camera Track 输出写入 Camera 组件。 |
+| `animation_path_motion_system.hpp` | `AnimationPathMotionSystem<Dim>` | 路径运动系统。Path 曲线 (Position/Rotation/Scale)×时间、路径约束 (Follow/LookAt)、路径采样与插值。 |
+| `animation_path_evaluation_system.hpp` | `AnimationPathEvaluationSystem<Dim>` | 路径求值系统。将 Path Motion 输出写入 Transform 组件。 |
+| `animation_skeletal_evaluation_system.hpp` | `AnimationSkeletalEvaluationSystem<Dim>` | 骨骼求值系统。骨骼轨道采样、Joint Palette 更新、Root Motion 提取。 |
+| `animation_morph_evaluation_system.hpp` | `AnimationMorphEvaluationSystem<Dim>` | 变形求值系统。Morph Target 权重采样、变形缓冲区构建、与 GPU Skinning 协调。 |
+| `animation_vertex_deform_evaluation_system.hpp` | `AnimationVertexDeformEvaluationSystem<Dim>` | 顶点变形求值系统。Vertex Deform 轨道采样、顶点负载输出、与 Geometry Runtime 协调。 |
+| `animation_frame_sequence_evaluation_system.hpp` | `AnimationFrameSequenceEvaluationSystem<Dim>` | 帧序列求值系统。Frame Sequence 轨道采样、A/B 帧混合权重、子网格帧索引路由。 |
+| `animation_resource_track_system.hpp` | `AnimationResourceTrackSystem` | 资源轨道系统。管理动画资源轨道的生命周期和路由。 |
 
 ### 2.8 文本渲染 (`include/vr/text/`)
 
@@ -173,6 +251,7 @@
 | `glyph_upload_host.hpp` | `GlyphUploadHost`, `GlyphUploadHostCreateInfo` | 字形上传。将 Atlas 脏页通过 UploadHost 传输至 GPU Image。 |
 | `text_renderer_2d.hpp` | `TextRenderer2D` | 2D 文本渲染器。图集纹理绑定、字形顶点/索引缓冲生成、Push Constant (颜色/SDF/Outline 参数)。 |
 | `text_renderer_3d.hpp` | `TextRenderer3D` | 3D 文本渲染器。世界空间文本、Billboard 矩阵、深度测试参数。 |
+| `text_runtime_contract.hpp` | `TextRuntimeContract`, `TextContractValidation`, `TextUploadContract` | 文本运行时契约。定义 Text 系统与 Renderer 之间的资源契约、上传策略、字形页面调度协议、诊断统计。 |
 
 ### 2.9 几何渲染 (`include/vr/geometry/`)
 
@@ -185,8 +264,26 @@
 | `geometry_upload_host.hpp` | `GeometryUploadHost` | 几何数据上传。顶点/索引缓冲上传，路径数据上传。 |
 | `geometry_renderer_2d.hpp` | `GeometryRenderer2D`, `GeometryRenderer2DCreateInfo`, `GeometryRenderer2DStats` | 2D 几何渲染器。路径线段→顶点缓冲、描边/填充管线绑定、抗锯齿、Push Constant。集成 Appearance 链接和运行时支持。 |
 | `geometry_renderer_3d.hpp` | `GeometryRenderer3D`, `GeometryRenderer3DCreateInfo`, `GeometryRenderer3DStats` | 3D 几何渲染器。GPU 实例化绘制 (instanced draw)、PBR 材质绑定、管线状态。集成 Appearance 和 Shadow 支持。 |
+| `geometry_skeletal_palette_builder.hpp` | `GeometrySkeletalPaletteBuilder`, `SkeletalPaletteUpload` | GPU 骨骼调色板构建器。从 AnimationSkeletalHost 消费 Joint Palette，构建用于 GPU Skinning 的骨骼矩阵 UBO/SSBO。 |
 
-### 2.10 Surface 渲染 (`include/vr/surface/`)
+### 2.10 动画子系统 (`include/vr/animation/`)
+
+| 文件 | 类/结构 | 说明 |
+|------|---------|------|
+| `animation_clip_host.hpp` | `AnimationClipHost<Dim>`, `AnimationClipCreateInfo`, `AnimationClipRoute` | 动画片段管理器。Clip 生命周期 (Create/Destroy)、采样/求值、轨道收集 (Property/Material/Path/Skeletal/Morph/VertexDeform)。支持循环/单次/乒乓播放模式。 |
+| `animation_skeletal_host.hpp` | `AnimationSkeletalHost<Dim>`, `SkeletalJointPalette`, `SkeletalJointIndex` | 骨骼动画宿主。关节层级 (Joint Hierarchy)、关节调色板 (Joint Palette)、GPU Skinning 矩阵上传、Root Motion 提取。 |
+| `animation_morph_host.hpp` | `AnimationMorphHost<Dim>`, `MorphTargetBuffer`, `MorphTargetWeight` | 变形目标 (Morph Target) 宿主。变形目标权重管理、GPU 缓冲区上传、Blend Shape 支持。 |
+| `animation_path_host.hpp` | `AnimationPathHost<Dim>`, `PathMotionCurve`, `PathMotionSample` | 路径动画宿主。路径曲线 (Position/Rotation/Scale)、路径采样、路径运动合成。 |
+| `animation_vertex_deform_host.hpp` | `AnimationVertexDeformHost<Dim>`, `VertexDeformBuffer`, `VertexDeformPayload` | 顶点变形宿主。GPU 顶点变形缓冲区、变形负载上传、与 Geometry 渲染器集成。 |
+| `animation_frame_sequence_host.hpp` | `AnimationFrameSequenceHost<Dim>`, `FrameSequenceState`, `FrameSequenceBlend` | 帧序列动画宿主。子网格帧序列播放、A/B 帧混合、帧索引路由。 |
+
+### 2.11 资产层 (`include/vr/asset/`)
+
+| 文件 | 类/结构 | 说明 |
+|------|---------|------|
+| `texture_host.hpp` | `TextureHost`, `TextureHostCreateInfo`, `TextureResource`, `TextureUploadDesc` | 资产纹理宿主。接收外部已解码像素数据、创建/接管 GPU Image、Mipmap 生成、格式协商。不包含 PNG/KTX2 解码逻辑，仅消费已准备数据。 |
+
+### 2.12 Surface 渲染 (`include/vr/surface/`)
 
 | 文件 | 类/结构 | 说明 |
 |------|---------|------|
@@ -196,7 +293,7 @@
 | `surface_renderer_2d.hpp` | `SurfaceRenderer2D`, `SurfaceRenderer2DCreateInfo`, `SurfaceRenderer2DStats` | 2D Surface 渲染器。精灵绘制、混合模式 (alpha/additive/multiply/screen)、UV 变换、tint color。集成 Appearance 和运行时上传支持。 |
 | `surface_renderer_3d.hpp` | `SurfaceRenderer3D`, `SurfaceRenderer3DCreateInfo`, `SurfaceRenderer3DStats` | 3D Surface 渲染器。世界空间贴图、纹理过滤 (linear/nearest/anisotropic)、寻址模式、双面渲染。 |
 
-### 2.11 Light/Shadow 渲染 (`include/vr/light/`, `include/vr/shadow/`)
+### 2.13 Light/Shadow 渲染 (`include/vr/light/`, `include/vr/shadow/`)
 
 | 文件 | 类/结构 | 说明 |
 |------|---------|------|
@@ -223,8 +320,38 @@
 | `src/render/upload_host.cpp` | `UploadHost` 实现：Staging buffer 管理、Allocate/Write/RecordCopy、Transfer Queue 提交、Synchronization2。 |
 | `src/render/descriptor_host.cpp` | `DescriptorHost` 实现：DescriptorPool 管理、Layout 缓存、Set 分配与更新。 |
 | `src/render/pipeline_host.cpp` | `PipelineHost` 实现：ShaderModule/PipelineLayout/GraphicsPipeline/ComputePipeline 缓存、延迟编译、VkPipelineCache。 |
+| `src/render/render_target_host.cpp` | `RenderTargetHost` 实现：渲染目标创建/销毁、附件管理、格式协商。 |
+| `src/render/render_target_pool.cpp` | `RenderTargetPool` 实现：多尺寸池管理、槽位分配/回收。 |
+| `src/render/render_target_pass.cpp` | `RenderTargetPass` 实现：VkRenderPass 创建、Load/Store Op、Clear 配置。 |
+| `src/render/render_target_composite_renderer.cpp` | `RenderTargetCompositeRenderer` 实现：离屏目标→Swapchain 合成。 |
+| `src/render/render_target_bloom_renderer.cpp` | `RenderTargetBloomRenderer` 实现：Prefilter→Blur→Combine Bloom 管线。 |
+| `src/render/scene_render_target_set.cpp` | `SceneRenderTargetSet` 实现：场景目标集管理。 |
+| `src/render/scene_bloom_post_stack.cpp` | `SceneBloomPostStack` 实现：Bloom 后处理栈。 |
+| `src/render/scene_recorder_2d.cpp` | `SceneRecorder2D` 实现：2D 场景统一编排、Layer 分流、UI-only/Mixed packet 路线。 |
+| `src/render/scene_recorder_3d.cpp` | `SceneRecorder3D` 实现：3D 场景统一编排、Multi-view/Light/Shadow/PostProcess 管线。 |
+| `src/render/ibl_host.cpp` | `IBLHost` 实现：Irradiance/Specular IBL 资源管理、BRDF LUT。 |
+| `src/render/ibl_bake_host.cpp` | `IBLBakeHost` 实现：HDR 环境图烘焙→Irradiance Map + Prefiltered Map + BRDF LUT (1039 行)。 |
+| `src/render/skybox_renderer.cpp` | `SkyboxRenderer` 实现：立方体贴图天空盒、等距矩形输入。 |
+| `src/render/frame_composer_host.cpp` | `FrameComposerHost` 实现：最终帧合成与 Swapchain 输出管理。 |
 
-### 3.3 资源 (`src/resource/`)
+### 3.3 动画 (`src/animation/`)
+
+| 文件 | 说明 |
+|------|------|
+| `src/animation/animation_clip_host.cpp` | `AnimationClipHost<Dim>` 实现 (688 行)：片段创建/销毁、轨道收集、采样求值、播放模式。 |
+| `src/animation/animation_skeletal_host.cpp` | `AnimationSkeletalHost<Dim>` 实现 (498 行)：关节层级、调色板构建、GPU Skinning 矩阵上传、Root Motion。 |
+| `src/animation/animation_morph_host.cpp` | `AnimationMorphHost<Dim>` 实现 (320 行)：变形目标管理、权重缓冲区上传、Blend Shape。 |
+| `src/animation/animation_path_host.cpp` | `AnimationPathHost<Dim>` 实现 (384 行)：路径曲线管理、采样与合成。 |
+| `src/animation/animation_vertex_deform_host.cpp` | `AnimationVertexDeformHost<Dim>` 实现 (322 行)：顶点变形缓冲区管理、payload 上传。 |
+| `src/animation/animation_frame_sequence_host.cpp` | `AnimationFrameSequenceHost<Dim>` 实现 (263 行)：帧序列播放、A/B 混合、帧索引路由。 |
+
+### 3.4 资产 (`src/asset/`)
+
+| 文件 | 说明 |
+|------|------|
+| `src/asset/texture_host.cpp` | `TextureHost` 实现 (441 行)：外部已解码纹理数据接入、GPU Image 创建、Mipmap 生成。 |
+
+### 3.5 资源 (`src/resource/`)
 
 | 文件 | 说明 |
 |------|------|
@@ -233,7 +360,7 @@
 | `src/resource/gpu_memory_host.cpp` | `GpuMemoryHost` 实现：Buddy 分配器初始化、AllocateAndBind、Deallocate、Flush/Invalidate。 |
 | `src/resource/sampler_host.cpp` | `SamplerHost` 实现：vkCreateSampler + 哈希缓存。 |
 
-### 3.4 文本子系统 (`src/text/`)
+### 3.6 文本子系统 (`src/text/`)
 
 | 文件 | 说明 |
 |------|------|
@@ -243,7 +370,7 @@
 | `src/text/text_renderer_2d.cpp` | `TextRenderer2D` 实现：顶点/索引缓冲、纹理绑定、绘制命令。 |
 | `src/text/text_renderer_3d.cpp` | `TextRenderer3D` 实现：3D 世界空间文本。 |
 
-### 3.5 几何子系统 (`src/geometry/`)
+### 3.7 几何子系统 (`src/geometry/`)
 
 | 文件 | 说明 |
 |------|------|
@@ -254,7 +381,7 @@
 | `src/geometry/geometry_renderer_2d.cpp` | `GeometryRenderer2D` 实现 (含 Appearance 集成)。 |
 | `src/geometry/geometry_renderer_3d.cpp` | `GeometryRenderer3D` 实现 (含 Appearance + Shadow 集成)。 |
 
-### 3.6 Surface 子系统 (`src/surface/`)
+### 3.8 Surface 子系统 (`src/surface/`)
 
 | 文件 | 说明 |
 |------|------|
@@ -263,7 +390,7 @@
 | `src/surface/surface_renderer_2d.cpp` | `SurfaceRenderer2D` 实现 (含 Appearance + Runtime Upload 集成)。 |
 | `src/surface/surface_renderer_3d.cpp` | `SurfaceRenderer3D` 实现。 |
 
-### 3.7 Light/Shadow 子系统 (`src/light/`, `src/shadow/`)
+### 3.9 Light/Shadow 子系统 (`src/light/`, `src/shadow/`)
 
 | 文件 | 说明 |
 |------|------|
@@ -292,6 +419,12 @@
 | `shaders/surface_3d.frag` | 3D Surface 片段着色器 (纹理过滤) |
 | `shaders/shadow_depth_2d.vert` | 2D 阴影深度顶点着色器 (遮挡物深度图) |
 | `shaders/shadow_depth_3d.vert` | 3D 阴影深度顶点着色器 (深度管线) |
+| `shaders/render_target_composite.vert` | 离屏合成顶点着色器 (全屏四边形) |
+| `shaders/render_target_composite.frag` | 离屏合成片段着色器 (渲染目标→Swapchain) |
+| `shaders/render_target_bloom_prefilter.frag` | Bloom Prefilter 片段着色器 (亮度阈值提取) |
+| `shaders/render_target_bloom_blur.frag` | Bloom Blur 片段着色器 (多级高斯模糊) |
+| `shaders/render_target_bloom_combine.frag` | Bloom Combine 片段着色器 (模糊结果与源图混合) |
+| `shaders/skybox.frag` | Skybox 片段着色器 (立方体贴图采样、HDR 色调映射、与 IBL 环境图联动) |
 
 SPIR-V 编译产物嵌入到 `build/generated/vr/{text,geometry,surface}/generated/` 下。
 
@@ -318,7 +451,9 @@ SPIR-V 编译产物嵌入到 `build/generated/vr/{text,geometry,surface}/generat
 | `examples/sdl_surface_unified_demo.cpp` | `sdl_surface_unified_demo` | Surface 渲染统一演示。 |
 | `examples/sdl_surface_light_shadow_2d_demo.cpp` | `sdl_surface_light_shadow_2d_demo` | 2D Surface + Light + Shadow 完整演示。 |
 | `examples/sdl_text_demo.cpp` | `sdl_text_demo` | 2D 文本渲染演示 (SDF + 图集)。 |
-| `examples/sdl_text_3d_demo.cpp` | `sdl_text_3d_demo` | 3D 文本渲染演示 (Billboard + 深度)。 |
+| `examples/sdl_text_3d_demo.cpp` | `sdl_text_3d_demo` | 3D 文本渲染演示 (Billboard + 深度 + RenderTarget)。 |
+| `examples/sdl_offscreen_postprocess_demo.cpp` | `sdl_offscreen_postprocess_demo` | 离屏渲染与后处理演示。渲染目标创建、SceneRenderTargetSet、Bloom Post Stack、Composite→Swapchain 完整流程。 |
+| `examples/sdl_scene_3d_unified_demo.cpp` | `sdl_scene_3d_unified_demo` | 3D 统一场景演示。完整 3D 渲染管线：Geometry + Surface + Text + Light + Shadow + RenderTarget + Bloom。 |
 
 ---
 
@@ -356,6 +491,10 @@ SPIR-V 编译产物嵌入到 `build/generated/vr/{text,geometry,surface}/generat
 | `ecs_appearance_system_tests.cpp` | AppearanceSystem 单元测试 |
 | `ecs_appearance_link_system_tests.cpp` | AppearanceLinkSystem 单元测试 |
 | `ecs_appearance_runtime_system_tests.cpp` | AppearanceRuntimeSystem 单元测试 |
+| `ecs_animation_system_tests.cpp` | 动画系统单元测试 (Clock/Curve/Property/Material/Camera/Path 综合) |
+| `ecs_animation_evaluation_system_tests.cpp` | 动画求值系统测试 (Property/Material/Camera/Path/Skeletal/Morph 求值) |
+| `ecs_animation_deformation_evaluation_system_tests.cpp` | 动画变形求值系统测试 (Skeletal/Morph Vertex Transform) |
+| `ecs_animation_vertex_frame_evaluation_system_tests.cpp` | 动画顶点帧求值系统测试 (VertexDeform/FrameSequence) |
 | `ecs_light_component_tests.cpp` | LightComponent 单元测试 |
 | `ecs_light_culling_system_tests.cpp` | LightCullingSystem 单元测试 |
 | `ecs_light_runtime_system_tests.cpp` | LightRuntimeSystem 单元测试 |
@@ -393,6 +532,16 @@ SPIR-V 编译产物嵌入到 `build/generated/vr/{text,geometry,surface}/generat
 | `runtime_geometry_renderer_2d_integration_tests.cpp` | GeometryRenderer2D 集成测试 |
 | `runtime_geometry_renderer_3d_integration_tests.cpp` | GeometryRenderer3D 集成测试 |
 | `runtime_surface_upload_host_integration_tests.cpp` | SurfaceUploadHost 集成测试 |
+| `runtime_surface_renderer_3d_integration_tests.cpp` | SurfaceRenderer3D 集成测试 |
+| `runtime_scene_3d_unified_integration_tests.cpp` | 3D 统一场景集成测试 (Geometry+Surface+Text+Light+Shadow+RenderTarget+Bloom+Animation) |
+| `runtime_frame_composer_integration_tests.cpp` | FrameComposerHost 集成测试 (场景合成→Swapchain)。 |
+| `runtime_ibl_host_integration_tests.cpp` | IBLHost 集成测试 (Irradiance/Specular IBL 资源加载与绑定)。 |
+| `runtime_ibl_bake_host_integration_tests.cpp` | IBLBakeHost 集成测试 (HDR 环境图烘焙流程)。 |
+| `runtime_texture_host_integration_tests.cpp` | TextureHost 集成测试 (纹理上传/Mip/格式协商)。 |
+| `animation_host_tests.cpp` | AnimationClipHost 单元测试 (片段创建、轨道管理、播放控制)。 |
+| `animation_skeletal_morph_host_tests.cpp` | AnimationSkeletalHost + AnimationMorphHost 单元测试。 |
+| `animation_vertex_frame_host_tests.cpp` | AnimationVertexDeformHost + AnimationFrameSequenceHost 单元测试。 |
+| `render_target_types_tests.cpp` | RenderTarget 类型/结构体单元测试 (已大幅扩展至 1130 行)。 |
 
 ---
 
@@ -463,6 +612,9 @@ SPIR-V 编译产物嵌入到 `build/generated/vr/{text,geometry,surface}/generat
 | `runtime_productization_progress_2026-04-29.md` | 运行时产品化进度记录。 |
 | `appearance_renderer_group_optimization_plan_2026-04-28.md` | Appearance 渲染器组优化计划。 |
 | `shader_development_plan_2026-04-29.md` | 着色器开发计划。着色器重构路线图、GLSL 合约检查、SPIR-V 反射工具链规划。 |
+| `render_target_v1_constraints.md` | Render Target v1 约束文档。渲染目标设计的架构约束、格式限制、规范约定。 |
+| `render_runtime_contract_v0_1.md` | 渲染运行时契约 v0.1。定义 RenderRuntime 与各子系统之间的资源、生命周期、同步契约。 |
+| `game_rendering_gap_analysis.md` | 游戏渲染能力缺口分析。T0-T3 分级评估，推荐 4-Phase 3D 游戏化路线图。 |
 
 ---
 
@@ -532,14 +684,14 @@ vr.types
 
 | 类别 | 文件数 |
 |------|--------|
-| 公开头文件 (.hpp) | 90 |
-| 源文件 (.cpp) | 28 |
-| 着色器 (.vert/.frag) + GLSL 头文件 | 14 + 2 |
-| 示例文件 | 9 |
-| 测试用例 | 41 |
+| 公开头文件 (.hpp) | 135 |
+| 源文件 (.cpp) | 47 |
+| 着色器 (.vert/.frag) + GLSL 头文件 | 20 + 2 |
+| 示例文件 | 11 |
+| 测试用例 | 55 |
 | 基准测试用例 | 17 (含 4 support files) |
-| 文档 | 11 |
+| 文档 | 14 |
 | 脚本/工具 | 3 + 4 |
 | CMake Presets | 1 |
 | C++20 模块文件 (feature 分支) | 12 |
-| **总计** | **230+** |
+| **总计** | **320+** |

@@ -1,0 +1,99 @@
+#version 460
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+struct ParticleGpuSortKeyRecord {
+    uint sort_key_hi;
+    uint sort_key_lo;
+    uint state_index;
+    uint batch_index;
+};
+
+struct ParticleGpuIndirectCommand {
+    uint vertexCount;
+    uint instanceCount;
+    uint firstVertex;
+    uint firstInstance;
+    uint live_particle_count;
+    uint reserved0;
+};
+
+layout(push_constant) uniform ParticleSortPushConstants {
+    uint segment_capacity;
+    uint batch_index;
+    float reserved0;
+    uint flags;
+} pc;
+
+layout(set = 0, binding = 5, std430) readonly buffer ParticleIndirectBuffer {
+    ParticleGpuIndirectCommand commands[];
+} indirect_buffer;
+
+layout(set = 0, binding = 6, std430) buffer ParticleSortBuffer {
+    ParticleGpuSortKeyRecord records[];
+} sort_buffer;
+
+bool less_key(in ParticleGpuSortKeyRecord lhs_, in ParticleGpuSortKeyRecord rhs_) {
+    if (lhs_.sort_key_hi != rhs_.sort_key_hi) {
+        return lhs_.sort_key_hi < rhs_.sort_key_hi;
+    }
+    if (lhs_.sort_key_lo != rhs_.sort_key_lo) {
+        return lhs_.sort_key_lo < rhs_.sort_key_lo;
+    }
+    return lhs_.state_index < rhs_.state_index;
+}
+
+ParticleGpuSortKeyRecord make_sentinel(uint batch_index_) {
+    ParticleGpuSortKeyRecord record;
+    record.sort_key_hi = 0xffffffffu;
+    record.sort_key_lo = 0xffffffffu;
+    record.state_index = 0u;
+    record.batch_index = batch_index_;
+    return record;
+}
+
+void main() {
+    uint local_index = gl_GlobalInvocationID.x;
+    if (local_index >= pc.segment_capacity) {
+        return;
+    }
+
+    uint stage = (pc.flags >> 16u) & 0xffffu;
+    uint pass = pc.flags & 0xffffu;
+    if (stage <= 1u || pass == 0u) {
+        return;
+    }
+
+    uint partner_index = local_index ^ pass;
+    if (partner_index <= local_index || partner_index >= pc.segment_capacity) {
+        return;
+    }
+
+    ParticleGpuIndirectCommand command = indirect_buffer.commands[pc.batch_index];
+    uint live_count = command.instanceCount;
+    if (live_count <= 1u) {
+        return;
+    }
+
+    uint first_instance = command.firstInstance;
+    uint global_lhs = first_instance + local_index;
+    uint global_rhs = first_instance + partner_index;
+
+    ParticleGpuSortKeyRecord lhs = local_index < live_count
+        ? sort_buffer.records[global_lhs]
+        : make_sentinel(pc.batch_index);
+    ParticleGpuSortKeyRecord rhs = partner_index < live_count
+        ? sort_buffer.records[global_rhs]
+        : make_sentinel(pc.batch_index);
+
+    bool ascending = (local_index & stage) == 0u;
+    bool should_swap = ascending ? less_key(rhs, lhs) : less_key(lhs, rhs);
+    if (should_swap) {
+        if (local_index < live_count) {
+            sort_buffer.records[global_lhs] = rhs;
+        }
+        if (partner_index < live_count) {
+            sort_buffer.records[global_rhs] = lhs;
+        }
+    }
+}

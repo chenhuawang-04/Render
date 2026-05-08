@@ -1,0 +1,238 @@
+﻿#version 460
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+struct ParticleGpuStateRecord {
+    float position_x;
+    float position_y;
+    float position_z;
+    float age_s;
+    float velocity_x;
+    float velocity_y;
+    float velocity_z;
+    float lifetime_s;
+    float start_size;
+    float end_size;
+    float rotation_radians;
+    float angular_velocity_radians;
+    uint start_color_rgba8;
+    uint end_color_rgba8;
+    uint texture_id;
+    uint material_id;
+    uint component_index;
+    uint user_data;
+    uint packed_flags;
+    uint reserved0;
+    float drag_coefficient;
+    float gravity_scale;
+    float soft_particle_distance;
+    float stretch_velocity_scale;
+};
+
+struct Particle3DGpuInstance {
+    float position_x;
+    float position_y;
+    float position_z;
+    float size_x;
+    float size_y;
+    float rotation_radians;
+    float normalized_age;
+    float stretch_factor;
+    uint color_rgba8;
+    uint texture_id;
+    uint material_id;
+    uint component_index;
+    uint user_data;
+    float velocity_x;
+    float velocity_y;
+    float velocity_z;
+    float soft_particle_distance;
+};
+
+struct ParticleGpuAliveEntry {
+    uint compacted_instance_index;
+    uint state_index;
+};
+
+struct ParticleGpuSortKeyRecord {
+    uint sort_key_hi;
+    uint sort_key_lo;
+    uint state_index;
+    uint batch_index;
+};
+
+struct ParticleGpuSpawnPacket {
+    uint component_index;
+    uint spawn_count;
+    uint random_seed;
+    uint spawn_cursor;
+    uint state_range_begin;
+    uint state_range_count;
+    uint simulation_space;
+    uint emitter_shape;
+    uint packed_flags;
+    float delta_time_s;
+    float emitter_time_s;
+    float lifetime_min_s;
+    float lifetime_max_s;
+    float speed_min;
+    float speed_max;
+    float start_size_min;
+    float start_size_max;
+    float end_size_min;
+    float end_size_max;
+    float rotation_min_radians;
+    float rotation_max_radians;
+    float angular_velocity_min;
+    float angular_velocity_max;
+    float drag_coefficient;
+    float gravity_scale;
+    float emission_extent_x;
+    float emission_extent_y;
+    float emission_extent_z;
+    float emission_radius;
+    float emission_axis_x;
+    float emission_axis_y;
+    float emission_axis_z;
+    float cone_half_angle_radians;
+    float spread_angle_radians;
+    float transform_x0;
+    float transform_x1;
+    float transform_x2;
+    float transform_x3;
+    float transform_y0;
+    float transform_y1;
+    float transform_y2;
+    float transform_y3;
+    float transform_z0;
+    float transform_z1;
+    float transform_z2;
+    float transform_z3;
+};
+
+struct ParticleGpuIndirectCommand {
+    uint vertexCount;
+    uint instanceCount;
+    uint firstVertex;
+    uint firstInstance;
+    uint live_particle_count;
+    uint reserved0;
+};
+
+layout(push_constant) uniform ParticleBuildPushConstants {
+    uint record_count;
+    uint spawn_packet_count;
+    float delta_time_s;
+    uint flags;
+    float sort_origin_x;
+    float sort_origin_y;
+    float sort_origin_z;
+    float sort_direction_x;
+    float sort_direction_y;
+    float sort_direction_z;
+} pc;
+
+layout(set = 0, binding = 0, std430) readonly buffer ParticleStateBuffer {
+    ParticleGpuStateRecord records[];
+} state_buffer;
+
+layout(set = 0, binding = 1, std430) writeonly buffer ParticleInstanceBuffer {
+    Particle3DGpuInstance instances[];
+} instance_buffer;
+
+layout(set = 0, binding = 2, std430) readonly buffer ParticleAliveBuffer {
+    ParticleGpuAliveEntry alive_entries[];
+} alive_buffer;
+
+layout(set = 0, binding = 3, std430) readonly buffer ParticleDeadBuffer {
+    ParticleGpuAliveEntry dead_entries[];
+} dead_buffer;
+
+layout(set = 0, binding = 4, std430) readonly buffer ParticleSpawnPacketBuffer {
+    ParticleGpuSpawnPacket packets[];
+} spawn_packet_buffer;
+
+layout(set = 0, binding = 5, std430) readonly buffer ParticleIndirectBuffer {
+    ParticleGpuIndirectCommand commands[];
+} indirect_buffer;
+
+layout(set = 0, binding = 6, std430) readonly buffer ParticleSortBuffer {
+    ParticleGpuSortKeyRecord records[];
+} sort_buffer;
+
+const uint PARTICLE_GPU_FLAG_ALIVE = 1u << 0u;
+const uint PARTICLE_BUILD_FLAG_ENABLE_SORT = 0x80000000u;
+
+uint pack_color(vec4 color_) {
+    vec4 clamped = clamp(color_, vec4(0.0), vec4(1.0));
+    uvec4 rgba = uvec4(round(clamped * 255.0));
+    return (rgba.x & 0xFFu) |
+           ((rgba.y & 0xFFu) << 8u) |
+           ((rgba.z & 0xFFu) << 16u) |
+           ((rgba.w & 0xFFu) << 24u);
+}
+
+vec4 unpack_color(uint packed_) {
+    return vec4(
+        float(packed_ & 0xFFu),
+        float((packed_ >> 8u) & 0xFFu),
+        float((packed_ >> 16u) & 0xFFu),
+        float((packed_ >> 24u) & 0xFFu)) / 255.0;
+}
+
+void main() {
+    uint index = gl_GlobalInvocationID.x;
+    if (index >= pc.record_count) {
+        return;
+    }
+
+    bool sort_enabled = (pc.flags & PARTICLE_BUILD_FLAG_ENABLE_SORT) != 0u;
+    uint state_record_index = index;
+    uint output_instance_index = index;
+    if (sort_enabled) {
+        ParticleGpuSortKeyRecord sort_record = sort_buffer.records[index];
+        if (sort_record.state_index == 0u) {
+            return;
+        }
+        state_record_index = sort_record.state_index - 1u;
+    } else {
+        ParticleGpuAliveEntry alive_entry = alive_buffer.alive_entries[index];
+        if (alive_entry.compacted_instance_index == 0u) {
+            return;
+        }
+        state_record_index = alive_entry.state_index - 1u;
+        output_instance_index = alive_entry.compacted_instance_index - 1u;
+    }
+
+    ParticleGpuStateRecord src = state_buffer.records[state_record_index];
+    float lifetime_s = max(src.lifetime_s, 1e-6);
+    float normalized_age = clamp(src.age_s / lifetime_s, 0.0, 1.0);
+    float size = mix(src.start_size, src.end_size, normalized_age);
+    vec4 color = mix(unpack_color(src.start_color_rgba8),
+                     unpack_color(src.end_color_rgba8),
+                     normalized_age);
+    float speed = length(vec3(src.velocity_x, src.velocity_y, src.velocity_z));
+    if ((src.packed_flags & PARTICLE_GPU_FLAG_ALIVE) == 0u || src.age_s >= src.lifetime_s) {
+        return;
+    }
+
+    Particle3DGpuInstance dst;
+    dst.position_x = src.position_x;
+    dst.position_y = src.position_y;
+    dst.position_z = src.position_z;
+    dst.size_x = size;
+    dst.size_y = size;
+    dst.rotation_radians = src.rotation_radians;
+    dst.normalized_age = normalized_age;
+    dst.stretch_factor = 1.0 + speed * max(src.stretch_velocity_scale, 0.0);
+    dst.color_rgba8 = pack_color(color);
+    dst.texture_id = src.texture_id;
+    dst.material_id = src.material_id;
+    dst.component_index = src.component_index;
+    dst.user_data = src.user_data;
+    dst.velocity_x = src.velocity_x;
+    dst.velocity_y = src.velocity_y;
+    dst.velocity_z = src.velocity_z;
+    dst.soft_particle_distance = src.soft_particle_distance;
+    instance_buffer.instances[output_instance_index] = dst;
+}
