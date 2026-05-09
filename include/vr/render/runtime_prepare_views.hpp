@@ -205,6 +205,14 @@ struct SkyEnvironmentGpuPrepareView final {
     FrameGpuProgressContext progress{};
 };
 
+struct SkyEnvironmentPassPrepareView final {
+    VulkanContext& device;
+    PipelineHost& pipeline;
+    RenderTargetHost& render_target;
+    FrameStaticContext frame{};
+    FrameGpuProgressContext progress{};
+};
+
 struct RenderTargetCompositeRendererPrepareView final {
     VulkanContext& device;
     DescriptorHost& descriptor;
@@ -390,6 +398,19 @@ template<typename T>
         .sampler = detail::RequirePrepareService(prepare_view_.sampler,
                                                  "sampler",
                                                  "SkyEnvironmentGpuPrepareView"),
+        .frame = prepare_view_.frame,
+        .progress = prepare_view_.progress,
+    };
+}
+
+[[nodiscard]] inline SkyEnvironmentPassPrepareView MakeSkyEnvironmentPassPrepareView(
+    const SceneRecorder3DPrepareView& prepare_view_) {
+    return {
+        .device = prepare_view_.device,
+        .pipeline = detail::RequirePrepareService(prepare_view_.pipeline,
+                                                  "pipeline",
+                                                  "SkyEnvironmentPassPrepareView"),
+        .render_target = prepare_view_.render_target,
         .frame = prepare_view_.frame,
         .progress = prepare_view_.progress,
     };

@@ -2,6 +2,7 @@
 
 #include "Center/Memory/Container/Vector/McVector.hpp"
 #include "vr/render/animation_frame_coordinator.hpp"
+#include "vr/render/environment/sky_environment_pass.hpp"
 #include "vr/render/light_frame_coordinator.hpp"
 #include "vr/render/light_shadow_link_coordinator.hpp"
 #include "vr/render/scene_bloom_post_stack.hpp"
@@ -41,6 +42,8 @@ struct SceneRecorder3DStats final {
     std::uint32_t frame_packet_prepare_count = 0U;
     std::uint32_t frame_packet_record_count = 0U;
     std::uint32_t animation_binding_refresh_count = 0U;
+    std::uint32_t environment_prepare_count = 0U;
+    std::uint32_t environment_record_count = 0U;
     std::uint32_t frame_view_count = 0U;
     std::uint32_t active_view_index = 0xFFFF'FFFFU;
     std::uint32_t scene_view_index = 0xFFFF'FFFFU;
@@ -566,16 +569,20 @@ private:
     [[nodiscard]] bool IsShadowEnabledForSubmission() const noexcept;
     [[nodiscard]] bool IsOverlayEnabledForSubmission() const noexcept;
     [[nodiscard]] bool IsPostProcessEnabledForSubmission() const noexcept;
+    [[nodiscard]] bool HasSkyEnvironmentPassForSubmission() const noexcept;
     [[nodiscard]] bool IsLayerVisibleForSubmission(std::uint32_t submission_layer_mask_) const noexcept;
     [[nodiscard]] bool IsOverlayLayerVisibleForSubmission(std::uint32_t submission_layer_mask_) const noexcept;
     [[nodiscard]] bool IsFirstSceneRendererEntryForRenderer(
         const SceneRendererEntry& entry_) const noexcept;
+    void ConfigureSkyEnvironmentPassForTargets();
+    [[nodiscard]] RenderTargetColorOutputConfig BuildSkyEnvironmentOutputConfig() const noexcept;
     void EnsureInitialized(const char* operation_) const;
     void EnsureRuntimeBinding(const char* operation_) const;
 
 private:
     SceneRecorder3DCreateInfo create_info_cache{};
     SceneRecorder3DStats stats{};
+    SkyEnvironmentPass sky_environment_pass{};
     SceneBloomPostStack post_stack{};
     SceneRecorder3DMcVector<PreSceneRendererEntry> pre_scene_renderer_entries{};
     SceneRecorder3DMcVector<SceneRendererEntry> scene_renderer_entries{};

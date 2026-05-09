@@ -107,6 +107,36 @@ VR_TEST_CASE(SceneSubmissionBuilder_2D_applies_active_view_background_override,
     VR_CHECK(packet.extra.background.color1.z == 1.0F);
 }
 
+VR_TEST_CASE(SceneSubmissionBuilder_3D_applies_active_view_environment_override,
+             "[scene][background][render]") {
+    vr::scene::Scene3D scene{};
+    scene.background.mode = vr::scene::SkyEnvironmentMode::solid_color;
+    scene.background.zenith_color = vr::ecs::Float4{.x = 0.4F, .y = 0.5F, .z = 0.6F, .w = 1.0F};
+    scene.background.revision = 9U;
+
+    vr::render::RenderView3D views[1]{};
+    views[0].background_override.mode = vr::render::BackgroundOverrideMode::override_state;
+    views[0].background_override.state.mode = vr::scene::SkyEnvironmentMode::gradient;
+    views[0].background_override.state.zenith_color = vr::ecs::Float4{.x = 0.1F, .y = 0.2F, .z = 0.3F, .w = 1.0F};
+    views[0].background_override.state.horizon_color = vr::ecs::Float4{.x = 0.8F, .y = 0.7F, .z = 0.6F, .w = 1.0F};
+    views[0].background_override.state.revision = 15U;
+    views[0].background_override.gpu = vr::scene::SkyEnvironmentGpuHandle{.index = 3U, .generation = 2U};
+    vr::render::RefreshRenderViewSignature(views[0]);
+
+    const vr::render::RenderScenePacket3D packet =
+        vr::scene::SceneSubmissionBuilder<vr::ecs::Dim3, vr::scene::SkyEnvironment>::Build(
+            scene,
+            views,
+            1U,
+            0U,
+            12U);
+
+    VR_CHECK(packet.extra.environment.mode == vr::scene::SkyEnvironmentMode::gradient);
+    VR_CHECK(packet.extra.environment.revision == 15U);
+    VR_CHECK(packet.extra.environment_gpu.index == 3U);
+    VR_CHECK(packet.extra.environment.horizon_color.x == 0.8F);
+}
+
 VR_TEST_CASE(SkyEnvironmentGpuHost_descriptor_reuse, "[scene][background][render]") {
     vr::VulkanContext context{};
     vr::asset::TextureHost texture_host{};
