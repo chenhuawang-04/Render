@@ -9,7 +9,7 @@
 **主要平台**: Windows (SDL3 后端)
 **调试工具**: CrashTracer (Benchmark 崩溃回溯，日志输出至 `crash_reports/`)
 
-项目是一个基于 Vulkan 1.3 的实时 2D/3D 图形渲染框架，由以下核心层次组成：
+项目是一个基于 Vulkan 1.3 的实时 2D/3D 图形渲染框架，由以下核心层次组成。
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
@@ -62,13 +62,17 @@
 │  │ Anim.     │ Anim.    │ Anim.    │ Anim.    │                  │   │
 │  │ Path      │ Vertex   │ FrameSeq │ Resource │                  │   │
 │  └──────────┴──────────┴──────────┴──────────┴──────────────────┘   │
+│  ├──────────┼──────────┼──────────┤                                  │
+│  │ Particle │ Particle │ Particle │                                  │
+│  │ System   │ Runtime  │ Emitter  │                                  │
+│  └──────────┴──────────┴──────────┴──────────────────────────────────┘   │
 ├──────────────────────────────────────────────────────────────────────┤
-│                    Renderer Backends                                  │
-│  ┌──────────┬──────────┬──────────┬────────────────────────────────┐ │
-│  │ Text     │ Geometry │ Surface  │ Shadow                         │ │
-│  │Renderer  │ Renderer │ Renderer │ Renderer 2D/3D                 │ │
-│  │ 2D / 3D  │ 2D / 3D  │ 2D / 3D  │                                │ │
-│  └──────────┴──────────┴──────────┴────────────────────────────────┘ │
+│                    Renderer Backends + Particle                      │
+│  ┌──────────┬──────────┬──────────┬──────────┬─────────────────────┐ │
+│  │ Text     │ Geometry │ Surface  │ Shadow   │ Particle            │ │
+│  │Renderer  │ Renderer │ Renderer │ Renderer │ Renderer 2D/3D      │ │
+│  │ 2D / 3D  │ 2D / 3D  │ 2D / 3D  │ 2D / 3D  │ 2D / 3D            │ │
+│  └──────────┴──────────┴──────────┴──────────┴─────────────────────┘ │
 ├──────────────────────────────────────────────────────────────────────┤
 │                    Resource & Domain Hosts                            │
 │  ┌──────────┬──────────┬──────────┬──────────┬──────────────────┐   │
@@ -235,18 +239,74 @@
 |------|------|
 | `AnimationFrameCoordinator<Dim>` | 动画帧协调。统一协调 AnimationClock、Evaluation、Host 的每帧更新，将动画输出注入 SceneRecorder 和渲染管线。 |
 
-### 3.4 ECS 层 (`vr/ecs`)
+### 3.4 Runtime 类型化服务层 (`vr/runtime`)
+
+**职责**: 新一代运行时核心。将每个 Host/Renderer 包装为带类型标签的 Service，通过编译期依赖图 (DAG) 进行生命周期编排和执行调度。支持 Profile 驱动的二进制裁剪。
+
+#### 3.4.1 核心架构
+
+| 组件 | 说明 |
+|------|------|
+| `Runtime<Profile>` | 顶层 Runtime 模板。聚合 RuntimeKernel + 所有 Services，Init/Shutdown/Tick 统一编排。基于 `RuntimeProfile` 编译期裁剪。 |
+| `RuntimeKernel` | Runtime 内核。管理 Service 注册、依赖解析 (DAG)、启动/停止/帧循环时序。静态依赖图无运行时开销。 |
+| `RuntimeContext` | Runtime 全局上下文。持有 VulkanContext、GpuMemoryHost、帧索引等全局共享资源。 |
+| `RuntimeExecution` | Runtime 执行计划。定义帧内服务调用顺序 (Prepare→Record→Submit→Retire)，支持无依赖阶段内并行。 |
+| `FrameScheduler` | 帧调度器。帧内任务排序、屏障插入、Queue 提交批处理。 |
+| `RuntimeDiagnostics` | 运行时诊断。GPU 时间戳、帧时间分析、内存统计、Service 健康检查。 |
+| `RuntimeStatus` | 运行时状态监控。Service 健康度 (Healthy/Degraded/Failed)、帧率、资源使用指标。 |
+| `RuntimeViews` | 运行时视图集合。编译期生成零开销 Service 引用访问接口。 |
+| `ServiceDependencyGraph` | 服务依赖图。编译期 DAG 构建、拓扑排序、循环依赖检测。 |
+
+#### 3.4.2 Runtime Profile 系统
+
+Profile 系统通过编译期模板参数决定哪些 Service 被包含和激活，实现二进制裁剪。
+
+| Profile | 说明 |
+|---------|------|
+| `MinimalProfile` | 最小 Profile：仅 Core 服务 (VulkanContext + Swapchain + FrameSync + Command)。适合最小化启动和调试。 |
+| `Runtime2DProfile` | 2D Profile：Text + Geometry2D + Surface2D + Light/Shadow2D + Particle2D。 |
+| `Runtime3DProfile` | 3D Profile：2D Profile 全部 + 3D 服务 + IBL + Animation + Skybox + FrameComposer。 |
+
+#### 3.4.3 服务包装器 (`vr/runtime/services/`)
+
+每个现有 Host/Renderer 被包装为 `RuntimeService<S>` 接口，共约 25 个服务：
+
+| 服务 | 包装对象 | 说明 |
+|------|---------|------|
+| `BoundHostService` | 任意 Host | 泛型 Host 服务绑定器，自动生成 Init/Shutdown/Tick 回调。 |
+| `CommandService` | FrameCommandHost | CommandBuffer 池化管理服务。 |
+| `DescriptorService` | DescriptorHost | 描述符池与 Layout 服务。 |
+| `GpuMemoryService` | GpuMemoryHost | GPU Buddy Allocator 服务。 |
+| `SamplerService` | SamplerHost | 采样器缓存服务。 |
+| `TextureService` | TextureHost | 资产纹理服务。 |
+| `UploadService` | UploadHost | Staging Buffer 上传服务。 |
+| `PipelineService` | PipelineHost | 管线缓存服务。 |
+| `RenderTargetService` | RenderTargetHost | 渲染目标管理服务。 |
+| `RenderTargetPoolService` | RenderTargetPool | 渲染目标池服务。 |
+| `FrameComposerService` | FrameComposerHost | 帧合成服务。 |
+| `FreeTypeService` | FreeTypeHost | FreeType 字体引擎服务。 |
+| `GlyphAtlasService` | GlyphAtlasHost | 字形图集服务。 |
+| `GlyphUploadService` | GlyphUploadHost | 字形上传服务。 |
+| `IBLService` | IBLHost | IBL 环境光照服务。 |
+| `IBLBakeService` | IBLBakeHost | IBL 烘焙服务。 |
+| `ParticleSimulationService` | ParticleSimulationHost<Dim> | 粒子 GPU 模拟服务。 |
+| `ParticleUploadService` | ParticleUploadHost<Dim> | 粒子上传服务。 |
+| `ParticleRenderService` | ParticleRenderer<Dim> | 粒子渲染服务。 |
+
+**依赖模型**: 每个 Service 通过 `ServiceDependency` 声明所需的其他 Service。编译期 DAG 验证确保无循环依赖和无缺失依赖。运行时仅调用已满足依赖的 Service。
+
+### 3.5 ECS 层 (`vr/ecs`)
 
 **职责**: 纯数据组件 + 静态方法系统，零虚函数、零继承，全 POD 组件设计。
 
-#### 3.4.1 概念基础
+#### 3.5.1 概念基础
 
 | 文件 | 说明 |
 |------|------|
 | `concept/dimension.hpp` | `Dim2` / `Dim3` 维度标签，`DimensionTag` concept。 |
 | `component/spatial_types.hpp` | 数学类型别名：`Float2/3/4`, `Quaternion`, `Affine2x3`, `Matrix4x4` (D3D 列主序)。 |
 
-#### 3.4.2 ECS 组件 (全 POD)
+#### 3.5.2 ECS 组件 (全 POD)
 
 | 组件 | Dim2 特有 | Dim3 特有 | 共享 |
 |------|----------|----------|------|
@@ -260,8 +320,10 @@
 | **Shadow** | 2D shadow caster (occluder shape) | 3D shadow caster (mesh route) | shadow map slot, bias, filter mode, depth format |
 | **Appearance** | 2D visibility+link group | 3D visibility+link group | appearance record, dirty tracking, link handle |
 | **Animation** | 2D animation clock/track | 3D animation clock/track | clock state, Property/Material/Camera/Path/Skeletal/Morph/VertexDeform/FrameSequence tracks, clip route, evaluation state |
+| **Particle** | 2D particle (position+velocity+color+size+rotation) | 3D particle (position+velocity+color+size+rotation) | age/lifetime, emitter route, sort key, texture index, GPU compute update |
+| **ParticleEmitter** | 2D emission shape (Point/Circle) | 3D emission shape (Point/Sphere/Cone/Box) | emission rate, burst, initial property ranges, lifetime distribution |
 
-#### 3.4.3 ECS 系统
+#### 3.5.3 ECS 系统
 
 ##### 核心数学与空间系统
 
@@ -347,9 +409,18 @@
 | `AnimationFrameSequenceEvaluationSystem<Dim>` | 帧序列求值 | Frame Sequence 轨道采样、A/B 帧混合、子网格帧索引路由 |
 | `AnimationResourceTrackSystem` | 资源轨道 | 动画资源轨道生命周期管理和路由 |
 
-### 3.5 渲染器模块
+##### 粒子系统组
 
-#### 3.5.1 Text 渲染器 (`vr/text`)
+| 系统 | 职责 | 关键特性 |
+|------|------|---------|
+| `ParticleSystem<Dim>` | 粒子路由与排序 | 64 位排序键 (pass/material/depth/batch)、生命周期管理、可见性路由 |
+| `ParticleRuntimeSystem<Dim>` | 粒子运行时 | GPU 粒子实例生成 (position/velocity/color/size/rotation)、批次合并、深度/layer 排序 |
+| `ParticleEmitterSystem<Dim>` | 粒子发射器 | 发射形状采样 (Point/Circle/Sphere/Cone/Box)、爆发/持续发射、初始属性随机化、发射计数管理 |
+| `TransparencyRenderPolicy` | 透明度策略 | 统一管理跨渲染器 (Particle/Text/Geometry/Surface) 的透明排序与混合模式路由 |
+
+### 3.6 渲染器模块
+
+#### 3.6.1 Text 渲染器 (`vr/text`)
 
 | 组件 | 说明 |
 |------|------|
@@ -359,7 +430,7 @@
 | `TextRenderer2D` | 2D 文本渲染：绑定图集纹理、字形顶点/索引缓冲、Push Constant。支持 SDF/Outline。 |
 | `TextRenderer3D` | 3D 文本渲染：世界空间文本渲染，支持 Billboard、深度测试。 |
 
-#### 3.5.2 Geometry 渲染器 (`vr/geometry`)
+#### 3.6.2 Geometry 渲染器 (`vr/geometry`)
 
 | 组件 | 说明 |
 |------|------|
@@ -370,7 +441,7 @@
 | `GeometryRenderer2D` | 2D 几何渲染：路径线段→顶点缓冲、描边/填充、抗锯齿、Push Constant。集成 Appearance 渲染支持。 |
 | `GeometryRenderer3D` | 3D 几何渲染：GPU 实例化绘制、PBR 材质绑定、Shadow mapping 支持。集成 Appearance 渲染支持。 |
 
-#### 3.5.3 Surface 渲染器 (`vr/surface`)
+#### 3.6.3 Surface 渲染器 (`vr/surface`)
 
 | 组件 | 说明 |
 |------|------|
@@ -379,7 +450,7 @@
 | `SurfaceRenderer2D` | 2D Surface 渲染：精灵绘制、混合模式、UV 变换、tint color。 |
 | `SurfaceRenderer3D` | 3D Surface 渲染：世界空间 Surface、纹理过滤、双面渲染。 |
 
-#### 3.5.4 Light/Shadow 渲染器 (`vr/light`, `vr/shadow`)
+#### 3.6.4 Light/Shadow 渲染器 (`vr/light`, `vr/shadow`)
 
 | 组件 | 说明 |
 |------|------|
@@ -388,7 +459,7 @@
 | `ShadowRenderer2D` | 2D 阴影渲染器：2D 遮挡物深度图渲染、光源关联。 |
 | `ShadowRenderer3D` | 3D 阴影渲染器：3D Shadow Map 渲染、深度管线、Directional Shadow Fit + 骨骼动画阴影支持。 |
 
-#### 3.5.5 动画 Host 层 (`vr/animation`)
+#### 3.6.5 动画 Host 层 (`vr/animation`)
 
 | 组件 | 说明 |
 |------|------|
@@ -399,17 +470,27 @@
 | `AnimationVertexDeformHost<Dim>` | 顶点变形宿主。GPU 顶点变形缓冲区管理、Deform Payload 上传。 |
 | `AnimationFrameSequenceHost<Dim>` | 帧序列动画宿主。子网格帧序列播放、A/B 帧混合、帧索引路由。 |
 
-#### 3.5.6 资产纹理 (`vr/asset`)
+#### 3.6.6 资产纹理 (`vr/asset`)
 
 | 组件 | 说明 |
 |------|------|
 | `TextureHost` | 资产纹理宿主。接收外部已解码像素数据、创建/接管 GPU Image、Mipmap 生成。不包含 PNG/KTX2 解码，仅消费已准备数据。 |
 
-#### 3.5.7 GPU 骨骼蒙皮 (`vr/geometry`)
+#### 3.6.7 GPU 骨骼蒙皮 (`vr/geometry`)
 
 | 组件 | 说明 |
 |------|------|
 | `GeometrySkeletalPaletteBuilder` | GPU 骨骼调色板构建器。从 `AnimationSkeletalHost` 消费 Joint Palette，构建用于顶点着色器骨骼蒙皮的矩阵 UBO/SSBO。 |
+
+#### 3.6.8 粒子渲染器 (`vr/particle`)
+
+| 组件 | 说明 |
+|------|------|
+| `ParticleTypes` | 粒子公共类型。POD 粒子数据 (position/velocity/color/size/rotation/age/lifetime)、发射器描述符、模拟参数。 |
+| `ParticleSimulationHost<Dim>` | 粒子模拟宿主。GPU Compute Shader 驱动的粒子物理：速度/重力/阻尼/生命周期更新。支持 AABB 裁剪和排序键。 |
+| `ParticleUploadHost<Dim>` | 粒子上传宿主。粒子/发射器缓冲区通过 UploadHost 传输至 GPU。支持增量上传减少 PCI-e 带宽。 |
+| `ParticleRenderer2D` | 2D 粒子渲染器。四边形绘制、GPU 实例化、纹理动画、混合模式、透明度排序。 |
+| `ParticleRenderer3D` | 3D 粒子渲染器。世界空间粒子、Billboard 摄像机对齐、Z 深度排序、纹理动画、GPU 实例化绘制。 |
 
 ---
 
@@ -440,8 +521,13 @@ RenderRuntime::Tick()
   ├── ShadowFrameCoordinator::Prepare
   │   └── ShadowAtlasBindingCoordinator  (Atlas 绑定)
   │
+  ├── ParticleSimulationHost::Simulate   (GPU Compute 粒子物理 + 排序)
+  │   ├── ParticleEmitterSystem::Emit   (新粒子生成)
+  │   └── ParticleUploadHost::Upload    (粒子数据→GPU)
+  │
   ├── SceneRecorder3D::Record       (Multi-view packet 路由 → 场景 Pass)
   │   ├── SceneRenderStage           (Opaque → Transparent 阶段)
+  │   ├── ParticleRenderer::Render  (粒子绘制)
   │   └── SkyboxRenderer::Render    (天空盒)
   │
   ├── IBLHost::Bind                  (绑定 Irradiance/Specular/BRDF LUT)
@@ -478,7 +564,23 @@ RenderRuntime::Tick()
 | `render_target_bloom_combine.frag` | Bloom Combine (模糊结果与源图混合) |
 | `skybox.frag` | Skybox 片段着色器 (立方体贴图/HDR 等距矩形采样) |
 
-### 5.2 共享 GLSL 头文件 (`shaders/include/`)
+### 5.2 粒子着色器
+
+粒子系统通过 Compute Shader 进行 GPU 端模拟，通过顶点/片段着色器进行渲染。
+
+| 着色器 | 用途 |
+|--------|------|
+| `particle_build_2d.comp` | 2D 粒子构建计算着色器 (发射器→粒子实例化) |
+| `particle_build_3d.comp` | 3D 粒子构建计算着色器 (发射器→粒子实例化) |
+| `particle_update_2d.comp` | 2D 粒子更新计算着色器 (生命周期/速度/位置/颜色插值) |
+| `particle_update_3d.comp` | 3D 粒子更新计算着色器 (生命周期/物理/颜色插值) |
+| `particle_sort_3d.comp` | 3D 粒子排序计算着色器 (Z 深度排序) |
+| `particle_2d.vert` | 2D 粒子顶点着色器 (四边形 + 实例化) |
+| `particle_2d.frag` | 2D 粒子片段着色器 (纹理 + 颜色/Alpha) |
+| `particle_3d.vert` | 3D 粒子顶点着色器 (Billboard + 世界空间) |
+| `particle_3d.frag` | 3D 粒子片段着色器 (纹理 + 深度) |
+
+### 5.3 共享 GLSL 头文件 (`shaders/include/`)
 
 通过 `#include` 在着色器间共享通用函数，避免重复代码。
 
@@ -487,7 +589,7 @@ RenderRuntime::Tick()
 | `shaders/include/vr/common/math.glsl` | 通用数学工具函数 (矩阵变换、坐标转换)。 |
 | `shaders/include/vr/text/text_shading.glsl` | 文本着色函数 (SDF 边缘平滑、轮廓、颜色混合)。被 `text_2d.frag` 和 `text_3d.frag` 引用。 |
 
-### 5.3 着色器工具链
+### 5.4 着色器工具链
 
 | 工具 | 说明 |
 |------|------|
@@ -573,11 +675,12 @@ vr.types
 
 ### 8.1 测试 (`tests/`)
 
-基于自定义轻量框架 (`test_framework.hpp/cpp`)。约 55 个测试文件，覆盖：
-- ECS 组件/系统单元测试 (Transform, Camera, Bounds, Culling, Geometry, Surface, Text, Light, Shadow, Appearance, Animation)
+基于自定义轻量框架 (`test_framework.hpp/cpp`)。约 62 个测试文件，覆盖：
+- ECS 组件/系统单元测试 (Transform, Camera, Bounds, Culling, Geometry, Surface, Text, Light, Shadow, Appearance, Animation, Particle)
 - 动画系统单元测试 (Clock/Curve/Property/Material/Camera/Path/Skeletal/Morph/VertexDeform/FrameSequence)
 - 动画 Host 单元测试 (Clip/Skeletal/Morph/VertexDeform/FrameSequence)
-- 运行时集成测试
+- 粒子系统单元测试 (Component/RuntimeSystem/SimulationHost)
+- 运行时集成测试 (含 Particle 2D/3D 渲染器集成, TextRenderer 集成)
 - GPU 资源类型测试
 - FreeType/Glyph 渲染测试
 - FrameRetire 回收测试
@@ -617,3 +720,6 @@ vr.types
 17. **IBL 环境光照**: IBL 分为在线宿主 (IBLHost) 和离线烘焙宿主 (IBLBakeHost)。Irradiance Map + Prefiltered Environment Map (多级 mip) + BRDF Integration LUT 三件套。通过 Compute Shader 驱动烘焙流程。
 18. **Text 运行时契约**: `TextRuntimeContract` 定义 Text 系统与 Renderer 之间的资源契约和上传策略，消除隐式依赖，使字形页面调度可诊断。
 19. **Directional Shadow Fit & Stabilization**: 3D Shadow Renderer 支持 Directional Light 的 CSM 风格阴影贴合 (Shadow Fit) 和坐标稳定化，减少阴影抖动。
+20. **GPU Compute 粒子系统**: 粒子模拟完全在 GPU 端通过 Compute Shader 执行 (Build→Update→Sort 三阶段)，CPU 仅管理发射逻辑。减少 CPU-GPU 带宽需求，支持百万级粒子。
+21. **类型化服务与 Profile 驱动**: 新一代 `Runtime<Profile>` 将每个 Host 包装为编译期类型安全的 Service，通过静态依赖 DAG 管理生命周期。Profile (Minimal/2D/3D) 编译期裁剪未使用的 Service，减小二进制体积。
+22. **质量分级测试框架**: `scripts/testing/` 引入 Quality Profiles (Critical/High/Medium/Low)，通过 `vr_quality_runner.py` 自动化测试编排。`quality_profiles.json` 定义可配置的门禁规则，支持 CI 集成。

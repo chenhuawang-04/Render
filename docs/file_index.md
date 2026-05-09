@@ -1,6 +1,6 @@
 # VulkanRender_New 代码文件索引
 
-> 统计 (当前分支 `ecs_font_quality_optimization`, commit `0fbfae2`): 约 135 个头文件, 47 个源文件, 20 个着色器 + 2 个 GLSL 头文件, 11 个示例, 55 个测试文件, 17 个基准文件, 13 个文档, 3 个脚本, 4 个工具, 1 个 CMake Presets
+> 统计 (当前分支 `develop`, commit `23ac879`): 约 177 个头文件, 51 个源文件, 29 个着色器 + 2 个 GLSL 头文件, 13 个示例, 62 个测试文件, 20 个基准文件, 16 个文档, 8 个脚本, 4 个工具, 1 个 CMake Presets
 
 ---
 
@@ -10,7 +10,7 @@
 |------|------|
 | `CMakeLists.txt` | 顶层 CMake 构建脚本。定义项目、外部依赖 (Vulkan/SDL3/FreeType/MemoryCenter)、`vulkan_init` 静态库、`vulkan_platform_sdl` 接口库、所有 Demo 可执行文件、着色器编译管道 (含 SPIR-V 反射和合约检查)、测试/基准子目录。 |
 | `CMakePresets.json` | CMake 预设配置。定义跨平台的 configure/build/test presets，支持 VS/Clang/GCC 等生成器，统一开发环境配置。 |
-| `.gitignore` | Git 忽略规则：`build/`, CMake 产物, IDE 文件, bench 临时/快照文件。 |
+| `.gitignore` | Git 忽略规则：`build/`, CMake 产物, IDE 文件, bench 临时/快照文件, Python `__pycache__/`。 |
 
 ---
 
@@ -49,6 +49,7 @@
 | `frame_command_host.hpp` | `FrameCommandHost`, `FrameCommandCreateInfo`, `FrameCommandSlot` | 每帧 CommandPool + CommandBuffer 池。AcquirePrimary/BeginPrimary/EndCommandBuffer，按需增长。 |
 | `frame_retire_host.hpp` | `FrameRetireHost`, `FrameRetireStats` | 延迟 GPU 资源回收。ImageView/Framebuffer/Swapchain/CommandPool 延迟销毁。Collect (按提交值) / Flush (强制清除)。 |
 | `render_loop_host.hpp` | `RenderLoopHost<WindowSurfaceT, SwapchainT, framesInFlight>`, `RenderLoopCreateInfo`, `FrameRecordContext`, `TickResult`, `TickCode`, `FrameRecorder` concept | 主帧循环。组合 Sync + Swapchain + Command + Retire，Tick() 驱动。支持 `FrameRecorder` 和 `FrameContextRecorder` 两种录制器 concept。Swapchain 变更自动通知。 |
+| `swapchain_target_set.hpp` | `SwapchainTargetSet` | 交换链目标集。管理每帧 Swapchain Image → Framebuffer 的映射，与 FrameComposer 和 SceneRenderTargetSet 协调最终输出。 |
 | `retire_bus.hpp` | `RetireBus` | 延迟销毁总线。管道化延迟回收事件，支持跨模块发布异步回收操作。 |
 
 #### 2.4.2 渲染资源管理
@@ -58,7 +59,7 @@
 | `descriptor_host.hpp` | `DescriptorHost`, `DescriptorHostCreateInfo`, `DescriptorSetLayoutDesc`, `DescriptorSetLayoutId`, `DescriptorBufferWrite`, `DescriptorImageWrite`, `DescriptorTexelBufferWrite` | 描述符池管理 + Layout 缓存 (哈希去重)。AllocateSet/UpdateSet，每帧独立池，可选验证。 |
 | `pipeline_host.hpp` | `PipelineHost`, `PipelineHostCreateInfo`, `PipelineHostStats`, `ShaderModuleId`, `PipelineLayoutId`, `GraphicsPipelineId`, `ComputePipelineId`, `GraphicsPipelineDesc`, `ComputePipelineDesc` | 管线缓存。ShaderModule/PipelineLayout/GraphicsPipeline/ComputePipeline 注册与获取。延迟编译队列 (Enqueue + ProcessPendingCompiles)。VkPipelineCache 文件持久化。 |
 | `upload_host.hpp` | `UploadHost`, `UploadHostCreateInfo`, `UploadAllocation`, `UploadSubmitInfo`, `UploadEndFrameResult`, `UploadFrameStats` | Staging Buffer 上传。Allocate/Write/RecordCopyBuffer/RecordCopyImage + Barrier。支持 Transfer Queue 异步上传、Synchronization2。 |
-| `runtime_prepare_context.hpp` | `RuntimePrepareContext` | 帧准备上下文结构体，聚合所有运行时子系统指针，传递至 Recorder 的 PrepareFrame 回调。 |
+| `runtime_prepare_views.hpp` | `RuntimePrepareViews` | 帧准备视图集合。替代旧版 `RuntimePrepareContext`，聚合所有运行时子系统指针并传递给 Recorder 的 PrepareFrame 回调。包含细粒度的 ECS 系统、Host 层、渲染器视图结构体。 |
 
 #### 2.4.3 Render Target / 离屏渲染
 
@@ -126,13 +127,74 @@
 | `frame_composer_host.hpp` | `FrameComposerHost`, `FrameComposerCreateInfo` | 帧合成宿主。管理最终帧的合成 Pass：场景渲染目标 + 后处理栈 + UI overlay → Swapchain。 |
 | `animation_frame_coordinator.hpp` | `AnimationFrameCoordinator<Dim>` | 动画帧协调器。统一协调 AnimationClock、Evaluation、Host 的每帧更新，将动画输出注入 SceneRecorder。 |
 
-### 2.5 ECS 概念层 (`include/vr/ecs/concept/`)
+#### 2.4.9 粒子渲染框架
+
+| 文件 | 类/结构 | 说明 |
+|------|---------|------|
+| `include/vr/particle/particle_types.hpp` | `Particle2D`, `Particle3D`, `ParticleEmitterDesc`, `ParticleSimulationConfig`, `ParticleRenderBatch` | 粒子公共类型。POD 粒子数据、发射器描述符、2D/3D 模拟配置、渲染批次。 |
+| `include/vr/particle/particle_simulation_host.hpp` | `ParticleSimulationHost<Dim>`, `ParticleSimulationCreateInfo` | 粒子模拟宿主。GPU Compute-driven 粒子物理 (速度/重力/阻尼/生命周期)，支持 AABB 裁剪、排序键。 |
+| `include/vr/particle/particle_upload_host.hpp` | `ParticleUploadHost<Dim>`, `ParticleUploadCreateInfo` | 粒子上传宿主。粒子顶点/实例数据通过 UploadHost 上传至 GPU Buffer。 |
+| `include/vr/particle/particle_renderer_2d.hpp` | `ParticleRenderer2D`, `ParticleRenderer2DCreateInfo`, `ParticleRenderer2DStats` | 2D 粒子渲染器。粒子四边形绘制、混合模式、纹理动画、透明度排序。 |
+| `include/vr/particle/particle_renderer_3d.hpp` | `ParticleRenderer3D`, `ParticleRenderer3DCreateInfo`, `ParticleRenderer3DStats` | 3D 粒子渲染器。世界空间粒子、Billboard 摄像机对齐、GPU 实例化绘制、Z 排序。 |
+
+### 2.5 Runtime 层 (`include/vr/runtime/`)
+
+Runtime 层是围绕类型化服务 (Typed Services) 和执行模型的新一代运行时核心。每个现有子系统 (Host/Renderer) 都被包装为可组合的 Service，通过 `RuntimeKernel` 进行生命周期编排。
+
+#### 2.5.1 Runtime 核心
+
+| 文件 | 类/结构 | 说明 |
+|------|---------|------|
+| `include/vr/runtime/runtime.hpp` | `Runtime<Profile>`, `RuntimeCreateInfo` | 顶层 Runtime 模板。聚合 RuntimeKernel + 所有 Services，Init/Shutdown/Tick 统一编排。基于 Profile 编译期裁剪。 |
+| `include/vr/runtime/runtime_kernel.hpp` | `RuntimeKernel`, `RuntimeKernelCreateInfo` | Runtime 内核。管理 Service 注册、依赖解析、启动/停止/帧循环时序。静态依赖图 (DAG)。 |
+| `include/vr/runtime/runtime_context.hpp` | `RuntimeContext` | Runtime 全局上下文。持有 VulkanContext、内存分配器、帧状态等全局资源。 |
+| `include/vr/runtime/runtime_create_info.hpp` | `RuntimeCreateInfo` | Runtime 创建信息。聚合所有 Service 的 CreateInfo 和可选模块开关。 |
+| `include/vr/runtime/runtime_diagnostics.hpp` | `RuntimeDiagnostics`, `RuntimeFrameDiagnostics` | 运行时诊断。GPU 时间戳、帧时间分析、内存统计、Service 健康检查。 |
+| `include/vr/runtime/runtime_execution.hpp` | `RuntimeExecution`, `FrameExecutionPlan`, `ExecutionStage` | 运行时执行计划。定义服务调用的帧内顺序 (Prepare→Record→Submit→Retire)，支持并行执行 (无依赖阶段内)。 |
+| `include/vr/runtime/runtime_profile.hpp` | `RuntimeProfile` concept, `MinimalProfile`, `Runtime2DProfile`, `Runtime3DProfile` | 运行时 Profile。编译期定义哪些 Service 被包含和激活，通过模板参数裁剪二进制。 |
+| `include/vr/runtime/runtime_service.hpp` | `RuntimeService<S>`, `ServiceTag`, `ServiceDependency` | 类型化服务包装器。将任意 Host/Renderer 包装为统一 Service 接口，声明依赖关系和生命周期。 |
+| `include/vr/runtime/runtime_services.hpp` | `RuntimeServices` | 服务集合模板。通过变参模板聚合所有 Service，提供编译期依赖验证和统一访问接口。 |
+| `include/vr/runtime/runtime_status.hpp` | `RuntimeStatus`, `ServiceStatus`, `ServiceHealth` | 运行时状态监控。Service 健康度、帧率/帧时间、资源使用指标。 |
+| `include/vr/runtime/runtime_views.hpp` | `RuntimeViews` | 运行时视图集合。编译期生成每帧可访问的 Service 引用集合，零开销访问。 |
+| `include/vr/runtime/service_dependency.hpp` | `ServiceDependencyGraph`, `ServiceDependencyEdge` | 服务依赖图。编译期 DAG 构建、依赖排序、循环依赖检测。 |
+| `include/vr/runtime/frame_scheduler.hpp` | `FrameScheduler`, `ScheduledTask`, `TaskPriority` | 帧调度器。帧内任务排序、屏障插入、Queue 提交批处理。 |
+| `include/vr/runtime/command_service.hpp` | `CommandService` | 命令服务。管理 Vulkan CommandBuffer 的帧级生命周期 (池分配、录制、提交)。 |
+| `include/vr/runtime/frame_retire_service.hpp` | `FrameRetireService` | 帧退役服务。延迟 GPU 资源回收的 Service 化接口。 |
+| `include/vr/runtime/queue_timeline.hpp` | `QueueTimeline`, `QueueSubmitPoint` | 队列时间线。跨队列提交点追踪、信号量/栅栏协调、同步保证。 |
+
+#### 2.5.2 Runtime 子服务 (`include/vr/runtime/services/`)
+
+每项服务将现有 Host/Renderer 包装为统一的 `RuntimeService` 接口，声明依赖和生命周期回调。
+
+| 文件 | 包装对象 | 说明 |
+|------|---------|------|
+| `bound_host_service.hpp` | 泛型 Host 绑定 | 泛型 Host 服务绑定器。将任意 Host 类型包装为 Service 接口，提供 Init/Shutdown/Tick 回调。 |
+| `command_service.hpp` | CommandService | CommandBuffer 池化与录制管理服务。 |
+| `descriptor_service.hpp` | DescriptorHost | 描述符池与 Layout 管理服务。 |
+| `frame_composer_service.hpp` | FrameComposerHost | 帧合成服务。场景 + 后处理 + UI → Swapchain。 |
+| `freetype_service.hpp` | FreeTypeHost | FreeType 字体引擎服务。 |
+| `glyph_atlas_service.hpp` | GlyphAtlasHost | 字形图集服务。页面分配与字形打包。 |
+| `glyph_upload_service.hpp` | GlyphUploadHost | 字形上传服务。脏页→GPU 传输。 |
+| `gpu_memory_service.hpp` | GpuMemoryHost | GPU 内存分配服务。Buddy Allocator。 |
+| `ibl_bake_service.hpp` | IBLBakeHost | IBL 烘焙服务。环境图→Irradiance/Specular/BRDF LUT。 |
+| `ibl_service.hpp` | IBLHost | IBL 环境光照服务。Irradiance/BRDF LUT 管理。 |
+| `particle_render_service.hpp` | ParticleRenderer<Dim> | 粒子渲染服务。2D/3D 粒子绘制。 |
+| `particle_simulation_service.hpp` | ParticleSimulationHost<Dim> | 粒子模拟服务。GPU Compute 物理。 |
+| `particle_upload_service.hpp` | ParticleUploadHost<Dim> | 粒子上传服务。粒子数据→GPU Buffer。 |
+| `pipeline_service.hpp` | PipelineHost | 图形/计算管线缓存服务。 |
+| `render_target_pool_service.hpp` | RenderTargetPool | 渲染目标池服务。 |
+| `render_target_service.hpp` | RenderTargetHost | 渲染目标管理服务。 |
+| `sampler_service.hpp` | SamplerHost | 采样器缓存服务。VkSampler 哈希去重。 |
+| `texture_service.hpp` | TextureHost | 资产纹理服务。外部像素数据→GPU Image。 |
+| `upload_service.hpp` | UploadHost | Staging Buffer 上传服务。 |
+
+### 2.6 ECS 概念层 (`include/vr/ecs/concept/`)
 
 | 文件 | 类/结构 | 说明 |
 |------|---------|------|
 | `dimension.hpp` | `Dim2`, `Dim3`, `SceneDimension`, `DimensionTag` concept | 维度标签类型。`Dim2` = 2D, `Dim3` = 3D。`DimensionTag` concept 约束模板参数。 |
 
-### 2.6 ECS 组件层 (`include/vr/ecs/component/`)
+### 2.7 ECS 组件层 (`include/vr/ecs/component/`)
 
 | 文件 | 主要结构/类 | 说明 |
 |------|------------|------|
@@ -147,10 +209,12 @@
 | `shadow_component.hpp` | `Shadow<Dim2/3>`, `ShadowStyle2D/3D`, `ShadowRuntimeData` | 阴影组件 (POD)。2D: 遮挡器形状。3D: 网格路由。Shadow Map 槽、偏移、过滤模式、深度格式。 |
 | `appearance_component.hpp` | `Appearance<Dim2/3>`, `AppearanceStyle`, `AppearanceRuntimeRecord` | Appearance 组件 (POD)。可见性记录、link 组、脏追踪、与 Geometry/Surface 渲染器的桥接句柄。 |
 | `animation_component.hpp` | `Animation<Dim2/3>`, `AnimationStyle`, `AnimationRuntime`, `AnimationTrack`, `AnimationPropertyValue`, `AnimationClockState`, `AnimationKind` (Property/Material/Path/Skeletal/Morph/VertexDeform/FrameSequence) | 动画组件 (POD)。动画时钟状态、轨道路由、Property 轨道 (position/rotation/scale/color/float)、Material 轨道、Skeletal 轨道 (骨骼引用 + Joint Weights)、Morph 轨道 (变形目标引用 + 权重)、VertexDeform 轨道、FrameSequence 轨道。支持 Clip 引用 + 播放回调。Phase 1 完整实现。 |
+| `particle_component.hpp` | `Particle<Dim2/3>`, `ParticleStyle2D/3D`, `ParticleRuntime2D/3D`, `ParticleEmissionState` | 粒子组件 (POD)。粒子生命周期 (age/lifetime)、位置/速度/加速度、颜色/大小/旋转、纹理索引、排序键。GPU Compute 驱动更新。 |
+| `particle_emitter_component.hpp` | `ParticleEmitter<Dim2/3>`, `EmitterShape`, `EmitterBurst`, `EmitterRate` | 粒子发射器组件 (POD)。发射形状 (Point/Circle/Sphere/Cone/Box)、发射速率/爆发、初始速度/颜色/大小范围、生命周期分布。 |
 
-### 2.7 ECS 系统层 (`include/vr/ecs/system/`)
+### 2.8 ECS 系统层 (`include/vr/ecs/system/`)
 
-#### 2.7.1 核心空间系统
+#### 2.8.1 核心空间系统
 
 | 文件 | 主要类/结构 | 说明 |
 |------|------------|------|
@@ -160,7 +224,7 @@
 | `bounds_system.hpp` | `BoundsSystem<Dim>` | 包围盒系统。世界空间 AABB 变换 (中心+范围法)、多种 UpdateAligned 变体、点包含/相交测试。修订追踪与脏标记传播、Transform 分离快速路径。 |
 | `culling_system.hpp` | `CullingSystem<Dim>`, `CullingScratch<Dim>`, `CullingBuildOptions`, `CullingBuildStats`, `PreparedCamera`, `FrustumPlanes` | 裁剪系统。视锥体平面提取 (从 VP 矩阵)、球体拒绝 + AABB 细化、可见性掩码过滤、候选列表接口、可见集签名哈希、VisibilityStamp epoch 机制。模板展开的零分支扫描。 |
 
-#### 2.7.2 几何系统组
+#### 2.8.2 几何系统组
 
 | 文件 | 主要类/结构 | 说明 |
 |------|------------|------|
@@ -170,7 +234,7 @@
 | `geometry_path_system.hpp` | `GeometryPathSystem`, `GeometryPathCommandView`, `GeometryPathMoveToCommand`, `GeometryPathLineToCommand`, `GeometryPathQuadToCommand`, `GeometryPathCubicToCommand`, `GeometryPathCloseCommand`, `GeometryPathCommandType` | 2D 路径命令系统。内联路径数据解析、命令迭代 (ForEachCommandRaw)、路径数据哈希。 |
 | `geometry_runtime_system.hpp` | `GeometryRuntimeSystem<Dim2/3>`, `Geometry2DPathPrimitive`, `Geometry3DGpuInstance`, `Geometry2DDrawBatch`, `Geometry3DDrawBatch`, 各种 RuntimeBuildConfig/BuildStats/Cache/Scratch | 几何运行时系统。2D: 路径→线段图元细分 (Quad/Cubic) + 样式打包 + 批次合并。3D: 组件→GPU 实例 (世界矩阵+PBR+包围盒) + 批次合并 + 增量变换更新。支持运行时缓存 (签名/epoch 追踪)。 |
 
-#### 2.7.3 Surface 系统组
+#### 2.8.3 Surface 系统组
 
 | 文件 | 主要类/结构 | 说明 |
 |------|------------|------|
@@ -179,7 +243,7 @@
 | `surface_runtime_system.hpp` | `SurfaceRuntimeSystem<Dim2/3>`, `Surface2DGpuInstance`, `Surface3DGpuInstance`, `Surface2DDrawBatch`, `Surface3DDrawBatch` | Surface 运行时系统。GPU 实例生成 + 批次合并 + 缓存。 |
 | `surface_upload_plan_system.hpp` | `SurfaceUploadPlanSystem`, `SurfaceUploadPatchRange`, `SurfaceUploadPlanStats`, `SurfaceUploadPlanBuildOptions`, `SurfaceUploadPlanScratch` | Surface 上传计划系统。识别需要上传的脏组件、页面调度。 |
 
-#### 2.7.4 文本系统组
+#### 2.8.4 文本系统组
 
 | 文件 | 主要类/结构 | 说明 |
 |------|------------|------|
@@ -188,7 +252,7 @@
 | `text_runtime_system.hpp` | `TextRuntimeSystem<Dim2/3>`, `TextGlyphQuad` | 文本运行时系统。字形四边形生成 (x0/y0/x1/y1 + uv 坐标)、字形缓存、批次合并。 |
 | `text_render_3d_system.hpp` | `TextRender3DSystem`, `Text3DGpuInstance`, `Text3DDrawBatch`, `Text3DFrameData`, `TextRender3DScratch` | 3D 文本特殊系统。3D 文本 GPU 实例 (rect、UV、world position、billboard 参数、颜色、大小限制)。 |
 
-#### 2.7.5 光照系统组
+#### 2.8.5 光照系统组
 
 | 文件 | 主要类/结构 | 说明 |
 |------|------------|------|
@@ -197,7 +261,7 @@
 | `light_runtime_system.hpp` | `LightRuntimeSystem<Dim>` | 光照运行时系统。GPU 光源数据 (UBO/SSBO) 生成、光照参数打包。 |
 | `light_gpu_layout.hpp` | `LightGpuLayout` | 光源 GPU Layout 定义。UBO/SSBO 内存布局结构。 |
 
-#### 2.7.6 阴影系统组
+#### 2.8.6 阴影系统组
 
 | 文件 | 主要类/结构 | 说明 |
 |------|------------|------|
@@ -206,13 +270,13 @@
 | `shadow_runtime_system.hpp` | `ShadowRuntimeSystem<Dim>` | 阴影运行时系统。Shadow Map 渲染调度、深度变换矩阵生成。 |
 | `shadow_gpu_layout.hpp` | `ShadowGpuLayout` | 阴影 GPU Layout 定义。Shadow Map 相关 GPU 内存布局。 |
 
-#### 2.7.7 透明度与混合系统
+#### 2.8.7 透明度与混合系统
 
 | 文件 | 主要类/结构 | 说明 |
 |------|------------|------|
 | `transparency_render_policy.hpp` | `TransparencyRenderPolicy` | 透明度渲染策略。统一管理跨渲染器 (Text/Geometry/Surface) 的透明排序、混合模式路由、Blend State 策略。结合 Appearance 材质路由实现分层透明渲染。 |
 
-#### 2.7.8 Appearance 系统组
+#### 2.8.8 Appearance 系统组
 
 | 文件 | 主要类/结构 | 说明 |
 |------|------------|------|
@@ -220,7 +284,7 @@
 | `appearance_link_system.hpp` | `AppearanceLinkSystem` | Appearance 链接系统。链接 Geometry/Surface 到 Appearance 记录、跨渲染器协调。 |
 | `appearance_runtime_system.hpp` | `AppearanceRuntimeSystem<Dim>` | Appearance 运行时系统。运行时 appearance 数据生成、缓存、与渲染器批量对接。 |
 
-#### 2.7.9 动画系统组
+#### 2.8.9 动画系统组
 
 | 文件 | 主要类/结构 | 说明 |
 |------|------------|------|
@@ -241,7 +305,16 @@
 | `animation_frame_sequence_evaluation_system.hpp` | `AnimationFrameSequenceEvaluationSystem<Dim>` | 帧序列求值系统。Frame Sequence 轨道采样、A/B 帧混合权重、子网格帧索引路由。 |
 | `animation_resource_track_system.hpp` | `AnimationResourceTrackSystem` | 资源轨道系统。管理动画资源轨道的生命周期和路由。 |
 
-### 2.8 文本渲染 (`include/vr/text/`)
+#### 2.8.10 粒子系统组
+
+| 文件 | 主要类/结构 | 说明 |
+|------|------------|------|
+| `particle_system.hpp` | `ParticleSystem<Dim>` | 粒子基础系统。64 位排序键 (pass/material/depth/batch)、生命周期管理、可见性路由。 |
+| `particle_runtime_system.hpp` | `ParticleRuntimeSystem<Dim2/3>`, `Particle2DGpuInstance`, `Particle3DGpuInstance`, `Particle2DDrawBatch`, `Particle3DDrawBatch` | 粒子运行时系统。GPU 实例生成 (位置/颜色/大小/旋转/纹理索引)、批次合并、粒子排序 (按深度或 layer)。 |
+| `particle_emitter_system.hpp` | `ParticleEmitterSystem<Dim>` | 粒子发射器系统。发射形状采样、爆发/持续发射、初始属性随机化、发射计数管理。 |
+| `transparency_render_policy.hpp` | `TransparencyRenderPolicy` | 透明度渲染策略。(已移至 2.8.7) 统一管理跨渲染器的透明排序与混合模式路由。 |
+
+### 2.9 文本渲染 (`include/vr/text/`)
 
 | 文件 | 类/结构 | 说明 |
 |------|---------|------|
@@ -253,7 +326,7 @@
 | `text_renderer_3d.hpp` | `TextRenderer3D` | 3D 文本渲染器。世界空间文本、Billboard 矩阵、深度测试参数。 |
 | `text_runtime_contract.hpp` | `TextRuntimeContract`, `TextContractValidation`, `TextUploadContract` | 文本运行时契约。定义 Text 系统与 Renderer 之间的资源契约、上传策略、字形页面调度协议、诊断统计。 |
 
-### 2.9 几何渲染 (`include/vr/geometry/`)
+### 2.10 几何渲染 (`include/vr/geometry/`)
 
 | 文件 | 类/结构 | 说明 |
 |------|---------|------|
@@ -266,7 +339,7 @@
 | `geometry_renderer_3d.hpp` | `GeometryRenderer3D`, `GeometryRenderer3DCreateInfo`, `GeometryRenderer3DStats` | 3D 几何渲染器。GPU 实例化绘制 (instanced draw)、PBR 材质绑定、管线状态。集成 Appearance 和 Shadow 支持。 |
 | `geometry_skeletal_palette_builder.hpp` | `GeometrySkeletalPaletteBuilder`, `SkeletalPaletteUpload` | GPU 骨骼调色板构建器。从 AnimationSkeletalHost 消费 Joint Palette，构建用于 GPU Skinning 的骨骼矩阵 UBO/SSBO。 |
 
-### 2.10 动画子系统 (`include/vr/animation/`)
+### 2.11 动画子系统 (`include/vr/animation/`)
 
 | 文件 | 类/结构 | 说明 |
 |------|---------|------|
@@ -277,13 +350,13 @@
 | `animation_vertex_deform_host.hpp` | `AnimationVertexDeformHost<Dim>`, `VertexDeformBuffer`, `VertexDeformPayload` | 顶点变形宿主。GPU 顶点变形缓冲区、变形负载上传、与 Geometry 渲染器集成。 |
 | `animation_frame_sequence_host.hpp` | `AnimationFrameSequenceHost<Dim>`, `FrameSequenceState`, `FrameSequenceBlend` | 帧序列动画宿主。子网格帧序列播放、A/B 帧混合、帧索引路由。 |
 
-### 2.11 资产层 (`include/vr/asset/`)
+### 2.12 资产层 (`include/vr/asset/`)
 
 | 文件 | 类/结构 | 说明 |
 |------|---------|------|
 | `texture_host.hpp` | `TextureHost`, `TextureHostCreateInfo`, `TextureResource`, `TextureUploadDesc` | 资产纹理宿主。接收外部已解码像素数据、创建/接管 GPU Image、Mipmap 生成、格式协商。不包含 PNG/KTX2 解码逻辑，仅消费已准备数据。 |
 
-### 2.12 Surface 渲染 (`include/vr/surface/`)
+### 2.13 Surface 渲染 (`include/vr/surface/`)
 
 | 文件 | 类/结构 | 说明 |
 |------|---------|------|
@@ -293,7 +366,7 @@
 | `surface_renderer_2d.hpp` | `SurfaceRenderer2D`, `SurfaceRenderer2DCreateInfo`, `SurfaceRenderer2DStats` | 2D Surface 渲染器。精灵绘制、混合模式 (alpha/additive/multiply/screen)、UV 变换、tint color。集成 Appearance 和运行时上传支持。 |
 | `surface_renderer_3d.hpp` | `SurfaceRenderer3D`, `SurfaceRenderer3DCreateInfo`, `SurfaceRenderer3DStats` | 3D Surface 渲染器。世界空间贴图、纹理过滤 (linear/nearest/anisotropic)、寻址模式、双面渲染。 |
 
-### 2.13 Light/Shadow 渲染 (`include/vr/light/`, `include/vr/shadow/`)
+### 2.14 Light/Shadow 渲染 (`include/vr/light/`, `include/vr/shadow/`)
 
 | 文件 | 类/结构 | 说明 |
 |------|---------|------|
@@ -301,6 +374,16 @@
 | `include/vr/shadow/shadow_atlas_host.hpp` | `ShadowAtlasHost`, `ShadowAtlasHostCreateInfo` | Shadow Map Atlas 管理。Atlas 页面分配、阴影贴图打包、脏页追踪。 |
 | `include/vr/shadow/shadow_renderer_2d.hpp` | `ShadowRenderer2D`, `ShadowRenderer2DCreateInfo` | 2D 阴影渲染器。2D 遮挡物深度图渲染、光源关联。 |
 | `include/vr/shadow/shadow_renderer_3d.hpp` | `ShadowRenderer3D`, `ShadowRenderer3DCreateInfo` | 3D 阴影渲染器。3D Shadow Map 渲染、深度管线。 |
+
+### 2.15 粒子渲染 (`include/vr/particle/`)
+
+| 文件 | 类/结构 | 说明 |
+|------|---------|------|
+| `particle_types.hpp` | `Particle2D`, `Particle3D`, `ParticleEmitterDesc`, `ParticleSimulationConfig` | 粒子公共类型。POD 粒子数据 (位置、速度、颜色、大小、旋转、生命周期)、发射器描述符、模拟配置参数。 |
+| `particle_simulation_host.hpp` | `ParticleSimulationHost<Dim>`, `ParticleSimulationCreateInfo` | 粒子模拟宿主。GPU Compute Shader 驱动的粒子物理模拟：速度/重力/阻尼/生命周期。支持 AABB 裁剪和粒子排序。 |
+| `particle_upload_host.hpp` | `ParticleUploadHost<Dim>`, `ParticleUploadCreateInfo` | 粒子上传宿主。粒子顶点/实例数据通过 UploadHost 传输至 GPU Buffer。支持粒子和发射器缓冲区的增量上传。 |
+| `particle_renderer_2d.hpp` | `ParticleRenderer2D`, `ParticleRenderer2DCreateInfo`, `ParticleRenderer2DStats` | 2D 粒子渲染器。粒子四边形绘制、纹理动画、混合模式、透明度排序、GPU 实例化。 |
+| `particle_renderer_3d.hpp` | `ParticleRenderer3D`, `ParticleRenderer3DCreateInfo`, `ParticleRenderer3DStats` | 3D 粒子渲染器。世界空间粒子、Billboard 摄像机对齐、Z 深度排序、纹理动画、GPU 实例化。 |
 
 ---
 
@@ -399,6 +482,21 @@
 | `src/shadow/shadow_renderer_2d.cpp` | `ShadowRenderer2D` 实现。 |
 | `src/shadow/shadow_renderer_3d.cpp` | `ShadowRenderer3D` 实现。 |
 
+### 3.10 粒子子系统 (`src/particle/`)
+
+| 文件 | 说明 |
+|------|------|
+| `src/particle/particle_simulation_host.cpp` | `ParticleSimulationHost<Dim>` 实现 (2452 行)：GPU Compute-driven 粒子物理模拟、发射逻辑、生命周期管理、排序。 |
+| `src/particle/particle_upload_host.cpp` | `ParticleUploadHost<Dim>` 实现 (427 行)：粒子/发射器缓冲区上传、增量更新。 |
+| `src/particle/particle_renderer_2d.cpp` | `ParticleRenderer2D` 实现 (1007 行)：2D 粒子渲染、混合模式、纹理动画、GPU 实例化。 |
+| `src/particle/particle_renderer_3d.cpp` | `ParticleRenderer3D` 实现 (1791 行)：3D 粒子渲染、Billboard 对齐、Z 排序、GPU 实例化。 |
+
+### 3.11 渲染运行时 (`src/render/` 新增)
+
+| 文件 | 说明 |
+|------|------|
+| `src/render/swapchain_target_set.cpp` | `SwapchainTargetSet` 实现 (41 行)：交换链 Image→Framebuffer 映射管理。 |
+
 ---
 
 ## 4. shaders/ — 着色器
@@ -426,9 +524,23 @@
 | `shaders/render_target_bloom_combine.frag` | Bloom Combine 片段着色器 (模糊结果与源图混合) |
 | `shaders/skybox.frag` | Skybox 片段着色器 (立方体贴图采样、HDR 色调映射、与 IBL 环境图联动) |
 
-SPIR-V 编译产物嵌入到 `build/generated/vr/{text,geometry,surface}/generated/` 下。
+### 4.1 粒子着色器
 
-### 4.1 共享 GLSL 头文件 (`shaders/include/`)
+| 文件 | 说明 |
+|------|------|
+| `shaders/particle_2d.vert` | 2D 粒子顶点着色器 (四边形 + 实例化属性) |
+| `shaders/particle_2d.frag` | 2D 粒子片段着色器 (纹理采样 + 颜色/Alpha) |
+| `shaders/particle_3d.vert` | 3D 粒子顶点着色器 (Billboard 对齐 + 世界空间) |
+| `shaders/particle_3d.frag` | 3D 粒子片段着色器 (纹理 + 深度) |
+| `shaders/particle_build_2d.comp` | 2D 粒子构建计算着色器 (发射器 → 粒子实例化) |
+| `shaders/particle_build_3d.comp` | 3D 粒子构建计算着色器 (发射器 → 粒子实例化) |
+| `shaders/particle_update_2d.comp` | 2D 粒子更新计算着色器 (生命周期/速度/位置/颜色插值) |
+| `shaders/particle_update_3d.comp` | 3D 粒子更新计算着色器 (生命周期/物理/颜色插值) |
+| `shaders/particle_sort_3d.comp` | 3D 粒子排序计算着色器 (Z 深度排序、内存重排) |
+
+SPIR-V 编译产物嵌入到 `build/generated/vr/{text,geometry,surface,particle}/generated/` 下。
+
+### 4.2 共享 GLSL 头文件 (`shaders/include/`)
 
 着色器代码复用模块，通过 `#include` 在多个着色器间共享通用函数。
 
@@ -454,6 +566,8 @@ SPIR-V 编译产物嵌入到 `build/generated/vr/{text,geometry,surface}/generat
 | `examples/sdl_text_3d_demo.cpp` | `sdl_text_3d_demo` | 3D 文本渲染演示 (Billboard + 深度 + RenderTarget)。 |
 | `examples/sdl_offscreen_postprocess_demo.cpp` | `sdl_offscreen_postprocess_demo` | 离屏渲染与后处理演示。渲染目标创建、SceneRenderTargetSet、Bloom Post Stack、Composite→Swapchain 完整流程。 |
 | `examples/sdl_scene_3d_unified_demo.cpp` | `sdl_scene_3d_unified_demo` | 3D 统一场景演示。完整 3D 渲染管线：Geometry + Surface + Text + Light + Shadow + RenderTarget + Bloom。 |
+| `examples/sdl_particle_2d_demo.cpp` | `sdl_particle_2d_demo` | 2D 粒子系统演示 (274 行)。粒子发射、GPU 模拟、透明度排序、纹理动画。 |
+| `examples/sdl_particle_3d_demo.cpp` | `sdl_particle_3d_demo` | 3D 粒子系统演示 (336 行)。世界空间粒子、Billboard 对齐、Z 排序、摄像机交互。 |
 
 ---
 
@@ -543,6 +657,24 @@ SPIR-V 编译产物嵌入到 `build/generated/vr/{text,geometry,surface}/generat
 | `animation_vertex_frame_host_tests.cpp` | AnimationVertexDeformHost + AnimationFrameSequenceHost 单元测试。 |
 | `render_target_types_tests.cpp` | RenderTarget 类型/结构体单元测试 (已大幅扩展至 1130 行)。 |
 
+#### 粒子 ECS/系统测试
+
+| 文件 | 测试对象 |
+|------|---------|
+| `ecs_particle_component_tests.cpp` | ParticleComponent + ParticleEmitterComponent 单元测试 |
+| `ecs_particle_runtime_system_tests.cpp` | ParticleRuntimeSystem 2D/3D 单元测试 |
+| `particle_simulation_host_tests.cpp` | ParticleSimulationHost 单元测试 |
+
+#### 集成测试 (续)
+
+| 文件 | 测试对象 |
+|------|---------|
+| `runtime_particle_renderer_2d_integration_tests.cpp` | ParticleRenderer2D 集成测试 (372 行) |
+| `runtime_particle_renderer_3d_integration_tests.cpp` | ParticleRenderer3D 集成测试 (451 行) |
+| `runtime_text_renderer_integration_tests.cpp` | 2D TextRenderer 集成测试 (新增, 307 行) |
+| `runtime_configuration_tests.cpp` | Runtime/Profile 配置测试 (已扩展至 436 行) |
+| `runtime_integration_tests.cpp` | 运行时集成测试 (已扩展至 281 行) |
+
 ---
 
 ## 7. bench/ — 基准测试套件
@@ -579,12 +711,16 @@ SPIR-V 编译产物嵌入到 `build/generated/vr/{text,geometry,surface}/generat
 | `frame_sync_bench.cpp` | FrameSyncHost 性能基准 |
 | `runtime_text_renderer_bench.cpp` | TextRenderer 性能基准 |
 | `vulkan_types_bench.cpp` | Vulkan 类型操作性能基准 |
+| `ecs_particle_runtime_system_bench.cpp` | ParticleRuntimeSystem 性能基准 |
+| `runtime_diagnostics_bench.cpp` | RuntimeDiagnostics 性能基准 |
+| `runtime_steady_state_allocation_bench.cpp` | 运行时稳态内存分配基准 (325 行) |
 
 ### 7.3 基准测试数据 (`bench/baselines/`)
 
 | 文件 | 说明 |
 |------|------|
 | `ecs_geometry_runtime_gold.json` | 几何运行时的黄金基线数据 |
+| `ecs_geometry_runtime_gate_gold_2026-05-07.json` | 几何运行时门控黄金基线 (387 行, 2026-05-07) |
 | `ecs_core_cpu_baseline_*.json` | CPU 核心 ECS 基线快照 |
 | `ecs_core_cpu_post_opt_*.json` | CPU 优化后快照 (含 `_snapshot.md`) |
 | `ecs_font_quality_*.json` | 字体质量基准快照 |
@@ -615,6 +751,9 @@ SPIR-V 编译产物嵌入到 `build/generated/vr/{text,geometry,surface}/generat
 | `render_target_v1_constraints.md` | Render Target v1 约束文档。渲染目标设计的架构约束、格式限制、规范约定。 |
 | `render_runtime_contract_v0_1.md` | 渲染运行时契约 v0.1。定义 RenderRuntime 与各子系统之间的资源、生命周期、同步契约。 |
 | `game_rendering_gap_analysis.md` | 游戏渲染能力缺口分析。T0-T3 分级评估，推荐 4-Phase 3D 游戏化路线图。 |
+| `testing_framework_architecture.md` | 测试框架架构文档 (97 行)。质量分级系统 (Quality Profiles)、Python 测试运行器架构、门控策略。 |
+| `code_review_report_2026-05-05.md` | 代码审查报告。15 路 Agent 并行深度审查，8 维评分体系，覆盖 11/12 子系统。 |
+| `remediation_plan_code_review_report_2026-05-05_followup.md` | 代码审查修复计划 (452 行)。针对审查报告的优先级修复清单和实施建议。 |
 
 ---
 
@@ -666,6 +805,10 @@ vr.types
 | `scripts/bench/README.md` | 基准测试脚本说明。 |
 | `scripts/bench/run_bench_gate.ps1` | 基准测试门控脚本 (PowerShell)。对比当前结果与基线，门禁判断。 |
 | `scripts/bench/new_golden_baseline.ps1` | 生成新黄金基线脚本。 |
+| `scripts/testing/README.md` | 测试脚本说明 (97 行)。质量分级系统文档。 |
+| `scripts/testing/quality_profiles.json` | 质量分级配置文件 (205 行)。定义 Critical/High/Medium/Low 质量门禁规则。 |
+| `scripts/testing/run_quality_profile.ps1` | 质量分级运行脚本 (PowerShell)。按 Profile 筛选和运行测试。 |
+| `scripts/testing/vr_quality_runner.py` | VR 质量测试运行器 (469 行)。Python 自动化测试编排、Profile 匹配、结果报告。 |
 
 ---
 
@@ -684,14 +827,14 @@ vr.types
 
 | 类别 | 文件数 |
 |------|--------|
-| 公开头文件 (.hpp) | 135 |
-| 源文件 (.cpp) | 47 |
-| 着色器 (.vert/.frag) + GLSL 头文件 | 20 + 2 |
-| 示例文件 | 11 |
-| 测试用例 | 55 |
-| 基准测试用例 | 17 (含 4 support files) |
-| 文档 | 14 |
-| 脚本/工具 | 3 + 4 |
+| 公开头文件 (.hpp) | 177 |
+| 源文件 (.cpp) | 51 |
+| 着色器 (.vert/.frag/.comp) + GLSL 头文件 | 29 + 2 |
+| 示例文件 | 13 |
+| 测试用例 | 62 |
+| 基准测试用例 | 20 (含 4 support files) |
+| 文档 | 16 |
+| 脚本/工具 | 8 + 4 |
 | CMake Presets | 1 |
 | C++20 模块文件 (feature 分支) | 12 |
-| **总计** | **320+** |
+| **总计** | **375+** |
