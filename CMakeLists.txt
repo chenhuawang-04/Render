@@ -461,6 +461,7 @@ add_library(vulkan_init STATIC
     src/render/frame_composer_host.cpp
     src/render/ibl_bake_host.cpp
     src/render/ibl_host.cpp
+    src/render/sky_environment_gpu_host.cpp
     src/render/skybox_renderer.cpp
     src/render/upload_host.cpp
     src/render/descriptor_host.cpp

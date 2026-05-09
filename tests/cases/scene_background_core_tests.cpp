@@ -1,6 +1,8 @@
 #include "support/test_framework.hpp"
 #include "vr/render/render_view.hpp"
 #include "vr/render/scene_submission.hpp"
+#include "vr/render/environment/sky_environment_gpu_host.hpp"
+#include "vr/render/upload_host.hpp"
 #include "vr/scene/scene.hpp"
 #include "vr/scene/scene_prepare.hpp"
 #include "vr/scene/scene_submission_builder.hpp"
@@ -103,4 +105,80 @@ VR_TEST_CASE(SceneSubmissionBuilder_2D_applies_active_view_background_override,
     VR_CHECK(packet.extra.background.mode == vr::scene::Background2DMode::gradient);
     VR_CHECK(packet.extra.background.revision == 11U);
     VR_CHECK(packet.extra.background.color1.z == 1.0F);
+}
+
+VR_TEST_CASE(SkyEnvironmentGpuHost_descriptor_reuse, "[scene][background][render]") {
+    vr::VulkanContext context{};
+    vr::asset::TextureHost texture_host{};
+    vr::render::DescriptorHost descriptor_host{};
+    vr::resource::SamplerHost sampler_host{};
+    vr::render::UploadHost upload_host{};
+    vr::render::SkyEnvironmentGpuHost host{};
+    host.Initialize(context, texture_host, descriptor_host, sampler_host, {});
+
+    vr::render::SkyEnvironmentGpuPrepareView prepare_view{
+        .device = context,
+        .texture = texture_host,
+        .upload = upload_host,
+        .descriptor = descriptor_host,
+        .sampler = sampler_host,
+    };
+
+    vr::scene::SkyEnvironmentRenderState state{};
+    state.mode = vr::scene::SkyEnvironmentMode::gradient;
+    state.revision = 5U;
+    state.sky_intensity = 2.0F;
+
+    const auto first = host.RegisterOrUpdate(state, prepare_view);
+    const auto second = host.RegisterOrUpdate(state, prepare_view);
+
+    VR_CHECK(first.IsValid());
+    VR_CHECK(first.index == second.index);
+    VR_CHECK(host.Stats().environment_count == 1U);
+    VR_CHECK(host.Stats().cache_hit_count == 1U);
+
+    host.Shutdown(context);
+}
+
+VR_TEST_CASE(SkyEnvironmentGpuHost_multi_environment, "[scene][background][render]") {
+    vr::VulkanContext context{};
+    vr::asset::TextureHost texture_host{};
+    vr::render::DescriptorHost descriptor_host{};
+    vr::resource::SamplerHost sampler_host{};
+    vr::render::UploadHost upload_host{};
+    vr::render::SkyEnvironmentGpuHost host{};
+    host.Initialize(context, texture_host, descriptor_host, sampler_host, {});
+
+    vr::render::SkyEnvironmentGpuPrepareView prepare_view{
+        .device = context,
+        .texture = texture_host,
+        .upload = upload_host,
+        .descriptor = descriptor_host,
+        .sampler = sampler_host,
+    };
+
+    vr::scene::SkyEnvironmentRenderState state_a{};
+    state_a.mode = vr::scene::SkyEnvironmentMode::solid_color;
+    state_a.revision = 1U;
+    state_a.exposure = 1.0F;
+
+    vr::scene::SkyEnvironmentRenderState state_b{};
+    state_b.mode = vr::scene::SkyEnvironmentMode::cubemap;
+    state_b.sky_texture_id = 7U;
+    state_b.revision = 2U;
+    state_b.exposure = 3.0F;
+    state_b.tint = vr::ecs::Float4{.x = 0.8F, .y = 0.7F, .z = 0.6F, .w = 1.0F};
+
+    const auto handle_a = host.RegisterOrUpdate(state_a, prepare_view);
+    const auto handle_b = host.RegisterOrUpdate(state_b, prepare_view);
+    const auto& params_b = host.Params(handle_b);
+
+    VR_CHECK(handle_a.IsValid());
+    VR_CHECK(handle_b.IsValid());
+    VR_CHECK(handle_a.index != handle_b.index);
+    VR_CHECK(host.Stats().environment_count == 2U);
+    VR_CHECK(params_b.tint_exposure.w == 3.0F);
+    VR_CHECK(params_b.tint_exposure.x == 0.8F);
+
+    host.Shutdown(context);
 }

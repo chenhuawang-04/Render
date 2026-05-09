@@ -37,6 +37,10 @@ class ParticleSimulationHost;
 } // namespace vr::particle
 
 namespace vr::render {
+class SkyEnvironmentGpuHost;
+}
+
+namespace vr::render {
 
 struct FrameStaticContext final {
     std::uint32_t frame_index = 0U;
@@ -187,6 +191,16 @@ struct BackgroundPass2DPrepareView final {
     VulkanContext& device;
     PipelineHost& pipeline;
     RenderTargetHost& render_target;
+    FrameStaticContext frame{};
+    FrameGpuProgressContext progress{};
+};
+
+struct SkyEnvironmentGpuPrepareView final {
+    VulkanContext& device;
+    asset::TextureHost& texture;
+    UploadHost& upload;
+    DescriptorHost& descriptor;
+    resource::SamplerHost& sampler;
     FrameStaticContext frame{};
     FrameGpuProgressContext progress{};
 };
@@ -355,6 +369,27 @@ template<typename T>
                                                   "pipeline",
                                                   "BackgroundPass2DPrepareView"),
         .render_target = prepare_view_.render_target,
+        .frame = prepare_view_.frame,
+        .progress = prepare_view_.progress,
+    };
+}
+
+[[nodiscard]] inline SkyEnvironmentGpuPrepareView MakeSkyEnvironmentGpuPrepareView(
+    const SceneRecorder3DPrepareView& prepare_view_) {
+    return {
+        .device = prepare_view_.device,
+        .texture = detail::RequirePrepareService(prepare_view_.texture,
+                                                 "texture",
+                                                 "SkyEnvironmentGpuPrepareView"),
+        .upload = detail::RequirePrepareService(prepare_view_.upload,
+                                                "upload",
+                                                "SkyEnvironmentGpuPrepareView"),
+        .descriptor = detail::RequirePrepareService(prepare_view_.descriptor,
+                                                    "descriptor",
+                                                    "SkyEnvironmentGpuPrepareView"),
+        .sampler = detail::RequirePrepareService(prepare_view_.sampler,
+                                                 "sampler",
+                                                 "SkyEnvironmentGpuPrepareView"),
         .frame = prepare_view_.frame,
         .progress = prepare_view_.progress,
     };
