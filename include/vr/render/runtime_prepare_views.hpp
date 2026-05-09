@@ -183,6 +183,14 @@ struct SurfaceRenderer2DPrepareView final {
     FrameGpuProgressContext progress{};
 };
 
+struct BackgroundPass2DPrepareView final {
+    VulkanContext& device;
+    PipelineHost& pipeline;
+    RenderTargetHost& render_target;
+    FrameStaticContext frame{};
+    FrameGpuProgressContext progress{};
+};
+
 struct RenderTargetCompositeRendererPrepareView final {
     VulkanContext& device;
     DescriptorHost& descriptor;
@@ -334,6 +342,19 @@ template<typename T>
         .pipeline = prepare_view_.pipeline,
         .render_target = prepare_view_.render_target,
         .sampler = prepare_view_.sampler,
+        .frame = prepare_view_.frame,
+        .progress = prepare_view_.progress,
+    };
+}
+
+[[nodiscard]] inline BackgroundPass2DPrepareView MakeBackgroundPass2DPrepareView(
+    const SceneRecorder2DPrepareView& prepare_view_) {
+    return {
+        .device = prepare_view_.device,
+        .pipeline = detail::RequirePrepareService(prepare_view_.pipeline,
+                                                  "pipeline",
+                                                  "BackgroundPass2DPrepareView"),
+        .render_target = prepare_view_.render_target,
         .frame = prepare_view_.frame,
         .progress = prepare_view_.progress,
     };

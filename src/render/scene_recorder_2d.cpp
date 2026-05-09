@@ -7,6 +7,7 @@ namespace vr::render {
 
 void SceneRecorder2D::Initialize(const SceneRecorder2DCreateInfo& create_info_) noexcept {
     create_info_cache = create_info_;
+    background_pass.Initialize();
     scene_targets.Initialize(create_info_cache.scene_target);
     pre_scene_renderer_entries.clear();
     scene_renderer_entries.clear();
@@ -32,11 +33,12 @@ void SceneRecorder2D::Initialize(const SceneRecorder2DCreateInfo& create_info_) 
     initialized = true;
 }
 
-void SceneRecorder2D::Shutdown(VulkanContext&) noexcept {
+void SceneRecorder2D::Shutdown(VulkanContext& context_) noexcept {
     if (!initialized) {
         return;
     }
 
+    background_pass.Shutdown(context_);
     scene_targets.Reset();
     pre_scene_renderer_entries.clear();
     scene_renderer_entries.clear();
@@ -158,9 +160,15 @@ void SceneRecorder2D::PrepareFrame(const SceneRecorder2DPrepareView& prepare_vie
             .progress = prepare_view_.progress,
         });
     }
+    ConfigureBackgroundPassForTargets();
     ConfigureSceneRenderersForTargets();
     if (use_scene_targets) {
         ConfigureSceneConsumerForTargets();
+    }
+
+    if (HasBackgroundPassForSubmission()) {
+        background_pass.PrepareFrame(MakeBackgroundPass2DPrepareView(prepare_view_));
+        ++stats.background_prepare_count;
     }
 
     for (const PreSceneRendererEntry& entry : pre_scene_renderer_entries) {
@@ -242,6 +250,11 @@ void SceneRecorder2D::Record(const FrameRecordContext& record_context_) {
         }
     }
 
+    if (HasBackgroundPassForSubmission() && scene_view != nullptr) {
+        background_pass.Record(record_context_, *scene_view, frame_packet->extra.background);
+        ++stats.background_record_count;
+    }
+
     for (const SceneRendererEntry& entry : scene_renderer_entries) {
         if (!IsLayerVisibleForSubmission(entry.submission_layer_mask)) {
             continue;
@@ -289,6 +302,12 @@ void SceneRecorder2D::OnSwapchainRecreated(std::uint32_t image_count_,
                                    IsPostProcessEnabledForSubmission();
     const bool overlay_enabled = IsOverlayEnabledForSubmission();
     const bool shadow_enabled = IsShadowEnabledForSubmission();
+
+    background_pass.OnSwapchainRecreated(image_count_,
+                                         extent_,
+                                         format_,
+                                         last_submitted_value_,
+                                         completed_submit_value_);
 
     for (const PreSceneRendererEntry& entry : pre_scene_renderer_entries) {
         if (!IsLayerVisibleForSubmission(entry.submission_layer_mask)) {
@@ -566,6 +585,23 @@ bool SceneRecorder2D::IsPostProcessEnabledForSubmission() const noexcept {
     return ResolveScenePostProcessEnabledForView(*frame_packet, scene_view);
 }
 
+bool SceneRecorder2D::HasBackgroundPassForSubmission() const noexcept {
+    if (frame_packet == nullptr) {
+        return false;
+    }
+    switch (frame_packet->extra.background.mode) {
+    case scene::Background2DMode::solid_color:
+    case scene::Background2DMode::gradient:
+        return scene_view != nullptr;
+    case scene::Background2DMode::none:
+    case scene::Background2DMode::sprite:
+    case scene::Background2DMode::surface_entity:
+    default:
+        break;
+    }
+    return false;
+}
+
 bool SceneRecorder2D::IsLayerVisibleForSubmission(std::uint32_t submission_layer_mask_) const noexcept {
     return HasSceneViewForSubmission() &&
            (EffectiveLayerMask() & submission_layer_mask_) != 0U;
@@ -577,9 +613,18 @@ bool SceneRecorder2D::IsOverlayLayerVisibleForSubmission(std::uint32_t submissio
             (OverlayLayerMask() & submission_layer_mask_) != 0U);
 }
 
+void SceneRecorder2D::ConfigureBackgroundPassForTargets() {
+    if (!HasBackgroundPassForSubmission()) {
+        background_pass.ResetOutputTargetConfig();
+        return;
+    }
+    background_pass.SetOutputTargetConfig(BuildBackgroundOutputConfig());
+}
+
 void SceneRecorder2D::ConfigureSceneRenderersForTargets() {
     const bool use_scene_targets = HasSceneConsumer() && IsPostProcessEnabledForSubmission();
     const bool use_explicit_scene_target = HasExplicitSceneTargetForSubmission();
+    const bool has_background_pass = HasBackgroundPassForSubmission();
     const bool explicit_depth_target =
         scene_view != nullptr && IsValidRenderTargetHandle(scene_view->targets.depth_target);
     for (const SceneRendererEntry& entry : scene_renderer_entries) {
@@ -603,7 +648,19 @@ void SceneRecorder2D::ConfigureSceneRenderersForTargets() {
                                            BuildExplicitSceneOutputConfig(entry.pass_role));
             }
         } else if (use_scene_targets) {
-            if (entry.configure_scene_fn != nullptr) {
+            if (has_background_pass && entry.configure_direct_scene_fn != nullptr) {
+                const bool final_pass = entry.pass_role == SceneRenderPassRole::single ||
+                                        entry.pass_role == SceneRenderPassRole::last;
+                const bool clear_depth = entry.pass_role == SceneRenderPassRole::single ||
+                                         entry.pass_role == SceneRenderPassRole::first;
+                const RenderTargetDepthOutputConfig depth_output =
+                    scene_targets.BuildDepthOutputConfig(clear_depth);
+                entry.configure_direct_scene_fn(entry.renderer,
+                                                entry.pass_role,
+                                                scene_targets.BuildColorOutputConfig(false, final_pass),
+                                                create_info_cache.scene_target.enable_depth ? &depth_output : nullptr,
+                                                false);
+            } else if (entry.configure_scene_fn != nullptr) {
                 (void)entry.configure_scene_fn(entry.renderer, scene_targets, entry.pass_role);
             }
         } else if (entry.configure_direct_scene_fn != nullptr) {
@@ -643,6 +700,39 @@ void SceneRecorder2D::ConfigureSceneConsumerForTargets() {
     }
 }
 
+RenderTargetColorOutputConfig SceneRecorder2D::BuildBackgroundOutputConfig() const noexcept {
+    const bool use_scene_targets = HasSceneConsumer() && IsPostProcessEnabledForSubmission();
+    const bool use_explicit_scene_target = HasExplicitSceneTargetForSubmission();
+
+    const bool overlay_enabled = IsOverlayEnabledForSubmission();
+    bool has_visible_scene_renderer = false;
+    for (const SceneRendererEntry& entry : scene_renderer_entries) {
+        if (entry.renderer != nullptr && IsLayerVisibleForSubmission(entry.submission_layer_mask)) {
+            has_visible_scene_renderer = true;
+            break;
+        }
+    }
+    const bool final_pass = !has_visible_scene_renderer && !overlay_enabled && !use_scene_targets;
+
+    if (use_scene_targets) {
+        return scene_targets.BuildColorOutputConfig(true, final_pass);
+    }
+
+    RenderTargetColorOutputConfig output{};
+    output.use_explicit_load_op = true;
+    output.load_op = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    output.store_op = VK_ATTACHMENT_STORE_OP_STORE;
+    output.clear_color = create_info_cache.scene_target.clear_color;
+    output.final_state = final_pass ? RenderTargetStateKind::present_src
+                                    : RenderTargetStateKind::color_attachment;
+    if (use_explicit_scene_target && scene_view != nullptr) {
+        output.color_target = scene_view->targets.color_target;
+        output.final_state = final_pass ? scene_view->targets.color_final_state
+                                        : RenderTargetStateKind::color_attachment;
+    }
+    return output;
+}
+
 RenderTargetColorOutputConfig SceneRecorder2D::BuildDirectSceneOutputConfig(
     SceneRenderPassRole pass_role_) const noexcept {
     RenderTargetColorOutputConfig output{};
@@ -657,7 +747,9 @@ RenderTargetColorOutputConfig SceneRecorder2D::BuildDirectSceneOutputConfig(
     switch (pass_role_) {
     case SceneRenderPassRole::single:
     case SceneRenderPassRole::first:
-        output.load_op = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        output.load_op = HasBackgroundPassForSubmission()
+            ? VK_ATTACHMENT_LOAD_OP_LOAD
+            : VK_ATTACHMENT_LOAD_OP_CLEAR;
         break;
     case SceneRenderPassRole::middle:
     case SceneRenderPassRole::last:

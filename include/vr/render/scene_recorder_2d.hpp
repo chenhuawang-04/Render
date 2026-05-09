@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Center/Memory/Container/Vector/McVector.hpp"
+#include "vr/render/environment/background_pass_2d.hpp"
 #include "vr/render/light_frame_coordinator.hpp"
 #include "vr/render/light_shadow_link_coordinator.hpp"
 #include "vr/render/scene_submission.hpp"
@@ -36,6 +37,8 @@ struct SceneRecorder2DStats final {
     std::uint32_t frame_packet_bind_count = 0U;
     std::uint32_t frame_packet_prepare_count = 0U;
     std::uint32_t frame_packet_record_count = 0U;
+    std::uint32_t background_prepare_count = 0U;
+    std::uint32_t background_record_count = 0U;
     std::uint32_t frame_view_count = 0U;
     std::uint32_t active_view_index = 0xFFFF'FFFFU;
     std::uint32_t scene_view_index = 0xFFFF'FFFFU;
@@ -483,10 +486,13 @@ private:
     [[nodiscard]] bool IsShadowEnabledForSubmission() const noexcept;
     [[nodiscard]] bool IsOverlayEnabledForSubmission() const noexcept;
     [[nodiscard]] bool IsPostProcessEnabledForSubmission() const noexcept;
+    [[nodiscard]] bool HasBackgroundPassForSubmission() const noexcept;
     [[nodiscard]] bool IsLayerVisibleForSubmission(std::uint32_t submission_layer_mask_) const noexcept;
     [[nodiscard]] bool IsOverlayLayerVisibleForSubmission(std::uint32_t submission_layer_mask_) const noexcept;
+    void ConfigureBackgroundPassForTargets();
     void ConfigureSceneRenderersForTargets();
     void ConfigureSceneConsumerForTargets();
+    [[nodiscard]] RenderTargetColorOutputConfig BuildBackgroundOutputConfig() const noexcept;
     [[nodiscard]] RenderTargetColorOutputConfig BuildDirectSceneOutputConfig(
         SceneRenderPassRole pass_role_) const noexcept;
     [[nodiscard]] RenderTargetDepthOutputConfig BuildDirectDepthOutputConfig(
@@ -503,6 +509,7 @@ private:
 private:
     SceneRecorder2DCreateInfo create_info_cache{};
     SceneRecorder2DStats stats{};
+    BackgroundPass2D background_pass{};
     SceneRenderTargetSet scene_targets{};
     SceneRecorder2DMcVector<PreSceneRendererEntry> pre_scene_renderer_entries{};
     SceneRecorder2DMcVector<SceneRendererEntry> scene_renderer_entries{};

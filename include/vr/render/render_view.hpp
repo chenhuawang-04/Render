@@ -4,6 +4,7 @@
 #include "vr/ecs/component/transform_component.hpp"
 #include "vr/ecs/concept/dimension.hpp"
 #include "vr/render/render_target_types.hpp"
+#include "vr/scene/background/background_traits.hpp"
 
 #include <cstdint>
 #include <cstring>
@@ -44,6 +45,12 @@ enum class RenderPostProcessPolicy : std::uint8_t {
     disabled = 2U,
 };
 
+enum class BackgroundOverrideMode : std::uint8_t {
+    inherit = 0U,
+    disabled = 1U,
+    override_state = 2U,
+};
+
 struct RenderViewViewport final {
     float x = 0.0F;
     float y = 0.0F;
@@ -68,6 +75,22 @@ struct RenderViewTargetRefs final {
 };
 
 template<ecs::DimensionTag DimensionT>
+struct RenderViewBackgroundOverride;
+
+template<>
+struct RenderViewBackgroundOverride<ecs::Dim2> final {
+    BackgroundOverrideMode mode = BackgroundOverrideMode::inherit;
+    scene::Background2DRenderState state{};
+};
+
+template<>
+struct RenderViewBackgroundOverride<ecs::Dim3> final {
+    BackgroundOverrideMode mode = BackgroundOverrideMode::inherit;
+    scene::SkyEnvironmentRenderState state{};
+    scene::SkyEnvironmentGpuHandle gpu{};
+};
+
+template<ecs::DimensionTag DimensionT>
 struct RenderView final {
     using CameraType = ecs::Camera<DimensionT>;
     using TransformType = ecs::Transform<DimensionT>;
@@ -88,6 +111,7 @@ struct RenderView final {
     RenderViewViewport viewport{};
     RenderViewScissor scissor{};
     RenderViewTargetRefs targets{};
+    RenderViewBackgroundOverride<DimensionT> background_override{};
     const CameraType* camera = nullptr;
     const TransformType* camera_transform = nullptr;
     std::uint64_t signature = 0U;
@@ -137,6 +161,18 @@ template<ecs::DimensionTag DimensionT>
     RenderViewHashCombine(hash, static_cast<std::uint64_t>(view_.targets.depth_target.generation));
     RenderViewHashCombine(hash, static_cast<std::uint64_t>(view_.targets.color_final_state));
     RenderViewHashCombine(hash, static_cast<std::uint64_t>(view_.targets.depth_final_state));
+    RenderViewHashCombine(hash, static_cast<std::uint64_t>(view_.background_override.mode));
+    if constexpr (std::is_same_v<DimensionT, ecs::Dim2>) {
+        RenderViewHashCombine(hash,
+                              static_cast<std::uint64_t>(view_.background_override.state.revision));
+    } else {
+        RenderViewHashCombine(hash,
+                              static_cast<std::uint64_t>(view_.background_override.state.revision));
+        RenderViewHashCombine(hash,
+                              static_cast<std::uint64_t>(view_.background_override.gpu.index));
+        RenderViewHashCombine(hash,
+                              static_cast<std::uint64_t>(view_.background_override.gpu.generation));
+    }
     RenderViewHashCombine(hash, static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(view_.camera)));
     RenderViewHashCombine(hash,
                           static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(view_.camera_transform)));
@@ -225,6 +261,8 @@ void RefreshRenderViewSignature(RenderView<DimensionT>& view_) noexcept {
 static_assert(std::is_standard_layout_v<RenderViewViewport>);
 static_assert(std::is_standard_layout_v<RenderViewScissor>);
 static_assert(std::is_standard_layout_v<RenderViewTargetRefs>);
+static_assert(std::is_standard_layout_v<RenderViewBackgroundOverride<ecs::Dim2>>);
+static_assert(std::is_standard_layout_v<RenderViewBackgroundOverride<ecs::Dim3>>);
 static_assert(std::is_standard_layout_v<RenderView2D>);
 static_assert(std::is_standard_layout_v<RenderView3D>);
 

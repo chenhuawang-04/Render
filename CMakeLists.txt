@@ -237,6 +237,7 @@ set(VR_SHADOW_2D_VERT_HEADER "${VR_GENERATED_SHADOW_SHADER_DIR}/shadow_depth_2d_
 set(VR_SHADOW_3D_VERT_HEADER "${VR_GENERATED_SHADOW_SHADER_DIR}/shadow_depth_3d_vert_spv.hpp")
 set(VR_RENDER_TARGET_COMPOSITE_VERT_HEADER "${VR_GENERATED_RENDER_SHADER_DIR}/render_target_composite_vert_spv.hpp")
 set(VR_RENDER_TARGET_COMPOSITE_FRAG_HEADER "${VR_GENERATED_RENDER_SHADER_DIR}/render_target_composite_frag_spv.hpp")
+set(VR_BACKGROUND_2D_FRAG_HEADER "${VR_GENERATED_RENDER_SHADER_DIR}/background_2d_frag_spv.hpp")
 set(VR_SKYBOX_FRAG_HEADER "${VR_GENERATED_RENDER_SHADER_DIR}/skybox_frag_spv.hpp")
 set(VR_RENDER_TARGET_BLOOM_PREFILTER_FRAG_HEADER "${VR_GENERATED_RENDER_SHADER_DIR}/render_target_bloom_prefilter_frag_spv.hpp")
 set(VR_RENDER_TARGET_BLOOM_BLUR_FRAG_HEADER "${VR_GENERATED_RENDER_SHADER_DIR}/render_target_bloom_blur_frag_spv.hpp")
@@ -367,6 +368,11 @@ vr_compile_shader_to_header("${VR_SHADER_SOURCE_DIR}/render_target_composite.fra
                             "k_render_target_composite_frag_spv"
                             "${VR_RENDER_TARGET_COMPOSITE_FRAG_HEADER}"
                             "vr::render::generated")
+vr_compile_shader_to_header("${VR_SHADER_SOURCE_DIR}/background_2d.frag"
+                            "frag"
+                            "k_background_2d_frag_spv"
+                            "${VR_BACKGROUND_2D_FRAG_HEADER}"
+                            "vr::render::generated")
 vr_compile_shader_to_header("${VR_SHADER_SOURCE_DIR}/skybox.frag"
                             "frag"
                             "k_skybox_frag_spv"
@@ -414,6 +420,7 @@ add_custom_target(vr_generated_shaders
         "${VR_SHADOW_3D_VERT_HEADER}"
         "${VR_RENDER_TARGET_COMPOSITE_VERT_HEADER}"
         "${VR_RENDER_TARGET_COMPOSITE_FRAG_HEADER}"
+        "${VR_BACKGROUND_2D_FRAG_HEADER}"
         "${VR_SKYBOX_FRAG_HEADER}"
         "${VR_RENDER_TARGET_BLOOM_PREFILTER_FRAG_HEADER}"
         "${VR_RENDER_TARGET_BLOOM_BLUR_FRAG_HEADER}"
@@ -462,6 +469,7 @@ add_library(vulkan_init STATIC
     src/render/render_target_pass.cpp
     src/render/render_target_pool.cpp
     src/render/swapchain_target_set.cpp
+    src/render/background_pass_2d.cpp
     src/render/render_target_composite_renderer.cpp
     src/render/render_target_bloom_renderer.cpp
     src/render/scene_recorder_2d.cpp

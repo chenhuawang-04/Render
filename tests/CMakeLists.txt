@@ -39,6 +39,7 @@ add_executable(${VR_TEST_TARGET}
     cases/ecs_appearance_runtime_system_tests.cpp
     cases/ecs_appearance_link_system_tests.cpp
     cases/render_appearance_frame_coordinator_tests.cpp
+    cases/scene_background_core_tests.cpp
     cases/render_light_frame_coordinator_tests.cpp
     cases/render_light_shadow_link_coordinator_tests.cpp
     cases/render_light_shadow_link_stage_tests.cpp

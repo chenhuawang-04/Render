@@ -2,6 +2,7 @@
 
 #include "vr/ecs/concept/dimension.hpp"
 #include "vr/render/render_view.hpp"
+#include "vr/scene/background/background_traits.hpp"
 
 #include <cstdint>
 #include <type_traits>
@@ -23,6 +24,20 @@ enum RenderScenePacketFlags : std::uint32_t {
 };
 
 template<ecs::DimensionTag DimensionT>
+struct RenderScenePacketExtra;
+
+template<>
+struct RenderScenePacketExtra<ecs::Dim2> final {
+    scene::Background2DRenderState background{};
+};
+
+template<>
+struct RenderScenePacketExtra<ecs::Dim3> final {
+    scene::SkyEnvironmentRenderState environment{};
+    scene::SkyEnvironmentGpuHandle environment_gpu{};
+};
+
+template<ecs::DimensionTag DimensionT>
 struct RenderScenePacket final {
     using ViewType = RenderView<DimensionT>;
 
@@ -40,6 +55,7 @@ struct RenderScenePacket final {
     RenderPostProcessPolicy postprocess_policy = RenderPostProcessPolicy::inherit;
     std::uint8_t reserved2 = 0U;
     std::uint16_t reserved3 = 0U;
+    RenderScenePacketExtra<DimensionT> extra{};
     std::uint64_t submission_id = 0U;
     std::uint64_t signature = 0U;
 
@@ -62,6 +78,9 @@ using RenderScenePacket2D = RenderScenePacket<ecs::Dim2>;
 using RenderScenePacket3D = RenderScenePacket<ecs::Dim3>;
 
 static constexpr std::uint32_t invalid_scene_view_index = 0xFFFF'FFFFU;
+
+static_assert(std::is_standard_layout_v<RenderScenePacketExtra<ecs::Dim2>>);
+static_assert(std::is_standard_layout_v<RenderScenePacketExtra<ecs::Dim3>>);
 
 template<ecs::DimensionTag DimensionT>
 struct ResolvedSceneViewSelection final {
@@ -86,6 +105,17 @@ template<ecs::DimensionTag DimensionT>
     RenderViewHashCombine(hash, static_cast<std::uint64_t>(packet_.render_layer_mask));
     RenderViewHashCombine(hash, static_cast<std::uint64_t>(packet_.debug_flags));
     RenderViewHashCombine(hash, static_cast<std::uint64_t>(packet_.postprocess_policy));
+    if constexpr (std::is_same_v<DimensionT, ecs::Dim2>) {
+        RenderViewHashCombine(hash,
+                              static_cast<std::uint64_t>(packet_.extra.background.revision));
+    } else {
+        RenderViewHashCombine(hash,
+                              static_cast<std::uint64_t>(packet_.extra.environment.revision));
+        RenderViewHashCombine(hash,
+                              static_cast<std::uint64_t>(packet_.extra.environment_gpu.index));
+        RenderViewHashCombine(hash,
+                              static_cast<std::uint64_t>(packet_.extra.environment_gpu.generation));
+    }
     RenderViewHashCombine(hash, packet_.submission_id);
     for (std::uint32_t view_index = 0U; view_index < packet_.view_count; ++view_index) {
         const RenderView<DimensionT>& view = packet_.views[view_index];
