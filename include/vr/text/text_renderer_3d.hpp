@@ -20,7 +20,7 @@ class VulkanContext;
 }
 
 namespace vr::render {
-struct RuntimePrepareContext;
+struct TextRenderer3DPrepareView;
 struct FrameRecordContext;
 class UploadHost;
 }
@@ -103,7 +103,7 @@ public:
     void SetDepthTargetConfig(const render::RenderTargetDepthOutputConfig& depth_output_target_config_) noexcept;
     void ResetDepthTargetConfig() noexcept;
 
-    void PrepareFrame(const render::RuntimePrepareContext& prepare_context_);
+    void PrepareFrame(const render::TextRenderer3DPrepareView& prepare_view_);
     void Record(const render::FrameRecordContext& record_context_);
     void RecordSceneStage(const render::FrameRecordContext& record_context_,
                           render::SceneRenderStage stage_);
@@ -179,7 +179,7 @@ private:
     void ResetPerFrameDrawState(std::uint32_t frame_index_,
                                 std::uint32_t atlas_page_count_);
     void EnsureGpuResourcesForFrame(VulkanContext& context_,
-                                    const render::RuntimePrepareContext& prepare_context_,
+                                    const render::TextRenderer3DPrepareView& prepare_view_,
                                     std::uint32_t frame_index_,
                                     VkDeviceSize required_bytes_);
     void PreparePageDescriptorSetsForFrame(std::uint32_t frame_index_);

@@ -143,15 +143,11 @@ void InitializeSparkEmitter(Particle3D& particle_,
 int main(int argc_,
          char** argv_) {
     Runtime runtime{};
-    vr::particle::ParticleUploadHost particle_upload_host{};
-    vr::particle::ParticleSimulationHost particle_simulation_host{};
     vr::render::SceneRecorder3D recorder{};
     vr::particle::ParticleRenderer3D particle_renderer{};
     const std::uint32_t max_frames = ParseMaxFrames(argc_, argv_);
 
     bool runtime_initialized = false;
-    bool upload_initialized = false;
-    bool simulation_initialized = false;
     bool renderer_initialized = false;
 
     try {
@@ -174,22 +170,6 @@ int main(int argc_,
 
         recorder.Initialize(BuildParticle3DRecorderCreateInfo());
         recorder.BindRuntime(runtime);
-
-        vr::particle::ParticleUploadHostCreateInfo upload_create_info{};
-        upload_create_info.frames_in_flight = 2U;
-        upload_create_info.initial_3d_instance_buffer_bytes = 1024U * 1024U;
-        particle_upload_host.Initialize(runtime.Context(), runtime.GpuMemory(), upload_create_info);
-        upload_initialized = true;
-
-        vr::particle::ParticleSimulationHostCreateInfo simulation_create_info{};
-        simulation_create_info.frames_in_flight = 2U;
-        simulation_create_info.initial_particle_capacity = 8192U;
-        simulation_create_info.initial_visible_particle_capacity = 8192U;
-        simulation_create_info.initial_spawn_packet_capacity = 128U;
-        simulation_create_info.initial_indirect_command_capacity = 64U;
-        simulation_create_info.initial_sort_key_capacity = 8192U;
-        particle_simulation_host.Initialize(runtime.Context(), runtime.GpuMemory(), simulation_create_info);
-        simulation_initialized = true;
 
         std::array<Particle3D, 2U> particles{};
         std::array<ParticleEmitter3D, 2U> emitters{};
@@ -240,8 +220,8 @@ int main(int argc_,
         renderer_create_info.clear_swapchain = false;
         particle_renderer.Initialize(renderer_create_info);
         renderer_initialized = true;
-        particle_renderer.SetHost(&particle_upload_host);
-        particle_renderer.SetSimulationHost(&particle_simulation_host);
+        runtime.Services().Get<vr::runtime::services::ParticleRenderService>().ConfigureRenderer(
+            particle_renderer);
         particle_renderer.SetSceneData(particles.data(),
                                        emitters.data(),
                                        transforms.data(),
@@ -318,7 +298,8 @@ int main(int argc_,
                 stats_frame_counter = 0U;
 
                 const auto& renderer_stats = particle_renderer.Stats();
-                const auto& sim_stats = particle_simulation_host.Stats();
+                const auto& sim_stats =
+                    runtime.Services().Get<vr::runtime::services::ParticleSimulationService>().Stats();
                 std::cout << "FPS:" << static_cast<int>(std::round(fps))
                           << " Frame:" << frame_counter
                           << " Draw:" << renderer_stats.draw_call_count
@@ -339,10 +320,6 @@ int main(int argc_,
 
         particle_renderer.Shutdown(runtime.Context());
         renderer_initialized = false;
-        particle_simulation_host.Shutdown(runtime.Context());
-        simulation_initialized = false;
-        particle_upload_host.Shutdown(runtime.Context());
-        upload_initialized = false;
         runtime.Shutdown();
         runtime_initialized = false;
         return 0;
@@ -350,12 +327,6 @@ int main(int argc_,
         std::cerr << "sdl_particle_3d_demo failed: " << e.what() << '\n';
         if (renderer_initialized) {
             particle_renderer.Shutdown(runtime.Context());
-        }
-        if (simulation_initialized) {
-            particle_simulation_host.Shutdown(runtime.Context());
-        }
-        if (upload_initialized) {
-            particle_upload_host.Shutdown(runtime.Context());
         }
         if (runtime_initialized) {
             runtime.Shutdown();

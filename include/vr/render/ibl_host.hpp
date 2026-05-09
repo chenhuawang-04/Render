@@ -3,6 +3,7 @@
 #include "Center/Memory/Container/Vector/McVector.hpp"
 #include "vr/asset/texture_host.hpp"
 #include "vr/render/descriptor_host.hpp"
+#include "vr/render/runtime_prepare_views.hpp"
 #include "vr/resource/buffer_host.hpp"
 #include "vr/resource/sampler_host.hpp"
 #include "vr/vulkan_context.hpp"
@@ -11,8 +12,6 @@
 #include <cstdint>
 
 namespace vr::render {
-
-struct RuntimePrepareContext;
 
 template<typename T>
 using IblMcVector = Center::Memory::mc_vector<T, Center::Memory::Tags::Container>;
@@ -93,7 +92,7 @@ public:
     void ClearActiveEnvironment() noexcept;
     void SetBrdfLut(asset::TextureId brdf_lut_) noexcept;
 
-    void PrepareFrame(const RuntimePrepareContext& prepare_context_);
+    void PrepareFrame(const IblHostPrepareView& prepare_view_);
 
     [[nodiscard]] const IblEnvironmentAssetDesc* FindEnvironment(IblEnvironmentId environment_id_) const noexcept;
     [[nodiscard]] VkDescriptorSet ActiveDescriptorSet(std::uint32_t frame_index_) const;
@@ -125,10 +124,10 @@ private:
     };
 
     [[nodiscard]] std::size_t LowerBoundEnvironmentIndex(IblEnvironmentId environment_id_) const noexcept;
-    void EnsureFrameResources(const RuntimePrepareContext& prepare_context_);
-    void EnsureDefaultTextures(const RuntimePrepareContext& prepare_context_);
-    void UploadDefaultSpecularCube(const RuntimePrepareContext& prepare_context_);
-    void UploadDefaultBrdfLut(const RuntimePrepareContext& prepare_context_);
+    void EnsureFrameResources(const IblHostPrepareView& prepare_view_);
+    void EnsureDefaultTextures(const IblHostPrepareView& prepare_view_);
+    void UploadDefaultSpecularCube(const IblHostPrepareView& prepare_view_);
+    void UploadDefaultBrdfLut(const IblHostPrepareView& prepare_view_);
     void DestroyFrameResources(VulkanContext& context_) noexcept;
     [[nodiscard]] const EnvironmentRecord* ResolveActiveEnvironmentRecord() const noexcept;
     [[nodiscard]] const asset::TextureHost::TextureRecord& RequireCubeTexture(asset::TextureId texture_id_,

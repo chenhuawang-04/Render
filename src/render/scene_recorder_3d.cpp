@@ -139,7 +139,7 @@ void SceneRecorder3D::ClearRendererRegistrations() noexcept {
     ClearOverlayRenderers();
 }
 
-void SceneRecorder3D::PrepareFrame(const RuntimePrepareContext& prepare_context_) {
+void SceneRecorder3D::PrepareFrame(const SceneRecorder3DPrepareView& prepare_view_) {
     EnsureInitialized("PrepareFrame");
     RefreshFramePacketBinding();
     if (frame_packet != nullptr) {
@@ -154,7 +154,13 @@ void SceneRecorder3D::PrepareFrame(const RuntimePrepareContext& prepare_context_
     SceneRenderTargetSet* targets = nullptr;
     if (use_post_stack) {
         targets = &post_stack.Targets();
-        (void)targets->PrepareFrame(prepare_context_);
+        (void)targets->PrepareFrame(SceneRenderTargetSetPrepareView{
+            .device = prepare_view_.device,
+            .render_target = prepare_view_.render_target,
+            .render_target_pool = prepare_view_.render_target_pool,
+            .frame = prepare_view_.frame,
+            .progress = prepare_view_.progress,
+        });
     }
 
     for (const PreSceneRendererEntry& entry : pre_scene_renderer_entries) {
@@ -168,7 +174,7 @@ void SceneRecorder3D::PrepareFrame(const RuntimePrepareContext& prepare_context_
             entry.configure_animation_fn(entry.renderer, animation_frame_coordinator);
         }
         if (entry.prepare_fn != nullptr && entry.renderer != nullptr) {
-            entry.prepare_fn(entry.renderer, prepare_context_);
+            entry.prepare_fn(entry.renderer, prepare_view_);
         }
     }
 
@@ -229,7 +235,9 @@ void SceneRecorder3D::PrepareFrame(const RuntimePrepareContext& prepare_context_
     ForEachSceneRendererInStageOrder(configure_scene_renderer);
     if (targets != nullptr) {
         (void)targets->ConfigureSceneConsumer(post_stack.Bloom());
-        post_stack.Bloom().PrepareFrame(prepare_context_);
+        post_stack.Bloom().PrepareFrame(
+            MakeRenderTargetBloomRendererPrepareView(
+                MakeSceneBloomPostStackPrepareView(prepare_view_)));
     }
 
     auto prepare_scene_renderer = [&](const SceneRendererEntry& entry_) {
@@ -241,7 +249,7 @@ void SceneRecorder3D::PrepareFrame(const RuntimePrepareContext& prepare_context_
             !IsFirstSceneRendererEntryForRenderer(entry_)) {
             return;
         }
-        entry_.prepare_fn(entry_.renderer, prepare_context_);
+        entry_.prepare_fn(entry_.renderer, prepare_view_);
     };
     ForEachSceneRendererInStageOrder(prepare_scene_renderer);
     for (const OverlayRendererEntry& entry : overlay_renderer_entries) {
@@ -252,17 +260,17 @@ void SceneRecorder3D::PrepareFrame(const RuntimePrepareContext& prepare_context_
             entry.set_output_target_fn(entry.renderer, BuildOverlayOutputConfig(entry.output_target_config));
         }
         if (entry.prepare_fn != nullptr && entry.renderer != nullptr) {
-            entry.prepare_fn(entry.renderer, prepare_context_);
+            entry.prepare_fn(entry.renderer, prepare_view_);
         }
     }
 
     stats.prepare_count += 1U;
 }
 
-void SceneRecorder3D::PrepareFrame(const RuntimePrepareContext& prepare_context_,
+void SceneRecorder3D::PrepareFrame(const SceneRecorder3DPrepareView& prepare_view_,
                                    const RenderScenePacket3D& frame_packet_) {
     SetFramePacket(&frame_packet_);
-    PrepareFrame(prepare_context_);
+    PrepareFrame(prepare_view_);
 }
 
 void SceneRecorder3D::Record(const FrameRecordContext& record_context_) {

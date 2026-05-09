@@ -1,5 +1,6 @@
 #include "support/test_framework.hpp"
 #include "vr/render/render_runtime_host.hpp"
+#include "vr/render/runtime_prepare_views.hpp"
 
 #include <array>
 #include <cctype>
@@ -70,14 +71,13 @@ public:
         }
     }
 
-    void PrepareFrame(const vr::render::RuntimePrepareContext& prepare_context_) {
-        if (prepare_context_.ibl_bake_host == nullptr ||
-            prepare_context_.ibl_host == nullptr ||
-            prepare_context_.texture_host == nullptr ||
-            prepare_context_.upload_host == nullptr ||
-            prepare_context_.context == nullptr) {
+    void PrepareFrame(const vr::render::SceneRecorder3DPrepareView& prepare_view_) {
+        if (prepare_view_.ibl_bake == nullptr ||
+            prepare_view_.ibl == nullptr ||
+            prepare_view_.texture == nullptr ||
+            prepare_view_.upload == nullptr) {
             throw std::runtime_error(
-                "IblBakeRecorder requires IBL bake/runtime dependencies in RuntimePrepareContext");
+                "IblBakeRecorder requires IBL bake/runtime dependencies in SceneRecorder3DPrepareView");
         }
 
         if (!baked_once) {
@@ -96,15 +96,17 @@ public:
             request.rotation_y_radians = 0.65F;
             request.tint_color = {0.85F, 0.90F, 1.05F};
             request.set_active_environment = true;
-            bake_result = prepare_context_.ibl_bake_host->BakeEnvironment(prepare_context_, request);
+            bake_result = prepare_view_.ibl_bake->BakeEnvironment(
+                vr::render::MakeIblBakeHostPrepareView(prepare_view_),
+                request);
             baked_once = true;
         }
 
-        prepare_context_.ibl_host->PrepareFrame(prepare_context_);
-        active_descriptor_set = prepare_context_.ibl_host->ActiveDescriptorSet(prepare_context_.frame_index);
-        active_params = prepare_context_.ibl_host->ActiveParams();
-        active_environment = prepare_context_.ibl_host->ActiveEnvironment();
-        active_brdf_lut = prepare_context_.ibl_host->BrdfLut();
+        prepare_view_.ibl->PrepareFrame(vr::render::MakeIblHostPrepareView(prepare_view_));
+        active_descriptor_set = prepare_view_.ibl->ActiveDescriptorSet(prepare_view_.frame.frame_index);
+        active_params = prepare_view_.ibl->ActiveParams();
+        active_environment = prepare_view_.ibl->ActiveEnvironment();
+        active_brdf_lut = prepare_view_.ibl->BrdfLut();
     }
 
     void Record(const vr::render::FrameRecordContext& record_context_) {

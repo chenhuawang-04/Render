@@ -2,8 +2,6 @@
 
 #include "vr/render/generated/render_target_composite_frag_spv.hpp"
 #include "vr/render/generated/render_target_composite_vert_spv.hpp"
-#include "vr/render/runtime_prepare_context.hpp"
-
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
@@ -110,29 +108,23 @@ void RenderTargetCompositeRenderer::ResetOutputTargetConfig() noexcept {
     output_target_config = {};
 }
 
-void RenderTargetCompositeRenderer::PrepareFrame(const RuntimePrepareContext& prepare_context_) {
+void RenderTargetCompositeRenderer::PrepareFrame(
+    const RenderTargetCompositeRendererPrepareView& prepare_view_) {
     if (!initialized) {
         throw std::runtime_error("RenderTargetCompositeRenderer::PrepareFrame called before Initialize");
     }
-    if (prepare_context_.context == nullptr ||
-        prepare_context_.descriptor_host == nullptr ||
-        prepare_context_.pipeline_host == nullptr ||
-        prepare_context_.render_target_host == nullptr ||
-        prepare_context_.sampler_host == nullptr) {
-        throw std::runtime_error("RenderTargetCompositeRenderer::PrepareFrame missing runtime dependencies");
-    }
 
-    context = prepare_context_.context;
-    descriptor_host = prepare_context_.descriptor_host;
-    pipeline_host = prepare_context_.pipeline_host;
-    render_target_host = prepare_context_.render_target_host;
-    sampler_host = prepare_context_.sampler_host;
+    context = &prepare_view_.device;
+    descriptor_host = &prepare_view_.descriptor;
+    pipeline_host = &prepare_view_.pipeline;
+    render_target_host = &prepare_view_.render_target;
+    sampler_host = &prepare_view_.sampler;
     stats = {};
 
-    if (prepare_context_.frame_index >= frame_descriptor_cache.size()) {
-        frame_descriptor_cache.resize(prepare_context_.frame_index + 1U);
+    if (prepare_view_.frame.frame_index >= frame_descriptor_cache.size()) {
+        frame_descriptor_cache.resize(prepare_view_.frame.frame_index + 1U);
     }
-    frame_descriptor_cache[prepare_context_.frame_index] = {};
+    frame_descriptor_cache[prepare_view_.frame.frame_index] = {};
 }
 
 void RenderTargetCompositeRenderer::Record(const FrameRecordContext& record_context_) {

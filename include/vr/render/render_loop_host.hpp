@@ -15,6 +15,7 @@
 namespace vr::render {
 
 class RenderTargetHost;
+class SwapchainTargetSet;
 
 struct FrameRecordContext {
     VkCommandBuffer command_buffer = VK_NULL_HANDLE;
@@ -25,7 +26,7 @@ struct FrameRecordContext {
     VkImage image = VK_NULL_HANDLE;
     VkImageView image_view = VK_NULL_HANDLE;
     RenderTargetHost* render_target_host = nullptr;
-    RenderTargetHandle swapchain_target_handle{};
+    const SwapchainTargetSet* swapchain_targets = nullptr;
 };
 
 template<typename RecorderT>
@@ -86,6 +87,15 @@ struct TickResult {
     TickCode code = TickCode::Submitted;
     uint32_t frame_index = 0U;
     uint32_t image_index = 0U;
+};
+
+struct AcquiredFrame {
+    TickCode code = TickCode::Submitted;
+    FrameToken token{};
+    VkExtent2D extent{};
+    VkFormat format = VK_FORMAT_UNDEFINED;
+    VkImage image = VK_NULL_HANDLE;
+    VkImageView image_view = VK_NULL_HANDLE;
 };
 
 struct RenderLoopCreateInfo {
@@ -198,28 +208,15 @@ public:
 
     template<typename RecorderT>
     requires (FrameRecorder<RecorderT> || FrameContextRecorder<RecorderT>)
-    [[nodiscard]] TickResult Tick(VulkanContext& context_,
-                                  const WindowSurfaceT& window_surface_,
-                                  SwapchainHostT& swapchain_,
-                                  RecorderT& recorder_) {
-        return Tick(context_,
-                    window_surface_,
-                    swapchain_,
-                    recorder_,
-                    nullptr,
-                    0U);
-    }
-
-    template<typename RecorderT>
-    requires (FrameRecorder<RecorderT> || FrameContextRecorder<RecorderT>)
-    [[nodiscard]] TickResult Tick(VulkanContext& context_,
-                                  const WindowSurfaceT& window_surface_,
-                                  SwapchainHostT& swapchain_,
-                                  RecorderT& recorder_,
-                                  const FrameSubmitWait* extra_submit_waits_,
-                                  uint32_t extra_submit_wait_count_) {
+    [[nodiscard]] AcquiredFrame AcquireFrame(VulkanContext& context_,
+                                             const WindowSurfaceT& window_surface_,
+                                             SwapchainHostT& swapchain_,
+                                             const std::uint64_t frame_id_,
+                                             const std::uint64_t transfer_wait_value_,
+                                             const std::uint64_t compute_wait_value_,
+                                             RecorderT& recorder_) {
         if (!initialized) {
-            throw std::runtime_error("RenderLoopHost::Tick called before Initialize");
+            throw std::runtime_error("RenderLoopHost::AcquireFrame called before Initialize");
         }
 
         if (!swapchain_.EnsureValid(context_,
@@ -232,8 +229,10 @@ public:
                                        create_info_cache.retire_collect_budget_per_type);
             return {
                 .code = TickCode::SkippedWindowHidden,
-                .frame_index = frame_sync.CurrentFrameIndex(),
-                .image_index = 0U
+                .token = {
+                    .frame_index = frame_sync.CurrentFrameIndex(),
+                    .image_index = 0U,
+                },
             };
         }
 
@@ -268,40 +267,50 @@ public:
         last_known_swapchain_extent = current_extent;
         last_known_swapchain_format = current_format;
 
-        auto begin_result = frame_sync.BeginFrame(context_, swapchain_);
+        auto begin_result = frame_sync.BeginFrame(context_,
+                                                  swapchain_,
+                                                  frame_id_,
+                                                  transfer_wait_value_,
+                                                  compute_wait_value_);
         if (begin_result.code == FrameBeginCode::RecreateSwapchain) {
             swapchain_.MarkDirty();
             return {
                 .code = TickCode::RecreateRequested,
-                .frame_index = begin_result.token.frame_index,
-                .image_index = begin_result.token.image_index
+                .token = begin_result.token,
+                .extent = current_extent,
+                .format = current_format,
             };
         }
 
         const FrameToken token = begin_result.token;
-        frame_commands.ResetFrame(context_, token.frame_index);
+        return {
+            .code = token.recommend_recreate ? TickCode::RecreateRequested : TickCode::Submitted,
+            .token = token,
+            .extent = current_extent,
+            .format = current_format,
+            .image = swapchain_.Image(token.image_index),
+            .image_view = swapchain_.ImageView(token.image_index),
+        };
+    }
 
-        VkCommandBuffer command_buffer = frame_commands.BeginPrimary(context_,
-                                                                     token.frame_index,
-                                                                     create_info_cache.command_usage_flags);
-        RecordFrame(recorder_,
-                    command_buffer,
-                    token.frame_index,
-                    token.image_index,
-                    swapchain_.Extent(),
-                    swapchain_.Format(),
-                    swapchain_.Image(token.image_index),
-                    swapchain_.ImageView(token.image_index));
-        frame_commands.EndCommandBuffer(command_buffer);
+    [[nodiscard]] TickResult SubmitPresentAndAdvance(VulkanContext& context_,
+                                                     SwapchainHostT& swapchain_,
+                                                     const FrameToken& token_,
+                                                     VkCommandBuffer command_buffer_,
+                                                     const FrameSubmitWait* extra_submit_waits_,
+                                                     uint32_t extra_submit_wait_count_) {
+        if (!initialized) {
+            throw std::runtime_error("RenderLoopHost::SubmitPresentAndAdvance called before Initialize");
+        }
 
         (void)frame_sync.Submit(context_,
-                                token,
-                                command_buffer,
+                                token_,
+                                command_buffer_,
                                 create_info_cache.submit_wait_stage_mask,
                                 extra_submit_waits_,
                                 extra_submit_wait_count_);
 
-        const bool need_recreate = frame_sync.Present(context_, swapchain_, token);
+        const bool need_recreate = frame_sync.Present(context_, swapchain_, token_);
         if (need_recreate) {
             swapchain_.MarkDirty();
         }
@@ -312,9 +321,97 @@ public:
                                    create_info_cache.retire_collect_budget_per_type);
         return {
             .code = need_recreate ? TickCode::RecreateRequested : TickCode::Submitted,
-            .frame_index = token.frame_index,
-            .image_index = token.image_index
+            .frame_index = token_.frame_index,
+            .image_index = token_.image_index
         };
+    }
+
+    template<typename RecorderT>
+    requires (FrameRecorder<RecorderT> || FrameContextRecorder<RecorderT>)
+    [[nodiscard]] TickResult Tick(VulkanContext& context_,
+                                  const WindowSurfaceT& window_surface_,
+                                  SwapchainHostT& swapchain_,
+                                  RecorderT& recorder_) {
+        return Tick(context_,
+                    window_surface_,
+                    swapchain_,
+                    0U,
+                    0U,
+                    0U,
+                    recorder_,
+                    nullptr,
+                    0U);
+    }
+
+    template<typename RecorderT>
+    requires (FrameRecorder<RecorderT> || FrameContextRecorder<RecorderT>)
+    [[nodiscard]] TickResult Tick(VulkanContext& context_,
+                                  const WindowSurfaceT& window_surface_,
+                                  SwapchainHostT& swapchain_,
+                                  const std::uint64_t frame_id_,
+                                  RecorderT& recorder_) {
+        return Tick(context_,
+                    window_surface_,
+                    swapchain_,
+                    frame_id_,
+                    0U,
+                    0U,
+                    recorder_,
+                    nullptr,
+                    0U);
+    }
+
+    template<typename RecorderT>
+    requires (FrameRecorder<RecorderT> || FrameContextRecorder<RecorderT>)
+    [[nodiscard]] TickResult Tick(VulkanContext& context_,
+                                  const WindowSurfaceT& window_surface_,
+                                  SwapchainHostT& swapchain_,
+                                  const std::uint64_t frame_id_,
+                                  const std::uint64_t transfer_wait_value_,
+                                  const std::uint64_t compute_wait_value_,
+                                  RecorderT& recorder_,
+                                  const FrameSubmitWait* extra_submit_waits_,
+                                  uint32_t extra_submit_wait_count_) {
+        if (!initialized) {
+            throw std::runtime_error("RenderLoopHost::Tick called before Initialize");
+        }
+
+        const AcquiredFrame acquired = AcquireFrame(context_,
+                                                    window_surface_,
+                                                    swapchain_,
+                                                    frame_id_,
+                                                    transfer_wait_value_,
+                                                    compute_wait_value_,
+                                                    recorder_);
+        if (acquired.code != TickCode::Submitted) {
+            return {
+                .code = acquired.code,
+                .frame_index = acquired.token.frame_index,
+                .image_index = acquired.token.image_index
+            };
+        }
+
+        const FrameToken token = acquired.token;
+        frame_commands.ResetFrame(context_, token.frame_index);
+
+        VkCommandBuffer command_buffer = frame_commands.BeginPrimary(context_,
+                                                                     token.frame_index,
+                                                                     create_info_cache.command_usage_flags);
+        RecordFrame(recorder_,
+                    command_buffer,
+                    token.frame_index,
+                    token.image_index,
+                    acquired.extent,
+                    acquired.format,
+                    acquired.image,
+                    acquired.image_view);
+        frame_commands.EndCommandBuffer(command_buffer);
+        return SubmitPresentAndAdvance(context_,
+                                       swapchain_,
+                                       token,
+                                       command_buffer,
+                                       extra_submit_waits_,
+                                       extra_submit_wait_count_);
     }
 
     [[nodiscard]] bool IsInitialized() const noexcept {

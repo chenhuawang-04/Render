@@ -5,7 +5,7 @@
 #include "vr/render/color_blend_state.hpp"
 #include "vr/render/ibl_host.hpp"
 #include "vr/render/render_loop_host.hpp"
-#include "vr/render/runtime_prepare_context.hpp"
+#include "vr/render/runtime_prepare_views.hpp"
 #include "vr/render/upload_host.hpp"
 #include "vr/resource/gpu_memory_host.hpp"
 #include "vr/resource/image_host.hpp"
@@ -372,34 +372,25 @@ void SurfaceRenderer3D::ResetDepthTargetConfig() noexcept {
     depth_output_target_config = {};
 }
 
-void SurfaceRenderer3D::PrepareFrame(const render::RuntimePrepareContext& prepare_context_) {
+void SurfaceRenderer3D::PrepareFrame(const render::SurfaceRenderer3DPrepareView& prepare_view_) {
     if (!initialized) {
         throw std::runtime_error("SurfaceRenderer3D::PrepareFrame called before Initialize");
-    }
-    if (prepare_context_.context == nullptr ||
-        prepare_context_.upload_host == nullptr ||
-        prepare_context_.descriptor_host == nullptr ||
-        prepare_context_.pipeline_host == nullptr ||
-        prepare_context_.ibl_host == nullptr ||
-        prepare_context_.gpu_memory_host == nullptr ||
-        prepare_context_.sampler_host == nullptr) {
-        throw std::runtime_error("SurfaceRenderer3D::PrepareFrame missing runtime dependencies");
     }
     if (surface_upload_host == nullptr || !surface_upload_host->IsInitialized()) {
         throw std::runtime_error("SurfaceRenderer3D::PrepareFrame requires initialized SurfaceUploadHost");
     }
 
-    context = prepare_context_.context;
-    upload_host = prepare_context_.upload_host;
-    descriptor_host = prepare_context_.descriptor_host;
-    pipeline_host = prepare_context_.pipeline_host;
-    ibl_host = prepare_context_.ibl_host;
-    gpu_memory_host = prepare_context_.gpu_memory_host;
-    sampler_host = prepare_context_.sampler_host;
-    active_frame_index = prepare_context_.frame_index;
-    last_submitted_value_seen = std::max(last_submitted_value_seen, prepare_context_.last_submitted_value);
+    context = &prepare_view_.device;
+    upload_host = &prepare_view_.upload;
+    descriptor_host = &prepare_view_.descriptor;
+    pipeline_host = &prepare_view_.pipeline;
+    ibl_host = &prepare_view_.ibl;
+    gpu_memory_host = &prepare_view_.gpu_memory;
+    sampler_host = &prepare_view_.sampler;
+    active_frame_index = prepare_view_.frame.frame_index;
+    last_submitted_value_seen = std::max(last_submitted_value_seen, prepare_view_.progress.last_submitted_value);
     completed_submit_value_seen = std::max(completed_submit_value_seen,
-                                           prepare_context_.completed_submit_value);
+                                           prepare_view_.progress.completed_submit_value);
 
     surface_upload_host->BeginFrame(*context,
                                     active_frame_index,
@@ -409,7 +400,7 @@ void SurfaceRenderer3D::PrepareFrame(const render::RuntimePrepareContext& prepar
         surface_image_host->BeginFrame(*context, completed_submit_value_seen);
     }
     EnsureFallbackTexture(*context, *upload_host, active_frame_index);
-    ibl_host->PrepareFrame(prepare_context_);
+    ibl_host->PrepareFrame(render::MakeIblHostPrepareView(prepare_view_));
     active_ibl_descriptor_set = ibl_host->ActiveDescriptorSet(active_frame_index);
     if (active_ibl_descriptor_set == VK_NULL_HANDLE) {
         throw std::runtime_error("SurfaceRenderer3D::PrepareFrame failed to resolve IBL descriptor set");

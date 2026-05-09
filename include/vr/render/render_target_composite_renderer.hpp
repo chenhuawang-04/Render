@@ -3,6 +3,7 @@
 #include "Center/Memory/Container/Vector/McVector.hpp"
 #include "vr/render/descriptor_host.hpp"
 #include "vr/render/pipeline_host.hpp"
+#include "vr/render/runtime_prepare_views.hpp"
 #include "vr/render/render_target_host.hpp"
 #include "vr/render/render_target_pass.hpp"
 #include "vr/resource/sampler_host.hpp"
@@ -14,8 +15,6 @@ class VulkanContext;
 }
 
 namespace vr::render {
-
-struct RuntimePrepareContext;
 
 template<typename T>
 using RenderTargetCompositeMcVector = Center::Memory::mc_vector<T, Center::Memory::Tags::Container>;
@@ -48,7 +47,7 @@ public:
     void SetOutputTargetConfig(const RenderTargetColorOutputConfig& output_target_config_) noexcept;
     void ResetOutputTargetConfig() noexcept;
 
-    void PrepareFrame(const RuntimePrepareContext& prepare_context_);
+    void PrepareFrame(const RenderTargetCompositeRendererPrepareView& prepare_view_);
     void Record(const FrameRecordContext& record_context_);
     void OnSwapchainRecreated(std::uint32_t image_count_,
                               VkExtent2D extent_,

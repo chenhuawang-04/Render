@@ -4,6 +4,7 @@
 #include "vr/ecs/component/transform_component.hpp"
 #include "vr/render/descriptor_host.hpp"
 #include "vr/render/pipeline_host.hpp"
+#include "vr/render/runtime_prepare_views.hpp"
 #include "vr/render/render_target_pass.hpp"
 
 #include <cstdint>
@@ -14,7 +15,6 @@ class VulkanContext;
 
 namespace vr::render {
 
-struct RuntimePrepareContext;
 struct FrameRecordContext;
 class IblHost;
 
@@ -56,7 +56,7 @@ public:
     void SetDepthTargetConfig(const RenderTargetDepthOutputConfig& depth_output_target_config_) noexcept;
     void ResetDepthTargetConfig() noexcept;
 
-    void PrepareFrame(const RuntimePrepareContext& prepare_context_);
+    void PrepareFrame(const SkyboxRendererPrepareView& prepare_view_);
     void Record(const FrameRecordContext& record_context_);
     void OnSwapchainRecreated(std::uint32_t image_count_,
                               VkExtent2D extent_,

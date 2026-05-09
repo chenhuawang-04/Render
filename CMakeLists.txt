@@ -461,6 +461,7 @@ add_library(vulkan_init STATIC
     src/render/render_target_host.cpp
     src/render/render_target_pass.cpp
     src/render/render_target_pool.cpp
+    src/render/swapchain_target_set.cpp
     src/render/render_target_composite_renderer.cpp
     src/render/render_target_bloom_renderer.cpp
     src/render/scene_recorder_2d.cpp

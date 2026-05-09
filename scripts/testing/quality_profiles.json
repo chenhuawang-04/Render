@@ -93,6 +93,28 @@
         }
       ]
     },
+    "bench_gate_runtime_allocation": {
+      "description": "Steady-state allocation gate for runtime text path after warmup.",
+      "steps": [
+        {
+          "name": "vr_bench_runtime_allocation_gate",
+          "command": [
+            "${bench_bin}",
+            "--filter",
+            "RuntimeDiagnostics_steady_state_text_renderer_2d_allocation_gate",
+            "--warmup",
+            "1",
+            "--runs",
+            "3",
+            "--min-duration-ms",
+            "5",
+            "--report-json",
+            "${report_dir}/bench_runtime_allocation_gate.json"
+          ],
+          "allow_exit_codes": [0]
+        }
+      ]
+    },
     "quality_full": {
       "description": "Recommended full pipeline: unit + geometry gate + smoke bench + integration.",
       "steps": [
@@ -144,6 +166,23 @@
             "5",
             "--report-json",
             "${report_dir}/bench_smoke.json"
+          ],
+          "allow_exit_codes": [0]
+        },
+        {
+          "name": "vr_bench_runtime_allocation_gate",
+          "command": [
+            "${bench_bin}",
+            "--filter",
+            "RuntimeDiagnostics_steady_state_text_renderer_2d_allocation_gate",
+            "--warmup",
+            "1",
+            "--runs",
+            "3",
+            "--min-duration-ms",
+            "5",
+            "--report-json",
+            "${report_dir}/bench_runtime_allocation_gate.json"
           ],
           "allow_exit_codes": [0]
         },

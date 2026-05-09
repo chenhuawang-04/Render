@@ -1,7 +1,5 @@
 #include "vr/render/ibl_bake_host.hpp"
 
-#include "vr/render/runtime_prepare_context.hpp"
-
 #include <algorithm>
 #include <bit>
 #include <cmath>
@@ -784,15 +782,12 @@ void IblBakeHost::Shutdown(VulkanContext& context_) {
     initialized = false;
 }
 
-asset::TextureId IblBakeHost::EnsureBrdfLut(const RuntimePrepareContext& prepare_context_,
+asset::TextureId IblBakeHost::EnsureBrdfLut(const IblBakeHostPrepareView& prepare_view_,
                                             asset::TextureId texture_id_,
                                             std::uint32_t lut_size_,
                                             std::uint32_t sample_count_) {
     if (!initialized || texture_host == nullptr) {
         throw std::runtime_error("IblBakeHost::EnsureBrdfLut called before Initialize");
-    }
-    if (prepare_context_.context == nullptr || prepare_context_.upload_host == nullptr) {
-        throw std::runtime_error("IblBakeHost::EnsureBrdfLut requires a valid Vulkan context and UploadHost");
     }
 
     const std::uint32_t resolved_lut_size =
@@ -806,7 +801,7 @@ asset::TextureId IblBakeHost::EnsureBrdfLut(const RuntimePrepareContext& prepare
             : AllocateTextureId();
     }
 
-    const VkFormat brdf_lut_format = ResolveBrdfLutFormat(*prepare_context_.context);
+    const VkFormat brdf_lut_format = ResolveBrdfLutFormat(prepare_view_.device);
     if (brdf_lut_format == VK_FORMAT_UNDEFINED) {
         throw std::runtime_error("IblBakeHost::EnsureBrdfLut could not resolve a sampled BRDF LUT format");
     }
@@ -820,7 +815,7 @@ asset::TextureId IblBakeHost::EnsureBrdfLut(const RuntimePrepareContext& prepare
         existing->extent.width == resolved_lut_size &&
         existing->extent.height == resolved_lut_size) {
         cached_brdf_lut_texture_id = texture_id_;
-        IblHost* resolved_ibl_host = ibl_host != nullptr ? ibl_host : prepare_context_.ibl_host;
+        IblHost* resolved_ibl_host = ibl_host != nullptr ? ibl_host : prepare_view_.ibl;
         if (resolved_ibl_host != nullptr && create_info_cache.auto_register_brdf_lut_with_ibl_host) {
             resolved_ibl_host->SetBrdfLut(texture_id_);
         }
@@ -858,11 +853,11 @@ asset::TextureId IblBakeHost::EnsureBrdfLut(const RuntimePrepareContext& prepare
     upload_info.subresources = &subresource;
     upload_info.subresource_count = 1U;
 
-    texture_host->UploadTexture(*prepare_context_.context,
-                                *prepare_context_.upload_host,
-                                prepare_context_.frame_index,
-                                prepare_context_.last_submitted_value,
-                                prepare_context_.completed_submit_value,
+    texture_host->UploadTexture(prepare_view_.device,
+                                prepare_view_.upload,
+                                prepare_view_.frame.frame_index,
+                                prepare_view_.progress.last_submitted_value,
+                                prepare_view_.progress.completed_submit_value,
                                 upload_info);
 
     TrackOwnedTexture(texture_id_);
@@ -871,7 +866,7 @@ asset::TextureId IblBakeHost::EnsureBrdfLut(const RuntimePrepareContext& prepare
     ++stats.generated_texture_count;
     ++stats.revision;
 
-    IblHost* resolved_ibl_host = ibl_host != nullptr ? ibl_host : prepare_context_.ibl_host;
+    IblHost* resolved_ibl_host = ibl_host != nullptr ? ibl_host : prepare_view_.ibl;
     if (resolved_ibl_host != nullptr && create_info_cache.auto_register_brdf_lut_with_ibl_host) {
         resolved_ibl_host->SetBrdfLut(texture_id_);
     }
@@ -879,13 +874,10 @@ asset::TextureId IblBakeHost::EnsureBrdfLut(const RuntimePrepareContext& prepare
     return texture_id_;
 }
 
-IblBakeResult IblBakeHost::BakeEnvironment(const RuntimePrepareContext& prepare_context_,
+IblBakeResult IblBakeHost::BakeEnvironment(const IblBakeHostPrepareView& prepare_view_,
                                            const IblBakeRequest& request_) {
     if (!initialized || texture_host == nullptr) {
         throw std::runtime_error("IblBakeHost::BakeEnvironment called before Initialize");
-    }
-    if (prepare_context_.context == nullptr || prepare_context_.upload_host == nullptr) {
-        throw std::runtime_error("IblBakeHost::BakeEnvironment requires a valid Vulkan context and UploadHost");
     }
     if (!request_.bake_specular) {
         throw std::invalid_argument("IblBakeHost::BakeEnvironment requires bake_specular == true");
@@ -904,7 +896,7 @@ IblBakeResult IblBakeHost::BakeEnvironment(const RuntimePrepareContext& prepare_
         request_.sh_sample_count > 0U
             ? request_.sh_sample_count
             : create_info_cache.default_sh_sample_count;
-    const VkFormat environment_cube_format = ResolveEnvironmentCubeFormat(*prepare_context_.context);
+    const VkFormat environment_cube_format = ResolveEnvironmentCubeFormat(prepare_view_.device);
     if (environment_cube_format == VK_FORMAT_UNDEFINED) {
         throw std::runtime_error("IblBakeHost::BakeEnvironment could not resolve a sampled environment cubemap format");
     }
@@ -913,14 +905,14 @@ IblBakeResult IblBakeHost::BakeEnvironment(const RuntimePrepareContext& prepare_
         result.brdf_lut_size = request_.brdf_lut_size > 0U
             ? request_.brdf_lut_size
             : create_info_cache.default_brdf_lut_size;
-        result.brdf_lut = EnsureBrdfLut(prepare_context_,
+        result.brdf_lut = EnsureBrdfLut(prepare_view_,
                                         request_.brdf_lut_texture_id,
                                         result.brdf_lut_size,
                                         request_.brdf_sample_count);
     } else if (request_.brdf_lut_texture_id.IsValid()) {
         result.brdf_lut = request_.brdf_lut_texture_id;
     } else {
-        IblHost* resolved_ibl_host = ibl_host != nullptr ? ibl_host : prepare_context_.ibl_host;
+        IblHost* resolved_ibl_host = ibl_host != nullptr ? ibl_host : prepare_view_.ibl;
         if (resolved_ibl_host != nullptr) {
             result.brdf_lut = resolved_ibl_host->BrdfLut();
         }
@@ -961,12 +953,12 @@ IblBakeResult IblBakeHost::BakeEnvironment(const RuntimePrepareContext& prepare_
         upload_info.subresources = subresources.data();
         upload_info.subresource_count = 6U;
 
-        texture_host->UploadTexture(*prepare_context_.context,
-                                    *prepare_context_.upload_host,
-                                    prepare_context_.frame_index,
-                                    prepare_context_.last_submitted_value,
-                                    prepare_context_.completed_submit_value,
-                                    upload_info);
+            texture_host->UploadTexture(prepare_view_.device,
+                                        prepare_view_.upload,
+                                        prepare_view_.frame.frame_index,
+                                        prepare_view_.progress.last_submitted_value,
+                                        prepare_view_.progress.completed_submit_value,
+                                        upload_info);
         TrackOwnedTexture(result.skybox_cube);
         ++stats.generated_texture_count;
     }
@@ -1010,11 +1002,11 @@ IblBakeResult IblBakeHost::BakeEnvironment(const RuntimePrepareContext& prepare_
         upload_info.subresources = subresources.data();
         upload_info.subresource_count = total_subresource_count;
 
-        texture_host->UploadTexture(*prepare_context_.context,
-                                    *prepare_context_.upload_host,
-                                    prepare_context_.frame_index,
-                                    prepare_context_.last_submitted_value,
-                                    prepare_context_.completed_submit_value,
+        texture_host->UploadTexture(prepare_view_.device,
+                                    prepare_view_.upload,
+                                    prepare_view_.frame.frame_index,
+                                    prepare_view_.progress.last_submitted_value,
+                                    prepare_view_.progress.completed_submit_value,
                                     upload_info);
         TrackOwnedTexture(result.specular_cube);
         ++stats.generated_texture_count;
@@ -1034,10 +1026,10 @@ IblBakeResult IblBakeHost::BakeEnvironment(const RuntimePrepareContext& prepare_
     result.environment.tint_color = request_.tint_color;
     result.environment.replace_existing = true;
 
-    IblHost* resolved_ibl_host = ibl_host != nullptr ? ibl_host : prepare_context_.ibl_host;
+    IblHost* resolved_ibl_host = ibl_host != nullptr ? ibl_host : prepare_view_.ibl;
     if (resolved_ibl_host != nullptr &&
         create_info_cache.auto_register_environment_with_ibl_host) {
-        result.environment_id = resolved_ibl_host->RegisterEnvironment(*prepare_context_.context,
+        result.environment_id = resolved_ibl_host->RegisterEnvironment(prepare_view_.device,
                                                                        result.environment);
         result.environment.environment_id = result.environment_id;
         result.registered_with_ibl_host = true;

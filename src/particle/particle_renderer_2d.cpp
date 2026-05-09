@@ -7,7 +7,7 @@
 #include "vr/particle/particle_simulation_host.hpp"
 #include "vr/render/color_blend_state.hpp"
 #include "vr/render/render_loop_host.hpp"
-#include "vr/render/runtime_prepare_context.hpp"
+#include "vr/render/runtime_prepare_views.hpp"
 #include "vr/render/upload_host.hpp"
 #include "vr/resource/buffer_host.hpp"
 #include "vr/resource/gpu_memory_host.hpp"
@@ -279,21 +279,19 @@ void ParticleRenderer2D::ResetOutputTargetConfig() noexcept {
     output_target_config = {};
 }
 
-void ParticleRenderer2D::PrepareFrame(const render::RuntimePrepareContext& prepare_context_) {
+void ParticleRenderer2D::PrepareFrame(const render::ParticleRenderer2DPrepareView& prepare_view_) {
     if (!initialized) {
         throw std::runtime_error("ParticleRenderer2D::PrepareFrame called before Initialize");
     }
-    if (prepare_context_.context == nullptr ||
-        prepare_context_.upload_host == nullptr ||
-        prepare_context_.descriptor_host == nullptr ||
-        prepare_context_.pipeline_host == nullptr ||
-        prepare_context_.gpu_memory_host == nullptr ||
-        prepare_context_.sampler_host == nullptr) {
-        throw std::runtime_error("ParticleRenderer2D::PrepareFrame missing runtime dependencies");
-    }
-    if (prepare_context_.context->EnabledVulkan13Features().dynamicRendering != VK_TRUE ||
-        prepare_context_.context->EnabledVulkan13Features().synchronization2 != VK_TRUE) {
+    if (prepare_view_.device.EnabledVulkan13Features().dynamicRendering != VK_TRUE ||
+        prepare_view_.device.EnabledVulkan13Features().synchronization2 != VK_TRUE) {
         throw std::runtime_error("ParticleRenderer2D requires Vulkan 1.3 dynamicRendering + synchronization2");
+    }
+    if (particle_upload_host == nullptr && prepare_view_.particle_upload != nullptr) {
+        particle_upload_host = prepare_view_.particle_upload;
+    }
+    if (particle_simulation_host == nullptr && prepare_view_.particle_simulation != nullptr) {
+        particle_simulation_host = prepare_view_.particle_simulation;
     }
     if (particle_upload_host == nullptr || !particle_upload_host->IsInitialized()) {
         throw std::runtime_error("ParticleRenderer2D::PrepareFrame requires initialized ParticleUploadHost");
@@ -302,21 +300,21 @@ void ParticleRenderer2D::PrepareFrame(const render::RuntimePrepareContext& prepa
         throw std::runtime_error("ParticleRenderer2D::PrepareFrame received non-initialized ParticleSimulationHost");
     }
 
-    context = prepare_context_.context;
-    upload_host = prepare_context_.upload_host;
-    descriptor_host = prepare_context_.descriptor_host;
-    pipeline_host = prepare_context_.pipeline_host;
-    gpu_memory_host = prepare_context_.gpu_memory_host;
-    sampler_host = prepare_context_.sampler_host;
-    if (prepare_context_.texture_host != nullptr) {
-        texture_host = prepare_context_.texture_host;
+    context = &prepare_view_.device;
+    upload_host = &prepare_view_.upload;
+    descriptor_host = &prepare_view_.descriptor;
+    pipeline_host = &prepare_view_.pipeline;
+    gpu_memory_host = &prepare_view_.gpu_memory;
+    sampler_host = &prepare_view_.sampler;
+    if (prepare_view_.texture != nullptr) {
+        texture_host = prepare_view_.texture;
     }
 
-    active_frame_index = prepare_context_.frame_index;
-    swapchain_extent = prepare_context_.swapchain_extent;
-    swapchain_format = prepare_context_.swapchain_format;
-    last_submitted_value_seen = prepare_context_.last_submitted_value;
-    completed_submit_value_seen = prepare_context_.completed_submit_value;
+    active_frame_index = prepare_view_.frame.frame_index;
+    swapchain_extent = prepare_view_.frame.swapchain_extent;
+    swapchain_format = prepare_view_.frame.swapchain_format;
+    last_submitted_value_seen = prepare_view_.progress.last_submitted_value;
+    completed_submit_value_seen = prepare_view_.progress.completed_submit_value;
 
     EnsureFallbackTexture(*context, *upload_host, active_frame_index);
 
@@ -343,8 +341,8 @@ void ParticleRenderer2D::PrepareFrame(const render::RuntimePrepareContext& prepa
     if (particle_simulation_host != nullptr) {
         particle_simulation_host->BeginFrame(*context,
                                              active_frame_index,
-                                             prepare_context_.last_submitted_value,
-                                             prepare_context_.completed_submit_value);
+                                             prepare_view_.progress.last_submitted_value,
+                                             prepare_view_.progress.completed_submit_value);
         const ParticleSimulationPrepareDesc prepare_desc =
             BuildSimulationPrepareDesc2D(particle_components,
                                          component_count);
@@ -424,8 +422,8 @@ void ParticleRenderer2D::PrepareFrame(const render::RuntimePrepareContext& prepa
         *context,
         *upload_host,
         active_frame_index,
-        prepare_context_.last_submitted_value,
-        prepare_context_.completed_submit_value,
+        prepare_view_.progress.last_submitted_value,
+        prepare_view_.progress.completed_submit_value,
         particle_components,
         particle_emitters,
         transforms,

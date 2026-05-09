@@ -1,5 +1,6 @@
 #include "support/test_framework.hpp"
 #include "vr/render/render_runtime_host.hpp"
+#include "vr/render/runtime_prepare_views.hpp"
 
 #include <array>
 #include <cctype>
@@ -72,22 +73,21 @@ using Runtime = vr::render::RenderRuntimeHost<vr::platform::ActiveBackendTag, 2U
 
 class IblPrepareRecorder final {
 public:
-    void PrepareFrame(const vr::render::RuntimePrepareContext& prepare_context_) {
-        if (prepare_context_.ibl_host == nullptr ||
-            prepare_context_.texture_host == nullptr ||
-            prepare_context_.upload_host == nullptr ||
-            prepare_context_.context == nullptr) {
+    void PrepareFrame(const vr::render::SceneRecorder3DPrepareView& prepare_view_) {
+        if (prepare_view_.ibl == nullptr ||
+            prepare_view_.texture == nullptr ||
+            prepare_view_.upload == nullptr) {
             throw std::runtime_error("IblPrepareRecorder requires valid IBL/Texture/Upload/Vulkan context pointers");
         }
 
         if (prepare_count == 0U) {
-            prepare_context_.ibl_host->PrepareFrame(prepare_context_);
-            fallback_descriptor_set = prepare_context_.ibl_host->ActiveDescriptorSet(prepare_context_.frame_index);
-            fallback_brdf_lut = prepare_context_.ibl_host->BrdfLut();
-            fallback_specular_texture = prepare_context_.ibl_host->ActiveSpecularTexture();
+            prepare_view_.ibl->PrepareFrame(vr::render::MakeIblHostPrepareView(prepare_view_));
+            fallback_descriptor_set = prepare_view_.ibl->ActiveDescriptorSet(prepare_view_.frame.frame_index);
+            fallback_brdf_lut = prepare_view_.ibl->BrdfLut();
+            fallback_specular_texture = prepare_view_.ibl->ActiveSpecularTexture();
         } else if (!environment_registered) {
-            UploadTextures(prepare_context_);
-            prepare_context_.ibl_host->SetBrdfLut(brdf_lut_texture_id);
+            UploadTextures(prepare_view_);
+            prepare_view_.ibl->SetBrdfLut(brdf_lut_texture_id);
 
             vr::render::IblEnvironmentAssetDesc environment_desc{};
             environment_desc.specular_cube = specular_cube_texture_id;
@@ -97,19 +97,19 @@ public:
             environment_desc.sh9[0] = {0.1F, 0.2F, 0.3F, 0.0F};
             environment_desc.sh9[1] = {0.4F, 0.5F, 0.6F, 0.0F};
 
-            environment_id = prepare_context_.ibl_host->RegisterEnvironment(*prepare_context_.context,
-                                                                             environment_desc);
-            prepare_context_.ibl_host->SetActiveEnvironment(environment_id);
+            environment_id = prepare_view_.ibl->RegisterEnvironment(prepare_view_.device,
+                                                                    environment_desc);
+            prepare_view_.ibl->SetActiveEnvironment(environment_id);
             environment_registered = true;
         }
 
         if (environment_registered) {
-            prepare_context_.ibl_host->PrepareFrame(prepare_context_);
-            active_descriptor_set = prepare_context_.ibl_host->ActiveDescriptorSet(prepare_context_.frame_index);
-            active_params = prepare_context_.ibl_host->ActiveParams();
-            active_brdf_lut = prepare_context_.ibl_host->BrdfLut();
-            active_specular_texture = prepare_context_.ibl_host->ActiveSpecularTexture();
-            active_skybox_texture = prepare_context_.ibl_host->ActiveSkyboxTexture();
+            prepare_view_.ibl->PrepareFrame(vr::render::MakeIblHostPrepareView(prepare_view_));
+            active_descriptor_set = prepare_view_.ibl->ActiveDescriptorSet(prepare_view_.frame.frame_index);
+            active_params = prepare_view_.ibl->ActiveParams();
+            active_brdf_lut = prepare_view_.ibl->BrdfLut();
+            active_specular_texture = prepare_view_.ibl->ActiveSpecularTexture();
+            active_skybox_texture = prepare_view_.ibl->ActiveSkyboxTexture();
         }
 
         ++prepare_count;
@@ -145,7 +145,7 @@ public:
     vr::render::IblGpuParams active_params{};
 
 private:
-    void UploadTextures(const vr::render::RuntimePrepareContext& prepare_context_) {
+    void UploadTextures(const vr::render::SceneRecorder3DPrepareView& prepare_view_) {
         constexpr std::uint32_t cube_width = 2U;
         constexpr std::uint32_t cube_height = 2U;
         constexpr std::uint32_t cube_texel_count = cube_width * cube_height;
@@ -189,14 +189,14 @@ private:
         cube_upload.subresources = cube_subresources.data();
         cube_upload.subresource_count = static_cast<std::uint32_t>(cube_subresources.size());
 
-        prepare_context_.texture_host->UploadTexture(*prepare_context_.context,
-                                                     *prepare_context_.upload_host,
-                                                     prepare_context_.frame_index,
-                                                     prepare_context_.last_submitted_value,
-                                                     prepare_context_.completed_submit_value,
-                                                     cube_upload);
+        prepare_view_.texture->UploadTexture(prepare_view_.device,
+                                             *prepare_view_.upload,
+                                             prepare_view_.frame.frame_index,
+                                             prepare_view_.progress.last_submitted_value,
+                                             prepare_view_.progress.completed_submit_value,
+                                             cube_upload);
 
-        const VkFormat brdf_lut_format = ResolveBrdfLutFormat(*prepare_context_.context);
+        const VkFormat brdf_lut_format = ResolveBrdfLutFormat(prepare_view_.device);
         if (brdf_lut_format == VK_FORMAT_UNDEFINED) {
             throw std::runtime_error("IblPrepareRecorder could not resolve a sampled BRDF LUT format");
         }
@@ -240,12 +240,12 @@ private:
         brdf_upload.subresources = &brdf_subresource;
         brdf_upload.subresource_count = 1U;
 
-        prepare_context_.texture_host->UploadTexture(*prepare_context_.context,
-                                                     *prepare_context_.upload_host,
-                                                     prepare_context_.frame_index,
-                                                     prepare_context_.last_submitted_value,
-                                                     prepare_context_.completed_submit_value,
-                                                     brdf_upload);
+        prepare_view_.texture->UploadTexture(prepare_view_.device,
+                                             *prepare_view_.upload,
+                                             prepare_view_.frame.frame_index,
+                                             prepare_view_.progress.last_submitted_value,
+                                             prepare_view_.progress.completed_submit_value,
+                                             brdf_upload);
     }
 
     static constexpr vr::asset::TextureId specular_cube_texture_id{7001U};

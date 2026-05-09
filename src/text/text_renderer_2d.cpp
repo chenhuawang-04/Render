@@ -3,7 +3,7 @@
 #include "vr/render/color_blend_state.hpp"
 #include "vr/render/render_loop_host.hpp"
 #include "vr/render/render_target_pass.hpp"
-#include "vr/render/runtime_prepare_context.hpp"
+#include "vr/render/runtime_prepare_views.hpp"
 #include "vr/render/upload_host.hpp"
 #include "vr/resource/gpu_memory_host.hpp"
 #include "vr/text/generated/text_2d_frag_spv.hpp"
@@ -204,21 +204,21 @@ void TextRenderer2D::ResetOutputTargetConfig() noexcept {
     output_target_config = {};
 }
 
-void TextRenderer2D::PrepareFrame(const render::RuntimePrepareContext& prepare_context_) {
+void TextRenderer2D::PrepareFrame(const render::TextRenderer2DPrepareView& prepare_view_) {
     if (!initialized) {
         throw std::runtime_error("TextRenderer2D::PrepareFrame called before Initialize");
     }
-    ValidateTextRuntimePrepareContext(prepare_context_, "TextRenderer2D::PrepareFrame");
+    ValidateTextRuntimePrepareView(prepare_view_, "TextRenderer2D::PrepareFrame");
 
-    context = prepare_context_.context;
-    upload_host = prepare_context_.upload_host;
-    descriptor_host = prepare_context_.descriptor_host;
-    pipeline_host = prepare_context_.pipeline_host;
-    gpu_memory_host = prepare_context_.gpu_memory_host;
-    freetype_host = prepare_context_.freetype_host;
-    glyph_atlas_host = prepare_context_.glyph_atlas_host;
-    glyph_upload_host = prepare_context_.glyph_upload_host;
-    active_frame_index = prepare_context_.frame_index;
+    context = &prepare_view_.device;
+    upload_host = &prepare_view_.upload;
+    descriptor_host = &prepare_view_.descriptor;
+    pipeline_host = &prepare_view_.pipeline;
+    gpu_memory_host = &prepare_view_.gpu_memory;
+    freetype_host = &prepare_view_.freetype;
+    glyph_atlas_host = &prepare_view_.glyph_atlas;
+    glyph_upload_host = &prepare_view_.glyph_upload;
+    active_frame_index = prepare_view_.frame.frame_index;
 
     stats = {};
     stats.component_count = component_count;
@@ -274,7 +274,7 @@ void TextRenderer2D::PrepareFrame(const render::RuntimePrepareContext& prepare_c
 
     const VkDeviceSize required_bytes = static_cast<VkDeviceSize>(gpu_instances.size()) * sizeof(GpuTextInstance);
 
-    EnsureGpuResourcesForFrame(*context, prepare_context_, active_frame_index, required_bytes);
+    EnsureGpuResourcesForFrame(*context, prepare_view_, active_frame_index, required_bytes);
     ResetPerFrameDrawState(active_frame_index, glyph_atlas_host->PageCount());
 
     PerFrameState& frame_state = frame_states[active_frame_index];
@@ -561,7 +561,7 @@ void TextRenderer2D::BuildGpuInstancesFromScratch() {
 }
 
 void TextRenderer2D::EnsureGpuResourcesForFrame(VulkanContext& context_,
-                                                const render::RuntimePrepareContext& prepare_context_,
+                                                const render::TextRenderer2DPrepareView& prepare_view_,
                                                 std::uint32_t frame_index_,
                                                 VkDeviceSize required_bytes_) {
     if (frame_index_ >= frame_states.size()) {
@@ -598,7 +598,7 @@ void TextRenderer2D::EnsureGpuResourcesForFrame(VulkanContext& context_,
     buffer_create_info.memory_properties = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
     buffer_create_info.persistently_mapped = false;
 
-    const std::uint32_t upload_queue_family_index = prepare_context_.upload_host->QueueFamilyIndex();
+    const std::uint32_t upload_queue_family_index = prepare_view_.upload.QueueFamilyIndex();
     const std::uint32_t graphics_queue_family_index = context_.QueueFamilies().graphics.value();
     if (upload_queue_family_index != graphics_queue_family_index) {
         buffer_create_info.sharing_mode = VK_SHARING_MODE_CONCURRENT;

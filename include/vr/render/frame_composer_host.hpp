@@ -12,7 +12,6 @@ class VulkanContext;
 
 namespace vr::render {
 
-struct RuntimePrepareContext;
 class RenderTargetHost;
 class RenderTargetPool;
 
@@ -61,7 +60,7 @@ public:
     void Initialize(const FrameComposerHostCreateInfo& create_info_ = {});
     void Shutdown(VulkanContext& context_);
 
-    [[nodiscard]] bool PrepareFrame(const RuntimePrepareContext& prepare_context_);
+    [[nodiscard]] bool PrepareFrame(const FrameComposerPrepareView& prepare_view_);
     [[nodiscard]] bool OnSwapchainRecreated(VulkanContext& context_,
                                             RenderTargetHost& render_target_host_,
                                             RenderTargetPool* render_target_pool_,

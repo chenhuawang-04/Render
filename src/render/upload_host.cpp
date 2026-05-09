@@ -161,6 +161,9 @@ void UploadHost::Initialize(VulkanContext& context_,
     submit_queue_flags = queue_properties[queue_family_index].queueFlags;
 
     synchronization2_enabled = context_.EnabledVulkan13Features().synchronization2 == VK_TRUE;
+    next_submit_value = 1U;
+    last_submitted_value = 0U;
+    completed_submit_value = 0U;
     context = &context_;
     memory_host = &gpu_memory_host_;
 
@@ -207,6 +210,9 @@ void UploadHost::Shutdown(VulkanContext& context_) {
     submit_queue_flags = 0U;
     cross_queue_submit = false;
     synchronization2_enabled = false;
+    next_submit_value = 1U;
+    last_submitted_value = 0U;
+    completed_submit_value = 0U;
     initialized = false;
 }
 
@@ -222,6 +228,7 @@ void UploadHost::BeginFrame(VulkanContext& context_, uint32_t frame_index_) {
                             &slot.in_flight_fence,
                             VK_TRUE,
                             std::numeric_limits<uint64_t>::max()));
+    completed_submit_value = std::max(completed_submit_value, slot.submit_value);
 
     CheckVk("vkResetCommandPool(upload frame)",
             vkResetCommandPool(context_.Device(), slot.command_pool, 0U));
@@ -236,6 +243,7 @@ void UploadHost::BeginFrame(VulkanContext& context_, uint32_t frame_index_) {
     for (auto& page : slot.pages) {
         page.write_head = 0U;
     }
+    slot.submit_value = 0U;
     slot.recording_active = true;
     slot.recorded_work = false;
     slot.stats = {};
@@ -483,6 +491,7 @@ UploadEndFrameResult UploadHost::EndFrameAndSubmit(VulkanContext& context_,
         submit_info_.signal_semaphore != VK_NULL_HANDLE;
 
     if (!needs_submit) {
+        slot.submit_value = 0U;
         return {
             .result = VK_SUCCESS,
             .submitted = false
@@ -538,6 +547,8 @@ UploadEndFrameResult UploadHost::EndFrameAndSubmit(VulkanContext& context_,
 
         const VkResult submit_result = vkQueueSubmit2(submit_queue, 1U, &submit2, slot.in_flight_fence);
         CheckVk("vkQueueSubmit2(upload frame)", submit_result);
+        slot.submit_value = next_submit_value++;
+        last_submitted_value = std::max(last_submitted_value, slot.submit_value);
         return {
             .result = submit_result,
             .submitted = true
@@ -562,6 +573,8 @@ UploadEndFrameResult UploadHost::EndFrameAndSubmit(VulkanContext& context_,
 
     const VkResult submit_result = vkQueueSubmit(submit_queue, 1U, &submit, slot.in_flight_fence);
     CheckVk("vkQueueSubmit(upload frame)", submit_result);
+    slot.submit_value = next_submit_value++;
+    last_submitted_value = std::max(last_submitted_value, slot.submit_value);
     return {
         .result = submit_result,
         .submitted = true
@@ -582,6 +595,7 @@ void UploadHost::WaitFrame(VulkanContext& context_,
                             &slot.in_flight_fence,
                             VK_TRUE,
                             timeout_ns_));
+    completed_submit_value = std::max(completed_submit_value, slot.submit_value);
 }
 
 void UploadHost::WaitIdle(VulkanContext& context_) {
@@ -589,6 +603,7 @@ void UploadHost::WaitIdle(VulkanContext& context_) {
         return;
     }
     CheckVk("vkQueueWaitIdle(upload)", vkQueueWaitIdle(submit_queue));
+    completed_submit_value = last_submitted_value;
 }
 
 bool UploadHost::IsInitialized() const noexcept {
@@ -617,6 +632,18 @@ VkQueueFlags UploadHost::SubmitQueueFlags() const noexcept {
 
 bool UploadHost::UsesCrossQueueSubmit() const noexcept {
     return cross_queue_submit;
+}
+
+std::uint64_t UploadHost::LastSubmittedValue() const noexcept {
+    return last_submitted_value;
+}
+
+std::uint64_t UploadHost::CompletedSubmitValue() const noexcept {
+    return completed_submit_value;
+}
+
+std::uint64_t UploadHost::NextSignalValue() const noexcept {
+    return next_submit_value;
 }
 
 const UploadFrameStats& UploadHost::FrameStats(uint32_t frame_index_) const {

@@ -7,7 +7,7 @@
 #include "vr/ecs/component/transform_component.hpp"
 #include "vr/render/pipeline_host.hpp"
 #include "vr/render/render_loop_host.hpp"
-#include "vr/render/runtime_prepare_context.hpp"
+#include "vr/render/runtime_prepare_views.hpp"
 #include "vr/render/shadow_frame_coordinator.hpp"
 #include "vr/shadow/shadow_atlas_host.hpp"
 
@@ -75,7 +75,7 @@ public:
     void SetTransformDirtyHint(const std::uint32_t* dirty_component_indices_,
                                std::uint32_t dirty_component_count_) noexcept;
 
-    void PrepareFrame(const render::RuntimePrepareContext& prepare_context_);
+    void PrepareFrame(const render::ShadowRenderer2DPrepareView& prepare_view_);
     void Record(const render::FrameRecordContext& record_context_);
 
     [[nodiscard]] bool IsInitialized() const noexcept;
@@ -157,4 +157,3 @@ private:
 };
 
 } // namespace vr::shadow
-

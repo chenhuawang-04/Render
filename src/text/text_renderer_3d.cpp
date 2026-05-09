@@ -2,7 +2,7 @@
 
 #include "vr/render/color_blend_state.hpp"
 #include "vr/render/render_loop_host.hpp"
-#include "vr/render/runtime_prepare_context.hpp"
+#include "vr/render/runtime_prepare_views.hpp"
 #include "vr/render/upload_host.hpp"
 #include "vr/resource/gpu_memory_host.hpp"
 #include "vr/text/text_runtime_contract.hpp"
@@ -363,25 +363,25 @@ void TextRenderer3D::ResetDepthTargetConfig() noexcept {
     depth_output_target_config = {};
 }
 
-void TextRenderer3D::PrepareFrame(const render::RuntimePrepareContext& prepare_context_) {
+void TextRenderer3D::PrepareFrame(const render::TextRenderer3DPrepareView& prepare_view_) {
     if (!initialized) {
         throw std::runtime_error("TextRenderer3D::PrepareFrame called before Initialize");
     }
-    ValidateTextRuntimePrepareContext(prepare_context_, "TextRenderer3D::PrepareFrame");
+    ValidateTextRuntimePrepareView(prepare_view_, "TextRenderer3D::PrepareFrame");
 
-    context = prepare_context_.context;
-    upload_host = prepare_context_.upload_host;
-    descriptor_host = prepare_context_.descriptor_host;
-    pipeline_host = prepare_context_.pipeline_host;
-    gpu_memory_host = prepare_context_.gpu_memory_host;
-    freetype_host = prepare_context_.freetype_host;
-    glyph_atlas_host = prepare_context_.glyph_atlas_host;
-    glyph_upload_host = prepare_context_.glyph_upload_host;
-    active_frame_index = prepare_context_.frame_index;
+    context = &prepare_view_.device;
+    upload_host = &prepare_view_.upload;
+    descriptor_host = &prepare_view_.descriptor;
+    pipeline_host = &prepare_view_.pipeline;
+    gpu_memory_host = &prepare_view_.gpu_memory;
+    freetype_host = &prepare_view_.freetype;
+    glyph_atlas_host = &prepare_view_.glyph_atlas;
+    glyph_upload_host = &prepare_view_.glyph_upload;
+    active_frame_index = prepare_view_.frame.frame_index;
     last_submitted_value_seen = std::max(last_submitted_value_seen,
-                                         prepare_context_.last_submitted_value);
+                                         prepare_view_.progress.last_submitted_value);
     completed_submit_value_seen = std::max(completed_submit_value_seen,
-                                           prepare_context_.completed_submit_value);
+                                           prepare_view_.progress.completed_submit_value);
     CollectRetiredDepthResources(*context, completed_submit_value_seen);
 
     stats = {};
@@ -547,7 +547,7 @@ void TextRenderer3D::PrepareFrame(const render::RuntimePrepareContext& prepare_c
     const VkDeviceSize required_bytes =
         static_cast<VkDeviceSize>(render_scratch.instances.size()) * sizeof(ecs::Text3DGpuInstance);
 
-    EnsureGpuResourcesForFrame(*context, prepare_context_, active_frame_index, required_bytes);
+    EnsureGpuResourcesForFrame(*context, prepare_view_, active_frame_index, required_bytes);
     ResetPerFrameDrawState(active_frame_index, glyph_atlas_host->PageCount());
 
     PerFrameState& frame_state = frame_states[active_frame_index];
@@ -984,7 +984,7 @@ void TextRenderer3D::ResetPerFrameDrawState(std::uint32_t frame_index_,
 }
 
 void TextRenderer3D::EnsureGpuResourcesForFrame(VulkanContext& context_,
-                                                const render::RuntimePrepareContext& prepare_context_,
+                                                const render::TextRenderer3DPrepareView& prepare_view_,
                                                 std::uint32_t frame_index_,
                                                 VkDeviceSize required_bytes_) {
     if (frame_index_ >= frame_states.size()) {
@@ -1021,7 +1021,7 @@ void TextRenderer3D::EnsureGpuResourcesForFrame(VulkanContext& context_,
     buffer_create_info.memory_properties = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
     buffer_create_info.persistently_mapped = false;
 
-    const std::uint32_t upload_queue_family_index = prepare_context_.upload_host->QueueFamilyIndex();
+    const std::uint32_t upload_queue_family_index = prepare_view_.upload.QueueFamilyIndex();
     const std::uint32_t graphics_queue_family_index = context_.QueueFamilies().graphics.value();
     if (upload_queue_family_index != graphics_queue_family_index) {
         buffer_create_info.sharing_mode = VK_SHARING_MODE_CONCURRENT;

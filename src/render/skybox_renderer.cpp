@@ -3,8 +3,6 @@
 #include "vr/render/generated/render_target_composite_vert_spv.hpp"
 #include "vr/render/generated/skybox_frag_spv.hpp"
 #include "vr/render/ibl_host.hpp"
-#include "vr/render/runtime_prepare_context.hpp"
-
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
@@ -112,24 +110,17 @@ void SkyboxRenderer::ResetDepthTargetConfig() noexcept {
     depth_output_target_config = {};
 }
 
-void SkyboxRenderer::PrepareFrame(const RuntimePrepareContext& prepare_context_) {
+void SkyboxRenderer::PrepareFrame(const SkyboxRendererPrepareView& prepare_view_) {
     if (!initialized) {
         throw std::runtime_error("SkyboxRenderer::PrepareFrame called before Initialize");
     }
-    if (prepare_context_.context == nullptr ||
-        prepare_context_.descriptor_host == nullptr ||
-        prepare_context_.pipeline_host == nullptr ||
-        prepare_context_.ibl_host == nullptr) {
-        throw std::runtime_error("SkyboxRenderer::PrepareFrame missing runtime dependencies");
-    }
-
-    context = prepare_context_.context;
-    descriptor_host = prepare_context_.descriptor_host;
-    pipeline_host = prepare_context_.pipeline_host;
-    ibl_host = prepare_context_.ibl_host;
+    context = &prepare_view_.device;
+    descriptor_host = &prepare_view_.descriptor;
+    pipeline_host = &prepare_view_.pipeline;
+    ibl_host = &prepare_view_.ibl;
     stats = {};
 
-    ibl_host->PrepareFrame(prepare_context_);
+    ibl_host->PrepareFrame(MakeIblHostPrepareView(prepare_view_));
 }
 
 void SkyboxRenderer::Record(const FrameRecordContext& record_context_) {

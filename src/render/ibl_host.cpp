@@ -1,6 +1,5 @@
 #include "vr/render/ibl_host.hpp"
 
-#include "vr/render/runtime_prepare_context.hpp"
 #include "vr/resource/gpu_memory_host.hpp"
 
 #include <algorithm>
@@ -251,22 +250,16 @@ void IblHost::SetBrdfLut(asset::TextureId brdf_lut_) noexcept {
     ++stats.revision;
 }
 
-void IblHost::PrepareFrame(const RuntimePrepareContext& prepare_context_) {
+void IblHost::PrepareFrame(const IblHostPrepareView& prepare_view_) {
     if (!initialized || texture_host == nullptr || descriptor_host == nullptr || sampler_host == nullptr) {
         throw std::runtime_error("IblHost::PrepareFrame called before Initialize");
     }
-    if (prepare_context_.context == nullptr ||
-        prepare_context_.gpu_memory_host == nullptr ||
-        prepare_context_.descriptor_host == nullptr ||
-        prepare_context_.upload_host == nullptr) {
-        throw std::runtime_error("IblHost::PrepareFrame requires context/gpu_memory/upload/descriptor hosts");
-    }
-    if (prepare_context_.frame_index >= frame_resources.size()) {
+    if (prepare_view_.frame.frame_index >= frame_resources.size()) {
         throw std::out_of_range("IblHost::PrepareFrame frame index out of range");
     }
 
-    EnsureFrameResources(prepare_context_);
-    EnsureDefaultTextures(prepare_context_);
+    EnsureFrameResources(prepare_view_);
+    EnsureDefaultTextures(prepare_view_);
 
     const EnvironmentRecord* active_record = ResolveActiveEnvironmentRecord();
     const asset::TextureHost::TextureRecord* specular_record = nullptr;
@@ -306,11 +299,11 @@ void IblHost::PrepareFrame(const RuntimePrepareContext& prepare_context_) {
     active_specular_texture_id = specular_record->texture_id;
     active_skybox_texture_id = skybox_record->texture_id;
 
-    FrameResources& frame = frame_resources[prepare_context_.frame_index];
+    FrameResources& frame = frame_resources[prepare_view_.frame.frame_index];
     const bool frame_already_prepared =
         frame.prepared &&
-        frame.prepared_frame_index == prepare_context_.frame_index &&
-        frame.prepared_last_submitted_value == prepare_context_.last_submitted_value &&
+        frame.prepared_frame_index == prepare_view_.frame.frame_index &&
+        frame.prepared_last_submitted_value == prepare_view_.progress.last_submitted_value &&
         frame.prepared_environment_id.value == active_environment_id.value &&
         frame.prepared_brdf_lut.value == brdf_record.texture_id.value &&
         frame.prepared_specular_texture.value == specular_record->texture_id.value &&
@@ -320,11 +313,11 @@ void IblHost::PrepareFrame(const RuntimePrepareContext& prepare_context_) {
     if (!frame_already_prepared) {
         std::memcpy(frame.gpu_params_buffer.mapped_ptr, &active_params, sizeof(IblGpuParams));
         if (!resource::BufferHost::IsHostCoherent(frame.gpu_params_buffer)) {
-            resource::BufferHost::Flush(*prepare_context_.context, frame.gpu_params_buffer);
+            resource::BufferHost::Flush(prepare_view_.device, frame.gpu_params_buffer);
         }
 
-        UpdateDescriptorSetForFrame(*prepare_context_.context,
-                                    prepare_context_.frame_index,
+        UpdateDescriptorSetForFrame(prepare_view_.device,
+                                    prepare_view_.frame.frame_index,
                                     *specular_record,
                                     brdf_record,
                                     *skybox_record);
@@ -334,8 +327,8 @@ void IblHost::PrepareFrame(const RuntimePrepareContext& prepare_context_) {
         frame.prepared_specular_texture = specular_record->texture_id;
         frame.prepared_skybox_texture = skybox_record->texture_id;
         frame.prepared_params = active_params;
-        frame.prepared_frame_index = prepare_context_.frame_index;
-        frame.prepared_last_submitted_value = prepare_context_.last_submitted_value;
+        frame.prepared_frame_index = prepare_view_.frame.frame_index;
+        frame.prepared_last_submitted_value = prepare_view_.progress.last_submitted_value;
         frame.prepared = true;
     }
 
@@ -425,7 +418,7 @@ std::size_t IblHost::LowerBoundEnvironmentIndex(IblEnvironmentId environment_id_
     return first;
 }
 
-void IblHost::EnsureFrameResources(const RuntimePrepareContext& prepare_context_) {
+void IblHost::EnsureFrameResources(const IblHostPrepareView& prepare_view_) {
     if (frame_resources.empty()) {
         frame_resources.resize(create_info_cache.frames_in_flight);
     }
@@ -442,33 +435,33 @@ void IblHost::EnsureFrameResources(const RuntimePrepareContext& prepare_context_
             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
         buffer_create_info.persistently_mapped = true;
         frame.gpu_params_buffer =
-            resource::BufferHost::CreateBuffer(*prepare_context_.context,
+            resource::BufferHost::CreateBuffer(prepare_view_.device,
                                                buffer_create_info,
-                                               *prepare_context_.gpu_memory_host);
+                                               prepare_view_.gpu_memory);
         if (frame.gpu_params_buffer.mapped_ptr == nullptr) {
             frame.gpu_params_buffer.mapped_ptr =
-                resource::BufferHost::Map(*prepare_context_.context, frame.gpu_params_buffer);
+                resource::BufferHost::Map(prepare_view_.device, frame.gpu_params_buffer);
         }
         std::memset(frame.gpu_params_buffer.mapped_ptr, 0, sizeof(IblGpuParams));
     }
 }
 
-void IblHost::EnsureDefaultTextures(const RuntimePrepareContext& prepare_context_) {
+void IblHost::EnsureDefaultTextures(const IblHostPrepareView& prepare_view_) {
     const bool needs_default_specular =
         create_info_cache.create_default_environment_textures &&
         (!active_environment_id.IsValid() || ResolveActiveEnvironmentRecord() == nullptr);
     if (!default_specular_cube_uploaded && needs_default_specular) {
-        UploadDefaultSpecularCube(prepare_context_);
+        UploadDefaultSpecularCube(prepare_view_);
     }
     const bool needs_default_brdf = create_info_cache.create_default_brdf_lut &&
                                     !active_brdf_lut_texture_id.IsValid();
     if (!default_brdf_lut_uploaded && needs_default_brdf) {
-        UploadDefaultBrdfLut(prepare_context_);
+        UploadDefaultBrdfLut(prepare_view_);
     }
 }
 
-void IblHost::UploadDefaultSpecularCube(const RuntimePrepareContext& prepare_context_) {
-    if (!asset::TextureHost::SupportsHdrEnvironmentFormat(*prepare_context_.context,
+void IblHost::UploadDefaultSpecularCube(const IblHostPrepareView& prepare_view_) {
+    if (!asset::TextureHost::SupportsHdrEnvironmentFormat(prepare_view_.device,
                                                           VK_FORMAT_R16G16B16A16_SFLOAT)) {
         throw std::runtime_error(
             "IblHost::UploadDefaultSpecularCube requires VK_FORMAT_R16G16B16A16_SFLOAT support");
@@ -499,18 +492,18 @@ void IblHost::UploadDefaultSpecularCube(const RuntimePrepareContext& prepare_con
     upload_info.subresources = subresources.data();
     upload_info.subresource_count = static_cast<std::uint32_t>(subresources.size());
 
-    texture_host->UploadTexture(*prepare_context_.context,
-                                *prepare_context_.upload_host,
-                                prepare_context_.frame_index,
-                                prepare_context_.last_submitted_value,
-                                prepare_context_.completed_submit_value,
+    texture_host->UploadTexture(prepare_view_.device,
+                                prepare_view_.upload,
+                                prepare_view_.frame.frame_index,
+                                prepare_view_.progress.last_submitted_value,
+                                prepare_view_.progress.completed_submit_value,
                                 upload_info);
     default_specular_cube_uploaded = true;
     ++stats.default_texture_build_count;
 }
 
-void IblHost::UploadDefaultBrdfLut(const RuntimePrepareContext& prepare_context_) {
-    const VkFormat brdf_lut_format = ResolveBrdfLutFormat(*prepare_context_.context);
+void IblHost::UploadDefaultBrdfLut(const IblHostPrepareView& prepare_view_) {
+    const VkFormat brdf_lut_format = ResolveBrdfLutFormat(prepare_view_.device);
     if (brdf_lut_format == VK_FORMAT_UNDEFINED) {
         throw std::runtime_error("IblHost::UploadDefaultBrdfLut could not resolve a sampled BRDF LUT format");
     }
@@ -555,11 +548,11 @@ void IblHost::UploadDefaultBrdfLut(const RuntimePrepareContext& prepare_context_
     upload_info.subresources = &subresource;
     upload_info.subresource_count = 1U;
 
-    texture_host->UploadTexture(*prepare_context_.context,
-                                *prepare_context_.upload_host,
-                                prepare_context_.frame_index,
-                                prepare_context_.last_submitted_value,
-                                prepare_context_.completed_submit_value,
+    texture_host->UploadTexture(prepare_view_.device,
+                                prepare_view_.upload,
+                                prepare_view_.frame.frame_index,
+                                prepare_view_.progress.last_submitted_value,
+                                prepare_view_.progress.completed_submit_value,
                                 upload_info);
     default_brdf_lut_uploaded = true;
     ++stats.default_texture_build_count;

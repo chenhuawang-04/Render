@@ -6,7 +6,7 @@
 #include "vr/render/ibl_host.hpp"
 #include "vr/render/color_blend_state.hpp"
 #include "vr/render/render_loop_host.hpp"
-#include "vr/render/runtime_prepare_context.hpp"
+#include "vr/render/runtime_prepare_views.hpp"
 #include "vr/render/upload_host.hpp"
 #include "vr/resource/gpu_memory_host.hpp"
 #include "vr/vulkan_context.hpp"
@@ -524,18 +524,9 @@ void GeometryRenderer3D::ResetDepthTargetConfig() noexcept {
     depth_output_target_config = {};
 }
 
-void GeometryRenderer3D::PrepareFrame(const render::RuntimePrepareContext& prepare_context_) {
+void GeometryRenderer3D::PrepareFrame(const render::GeometryRenderer3DPrepareView& prepare_view_) {
     if (!initialized) {
         throw std::runtime_error("GeometryRenderer3D::PrepareFrame called before Initialize");
-    }
-    if (prepare_context_.context == nullptr ||
-        prepare_context_.upload_host == nullptr ||
-        prepare_context_.descriptor_host == nullptr ||
-        prepare_context_.pipeline_host == nullptr ||
-        prepare_context_.gpu_memory_host == nullptr ||
-        prepare_context_.ibl_host == nullptr ||
-        prepare_context_.sampler_host == nullptr) {
-        throw std::runtime_error("GeometryRenderer3D::PrepareFrame missing runtime dependencies");
     }
     if (geometry_resource_host == nullptr || !geometry_resource_host->IsInitialized()) {
         throw std::runtime_error("GeometryRenderer3D::PrepareFrame requires initialized GeometryResourceHost");
@@ -544,29 +535,29 @@ void GeometryRenderer3D::PrepareFrame(const render::RuntimePrepareContext& prepa
         throw std::runtime_error("GeometryRenderer3D::PrepareFrame requires initialized GeometryUploadHost");
     }
 
-    context = prepare_context_.context;
-    upload_host = prepare_context_.upload_host;
-    descriptor_host = prepare_context_.descriptor_host;
-    pipeline_host = prepare_context_.pipeline_host;
-    gpu_memory_host = prepare_context_.gpu_memory_host;
-    ibl_host = prepare_context_.ibl_host;
-    sampler_host = prepare_context_.sampler_host;
-    active_frame_index = prepare_context_.frame_index;
+    context = &prepare_view_.device;
+    upload_host = &prepare_view_.upload;
+    descriptor_host = &prepare_view_.descriptor;
+    pipeline_host = &prepare_view_.pipeline;
+    gpu_memory_host = &prepare_view_.gpu_memory;
+    ibl_host = &prepare_view_.ibl;
+    sampler_host = &prepare_view_.sampler;
+    active_frame_index = prepare_view_.frame.frame_index;
     if (active_frame_index >= frame_lighting_resources.size()) {
         frame_lighting_resources.resize(active_frame_index + 1U);
     }
     {
         FrameLightingResources& frame_resources = frame_lighting_resources[active_frame_index];
-        // DescriptorHost::BeginFrame 对当前 frame 的 descriptor pool 执行 reset，
-        // reset 后历史 VkDescriptorSet 句柄不再有效。这里必须清空缓存句柄，
-        // 防止后续 Record 阶段绑定已失效 descriptor set。
+        // DescriptorHost::BeginFrame 对当�?frame �?descriptor pool 执行 reset�?
+        // reset 后历�?VkDescriptorSet 句柄不再有效。这里必须清空缓存句柄，
+        // 防止后续 Record 阶段绑定已失�?descriptor set�?
         frame_resources.descriptor_set = VK_NULL_HANDLE;
         frame_resources.descriptor_buffer_signature = 0U;
         frame_resources.descriptor_image_signature = 0U;
         frame_resources.descriptor_set_signature = 0U;
     }
-    last_submitted_value_seen = std::max(last_submitted_value_seen, prepare_context_.last_submitted_value);
-    completed_submit_value_seen = std::max(completed_submit_value_seen, prepare_context_.completed_submit_value);
+    last_submitted_value_seen = std::max(last_submitted_value_seen, prepare_view_.progress.last_submitted_value);
+    completed_submit_value_seen = std::max(completed_submit_value_seen, prepare_view_.progress.completed_submit_value);
 
     CollectRetiredDepthResources(*context, completed_submit_value_seen);
     geometry_resource_host->BeginFrame(*context, completed_submit_value_seen);
@@ -626,7 +617,7 @@ void GeometryRenderer3D::PrepareFrame(const render::RuntimePrepareContext& prepa
     culling_stats = {};
     appearance_runtime_stats = {};
     appearance_link_stats = {};
-    ibl_host->PrepareFrame(prepare_context_);
+    ibl_host->PrepareFrame(render::MakeIblHostPrepareView(prepare_view_));
     const auto appearance_prepare_result = appearance_prepare_bridge.PrepareGeometry(
         geometry_components,
         component_count,
@@ -724,17 +715,17 @@ void GeometryRenderer3D::PrepareFrame(const render::RuntimePrepareContext& prepa
     }
 
     VkFormat active_color_format = swapchain_format;
-    if (prepare_context_.render_target_host != nullptr &&
-        prepare_context_.render_target_host->IsValid(output_target_config.color_target)) {
-        active_color_format = prepare_context_.render_target_host->ResolveView(output_target_config.color_target).format;
+    if (prepare_view_.render_target != nullptr &&
+        prepare_view_.render_target->IsValid(output_target_config.color_target)) {
+        active_color_format = prepare_view_.render_target->ResolveView(output_target_config.color_target).format;
     }
 
     VkFormat active_depth_format = VK_FORMAT_UNDEFINED;
     if (create_info_cache.enable_depth) {
-        if (prepare_context_.render_target_host != nullptr &&
-            prepare_context_.render_target_host->IsValid(depth_output_target_config.depth_target)) {
+        if (prepare_view_.render_target != nullptr &&
+            prepare_view_.render_target->IsValid(depth_output_target_config.depth_target)) {
             active_depth_format =
-                prepare_context_.render_target_host->ResolveView(depth_output_target_config.depth_target).format;
+                prepare_view_.render_target->ResolveView(depth_output_target_config.depth_target).format;
         } else {
             active_depth_format = ResolveDepthFormat(*context, create_info_cache.preferred_depth_format);
         }

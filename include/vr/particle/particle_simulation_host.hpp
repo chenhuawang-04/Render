@@ -322,6 +322,10 @@ public:
     [[nodiscard]] const ParticleSimulationHostCreateInfo& CreateInfo() const noexcept;
     [[nodiscard]] const ParticleSimulationHostStats& Stats() const noexcept;
     [[nodiscard]] const ParticleSimulationHostCapabilities& Capabilities() const noexcept;
+    [[nodiscard]] bool HasComputeTimelineProgress() const noexcept;
+    [[nodiscard]] std::uint64_t LastSubmittedValue() const noexcept;
+    [[nodiscard]] std::uint64_t CompletedSubmitValue() const noexcept;
+    [[nodiscard]] std::uint64_t NextSignalValue() const noexcept;
 
 private:
     struct BufferSlot final {

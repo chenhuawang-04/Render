@@ -133,6 +133,9 @@ public:
     [[nodiscard]] VkQueue SubmitQueue() const noexcept;
     [[nodiscard]] VkQueueFlags SubmitQueueFlags() const noexcept;
     [[nodiscard]] bool UsesCrossQueueSubmit() const noexcept;
+    [[nodiscard]] std::uint64_t LastSubmittedValue() const noexcept;
+    [[nodiscard]] std::uint64_t CompletedSubmitValue() const noexcept;
+    [[nodiscard]] std::uint64_t NextSignalValue() const noexcept;
     [[nodiscard]] const UploadFrameStats& FrameStats(uint32_t frame_index_) const;
     [[nodiscard]] VkDeviceSize CapacityBytes() const noexcept;
 
@@ -150,6 +153,7 @@ private:
         VkCommandPool command_pool = VK_NULL_HANDLE;
         VkCommandBuffer command_buffer = VK_NULL_HANDLE;
         VkFence in_flight_fence = VK_NULL_HANDLE;
+        std::uint64_t submit_value = 0U;
         bool recording_active = false;
         bool recorded_work = false;
         UploadFrameStats stats{};
@@ -198,6 +202,9 @@ private:
     VkQueueFlags submit_queue_flags = 0U;
     bool cross_queue_submit = false;
     bool synchronization2_enabled = false;
+    std::uint64_t next_submit_value = 1U;
+    std::uint64_t last_submitted_value = 0U;
+    std::uint64_t completed_submit_value = 0U;
     bool initialized = false;
 };
 

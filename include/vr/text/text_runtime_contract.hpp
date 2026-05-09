@@ -1,6 +1,6 @@
 #pragma once
 
-#include "vr/render/runtime_prepare_context.hpp"
+#include "vr/render/runtime_prepare_views.hpp"
 #include "vr/vulkan_context.hpp"
 
 #include <concepts>
@@ -80,50 +80,16 @@ inline void RequireTextRuntimeFeatures(const vr::VulkanContext& context_,
     throw std::runtime_error(oss.str());
 }
 
-inline void ValidateTextRuntimePrepareContext(const vr::render::RuntimePrepareContext& prepare_context_,
-                                              std::string_view caller_) {
-    std::ostringstream missing_stream{};
-    bool missing_any = false;
-    auto append_missing = [&](std::string_view name_) {
-        if (missing_any) {
-            missing_stream << ", ";
-        }
-        missing_stream << name_;
-        missing_any = true;
-    };
+inline void ValidateTextRuntimePrepareView(const vr::render::TextRenderer2DPrepareView& prepare_view_,
+                                           std::string_view caller_) {
+    (void)prepare_view_;
+    RequireTextRuntimeFeatures(prepare_view_.device, caller_);
+}
 
-    if (prepare_context_.context == nullptr) {
-        append_missing("context");
-    }
-    if (prepare_context_.upload_host == nullptr) {
-        append_missing("upload_host");
-    }
-    if (prepare_context_.descriptor_host == nullptr) {
-        append_missing("descriptor_host");
-    }
-    if (prepare_context_.pipeline_host == nullptr) {
-        append_missing("pipeline_host");
-    }
-    if (prepare_context_.gpu_memory_host == nullptr) {
-        append_missing("gpu_memory_host");
-    }
-    if (prepare_context_.freetype_host == nullptr) {
-        append_missing("freetype_host");
-    }
-    if (prepare_context_.glyph_atlas_host == nullptr) {
-        append_missing("glyph_atlas_host");
-    }
-    if (prepare_context_.glyph_upload_host == nullptr) {
-        append_missing("glyph_upload_host");
-    }
-
-    if (missing_any) {
-        std::ostringstream oss{};
-        oss << caller_ << " requires runtime text modules enabled: {" << missing_stream.str() << "}";
-        throw std::runtime_error(oss.str());
-    }
-
-    RequireTextRuntimeFeatures(*prepare_context_.context, caller_);
+inline void ValidateTextRuntimePrepareView(const vr::render::TextRenderer3DPrepareView& prepare_view_,
+                                           std::string_view caller_) {
+    (void)prepare_view_;
+    RequireTextRuntimeFeatures(prepare_view_.device, caller_);
 }
 
 } // namespace vr::text

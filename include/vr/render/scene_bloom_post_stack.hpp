@@ -27,13 +27,20 @@ public:
     void Shutdown(VulkanContext& context_) noexcept;
 
     template<typename... BindingTs>
-    [[nodiscard]] bool PrepareFrame(const RuntimePrepareContext& prepare_context_,
+    [[nodiscard]] bool PrepareFrame(const SceneBloomPostStackPrepareView& prepare_view_,
                                     const BindingTs&... bindings_) {
         EnsureInitialized("PrepareFrame");
-        const bool ready = scene_targets.PrepareFrameAndConfigure(prepare_context_,
+        const bool ready = scene_targets.PrepareFrameAndConfigure(
+                                                                  SceneRenderTargetSetPrepareView{
+                                                                      .device = prepare_view_.device,
+                                                                      .render_target = prepare_view_.render_target,
+                                                                      .render_target_pool = prepare_view_.render_target_pool,
+                                                                      .frame = prepare_view_.frame,
+                                                                      .progress = prepare_view_.progress,
+                                                                  },
                                                                   &bloom_renderer,
                                                                   bindings_...);
-        bloom_renderer.PrepareFrame(prepare_context_);
+        bloom_renderer.PrepareFrame(MakeRenderTargetBloomRendererPrepareView(prepare_view_));
         return ready;
     }
 

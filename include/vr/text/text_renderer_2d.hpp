@@ -15,7 +15,7 @@ class VulkanContext;
 }
 
 namespace vr::render {
-struct RuntimePrepareContext;
+struct TextRenderer2DPrepareView;
 struct FrameRecordContext;
 class UploadHost;
 }
@@ -72,7 +72,7 @@ public:
     void SetOutputTargetConfig(const render::RenderTargetColorOutputConfig& output_target_config_) noexcept;
     void ResetOutputTargetConfig() noexcept;
 
-    void PrepareFrame(const render::RuntimePrepareContext& prepare_context_);
+    void PrepareFrame(const render::TextRenderer2DPrepareView& prepare_view_);
     void Record(const render::FrameRecordContext& record_context_);
     void OnSwapchainRecreated(std::uint32_t image_count_,
                               VkExtent2D extent_,
@@ -133,7 +133,7 @@ private:
                                 std::uint32_t atlas_page_count_);
     void BuildGpuInstancesFromScratch();
     void EnsureGpuResourcesForFrame(VulkanContext& context_,
-                                    const render::RuntimePrepareContext& prepare_context_,
+                                    const render::TextRenderer2DPrepareView& prepare_view_,
                                     std::uint32_t frame_index_,
                                     VkDeviceSize required_bytes_);
     void PreparePageDescriptorSetsForFrame(std::uint32_t frame_index_);

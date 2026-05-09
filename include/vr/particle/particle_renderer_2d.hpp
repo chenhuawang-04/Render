@@ -26,7 +26,7 @@ class TextureHost;
 }
 
 namespace vr::render {
-struct RuntimePrepareContext;
+struct ParticleRenderer2DPrepareView;
 struct FrameRecordContext;
 class UploadHost;
 }
@@ -93,7 +93,7 @@ public:
     void SetOutputTargetConfig(const render::RenderTargetColorOutputConfig& output_target_config_) noexcept;
     void ResetOutputTargetConfig() noexcept;
 
-    void PrepareFrame(const render::RuntimePrepareContext& prepare_context_);
+    void PrepareFrame(const render::ParticleRenderer2DPrepareView& prepare_view_);
     void Record(const render::FrameRecordContext& record_context_);
     void OnSwapchainRecreated(std::uint32_t image_count_,
                               VkExtent2D extent_,

@@ -3,6 +3,7 @@
 #include "vr/render/render_target_format_utils.hpp"
 #include "vr/render/render_target_pass.hpp"
 #include "vr/render/render_runtime_host.hpp"
+#include "vr/render/runtime_prepare_views.hpp"
 
 #include <SDL3/SDL.h>
 
@@ -194,15 +195,13 @@ private:
 
 class TransientPoolRecorder final {
 public:
-    void PrepareFrame(const vr::render::RuntimePrepareContext& prepare_context_) {
-        if (prepare_context_.render_target_pool == nullptr ||
-            prepare_context_.render_target_host == nullptr ||
-            prepare_context_.context == nullptr) {
+    void PrepareFrame(const vr::render::SceneRecorder2DPrepareView& prepare_view_) {
+        if (prepare_view_.render_target_pool == nullptr) {
             return;
         }
 
         if (selected_format == VK_FORMAT_UNDEFINED) {
-            selected_format = SelectTransientColorFormat(*prepare_context_.context);
+            selected_format = SelectTransientColorFormat(prepare_view_.device);
             if (selected_format == VK_FORMAT_UNDEFINED) {
                 return;
             }
@@ -222,9 +221,9 @@ public:
         desc.aspect = VK_IMAGE_ASPECT_COLOR_BIT;
         desc.color_encoding = vr::render::RenderTargetColorEncoding::linear;
 
-        const auto acquire_result = prepare_context_.render_target_pool->AcquireTransientTarget(
-            *prepare_context_.context,
-            *prepare_context_.render_target_host,
+        const auto acquire_result = prepare_view_.render_target_pool->AcquireTransientTarget(
+            prepare_view_.device,
+            prepare_view_.render_target,
             desc);
         acquired_handles.push_back(acquire_result.handle);
         reused_count += acquire_result.reused ? 1U : 0U;
@@ -296,20 +295,20 @@ public:
         destination_buffer = destination_buffer_;
     }
 
-    void PrepareFrame(const vr::render::RuntimePrepareContext& prepare_context_) {
+    void PrepareFrame(const vr::render::SceneRecorder2DPrepareView& prepare_view_) {
         prepare_count += 1U;
-        if (prepare_context_.upload_host == nullptr || destination_buffer == VK_NULL_HANDLE) {
+        if (prepare_view_.upload == nullptr || destination_buffer == VK_NULL_HANDLE) {
             return;
         }
 
-        prepare_context_.upload_host->StageAndRecordCopyBuffer(prepare_context_.frame_index,
-                                                               destination_buffer,
-                                                               0U,
-                                                               payload.data(),
-                                                               payload.size(),
-                                                               16U);
+        prepare_view_.upload->StageAndRecordCopyBuffer(prepare_view_.frame.frame_index,
+                                                       destination_buffer,
+                                                       0U,
+                                                       payload.data(),
+                                                       payload.size(),
+                                                       16U);
         upload_record_count += 1U;
-        last_frame_index = prepare_context_.frame_index;
+        last_frame_index = prepare_view_.frame.frame_index;
     }
 
     void OnSwapchainRecreated(std::uint32_t image_count_,
@@ -339,13 +338,10 @@ private:
 
 class ColorDepthFinalStateRecorder final {
 public:
-    void PrepareFrame(const vr::render::RuntimePrepareContext& prepare_context_) {
+    void PrepareFrame(const vr::render::SceneRecorder2DPrepareView& prepare_view_) {
         ++prepare_count;
-        render_target_host = prepare_context_.render_target_host;
-        context = prepare_context_.context;
-        if (render_target_host == nullptr || context == nullptr) {
-            return;
-        }
+        render_target_host = &prepare_view_.render_target;
+        context = &prepare_view_.device;
 
         if (color_format == VK_FORMAT_UNDEFINED) {
             color_format = SelectTransientColorFormat(*context);
@@ -610,7 +606,7 @@ VR_TEST_CASE(RuntimeIntegration_frame_diagnostics_capture_swapchain_state,
     create_info.platform.window.high_pixel_density = false;
     create_info.platform.instance.enable_validation = false;
     create_info.render_loop.swapchain.enable_vsync = false;
-    create_info.diagnostics.enable_frame_diagnostics = true;
+    create_info.diagnostics.level = vr::runtime::DiagnosticsLevel::CountersOnly;
 
     ClearToPresentRecorder recorder{};
     try {
@@ -626,13 +622,48 @@ VR_TEST_CASE(RuntimeIntegration_frame_diagnostics_capture_swapchain_state,
     runtime.Shutdown();
 
     VR_REQUIRE(tick_result.diagnostics.collected);
-    VR_CHECK(tick_result.diagnostics.swapchain_valid);
-    VR_CHECK(tick_result.diagnostics.swapchain_generation > 0U);
-    VR_CHECK(tick_result.diagnostics.swapchain_image_count >= 2U);
-    VR_CHECK(tick_result.diagnostics.swapchain_extent.width == 320U);
-    VR_CHECK(tick_result.diagnostics.swapchain_extent.height == 240U);
-    VR_CHECK(tick_result.diagnostics.frame_index == tick_result.render.frame_index);
-    VR_CHECK(tick_result.diagnostics.image_index == tick_result.render.image_index);
+    VR_CHECK(tick_result.diagnostics.level == vr::runtime::DiagnosticsLevel::CountersOnly);
+    VR_CHECK(tick_result.diagnostics.frame.frame_id > 0U);
+    VR_CHECK(tick_result.diagnostics.swapchain.valid);
+    VR_CHECK(tick_result.diagnostics.swapchain.generation > 0U);
+    VR_CHECK(tick_result.diagnostics.swapchain.image_count >= 2U);
+    VR_CHECK(tick_result.diagnostics.swapchain.extent.width == 320U);
+    VR_CHECK(tick_result.diagnostics.swapchain.extent.height == 240U);
+    VR_CHECK(tick_result.diagnostics.frame.frame_index == tick_result.render.frame_index);
+    VR_CHECK(tick_result.diagnostics.frame.image_index == tick_result.render.image_index);
+    VR_CHECK(tick_result.diagnostics.commands.frame_slot_count == 2U);
+    VR_CHECK(tick_result.diagnostics.queues.graphics_submitted >=
+             tick_result.diagnostics.queues.graphics_completed);
+}
+
+VR_TEST_CASE(RuntimeIntegration_frame_diagnostics_off_skips_collection,
+             "integration;gpu;sdl;runtime;diagnostics") {
+    Runtime runtime{};
+    Runtime::CreateInfo create_info{};
+    create_info.platform.window.title = "vr_tests_runtime_diagnostics_off";
+    create_info.platform.window.width = 320;
+    create_info.platform.window.height = 240;
+    create_info.platform.window.resizable = false;
+    create_info.platform.window.high_pixel_density = false;
+    create_info.platform.instance.enable_validation = false;
+    create_info.render_loop.swapchain.enable_vsync = false;
+    create_info.diagnostics.level = vr::runtime::DiagnosticsLevel::Off;
+
+    ClearToPresentRecorder recorder{};
+    try {
+        runtime.Initialize(create_info);
+    } catch (const std::exception& exception_) {
+        if (IsEnvironmentSkipError(exception_.what())) {
+            VR_SKIP(exception_.what());
+        }
+        throw;
+    }
+
+    const Runtime::RuntimeTickResult tick_result = runtime.Tick(recorder);
+    runtime.Shutdown();
+
+    VR_CHECK(!tick_result.diagnostics.collected);
+    VR_CHECK(tick_result.diagnostics.level == vr::runtime::DiagnosticsLevel::Off);
 }
 
 VR_TEST_CASE(RuntimeIntegration_swapchain_mark_dirty_notifies_recorder,
@@ -681,7 +712,7 @@ VR_TEST_CASE(RuntimeIntegration_cross_queue_upload_reports_extra_wait_when_avail
     create_info.platform.window.high_pixel_density = false;
     create_info.platform.instance.enable_validation = false;
     create_info.render_loop.swapchain.enable_vsync = false;
-    create_info.diagnostics.enable_frame_diagnostics = true;
+    create_info.diagnostics.level = vr::runtime::DiagnosticsLevel::CountersOnly;
 
     UploadCopyRecorder recorder{};
     vr::resource::BufferResource destination_buffer{};
@@ -708,14 +739,19 @@ VR_TEST_CASE(RuntimeIntegration_cross_queue_upload_reports_extra_wait_when_avail
     recorder.SetDestinationBuffer(destination_buffer.buffer);
 
     const Runtime::RuntimeTickResult tick_result = runtime.Tick(recorder);
+    const std::uint64_t upload_submitted_value = runtime.Upload().LastSubmittedValue();
+    const std::uint64_t upload_completed_value = runtime.Upload().CompletedSubmitValue();
     runtime.DestroyBuffer(destination_buffer);
     runtime.Shutdown();
 
     VR_CHECK(tick_result.upload_submitted);
     VR_CHECK(tick_result.upload_cross_queue_wait);
     VR_REQUIRE(tick_result.diagnostics.collected);
-    VR_CHECK(tick_result.diagnostics.upload_enabled);
-    VR_CHECK(tick_result.diagnostics.upload_uses_cross_queue);
+    VR_CHECK(tick_result.diagnostics.frame.upload_submitted == tick_result.upload_submitted);
+    VR_CHECK(tick_result.diagnostics.frame.upload_cross_queue_wait);
+    VR_CHECK(tick_result.diagnostics.queues.transfer_submitted == upload_submitted_value);
+    VR_CHECK(tick_result.diagnostics.queues.transfer_completed == upload_completed_value);
+    VR_CHECK(tick_result.diagnostics.queues.transfer_submitted > 0U);
     VR_CHECK(tick_result.diagnostics.upload.buffer_copy_count > 0U);
 }
 
@@ -730,7 +766,7 @@ VR_TEST_CASE(RuntimeIntegration_upload_staging_page_growth_handles_large_copy,
     create_info.platform.window.high_pixel_density = false;
     create_info.platform.instance.enable_validation = false;
     create_info.render_loop.swapchain.enable_vsync = false;
-    create_info.diagnostics.enable_frame_diagnostics = true;
+    create_info.diagnostics.level = vr::runtime::DiagnosticsLevel::Detailed;
     create_info.upload.staging_buffer_size = 256U;
     create_info.upload.max_staging_page_count = 4U;
     create_info.upload.allow_staging_page_growth = true;
@@ -763,6 +799,8 @@ VR_TEST_CASE(RuntimeIntegration_upload_staging_page_growth_handles_large_copy,
     VR_CHECK(tick_result.diagnostics.upload.staging_page_count >= 2U);
     VR_CHECK(tick_result.diagnostics.upload.staging_page_growth_count >= 1U);
     VR_CHECK(tick_result.diagnostics.upload.capacity_bytes >= recorder.PayloadBytes());
+    VR_CHECK(tick_result.diagnostics.allocations.upload_staging_page_growth_count >= 1U);
+    VR_CHECK(tick_result.diagnostics.allocations.upload_capacity_bytes >= recorder.PayloadBytes());
 }
 
 VR_TEST_CASE(RuntimeIntegration_upload_staging_exhaustion_reports_capacity_details,

@@ -33,9 +33,12 @@ enum class FrameBeginCode : std::uint8_t {
 };
 
 struct FrameSlot {
-    VkSemaphore image_available = VK_NULL_HANDLE;
-    VkSemaphore render_finished = VK_NULL_HANDLE;
-    VkFence in_flight = VK_NULL_HANDLE;
+    VkSemaphore acquire_binary = VK_NULL_HANDLE;
+    VkSemaphore present_binary = VK_NULL_HANDLE;
+    VkFence reuse_fence = VK_NULL_HANDLE;
+    std::uint64_t graphics_value = 0U;
+    std::uint64_t transfer_value = 0U;
+    std::uint64_t compute_value = 0U;
 };
 
 struct FrameSubmitWait {
@@ -44,12 +47,15 @@ struct FrameSubmitWait {
 };
 
 struct FrameToken {
+    std::uint64_t frame_id = 0U;
     uint32_t frame_index = 0U;
     uint32_t image_index = 0U;
-    VkSemaphore wait_semaphore = VK_NULL_HANDLE;
-    VkSemaphore signal_semaphore = VK_NULL_HANDLE;
-    VkFence submit_fence = VK_NULL_HANDLE;
-    uint64_t submit_value = 0U;
+    VkSemaphore acquire_binary = VK_NULL_HANDLE;
+    VkSemaphore present_binary = VK_NULL_HANDLE;
+    VkFence reuse_fence = VK_NULL_HANDLE;
+    std::uint64_t graphics_signal_value = 0U;
+    std::uint64_t transfer_wait_value = 0U;
+    std::uint64_t compute_wait_value = 0U;
     bool recommend_recreate = false;
 };
 
@@ -90,32 +96,32 @@ public:
         uint32_t created_count = 0U;
         try {
             for (; created_count < frames_in_flight_v; ++created_count) {
-                CheckVk("vkCreateSemaphore(image_available)",
+                CheckVk("vkCreateSemaphore(acquire_binary)",
                         vkCreateSemaphore(device_,
                                           &semaphore_create_info,
                                           nullptr,
-                                          &slots[created_count].image_available));
-                CheckVk("vkCreateSemaphore(render_finished)",
+                                          &slots[created_count].acquire_binary));
+                CheckVk("vkCreateSemaphore(present_binary)",
                         vkCreateSemaphore(device_,
                                           &semaphore_create_info,
                                           nullptr,
-                                          &slots[created_count].render_finished));
-                CheckVk("vkCreateFence(in_flight)",
-                        vkCreateFence(device_, &fence_create_info, nullptr, &slots[created_count].in_flight));
+                                          &slots[created_count].present_binary));
+                CheckVk("vkCreateFence(reuse_fence)",
+                        vkCreateFence(device_, &fence_create_info, nullptr, &slots[created_count].reuse_fence));
             }
         } catch (...) {
             for (uint32_t i = 0U; i <= created_count && i < frames_in_flight_v; ++i) {
-                if (slots[i].image_available != VK_NULL_HANDLE) {
-                    vkDestroySemaphore(device_, slots[i].image_available, nullptr);
-                    slots[i].image_available = VK_NULL_HANDLE;
+                if (slots[i].acquire_binary != VK_NULL_HANDLE) {
+                    vkDestroySemaphore(device_, slots[i].acquire_binary, nullptr);
+                    slots[i].acquire_binary = VK_NULL_HANDLE;
                 }
-                if (slots[i].render_finished != VK_NULL_HANDLE) {
-                    vkDestroySemaphore(device_, slots[i].render_finished, nullptr);
-                    slots[i].render_finished = VK_NULL_HANDLE;
+                if (slots[i].present_binary != VK_NULL_HANDLE) {
+                    vkDestroySemaphore(device_, slots[i].present_binary, nullptr);
+                    slots[i].present_binary = VK_NULL_HANDLE;
                 }
-                if (slots[i].in_flight != VK_NULL_HANDLE) {
-                    vkDestroyFence(device_, slots[i].in_flight, nullptr);
-                    slots[i].in_flight = VK_NULL_HANDLE;
+                if (slots[i].reuse_fence != VK_NULL_HANDLE) {
+                    vkDestroyFence(device_, slots[i].reuse_fence, nullptr);
+                    slots[i].reuse_fence = VK_NULL_HANDLE;
                 }
             }
             throw;
@@ -126,15 +132,12 @@ public:
             owner_fence = VK_NULL_HANDLE;
         }
 
-        for (auto& slot_value : slot_submit_value) {
-            slot_value = 0U;
-        }
         for (auto& reuse_waited : frame_reuse_waited) {
             reuse_waited = false;
         }
-        next_submit_value = 1U;
-        last_submitted_value = 0U;
-        completed_submit_value = 0U;
+        next_graphics_value = 1U;
+        graphics_submitted_value = 0U;
+        graphics_completed_value = 0U;
         current_frame = 0U;
         initialized = true;
     }
@@ -151,8 +154,8 @@ public:
             FrameMcVector<VkFence> fences_to_wait;
             fences_to_wait.reserve(frames_in_flight_v);
             for (const auto& slot : slots) {
-                if (slot.in_flight != VK_NULL_HANDLE) {
-                    fences_to_wait.push_back(slot.in_flight);
+                if (slot.reuse_fence != VK_NULL_HANDLE) {
+                    fences_to_wait.push_back(slot.reuse_fence);
                 }
             }
             if (!fences_to_wait.empty()) {
@@ -175,35 +178,37 @@ public:
             }
 
             for (auto& slot : slots) {
-                if (slot.image_available != VK_NULL_HANDLE) {
-                    vkDestroySemaphore(device_, slot.image_available, nullptr);
-                    slot.image_available = VK_NULL_HANDLE;
+                if (slot.acquire_binary != VK_NULL_HANDLE) {
+                    vkDestroySemaphore(device_, slot.acquire_binary, nullptr);
+                    slot.acquire_binary = VK_NULL_HANDLE;
                 }
-                if (slot.render_finished != VK_NULL_HANDLE) {
-                    vkDestroySemaphore(device_, slot.render_finished, nullptr);
-                    slot.render_finished = VK_NULL_HANDLE;
+                if (slot.present_binary != VK_NULL_HANDLE) {
+                    vkDestroySemaphore(device_, slot.present_binary, nullptr);
+                    slot.present_binary = VK_NULL_HANDLE;
                 }
-                if (slot.in_flight != VK_NULL_HANDLE) {
-                    vkDestroyFence(device_, slot.in_flight, nullptr);
-                    slot.in_flight = VK_NULL_HANDLE;
+                if (slot.reuse_fence != VK_NULL_HANDLE) {
+                    vkDestroyFence(device_, slot.reuse_fence, nullptr);
+                    slot.reuse_fence = VK_NULL_HANDLE;
                 }
             }
         } else {
             for (auto& slot : slots) {
-                slot.image_available = VK_NULL_HANDLE;
-                slot.render_finished = VK_NULL_HANDLE;
-                slot.in_flight = VK_NULL_HANDLE;
+                slot.acquire_binary = VK_NULL_HANDLE;
+                slot.present_binary = VK_NULL_HANDLE;
+                slot.reuse_fence = VK_NULL_HANDLE;
             }
         }
 
         image_owner_fence.clear();
-        for (auto& slot_value : slot_submit_value) {
-            slot_value = 0U;
+        for (auto& slot : slots) {
+            slot.graphics_value = 0U;
+            slot.transfer_value = 0U;
+            slot.compute_value = 0U;
         }
         for (auto& reuse_waited : frame_reuse_waited) {
             reuse_waited = false;
         }
-        completed_submit_value = last_submitted_value;
+        graphics_completed_value = graphics_submitted_value;
         current_frame = 0U;
         initialized = false;
     }
@@ -226,7 +231,11 @@ public:
     }
 
     template<SwapchainBridge SwapchainHostT>
-    [[nodiscard]] FrameBeginResult BeginFrame(VulkanContext& context_, SwapchainHostT& swapchain_) {
+    [[nodiscard]] FrameBeginResult BeginFrame(VulkanContext& context_,
+                                              SwapchainHostT& swapchain_,
+                                              const std::uint64_t frame_id_ = 0U,
+                                              const std::uint64_t transfer_wait_value_ = 0U,
+                                              const std::uint64_t compute_wait_value_ = 0U) {
         if (!initialized) {
             throw std::runtime_error("FrameSyncHost::BeginFrame called before Initialize");
         }
@@ -245,7 +254,7 @@ public:
         }
 
         auto acquire_result = swapchain_.AcquireNextImage(context_,
-                                                          slot.image_available,
+                                                          slot.acquire_binary,
                                                           VK_NULL_HANDLE);
 
         FrameBeginResult result{};
@@ -267,7 +276,7 @@ public:
         }
 
         VkFence owner_fence = image_owner_fence[image_index];
-        if (owner_fence != VK_NULL_HANDLE && owner_fence != slot.in_flight) {
+        if (owner_fence != VK_NULL_HANDLE && owner_fence != slot.reuse_fence) {
             CheckVk("vkWaitForFences(image owner)",
                     vkWaitForFences(context_.Device(),
                                     1U,
@@ -275,16 +284,19 @@ public:
                                     VK_TRUE,
                                     std::numeric_limits<uint64_t>::max()));
         }
-        image_owner_fence[image_index] = slot.in_flight;
+        image_owner_fence[image_index] = slot.reuse_fence;
 
         result.code = FrameBeginCode::Ready;
+        result.token.frame_id = frame_id_;
         result.token.frame_index = current_frame;
         result.token.image_index = image_index;
-        result.token.wait_semaphore = slot.image_available;
-        result.token.signal_semaphore = slot.render_finished;
-        result.token.submit_fence = slot.in_flight;
-        result.token.submit_value = next_submit_value;
-        ++next_submit_value;
+        result.token.acquire_binary = slot.acquire_binary;
+        result.token.present_binary = slot.present_binary;
+        result.token.reuse_fence = slot.reuse_fence;
+        result.token.graphics_signal_value = next_graphics_value;
+        result.token.transfer_wait_value = transfer_wait_value_;
+        result.token.compute_wait_value = compute_wait_value_;
+        ++next_graphics_value;
         result.token.recommend_recreate =
             (acquire_result.result == VK_SUBOPTIMAL_KHR) || acquire_result.need_recreate;
         return result;
@@ -314,16 +326,16 @@ public:
         if (command_buffer_ == VK_NULL_HANDLE) {
             throw std::runtime_error("FrameSyncHost::Submit requires valid VkCommandBuffer");
         }
-        if (token_.submit_fence == VK_NULL_HANDLE ||
-            token_.wait_semaphore == VK_NULL_HANDLE ||
-            token_.signal_semaphore == VK_NULL_HANDLE) {
+        if (token_.reuse_fence == VK_NULL_HANDLE ||
+            token_.acquire_binary == VK_NULL_HANDLE ||
+            token_.present_binary == VK_NULL_HANDLE) {
             throw std::runtime_error("FrameSyncHost::Submit received invalid FrameToken synchronization objects");
         }
         if (token_.frame_index >= frames_in_flight_v) {
             throw std::runtime_error("FrameSyncHost::Submit token.frame_index out of range");
         }
-        if (token_.submit_value == 0U) {
-            throw std::runtime_error("FrameSyncHost::Submit token.submit_value must be non-zero");
+        if (token_.graphics_signal_value == 0U) {
+            throw std::runtime_error("FrameSyncHost::Submit token.graphics_signal_value must be non-zero");
         }
         constexpr uint32_t kMaxWaitSemaphores = 8U;
         if (extra_wait_count_ > kMaxWaitSemaphores - 1U) {
@@ -334,14 +346,14 @@ public:
         }
 
         const VkDevice device_ = context_.Device();
-        CheckVk("vkResetFences(submit fence)", vkResetFences(device_, 1U, &token_.submit_fence));
+        CheckVk("vkResetFences(reuse fence)", vkResetFences(device_, 1U, &token_.reuse_fence));
 
         std::array<VkSemaphore, kMaxWaitSemaphores> wait_semaphores{};
         std::array<VkPipelineStageFlags, kMaxWaitSemaphores> wait_stage_masks{};
         std::array<VkPipelineStageFlags2, kMaxWaitSemaphores> wait_stage_masks2{};
         uint32_t wait_count = 0U;
 
-        wait_semaphores[wait_count] = token_.wait_semaphore;
+        wait_semaphores[wait_count] = token_.acquire_binary;
         wait_stage_masks[wait_count] = wait_stage_mask_ == 0U
             ? VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT
             : wait_stage_mask_;
@@ -388,7 +400,7 @@ public:
 
             VkSemaphoreSubmitInfo signal_info{};
             signal_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
-            signal_info.semaphore = token_.signal_semaphore;
+            signal_info.semaphore = token_.present_binary;
             signal_info.value = 0U;
             signal_info.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
             signal_info.deviceIndex = 0U;
@@ -406,11 +418,11 @@ public:
             const VkResult submit_result = vkQueueSubmit2(context_.GraphicsQueue(),
                                                           1U,
                                                           &submit_info2,
-                                                          token_.submit_fence);
+                                                          token_.reuse_fence);
             CheckVk("vkQueueSubmit2(graphics)", submit_result);
             frame_reuse_waited[token_.frame_index] = false;
-            slot_submit_value[token_.frame_index] = token_.submit_value;
-            last_submitted_value = std::max(last_submitted_value, token_.submit_value);
+            slots[token_.frame_index].graphics_value = token_.graphics_signal_value;
+            graphics_submitted_value = std::max(graphics_submitted_value, token_.graphics_signal_value);
             return submit_result;
         }
 
@@ -422,16 +434,16 @@ public:
         submit_info.commandBufferCount = 1U;
         submit_info.pCommandBuffers = &command_buffer_;
         submit_info.signalSemaphoreCount = 1U;
-        submit_info.pSignalSemaphores = &token_.signal_semaphore;
+        submit_info.pSignalSemaphores = &token_.present_binary;
 
         const VkResult submit_result = vkQueueSubmit(context_.GraphicsQueue(),
                                                      1U,
                                                      &submit_info,
-                                                     token_.submit_fence);
+                                                     token_.reuse_fence);
         CheckVk("vkQueueSubmit(graphics)", submit_result);
         frame_reuse_waited[token_.frame_index] = false;
-        slot_submit_value[token_.frame_index] = token_.submit_value;
-        last_submitted_value = std::max(last_submitted_value, token_.submit_value);
+        slots[token_.frame_index].graphics_value = token_.graphics_signal_value;
+        graphics_submitted_value = std::max(graphics_submitted_value, token_.graphics_signal_value);
         return submit_result;
     }
 
@@ -439,7 +451,7 @@ public:
     [[nodiscard]] bool Present(VulkanContext& context_,
                                SwapchainHostT& swapchain_,
                                const FrameToken& token_) {
-        auto present_result = swapchain_.Present(context_, token_.image_index, token_.signal_semaphore);
+        auto present_result = swapchain_.Present(context_, token_.image_index, token_.present_binary);
         return present_result.need_recreate || token_.recommend_recreate;
     }
 
@@ -460,11 +472,23 @@ public:
     }
 
     [[nodiscard]] uint64_t LastSubmittedValue() const noexcept {
-        return last_submitted_value;
+        return graphics_submitted_value;
     }
 
     [[nodiscard]] uint64_t CompletedSubmitValue() const noexcept {
-        return completed_submit_value;
+        return graphics_completed_value;
+    }
+
+    [[nodiscard]] uint64_t LastGraphicsSubmittedValue() const noexcept {
+        return graphics_submitted_value;
+    }
+
+    [[nodiscard]] uint64_t CompletedGraphicsValue() const noexcept {
+        return graphics_completed_value;
+    }
+
+    [[nodiscard]] uint64_t NextGraphicsSignalValue() const noexcept {
+        return next_graphics_value;
     }
 
 private:
@@ -519,21 +543,20 @@ private:
         CheckVk("vkWaitForFences(current frame)",
                 vkWaitForFences(device,
                                 1U,
-                                &slot.in_flight,
+                                &slot.reuse_fence,
                                 VK_TRUE,
                                 std::numeric_limits<uint64_t>::max()));
-        completed_submit_value = std::max(completed_submit_value, slot_submit_value[current_frame]);
+        graphics_completed_value = std::max(graphics_completed_value, slot.graphics_value);
         frame_reuse_waited[current_frame] = true;
     }
 
 private:
     std::array<FrameSlot, frames_in_flight_v> slots{};
     FrameMcVector<VkFence> image_owner_fence{};
-    std::array<uint64_t, frames_in_flight_v> slot_submit_value{};
     std::array<bool, frames_in_flight_v> frame_reuse_waited{};
-    uint64_t next_submit_value = 1U;
-    uint64_t last_submitted_value = 0U;
-    uint64_t completed_submit_value = 0U;
+    uint64_t next_graphics_value = 1U;
+    uint64_t graphics_submitted_value = 0U;
+    uint64_t graphics_completed_value = 0U;
     uint32_t current_frame = 0U;
     bool initialized = false;
 };

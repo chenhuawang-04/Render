@@ -191,8 +191,8 @@ public:
     void ClearOverlayRenderers() noexcept;
     void ClearRendererRegistrations() noexcept;
 
-    void PrepareFrame(const RuntimePrepareContext& prepare_context_);
-    void PrepareFrame(const RuntimePrepareContext& prepare_context_,
+    void PrepareFrame(const SceneRecorder3DPrepareView& prepare_view_);
+    void PrepareFrame(const SceneRecorder3DPrepareView& prepare_view_,
                       const RenderScenePacket3D& frame_packet_);
     void Record(const FrameRecordContext& record_context_);
     void Record(const FrameRecordContext& record_context_,
@@ -217,7 +217,7 @@ public:
 private:
     static constexpr std::uint32_t all_submission_layers = 0xFFFF'FFFFU;
 
-    using PrepareFn = void (*)(void*, const RuntimePrepareContext&);
+    using PrepareFn = void (*)(void*, const SceneRecorder3DPrepareView&);
     using RecordFn = void (*)(void*, const FrameRecordContext&);
     using SceneRecordFn = void (*)(void*, const FrameRecordContext&, SceneRecorder3DSceneStage);
     using SwapchainRecreatedFn = void (*)(void*,
@@ -293,8 +293,52 @@ private:
 
     template<typename RendererT>
     static void PrepareRenderer(void* renderer_,
-                                const RuntimePrepareContext& prepare_context_) {
-        static_cast<RendererT*>(renderer_)->PrepareFrame(prepare_context_);
+                                const SceneRecorder3DPrepareView& prepare_view_) {
+        RendererT& renderer_ref = *static_cast<RendererT*>(renderer_);
+        if constexpr (requires(RendererT& candidate_,
+                               const TextRenderer3DPrepareView& renderer_prepare_view_) {
+                          candidate_.PrepareFrame(renderer_prepare_view_);
+                      }) {
+            renderer_ref.PrepareFrame(MakeTextRenderer3DPrepareView(prepare_view_));
+        } else if constexpr (requires(RendererT& candidate_,
+                                      const IblBakeCoordinatorPrepareView& renderer_prepare_view_) {
+                                 candidate_.PrepareFrame(renderer_prepare_view_);
+                             }) {
+            renderer_ref.PrepareFrame(MakeIblBakeCoordinatorPrepareView(prepare_view_));
+        } else if constexpr (requires(RendererT& candidate_,
+                                  const ParticleRenderer3DPrepareView& renderer_prepare_view_) {
+                                 candidate_.PrepareFrame(renderer_prepare_view_);
+                             }) {
+            renderer_ref.PrepareFrame(MakeParticleRenderer3DPrepareView(prepare_view_));
+        } else if constexpr (requires(RendererT& candidate_,
+                                      const ShadowRenderer3DPrepareView& renderer_prepare_view_) {
+                                 candidate_.PrepareFrame(renderer_prepare_view_);
+                             }) {
+            renderer_ref.PrepareFrame(MakeShadowRenderer3DPrepareView(prepare_view_));
+        } else if constexpr (requires(RendererT& candidate_,
+                                      const GeometryRenderer3DPrepareView& renderer_prepare_view_) {
+                                 candidate_.PrepareFrame(renderer_prepare_view_);
+                             }) {
+            renderer_ref.PrepareFrame(MakeGeometryRenderer3DPrepareView(prepare_view_));
+        } else if constexpr (requires(RendererT& candidate_,
+                                      const SurfaceRenderer3DPrepareView& renderer_prepare_view_) {
+                                 candidate_.PrepareFrame(renderer_prepare_view_);
+                             }) {
+            renderer_ref.PrepareFrame(MakeSurfaceRenderer3DPrepareView(prepare_view_));
+        } else if constexpr (requires(RendererT& candidate_,
+                                      const SkyboxRendererPrepareView& renderer_prepare_view_) {
+                                 candidate_.PrepareFrame(renderer_prepare_view_);
+                             }) {
+            renderer_ref.PrepareFrame(MakeSkyboxRendererPrepareView(prepare_view_));
+        } else if constexpr (requires(RendererT& candidate_,
+                                      const SceneRecorder3DPrepareView& renderer_prepare_view_) {
+                                 candidate_.PrepareFrame(renderer_prepare_view_);
+                             }) {
+            renderer_ref.PrepareFrame(prepare_view_);
+        } else {
+            static_assert(sizeof(RendererT) == 0,
+                          "SceneRecorder3D renderer must expose a typed PrepareFrame overload");
+        }
     }
 
     template<typename RendererT>

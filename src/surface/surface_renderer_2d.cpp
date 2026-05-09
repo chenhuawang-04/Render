@@ -3,7 +3,7 @@
 #include "vr/render/color_blend_state.hpp"
 #include "vr/render/render_loop_host.hpp"
 #include "vr/render/render_target_pass.hpp"
-#include "vr/render/runtime_prepare_context.hpp"
+#include "vr/render/runtime_prepare_views.hpp"
 #include "vr/render/upload_host.hpp"
 #include "vr/ecs/system/transparency_render_policy.hpp"
 #include "vr/resource/gpu_memory_host.hpp"
@@ -337,32 +337,24 @@ void SurfaceRenderer2D::ResetOutputTargetConfig() noexcept {
     output_target_config = {};
 }
 
-void SurfaceRenderer2D::PrepareFrame(const render::RuntimePrepareContext& prepare_context_) {
+void SurfaceRenderer2D::PrepareFrame(const render::SurfaceRenderer2DPrepareView& prepare_view_) {
     if (!initialized) {
         throw std::runtime_error("SurfaceRenderer2D::PrepareFrame called before Initialize");
-    }
-    if (prepare_context_.context == nullptr ||
-        prepare_context_.upload_host == nullptr ||
-        prepare_context_.descriptor_host == nullptr ||
-        prepare_context_.pipeline_host == nullptr ||
-        prepare_context_.gpu_memory_host == nullptr ||
-        prepare_context_.sampler_host == nullptr) {
-        throw std::runtime_error("SurfaceRenderer2D::PrepareFrame missing runtime dependencies");
     }
     if (surface_upload_host == nullptr || !surface_upload_host->IsInitialized()) {
         throw std::runtime_error("SurfaceRenderer2D::PrepareFrame requires initialized SurfaceUploadHost");
     }
 
-    context = prepare_context_.context;
-    upload_host = prepare_context_.upload_host;
-    descriptor_host = prepare_context_.descriptor_host;
-    pipeline_host = prepare_context_.pipeline_host;
-    gpu_memory_host = prepare_context_.gpu_memory_host;
-    sampler_host = prepare_context_.sampler_host;
-    active_frame_index = prepare_context_.frame_index;
-    last_submitted_value_seen = std::max(last_submitted_value_seen, prepare_context_.last_submitted_value);
+    context = &prepare_view_.device;
+    upload_host = &prepare_view_.upload;
+    descriptor_host = &prepare_view_.descriptor;
+    pipeline_host = &prepare_view_.pipeline;
+    gpu_memory_host = &prepare_view_.gpu_memory;
+    sampler_host = &prepare_view_.sampler;
+    active_frame_index = prepare_view_.frame.frame_index;
+    last_submitted_value_seen = std::max(last_submitted_value_seen, prepare_view_.progress.last_submitted_value);
     completed_submit_value_seen = std::max(completed_submit_value_seen,
-                                           prepare_context_.completed_submit_value);
+                                           prepare_view_.progress.completed_submit_value);
 
     surface_upload_host->BeginFrame(*context,
                                     active_frame_index,
@@ -382,9 +374,9 @@ void SurfaceRenderer2D::PrepareFrame(const render::RuntimePrepareContext& prepar
     }
     {
         FrameLightingResources& frame_resources = frame_lighting_resources[active_frame_index];
-        // DescriptorHost::BeginFrame 会对当前 frame arena 执行 vkResetDescriptorPool。
-        // 该操作会使此前为该 frame 分配的所有 VkDescriptorSet 句柄立即失效。
-        // 因此必须在每帧 Prepare 阶段强制失效本地缓存句柄，避免绑定悬空集合。
+        // DescriptorHost::BeginFrame 会对当前 frame arena 执行 vkResetDescriptorPool�?
+        // 该操作会使此前为�?frame 分配的所�?VkDescriptorSet 句柄立即失效�?
+        // 因此必须在每�?Prepare 阶段强制失效本地缓存句柄，避免绑定悬空集合�?
         frame_resources.descriptor_set = VK_NULL_HANDLE;
         frame_resources.descriptor_buffer_signature = 0U;
         frame_resources.descriptor_image_signature = 0U;

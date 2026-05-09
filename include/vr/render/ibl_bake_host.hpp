@@ -4,6 +4,7 @@
 #include "vr/asset/texture_host.hpp"
 #include "vr/ecs/component/spatial_types.hpp"
 #include "vr/render/ibl_host.hpp"
+#include "vr/render/runtime_prepare_views.hpp"
 
 #include <array>
 #include <cstdint>
@@ -13,8 +14,6 @@ class VulkanContext;
 }
 
 namespace vr::render {
-
-struct RuntimePrepareContext;
 
 template<typename T>
 using IblBakeMcVector = Center::Memory::mc_vector<T, Center::Memory::Tags::Container>;
@@ -109,12 +108,12 @@ public:
 
     void Shutdown(VulkanContext& context_);
 
-    [[nodiscard]] asset::TextureId EnsureBrdfLut(const RuntimePrepareContext& prepare_context_,
+    [[nodiscard]] asset::TextureId EnsureBrdfLut(const IblBakeHostPrepareView& prepare_view_,
                                                  asset::TextureId texture_id_ = {},
                                                  std::uint32_t lut_size_ = 0U,
                                                  std::uint32_t sample_count_ = 0U);
 
-    [[nodiscard]] IblBakeResult BakeEnvironment(const RuntimePrepareContext& prepare_context_,
+    [[nodiscard]] IblBakeResult BakeEnvironment(const IblBakeHostPrepareView& prepare_view_,
                                                 const IblBakeRequest& request_);
 
     [[nodiscard]] bool IsInitialized() const noexcept;

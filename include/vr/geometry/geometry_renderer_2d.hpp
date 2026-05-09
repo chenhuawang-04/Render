@@ -16,7 +16,7 @@ class VulkanContext;
 }
 
 namespace vr::render {
-struct RuntimePrepareContext;
+struct GeometryRenderer2DPrepareView;
 struct FrameRecordContext;
 }
 
@@ -78,7 +78,7 @@ public:
     void SetOutputTargetConfig(const render::RenderTargetColorOutputConfig& output_target_config_) noexcept;
     void ResetOutputTargetConfig() noexcept;
 
-    void PrepareFrame(const render::RuntimePrepareContext& prepare_context_);
+    void PrepareFrame(const render::GeometryRenderer2DPrepareView& prepare_view_);
     void Record(const render::FrameRecordContext& record_context_);
     void OnSwapchainRecreated(std::uint32_t image_count_,
                               VkExtent2D extent_,

@@ -1,6 +1,5 @@
 #include "vr/render/frame_composer_host.hpp"
 
-#include "vr/render/runtime_prepare_context.hpp"
 
 #include <limits>
 #include <stdexcept>
@@ -48,37 +47,33 @@ void FrameComposerHost::Shutdown(VulkanContext& context_) {
     initialized = false;
 }
 
-bool FrameComposerHost::PrepareFrame(const RuntimePrepareContext& prepare_context_) {
+bool FrameComposerHost::PrepareFrame(const FrameComposerPrepareView& prepare_view_) {
     if (!initialized) {
         throw std::runtime_error("FrameComposerHost::PrepareFrame called before Initialize");
     }
-    if (prepare_context_.context == nullptr ||
-        prepare_context_.render_target_host == nullptr ||
-        prepare_context_.descriptor_host == nullptr ||
-        prepare_context_.pipeline_host == nullptr ||
-        prepare_context_.sampler_host == nullptr) {
-        throw std::runtime_error("FrameComposerHost::PrepareFrame missing runtime dependencies");
-    }
 
-    context = prepare_context_.context;
-    render_target_host = prepare_context_.render_target_host;
-    render_target_pool = prepare_context_.render_target_pool;
+    context = &prepare_view_.device;
+    render_target_host = &prepare_view_.render_target;
+    render_target_pool = prepare_view_.render_target_pool;
 
-    const bool ready = scene_targets.PrepareFrameAndConfigure(prepare_context_, &tonemap_renderer);
+    const bool ready = scene_targets.PrepareFrameAndConfigure(
+        MakeSceneRenderTargetSetPrepareView(prepare_view_),
+        &tonemap_renderer);
     if (tonemap_output_override) {
         tonemap_renderer.SetOutputTargetConfig(tonemap_output_target_config);
     } else {
         tonemap_renderer.ResetOutputTargetConfig();
     }
+    tonemap_renderer.PrepareFrame(MakeRenderTargetCompositeRendererPrepareView(prepare_view_));
 
-    if (prepare_context_.frame_index >= frame_targets.size()) {
-        frame_targets.resize(prepare_context_.frame_index + 1U);
+    if (prepare_view_.frame.frame_index >= frame_targets.size()) {
+        frame_targets.resize(prepare_view_.frame.frame_index + 1U);
     }
     if (ready) {
-        RefreshFrameTargets(prepare_context_.frame_index);
+        RefreshFrameTargets(prepare_view_.frame.frame_index);
         ++stats.ready_frame_count;
     } else {
-        frame_targets[prepare_context_.frame_index] = {};
+        frame_targets[prepare_view_.frame.frame_index] = {};
     }
 
     ++stats.prepared_frame_count;

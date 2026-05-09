@@ -440,36 +440,29 @@ void ShadowRenderer3D::SetTransformDirtyHint(const std::uint32_t* dirty_componen
     frame_coordinator.SetTransformDirtyHint(dirty_component_indices_, dirty_component_count_);
 }
 
-void ShadowRenderer3D::PrepareFrame(const render::RuntimePrepareContext& prepare_context_) {
+void ShadowRenderer3D::PrepareFrame(const render::ShadowRenderer3DPrepareView& prepare_view_) {
     if (!initialized) {
         return;
     }
-    if (prepare_context_.context == nullptr ||
-        prepare_context_.descriptor_host == nullptr ||
-        prepare_context_.pipeline_host == nullptr ||
-        prepare_context_.gpu_memory_host == nullptr) {
-        return;
-    }
-
-    context = prepare_context_.context;
-    descriptor_host = prepare_context_.descriptor_host;
-    pipeline_host = prepare_context_.pipeline_host;
-    gpu_memory_host = prepare_context_.gpu_memory_host;
-    active_frame_index = prepare_context_.frame_index;
+    context = &prepare_view_.device;
+    descriptor_host = &prepare_view_.descriptor;
+    pipeline_host = &prepare_view_.pipeline;
+    gpu_memory_host = &prepare_view_.gpu_memory;
+    active_frame_index = prepare_view_.frame.frame_index;
     resolved_depth_format = ResolveDepthFormat(*context, create_info_cache.preferred_depth_format);
     create_info_cache.atlas.depth_format = resolved_depth_format;
 
     if (!atlas_host.IsInitialized()) {
         atlas_host.Initialize(*context, *gpu_memory_host, create_info_cache.atlas);
     }
-    atlas_host.BeginFrame(*context, prepare_context_.completed_submit_value);
+    atlas_host.BeginFrame(*context, prepare_view_.progress.completed_submit_value);
 
     frame_coordinator.SetShadowData(shadow_components, shadow_transforms, shadow_component_count);
     frame_coordinator.SetCamera(camera_component);
     frame_coordinator.SetCasterBounds(caster_bounds, geometry_component_count);
     frame_coordinator.Reserve(shadow_component_count, geometry_component_count);
 
-    last_prepare_result = frame_coordinator.PrepareFrame(prepare_context_.frame_index,
+    last_prepare_result = frame_coordinator.PrepareFrame(prepare_view_.frame.frame_index,
                                                          create_info_cache.runtime_build,
                                                          create_info_cache.caster_build);
 
@@ -486,8 +479,8 @@ void ShadowRenderer3D::PrepareFrame(const render::RuntimePrepareContext& prepare
             };
         }
         atlas_host.EnsureAtlases(*context,
-                                 prepare_context_.last_submitted_value,
-                                 prepare_context_.completed_submit_value,
+                                 prepare_view_.progress.last_submitted_value,
+                                 prepare_view_.progress.completed_submit_value,
                                  requests.data(),
                                  static_cast<std::uint32_t>(requests.size()));
     }

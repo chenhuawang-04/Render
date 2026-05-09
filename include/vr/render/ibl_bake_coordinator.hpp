@@ -2,7 +2,7 @@
 
 #include "vr/render/ibl_bake_host.hpp"
 #include "vr/render/render_loop_host.hpp"
-#include "vr/render/runtime_prepare_context.hpp"
+#include "vr/render/runtime_prepare_views.hpp"
 
 #include <cstdint>
 #include <stdexcept>
@@ -64,20 +64,17 @@ public:
         stats.baked = 0U;
     }
 
-    void PrepareFrame(const RuntimePrepareContext& prepare_context_) {
+    void PrepareFrame(const IblBakeCoordinatorPrepareView& prepare_view_) {
         ++stats.prepare_count;
         if (!HasRequest()) {
             return;
-        }
-        if (prepare_context_.ibl_bake_host == nullptr) {
-            throw std::runtime_error(
-                "IblBakeCoordinator requires RuntimePrepareContext.ibl_bake_host");
         }
         if (baked_revision == source_revision) {
             return;
         }
 
-        result = prepare_context_.ibl_bake_host->BakeEnvironment(prepare_context_, request);
+        result = prepare_view_.ibl_bake.BakeEnvironment(MakeIblBakeHostPrepareView(prepare_view_),
+                                                        request);
         baked_revision = source_revision;
         ++stats.bake_count;
         stats.baked = 1U;

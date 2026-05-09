@@ -1,4 +1,5 @@
 #include "vr/render/render_target_pass.hpp"
+#include "vr/render/swapchain_target_set.hpp"
 
 #include <stdexcept>
 
@@ -88,6 +89,14 @@ void RecordLegacySwapchainTransitionToPresent(const FrameRecordContext& record_c
 
 } // namespace
 
+[[nodiscard]] RenderTargetHandle ResolveCurrentSwapchainTargetHandle(
+    const FrameRecordContext& record_context_) noexcept {
+    if (record_context_.swapchain_targets == nullptr) {
+        return invalid_render_target_handle;
+    }
+    return record_context_.swapchain_targets->Get(record_context_.image_index);
+}
+
 ResolvedColorRenderTarget ResolveColorRenderTarget(const FrameRecordContext& record_context_,
                                                    const RenderTargetColorOutputConfig& output_config_) {
     ResolvedColorRenderTarget resolved{};
@@ -95,7 +104,7 @@ ResolvedColorRenderTarget ResolveColorRenderTarget(const FrameRecordContext& rec
 
     RenderTargetHandle handle = output_config_.color_target;
     if (!IsValidRenderTargetHandle(handle)) {
-        handle = record_context_.swapchain_target_handle;
+        handle = ResolveCurrentSwapchainTargetHandle(record_context_);
     }
 
     if (render_target_host != nullptr && IsValidRenderTargetHandle(handle)) {
@@ -108,8 +117,8 @@ ResolvedColorRenderTarget ResolveColorRenderTarget(const FrameRecordContext& rec
         resolved.using_render_target_host = true;
         resolved.present_after_pass =
             !IsValidRenderTargetHandle(output_config_.color_target) &&
-            handle.index == record_context_.swapchain_target_handle.index &&
-            handle.generation == record_context_.swapchain_target_handle.generation;
+            handle.index == ResolveCurrentSwapchainTargetHandle(record_context_).index &&
+            handle.generation == ResolveCurrentSwapchainTargetHandle(record_context_).generation;
         return resolved;
     }
 

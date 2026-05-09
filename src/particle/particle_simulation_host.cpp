@@ -2106,6 +2106,22 @@ const ParticleSimulationHostCapabilities& ParticleSimulationHost::Capabilities()
     return capabilities;
 }
 
+bool ParticleSimulationHost::HasComputeTimelineProgress() const noexcept {
+    return false;
+}
+
+std::uint64_t ParticleSimulationHost::LastSubmittedValue() const noexcept {
+    return 0U;
+}
+
+std::uint64_t ParticleSimulationHost::CompletedSubmitValue() const noexcept {
+    return 0U;
+}
+
+std::uint64_t ParticleSimulationHost::NextSignalValue() const noexcept {
+    return 1U;
+}
+
 VkDeviceSize ParticleSimulationHost::NextPow2(VkDeviceSize value_) noexcept {
     if (value_ <= 1U) {
         return 1U;

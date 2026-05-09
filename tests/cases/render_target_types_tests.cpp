@@ -7,6 +7,7 @@
 #include "vr/render/render_target_host.hpp"
 #include "vr/render/render_view_submission_utils.hpp"
 #include "vr/render/scene_recorder_3d.hpp"
+#include "vr/render/runtime_prepare_views.hpp"
 #include "vr/render/render_target_types.hpp"
 #include "vr/render/scene_render_target_set.hpp"
 
@@ -14,6 +15,24 @@
 #include <type_traits>
 
 namespace {
+
+[[nodiscard]] vr::render::SceneRecorder2DPrepareView MakeSceneRecorder2DPrepareViewForTests() {
+    static vr::VulkanContext context{};
+    static vr::render::RenderTargetHost render_target{};
+    return {
+        .device = context,
+        .render_target = render_target,
+    };
+}
+
+[[nodiscard]] vr::render::SceneRecorder3DPrepareView MakeSceneRecorder3DPrepareViewForTests() {
+    static vr::VulkanContext context{};
+    static vr::render::RenderTargetHost render_target{};
+    return {
+        .device = context,
+        .render_target = render_target,
+    };
+}
 
 struct FakeColorRenderer {
     vr::render::RenderTargetColorOutputConfig color_output{};
@@ -56,7 +75,11 @@ struct FakeSceneRecorderRenderer : FakeDepthRenderer {
     std::uint32_t transparent_record_count = 0U;
     std::uint32_t* order_cursor = nullptr;
 
-    void PrepareFrame(const vr::render::RuntimePrepareContext&) noexcept {
+    void PrepareFrame(const vr::render::SceneRecorder2DPrepareView&) noexcept {
+        prepare_count += 1U;
+    }
+
+    void PrepareFrame(const vr::render::SceneRecorder3DPrepareView&) noexcept {
         prepare_count += 1U;
     }
 
@@ -96,7 +119,7 @@ struct FakeColorSceneRecorderRenderer final : FakeColorRenderer {
     std::uint32_t record_count = 0U;
     std::uint32_t recreate_count = 0U;
 
-    void PrepareFrame(const vr::render::RuntimePrepareContext&) noexcept {
+    void PrepareFrame(const vr::render::SceneRecorder2DPrepareView&) noexcept {
         prepare_count += 1U;
     }
 
@@ -118,7 +141,11 @@ struct FakePreSceneRecorderRenderer final {
     std::uint32_t record_count = 0U;
     std::uint32_t recreate_count = 0U;
 
-    void PrepareFrame(const vr::render::RuntimePrepareContext&) noexcept {
+    void PrepareFrame(const vr::render::SceneRecorder2DPrepareView&) noexcept {
+        prepare_count += 1U;
+    }
+
+    void PrepareFrame(const vr::render::SceneRecorder3DPrepareView&) noexcept {
         prepare_count += 1U;
     }
 
@@ -207,7 +234,7 @@ struct FakeAnimatedShadowRecorderRenderer final {
     const vr::ecs::FrameSequenceOutputState* frame_sequence_outputs = nullptr;
     std::uint32_t frame_sequence_output_count = 0U;
 
-    void PrepareFrame(const vr::render::RuntimePrepareContext&) noexcept {
+    void PrepareFrame(const vr::render::SceneRecorder3DPrepareView&) noexcept {
         prepare_count += 1U;
     }
 
@@ -250,7 +277,7 @@ struct FakeSceneConsumer final {
     std::uint32_t record_count = 0U;
     std::uint32_t recreate_count = 0U;
 
-    void PrepareFrame(const vr::render::RuntimePrepareContext&) noexcept {
+    void PrepareFrame(const vr::render::SceneRecorder2DPrepareView&) noexcept {
         prepare_count += 1U;
     }
 
@@ -712,9 +739,9 @@ VR_TEST_CASE(SceneRecorder2D_submission_flags_and_layers_filter_recorders,
                                                         0x1U);
     recorder.SetFramePacket(&packet);
 
-    vr::render::RuntimePrepareContext prepare_context{};
+    const auto prepare_view = MakeSceneRecorder2DPrepareViewForTests();
     vr::render::FrameRecordContext record_context{};
-    recorder.PrepareFrame(prepare_context);
+    recorder.PrepareFrame(prepare_view);
     recorder.Record(record_context);
 
     VR_CHECK(world_renderer.prepare_count == 1U);
@@ -790,9 +817,9 @@ VR_TEST_CASE(SceneRecorder2D_mixed_packet_routes_scene_and_overlay_from_distinct
     vr::render::RefreshRenderScenePacketSignature(packet);
     recorder.SetFramePacket(&packet);
 
-    vr::render::RuntimePrepareContext prepare_context{};
+    const auto prepare_view = MakeSceneRecorder2DPrepareViewForTests();
     vr::render::FrameRecordContext record_context{};
-    recorder.PrepareFrame(prepare_context);
+    recorder.PrepareFrame(prepare_view);
     recorder.Record(record_context);
 
     VR_CHECK(world_renderer.prepare_count == 1U);
@@ -834,9 +861,9 @@ VR_TEST_CASE(SceneRecorder2D_ui_only_packet_skips_scene_and_runs_overlay,
     vr::render::RefreshRenderScenePacketSignature(packet);
     recorder.SetFramePacket(&packet);
 
-    vr::render::RuntimePrepareContext prepare_context{};
+    const auto prepare_view = MakeSceneRecorder2DPrepareViewForTests();
     vr::render::FrameRecordContext record_context{};
-    recorder.PrepareFrame(prepare_context);
+    recorder.PrepareFrame(prepare_view);
     recorder.Record(record_context);
 
     VR_CHECK(world_renderer.prepare_count == 0U);
@@ -872,8 +899,7 @@ VR_TEST_CASE(SceneRecorder2D_explicit_scene_target_bypasses_scene_consumer_route
         vr::render::MakeSingleViewScenePacket(view, 61U);
     recorder.SetFramePacket(&packet);
 
-    vr::render::RuntimePrepareContext prepare_context{};
-    recorder.PrepareFrame(prepare_context);
+    recorder.PrepareFrame(MakeSceneRecorder2DPrepareViewForTests());
 
     VR_CHECK(world_renderer.color_set);
     VR_CHECK(world_renderer.color_output.color_target.index == 11U);
@@ -894,8 +920,7 @@ VR_TEST_CASE(SceneRecorder2D_direct_depth_output_routes_to_depth_capable_rendere
     FakeSceneRecorderRenderer world_renderer{};
     recorder.RegisterSceneRenderer(world_renderer, vr::render::SceneRenderPassRole::first, 0x1U);
 
-    vr::render::RuntimePrepareContext prepare_context{};
-    recorder.PrepareFrame(prepare_context);
+    recorder.PrepareFrame(MakeSceneRecorder2DPrepareViewForTests());
 
     VR_CHECK(world_renderer.color_set);
     VR_CHECK(world_renderer.depth_set);
@@ -915,8 +940,7 @@ VR_TEST_CASE(SceneRecorder2D_direct_depth_output_keeps_color_only_renderer_compa
     FakeColorSceneRecorderRenderer world_renderer{};
     recorder.RegisterSceneRenderer(world_renderer, vr::render::SceneRenderPassRole::single, 0x1U);
 
-    vr::render::RuntimePrepareContext prepare_context{};
-    recorder.PrepareFrame(prepare_context);
+    recorder.PrepareFrame(MakeSceneRecorder2DPrepareViewForTests());
 
     VR_CHECK(world_renderer.color_set);
     VR_CHECK(world_renderer.prepare_count == 1U);
@@ -944,8 +968,7 @@ VR_TEST_CASE(SceneRecorder2D_explicit_scene_depth_target_routes_to_depth_capable
         vr::render::MakeSingleViewScenePacket(view, 88U);
     recorder.SetFramePacket(&packet);
 
-    vr::render::RuntimePrepareContext prepare_context{};
-    recorder.PrepareFrame(prepare_context);
+    recorder.PrepareFrame(MakeSceneRecorder2DPrepareViewForTests());
 
     VR_CHECK(world_renderer.color_set);
     VR_CHECK(world_renderer.depth_set);
@@ -974,10 +997,10 @@ VR_TEST_CASE(SceneRecorder2D_explicit_scene_depth_target_requires_depth_capable_
         vr::render::MakeSingleViewScenePacket(view, 91U);
     recorder.SetFramePacket(&packet);
 
-    vr::render::RuntimePrepareContext prepare_context{};
+    const auto prepare_view = MakeSceneRecorder2DPrepareViewForTests();
     bool threw = false;
     try {
-        recorder.PrepareFrame(prepare_context);
+        recorder.PrepareFrame(prepare_view);
     } catch (const std::runtime_error&) {
         threw = true;
     }
@@ -1241,9 +1264,9 @@ VR_TEST_CASE(SceneRecorder3D_submission_flags_and_layers_filter_renderers,
     vr::render::RefreshRenderScenePacketSignature(packet);
     recorder.SetFramePacket(&packet);
 
-    vr::render::RuntimePrepareContext prepare_context{};
+    const auto prepare_view = MakeSceneRecorder3DPrepareViewForTests();
     vr::render::FrameRecordContext record_context{};
-    recorder.PrepareFrame(prepare_context);
+    recorder.PrepareFrame(prepare_view);
     recorder.Record(record_context);
 
     VR_CHECK(shadow_renderer.prepare_count == 0U);
@@ -1281,8 +1304,7 @@ VR_TEST_CASE(SceneRecorder3D_postprocess_disabled_falls_back_to_direct_scene_out
     vr::render::RefreshRenderScenePacketSignature(packet);
     recorder.SetFramePacket(&packet);
 
-    vr::render::RuntimePrepareContext prepare_context{};
-    recorder.PrepareFrame(prepare_context);
+    recorder.PrepareFrame(MakeSceneRecorder3DPrepareViewForTests());
 
     VR_CHECK(scene_renderer.color_set);
     VR_CHECK(scene_renderer.depth_set);
@@ -1355,9 +1377,9 @@ VR_TEST_CASE(SceneRecorder3D_mixed_packet_routes_scene_and_overlay_from_distinct
     vr::render::RefreshRenderScenePacketSignature(packet);
     recorder.SetFramePacket(&packet);
 
-    vr::render::RuntimePrepareContext prepare_context{};
+    const auto prepare_view = MakeSceneRecorder3DPrepareViewForTests();
     vr::render::FrameRecordContext record_context{};
-    recorder.PrepareFrame(prepare_context);
+    recorder.PrepareFrame(prepare_view);
     recorder.Record(record_context);
 
     VR_CHECK(world_renderer.prepare_count == 1U);
@@ -1399,9 +1421,9 @@ VR_TEST_CASE(SceneRecorder3D_ui_only_packet_skips_scene_and_runs_overlay,
     vr::render::RefreshRenderScenePacketSignature(packet);
     recorder.SetFramePacket(&packet);
 
-    vr::render::RuntimePrepareContext prepare_context{};
+    const auto prepare_view = MakeSceneRecorder3DPrepareViewForTests();
     vr::render::FrameRecordContext record_context{};
-    recorder.PrepareFrame(prepare_context);
+    recorder.PrepareFrame(prepare_view);
     recorder.Record(record_context);
 
     VR_CHECK(world_renderer.prepare_count == 0U);
@@ -1437,8 +1459,7 @@ VR_TEST_CASE(SceneRecorder3D_reflection_view_explicit_targets_override_scene_rou
         vr::render::MakeSingleViewScenePacket(reflection_view, 62U, vr::render::RenderScenePacketKind::mixed);
     recorder.SetFramePacket(&packet);
 
-    vr::render::RuntimePrepareContext prepare_context{};
-    recorder.PrepareFrame(prepare_context);
+    recorder.PrepareFrame(MakeSceneRecorder3DPrepareViewForTests());
 
     VR_CHECK(scene_renderer.color_set);
     VR_CHECK(scene_renderer.depth_set);

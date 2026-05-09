@@ -72,8 +72,8 @@ using TransformSystem2D = vr::ecs::TransformSystem<vr::ecs::Dim2>;
 struct ParticleRecorder2D final {
     vr::particle::ParticleRenderer2D* renderer = nullptr;
 
-    void PrepareFrame(const vr::render::RuntimePrepareContext& prepare_context_) {
-        renderer->PrepareFrame(prepare_context_);
+    void PrepareFrame(const vr::render::ParticleRenderer2DPrepareView& prepare_view_) {
+        renderer->PrepareFrame(prepare_view_);
     }
 
     void Record(const vr::render::FrameRecordContext& record_context_) {
@@ -96,13 +96,9 @@ struct ParticleRecorder2D final {
 VR_TEST_CASE(RuntimeIntegration_particle_renderer_2d_hybrid_smoke,
              "integration;gpu;sdl;runtime;particle;render2d") {
     Runtime runtime{};
-    vr::particle::ParticleUploadHost particle_upload_host{};
-    vr::particle::ParticleSimulationHost particle_simulation_host{};
     vr::particle::ParticleRenderer2D particle_renderer{};
 
     bool runtime_initialized = false;
-    bool upload_initialized = false;
-    bool simulation_initialized = false;
     bool renderer_initialized = false;
 
     try {
@@ -122,22 +118,6 @@ VR_TEST_CASE(RuntimeIntegration_particle_renderer_2d_hybrid_smoke,
         create_info.poll_events_each_tick = true;
         runtime.Initialize(create_info);
         runtime_initialized = true;
-
-        vr::particle::ParticleUploadHostCreateInfo upload_create_info{};
-        upload_create_info.frames_in_flight = 2U;
-        upload_create_info.initial_2d_instance_buffer_bytes = 256U * 1024U;
-        particle_upload_host.Initialize(runtime.Context(), runtime.GpuMemory(), upload_create_info);
-        upload_initialized = true;
-
-        vr::particle::ParticleSimulationHostCreateInfo simulation_create_info{};
-        simulation_create_info.frames_in_flight = 2U;
-        simulation_create_info.initial_particle_capacity = 1024U;
-        simulation_create_info.initial_visible_particle_capacity = 1024U;
-        simulation_create_info.initial_spawn_packet_capacity = 64U;
-        simulation_create_info.initial_indirect_command_capacity = 32U;
-        simulation_create_info.initial_sort_key_capacity = 1024U;
-        particle_simulation_host.Initialize(runtime.Context(), runtime.GpuMemory(), simulation_create_info);
-        simulation_initialized = true;
 
         Particle2D particle{};
         ParticleEmitter2D emitter{};
@@ -179,8 +159,8 @@ VR_TEST_CASE(RuntimeIntegration_particle_renderer_2d_hybrid_smoke,
         renderer_create_info.clear_swapchain = false;
         particle_renderer.Initialize(renderer_create_info);
         renderer_initialized = true;
-        particle_renderer.SetHost(&particle_upload_host);
-        particle_renderer.SetSimulationHost(&particle_simulation_host);
+        runtime.Services().Get<vr::runtime::services::ParticleRenderService>().ConfigureRenderer(
+            particle_renderer);
         particle_renderer.SetSceneData(&particle, &emitter, &transform, 1U);
 
         ParticleRecorder2D recorder{.renderer = &particle_renderer};
@@ -210,20 +190,18 @@ VR_TEST_CASE(RuntimeIntegration_particle_renderer_2d_hybrid_smoke,
         VR_REQUIRE(submitted_frames > 0U);
         VR_REQUIRE(max_uploaded_instances > 0U);
         VR_REQUIRE(max_draw_calls > 0U);
-        VR_REQUIRE(particle_simulation_host.Stats().prepared_frame_count > 0U);
-        if (particle_simulation_host.Capabilities().SupportsHybridSimulation()) {
-            VR_REQUIRE(particle_simulation_host.Stats().gpu_build_prepare_count > 0U);
-            VR_REQUIRE(particle_simulation_host.Stats().gpu_build_dispatch_count > 0U);
-            VR_REQUIRE(particle_simulation_host.Stats().update_dispatch_count > 0U);
+        const auto& particle_simulation_service =
+            runtime.Services().Get<vr::runtime::services::ParticleSimulationService>();
+        VR_REQUIRE(particle_simulation_service.Stats().prepared_frame_count > 0U);
+        if (particle_simulation_service.Capabilities().SupportsHybridSimulation()) {
+            VR_REQUIRE(particle_simulation_service.Stats().gpu_build_prepare_count > 0U);
+            VR_REQUIRE(particle_simulation_service.Stats().gpu_build_dispatch_count > 0U);
+            VR_REQUIRE(particle_simulation_service.Stats().update_dispatch_count > 0U);
             VR_REQUIRE(max_indirect_draw_calls > 0U);
         }
 
         particle_renderer.Shutdown(runtime.Context());
         renderer_initialized = false;
-        particle_simulation_host.Shutdown(runtime.Context());
-        simulation_initialized = false;
-        particle_upload_host.Shutdown(runtime.Context());
-        upload_initialized = false;
         runtime.Shutdown();
         runtime_initialized = false;
     } catch (const std::exception& e) {
@@ -231,14 +209,6 @@ VR_TEST_CASE(RuntimeIntegration_particle_renderer_2d_hybrid_smoke,
             if (renderer_initialized) {
                 particle_renderer.Shutdown(runtime.Context());
                 renderer_initialized = false;
-            }
-            if (simulation_initialized) {
-                particle_simulation_host.Shutdown(runtime.Context());
-                simulation_initialized = false;
-            }
-            if (upload_initialized) {
-                particle_upload_host.Shutdown(runtime.Context());
-                upload_initialized = false;
             }
             if (runtime_initialized) {
                 runtime.Shutdown();
@@ -249,14 +219,6 @@ VR_TEST_CASE(RuntimeIntegration_particle_renderer_2d_hybrid_smoke,
         if (renderer_initialized) {
             particle_renderer.Shutdown(runtime.Context());
             renderer_initialized = false;
-        }
-        if (simulation_initialized) {
-            particle_simulation_host.Shutdown(runtime.Context());
-            simulation_initialized = false;
-        }
-        if (upload_initialized) {
-            particle_upload_host.Shutdown(runtime.Context());
-            upload_initialized = false;
         }
         if (runtime_initialized) {
             runtime.Shutdown();
@@ -269,13 +231,9 @@ VR_TEST_CASE(RuntimeIntegration_particle_renderer_2d_hybrid_smoke,
 VR_TEST_CASE(RuntimeIntegration_particle_renderer_2d_gpu_persistent_seed_once,
              "integration;gpu;sdl;runtime;particle;render2d") {
     Runtime runtime{};
-    vr::particle::ParticleUploadHost particle_upload_host{};
-    vr::particle::ParticleSimulationHost particle_simulation_host{};
     vr::particle::ParticleRenderer2D particle_renderer{};
 
     bool runtime_initialized = false;
-    bool upload_initialized = false;
-    bool simulation_initialized = false;
     bool renderer_initialized = false;
 
     try {
@@ -295,22 +253,6 @@ VR_TEST_CASE(RuntimeIntegration_particle_renderer_2d_gpu_persistent_seed_once,
         create_info.poll_events_each_tick = true;
         runtime.Initialize(create_info);
         runtime_initialized = true;
-
-        vr::particle::ParticleUploadHostCreateInfo upload_create_info{};
-        upload_create_info.frames_in_flight = 2U;
-        upload_create_info.initial_2d_instance_buffer_bytes = 256U * 1024U;
-        particle_upload_host.Initialize(runtime.Context(), runtime.GpuMemory(), upload_create_info);
-        upload_initialized = true;
-
-        vr::particle::ParticleSimulationHostCreateInfo simulation_create_info{};
-        simulation_create_info.frames_in_flight = 2U;
-        simulation_create_info.initial_particle_capacity = 1024U;
-        simulation_create_info.initial_visible_particle_capacity = 1024U;
-        simulation_create_info.initial_spawn_packet_capacity = 64U;
-        simulation_create_info.initial_indirect_command_capacity = 32U;
-        simulation_create_info.initial_sort_key_capacity = 1024U;
-        particle_simulation_host.Initialize(runtime.Context(), runtime.GpuMemory(), simulation_create_info);
-        simulation_initialized = true;
 
         Particle2D particle{};
         ParticleEmitter2D emitter{};
@@ -355,8 +297,8 @@ VR_TEST_CASE(RuntimeIntegration_particle_renderer_2d_gpu_persistent_seed_once,
         renderer_create_info.clear_swapchain = false;
         particle_renderer.Initialize(renderer_create_info);
         renderer_initialized = true;
-        particle_renderer.SetHost(&particle_upload_host);
-        particle_renderer.SetSimulationHost(&particle_simulation_host);
+        runtime.Services().Get<vr::runtime::services::ParticleRenderService>().ConfigureRenderer(
+            particle_renderer);
         particle_renderer.SetSceneData(&particle, &emitter, &transform, 1U);
 
         ParticleRecorder2D recorder{.renderer = &particle_renderer};
@@ -384,58 +326,40 @@ VR_TEST_CASE(RuntimeIntegration_particle_renderer_2d_gpu_persistent_seed_once,
         VR_REQUIRE(submitted_frames > 0U);
         VR_REQUIRE(max_indirect_draw_calls > 0U);
         VR_REQUIRE(max_uploaded_instances > 0U);
-        VR_REQUIRE(particle_simulation_host.Stats().prepared_frame_count > 0U);
-        if (particle_simulation_host.Capabilities().SupportsGpuSimulation()) {
-            VR_REQUIRE(particle_simulation_host.Stats().gpu_build_prepare_count > 0U);
-            VR_REQUIRE(particle_simulation_host.Stats().gpu_build_dispatch_count > 0U);
-            VR_REQUIRE(particle_simulation_host.Stats().update_dispatch_count > 0U);
-            VR_REQUIRE(particle_simulation_host.Stats().state_upload_count > 0U);
-            VR_REQUIRE(particle_simulation_host.Stats().state_upload_count <=
-                       particle_simulation_host.FramesInFlight());
-            VR_REQUIRE(particle_simulation_host.Stats().spawn_packet_upload_count <=
-                       particle_simulation_host.FramesInFlight());
+        const auto& particle_simulation_service_gpu =
+            runtime.Services().Get<vr::runtime::services::ParticleSimulationService>();
+        VR_REQUIRE(particle_simulation_service_gpu.Stats().prepared_frame_count > 0U);
+        if (particle_simulation_service_gpu.Capabilities().SupportsGpuSimulation()) {
+            VR_REQUIRE(particle_simulation_service_gpu.Stats().gpu_build_prepare_count > 0U);
+            VR_REQUIRE(particle_simulation_service_gpu.Stats().gpu_build_dispatch_count > 0U);
+            VR_REQUIRE(particle_simulation_service_gpu.Stats().update_dispatch_count > 0U);
+            VR_REQUIRE(particle_simulation_service_gpu.Stats().state_upload_count > 0U);
+            VR_REQUIRE(particle_simulation_service_gpu.Stats().state_upload_count <=
+                       particle_simulation_service_gpu.Host().FramesInFlight());
+            VR_REQUIRE(particle_simulation_service_gpu.Stats().spawn_packet_upload_count <=
+                       particle_simulation_service_gpu.Host().FramesInFlight());
             VR_REQUIRE(particle_renderer.Stats().cache_reused);
         }
 
         particle_renderer.Shutdown(runtime.Context());
         renderer_initialized = false;
-        particle_simulation_host.Shutdown(runtime.Context());
-        simulation_initialized = false;
-        particle_upload_host.Shutdown(runtime.Context());
-        upload_initialized = false;
         runtime.Shutdown();
         runtime_initialized = false;
     } catch (const std::exception& e) {
         if (IsEnvironmentSkipError(e.what())) {
-            if (renderer_initialized) {
-                particle_renderer.Shutdown(runtime.Context());
-                renderer_initialized = false;
-            }
-            if (simulation_initialized) {
-                particle_simulation_host.Shutdown(runtime.Context());
-                simulation_initialized = false;
-            }
-            if (upload_initialized) {
-                particle_upload_host.Shutdown(runtime.Context());
-                upload_initialized = false;
-            }
-            if (runtime_initialized) {
-                runtime.Shutdown();
-                runtime_initialized = false;
+        if (renderer_initialized) {
+            particle_renderer.Shutdown(runtime.Context());
+            renderer_initialized = false;
+        }
+        if (runtime_initialized) {
+            runtime.Shutdown();
+            runtime_initialized = false;
             }
             VR_SKIP(e.what());
         }
         if (renderer_initialized) {
             particle_renderer.Shutdown(runtime.Context());
             renderer_initialized = false;
-        }
-        if (simulation_initialized) {
-            particle_simulation_host.Shutdown(runtime.Context());
-            simulation_initialized = false;
-        }
-        if (upload_initialized) {
-            particle_upload_host.Shutdown(runtime.Context());
-            upload_initialized = false;
         }
         if (runtime_initialized) {
             runtime.Shutdown();

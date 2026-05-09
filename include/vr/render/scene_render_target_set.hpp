@@ -5,7 +5,7 @@
 #include "vr/render/render_target_host.hpp"
 #include "vr/render/render_target_pass.hpp"
 #include "vr/render/render_target_pool.hpp"
-#include "vr/render/runtime_prepare_context.hpp"
+#include "vr/render/runtime_prepare_views.hpp"
 
 #include <array>
 #include <cstdint>
@@ -77,7 +77,7 @@ public:
                                           VkExtent2D swapchain_extent_,
                                           std::uint64_t last_submitted_value_,
                                           std::uint64_t completed_submit_value_);
-    [[nodiscard]] bool PrepareFrame(const RuntimePrepareContext& prepare_context_);
+    [[nodiscard]] bool PrepareFrame(const SceneRenderTargetSetPrepareView& prepare_view_);
     [[nodiscard]] bool OnSwapchainRecreated(VulkanContext& context_,
                                             RenderTargetHost& render_target_host_,
                                             RenderTargetPool* render_target_pool_,
@@ -200,10 +200,10 @@ public:
     void ResetCompositeRenderer(RenderTargetCompositeRenderer& composite_renderer_) const noexcept;
 
     template<typename... BindingTs>
-    [[nodiscard]] bool PrepareFrameAndConfigure(const RuntimePrepareContext& prepare_context_,
+    [[nodiscard]] bool PrepareFrameAndConfigure(const SceneRenderTargetSetPrepareView& prepare_view_,
                                                 RenderTargetCompositeRenderer* composite_renderer_,
                                                 const BindingTs&... bindings_) {
-        const bool ready = PrepareFrame(prepare_context_);
+        const bool ready = PrepareFrame(prepare_view_);
         ConfigureBindings(bindings_...);
         if (composite_renderer_ != nullptr) {
             (void)ConfigureCompositeRenderer(*composite_renderer_);
@@ -212,13 +212,13 @@ public:
     }
 
     template<typename ConsumerT, typename... BindingTs>
-    [[nodiscard]] bool PrepareFrameAndConfigure(const RuntimePrepareContext& prepare_context_,
+    [[nodiscard]] bool PrepareFrameAndConfigure(const SceneRenderTargetSetPrepareView& prepare_view_,
                                                 ConsumerT* scene_consumer_,
                                                 const BindingTs&... bindings_)
         requires(requires(SceneRenderTargetSet& target_set_, ConsumerT& consumer_) {
             target_set_.ConfigureSceneConsumer(consumer_);
         }) {
-        const bool ready = PrepareFrame(prepare_context_);
+        const bool ready = PrepareFrame(prepare_view_);
         ConfigureBindings(bindings_...);
         if (scene_consumer_ != nullptr) {
             (void)ConfigureSceneConsumer(*scene_consumer_);

@@ -1,6 +1,7 @@
 #include "support/test_framework.hpp"
 #include "vr/render/frame_composer_host.hpp"
 #include "vr/render/render_runtime_host.hpp"
+#include "vr/render/runtime_prepare_views.hpp"
 
 #include <array>
 #include <cctype>
@@ -56,13 +57,10 @@ using Runtime = vr::render::RenderRuntimeHost<vr::platform::ActiveBackendTag, 2U
 
 class FrameComposerRecorder final {
 public:
-    void PrepareFrame(const vr::render::RuntimePrepareContext& prepare_context_) {
-        if (prepare_context_.frame_composer_host == nullptr) {
-            throw std::runtime_error("FrameComposerRecorder requires a frame composer host");
-        }
-        prepared = prepare_context_.frame_composer_host->PrepareFrame(prepare_context_);
+    void PrepareFrame(const vr::render::FrameComposerPrepareView& prepare_view_) {
+        prepared = composer->PrepareFrame(prepare_view_);
         if (prepared) {
-            captured_targets = prepare_context_.frame_composer_host->Targets(prepare_context_.frame_index);
+            captured_targets = composer->Targets(prepare_view_.frame.frame_index);
         }
         ++prepare_count;
     }
@@ -103,7 +101,7 @@ VR_TEST_CASE(RuntimeIntegration_frame_composer_prepare_and_tonemap_smoke,
         create_info.platform.device.required_vulkan13_features.dynamicRendering = VK_TRUE;
         create_info.platform.device.required_vulkan13_features.synchronization2 = VK_TRUE;
         create_info.render_loop.swapchain.enable_vsync = false;
-        create_info.diagnostics.enable_frame_diagnostics = true;
+        create_info.diagnostics.level = vr::runtime::DiagnosticsLevel::CountersOnly;
         runtime.Initialize(create_info);
         runtime_initialized = true;
 

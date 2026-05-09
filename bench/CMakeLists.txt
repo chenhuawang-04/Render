@@ -44,6 +44,8 @@ add_executable(${VR_BENCH_TARGET}
     cases/render_shadow_atlas_binding_coordinator_bench.cpp
     cases/frame_retire_host_bench.cpp
     cases/frame_sync_bench.cpp
+    cases/runtime_diagnostics_bench.cpp
+    cases/runtime_steady_state_allocation_bench.cpp
     cases/runtime_text_renderer_bench.cpp
 )
 

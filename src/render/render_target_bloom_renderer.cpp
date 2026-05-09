@@ -5,7 +5,6 @@
 #include "vr/render/generated/render_target_bloom_prefilter_frag_spv.hpp"
 #include "vr/render/generated/render_target_composite_vert_spv.hpp"
 #include "vr/render/render_target_format_utils.hpp"
-#include "vr/render/runtime_prepare_context.hpp"
 
 #include <algorithm>
 #include <array>
@@ -169,35 +168,26 @@ void RenderTargetBloomRenderer::ResetOutputTargetConfig() noexcept {
     output_target_config = {};
 }
 
-void RenderTargetBloomRenderer::PrepareFrame(const RuntimePrepareContext& prepare_context_) {
+void RenderTargetBloomRenderer::PrepareFrame(const RenderTargetBloomRendererPrepareView& prepare_view_) {
     if (!initialized) {
         throw std::runtime_error("RenderTargetBloomRenderer::PrepareFrame called before Initialize");
     }
-    if (prepare_context_.context == nullptr ||
-        prepare_context_.descriptor_host == nullptr ||
-        prepare_context_.pipeline_host == nullptr ||
-        prepare_context_.render_target_host == nullptr ||
-        prepare_context_.render_target_pool == nullptr ||
-        prepare_context_.sampler_host == nullptr) {
-        throw std::runtime_error("RenderTargetBloomRenderer::PrepareFrame missing runtime dependencies");
-    }
-
-    context = prepare_context_.context;
-    descriptor_host = prepare_context_.descriptor_host;
-    pipeline_host = prepare_context_.pipeline_host;
-    render_target_host = prepare_context_.render_target_host;
-    render_target_pool = prepare_context_.render_target_pool;
-    sampler_host = prepare_context_.sampler_host;
+    context = &prepare_view_.device;
+    descriptor_host = &prepare_view_.descriptor;
+    pipeline_host = &prepare_view_.pipeline;
+    render_target_host = &prepare_view_.render_target;
+    render_target_pool = &prepare_view_.render_target_pool;
+    sampler_host = &prepare_view_.sampler;
     stats = {};
     bloom_target_a = {};
     bloom_target_b = {};
     active_intermediate_format = VK_FORMAT_UNDEFINED;
     frame_ready = false;
 
-    if (prepare_context_.frame_index >= frame_descriptor_cache.size()) {
-        frame_descriptor_cache.resize(prepare_context_.frame_index + 1U);
+    if (prepare_view_.frame.frame_index >= frame_descriptor_cache.size()) {
+        frame_descriptor_cache.resize(prepare_view_.frame.frame_index + 1U);
     }
-    frame_descriptor_cache[prepare_context_.frame_index] = {};
+    frame_descriptor_cache[prepare_view_.frame.frame_index] = {};
 
     if (!IsValidRenderTargetHandle(scene_source_target) ||
         !render_target_host->IsValid(scene_source_target)) {

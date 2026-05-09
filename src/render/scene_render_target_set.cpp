@@ -161,29 +161,26 @@ bool SceneRenderTargetSet::EnsureForSwapchain(VulkanContext& context_,
     return frame_ready;
 }
 
-bool SceneRenderTargetSet::PrepareFrame(const RuntimePrepareContext& prepare_context_) {
+bool SceneRenderTargetSet::PrepareFrame(const SceneRenderTargetSetPrepareView& prepare_view_) {
     if (!initialized) {
         throw std::runtime_error("SceneRenderTargetSet::PrepareFrame called before Initialize");
     }
-    if (prepare_context_.context == nullptr || prepare_context_.render_target_host == nullptr) {
-        throw std::runtime_error("SceneRenderTargetSet::PrepareFrame requires render target runtime context");
-    }
-    if (SupportsSwapchainRelativeExtent() && !HasNonZeroExtent(prepare_context_.swapchain_extent)) {
+    if (SupportsSwapchainRelativeExtent() && !HasNonZeroExtent(prepare_view_.frame.swapchain_extent)) {
         InvalidateCurrentFrameTargets();
         return false;
     }
 
-    (void)EnsureForSwapchain(*prepare_context_.context,
-                             *prepare_context_.render_target_host,
-                             prepare_context_.swapchain_extent,
-                             prepare_context_.last_submitted_value,
-                             prepare_context_.completed_submit_value);
+    (void)EnsureForSwapchain(prepare_view_.device,
+                             prepare_view_.render_target,
+                             prepare_view_.frame.swapchain_extent,
+                             prepare_view_.progress.last_submitted_value,
+                             prepare_view_.progress.completed_submit_value);
 
-    if (prepare_context_.render_target_pool != nullptr) {
-        AcquireTransientTargets(*prepare_context_.context,
-                                *prepare_context_.render_target_host,
-                                *prepare_context_.render_target_pool,
-                                prepare_context_.swapchain_extent);
+    if (prepare_view_.render_target_pool != nullptr) {
+        AcquireTransientTargets(prepare_view_.device,
+                                prepare_view_.render_target,
+                                *prepare_view_.render_target_pool,
+                                prepare_view_.frame.swapchain_extent);
     } else {
         if (create_info_cache.color_lifetime == RenderTargetLifetime::transient ||
             (create_info_cache.enable_depth &&

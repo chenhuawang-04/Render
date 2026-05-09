@@ -6,7 +6,7 @@
 #include "vr/render/color_blend_state.hpp"
 #include "vr/render/render_loop_host.hpp"
 #include "vr/render/render_target_pass.hpp"
-#include "vr/render/runtime_prepare_context.hpp"
+#include "vr/render/runtime_prepare_views.hpp"
 #include "vr/render/upload_host.hpp"
 #include "vr/vulkan_context.hpp"
 
@@ -150,25 +150,20 @@ void GeometryRenderer2D::ResetOutputTargetConfig() noexcept {
     output_target_config = {};
 }
 
-void GeometryRenderer2D::PrepareFrame(const render::RuntimePrepareContext& prepare_context_) {
+void GeometryRenderer2D::PrepareFrame(const render::GeometryRenderer2DPrepareView& prepare_view_) {
     if (!initialized) {
         throw std::runtime_error("GeometryRenderer2D::PrepareFrame called before Initialize");
-    }
-    if (prepare_context_.context == nullptr ||
-        prepare_context_.upload_host == nullptr ||
-        prepare_context_.pipeline_host == nullptr) {
-        throw std::runtime_error("GeometryRenderer2D::PrepareFrame missing runtime dependencies");
     }
     if (geometry_upload_host == nullptr || !geometry_upload_host->IsInitialized()) {
         throw std::runtime_error("GeometryRenderer2D::PrepareFrame requires initialized GeometryUploadHost");
     }
 
-    context = prepare_context_.context;
-    upload_host = prepare_context_.upload_host;
-    pipeline_host = prepare_context_.pipeline_host;
-    active_frame_index = prepare_context_.frame_index;
-    last_submitted_value_seen = std::max(last_submitted_value_seen, prepare_context_.last_submitted_value);
-    completed_submit_value_seen = std::max(completed_submit_value_seen, prepare_context_.completed_submit_value);
+    context = &prepare_view_.device;
+    upload_host = &prepare_view_.upload;
+    pipeline_host = &prepare_view_.pipeline;
+    active_frame_index = prepare_view_.frame.frame_index;
+    last_submitted_value_seen = std::max(last_submitted_value_seen, prepare_view_.progress.last_submitted_value);
+    completed_submit_value_seen = std::max(completed_submit_value_seen, prepare_view_.progress.completed_submit_value);
 
     geometry_upload_host->BeginFrame(*context,
                                      active_frame_index,

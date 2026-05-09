@@ -135,7 +135,7 @@ void SceneRecorder2D::ClearRendererRegistrations() noexcept {
     ClearOverlayRenderers();
 }
 
-void SceneRecorder2D::PrepareFrame(const RuntimePrepareContext& prepare_context_) {
+void SceneRecorder2D::PrepareFrame(const SceneRecorder2DPrepareView& prepare_view_) {
     EnsureInitialized("PrepareFrame");
     RefreshFramePacketBinding();
     if (frame_packet != nullptr) {
@@ -150,7 +150,13 @@ void SceneRecorder2D::PrepareFrame(const RuntimePrepareContext& prepare_context_
     const bool shadow_enabled = IsShadowEnabledForSubmission();
     if (use_scene_targets) {
         EnsureRuntimeBinding("PrepareFrame");
-        (void)scene_targets.PrepareFrame(prepare_context_);
+        (void)scene_targets.PrepareFrame(SceneRenderTargetSetPrepareView{
+            .device = prepare_view_.device,
+            .render_target = prepare_view_.render_target,
+            .render_target_pool = prepare_view_.render_target_pool,
+            .frame = prepare_view_.frame,
+            .progress = prepare_view_.progress,
+        });
     }
     ConfigureSceneRenderersForTargets();
     if (use_scene_targets) {
@@ -165,7 +171,7 @@ void SceneRecorder2D::PrepareFrame(const RuntimePrepareContext& prepare_context_
             continue;
         }
         if (entry.prepare_fn != nullptr && entry.renderer != nullptr) {
-            entry.prepare_fn(entry.renderer, prepare_context_);
+            entry.prepare_fn(entry.renderer, prepare_view_);
         }
     }
 
@@ -174,7 +180,7 @@ void SceneRecorder2D::PrepareFrame(const RuntimePrepareContext& prepare_context_
             continue;
         }
         if (entry.prepare_fn != nullptr && entry.renderer != nullptr) {
-            entry.prepare_fn(entry.renderer, prepare_context_);
+            entry.prepare_fn(entry.renderer, prepare_view_);
         }
     }
 
@@ -185,7 +191,7 @@ void SceneRecorder2D::PrepareFrame(const RuntimePrepareContext& prepare_context_
                                                       BuildOverlayOutputConfig(scene_consumer_entry.output_target_config));
         }
         if (scene_consumer_entry.prepare_fn != nullptr) {
-            scene_consumer_entry.prepare_fn(scene_consumer_entry.renderer, prepare_context_);
+            scene_consumer_entry.prepare_fn(scene_consumer_entry.renderer, prepare_view_);
         }
     }
 
@@ -197,17 +203,17 @@ void SceneRecorder2D::PrepareFrame(const RuntimePrepareContext& prepare_context_
             entry.set_output_target_fn(entry.renderer, BuildOverlayOutputConfig(entry.output_target_config));
         }
         if (entry.prepare_fn != nullptr && entry.renderer != nullptr) {
-            entry.prepare_fn(entry.renderer, prepare_context_);
+            entry.prepare_fn(entry.renderer, prepare_view_);
         }
     }
 
     stats.prepare_count += 1U;
 }
 
-void SceneRecorder2D::PrepareFrame(const RuntimePrepareContext& prepare_context_,
+void SceneRecorder2D::PrepareFrame(const SceneRecorder2DPrepareView& prepare_view_,
                                    const RenderScenePacket2D& frame_packet_) {
     SetFramePacket(&frame_packet_);
-    PrepareFrame(prepare_context_);
+    PrepareFrame(prepare_view_);
 }
 
 void SceneRecorder2D::Record(const FrameRecordContext& record_context_) {

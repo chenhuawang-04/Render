@@ -27,7 +27,7 @@ class VulkanContext;
 }
 
 namespace vr::render {
-struct RuntimePrepareContext;
+struct ParticleRenderer3DPrepareView;
 struct FrameRecordContext;
 class UploadHost;
 }
@@ -119,7 +119,7 @@ public:
     void SetDepthTargetConfig(const render::RenderTargetDepthOutputConfig& depth_output_target_config_) noexcept;
     void ResetDepthTargetConfig() noexcept;
 
-    void PrepareFrame(const render::RuntimePrepareContext& prepare_context_);
+    void PrepareFrame(const render::ParticleRenderer3DPrepareView& prepare_view_);
     void Record(const render::FrameRecordContext& record_context_);
     void RecordSceneStage(const render::FrameRecordContext& record_context_,
                           render::SceneRenderStage stage_);
