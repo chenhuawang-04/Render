@@ -218,20 +218,23 @@
 | `SceneRecorder3D` | 3D 场景录制器。编排 Light/Shadow/Scene/PostProcess 管线，支持 Multi-view packet、Reflection/Custom view、Animation 集成。 |
 | `SceneRenderStage` | 场景渲染阶段。Opaque→Transparent 阶段顺序、Bloom 编排、后处理策略路由。 |
 
-#### 3.3.7 IBL / 环境光照
+#### 3.3.7 IBL / 环境光照 (惰性管线)
 
 | 组件 | 说明 |
 |------|------|
-| `IBLHost` | IBL 宿主。管理 Irradiance Diffuse IBL、Specular Prefiltered Environment Map、BRDF Integration LUT。接收外部 HDR/Cubemap 数据。 |
-| `IBLBakeHost` | IBL 烘焙宿主。将 HDR 环境贴图离线烘焙为 Irradiance Map + Prefiltered Mipmap + BRDF LUT。Compute Shader 驱动。 |
+| `IBLHost` | IBL 宿主。管理 Irradiance Diffuse IBL、Specular Prefiltered Environment Map、BRDF Integration LUT。支持惰性 IBL 管线：环境注册 → 请求烘焙 → 自动应用。`SkyEnvironmentGpuHost` 通过 `EnsureIblEnvironment` 触发按需 IBL 注册。 |
+| `IBLBakeHost` | IBL 烘焙宿主。将 HDR 环境贴图离线烘焙为 Irradiance Map + Prefiltered Mipmap + BRDF LUT。Compute Shader 驱动。与 `SkyEnvironmentGpuHost` 通过 `TryBakePendingEnvironment` 协调惰性烘焙流程。 |
 | `IBLBakeCoordinator` | IBL 烘焙协调器。管理烘焙 Pass 编排、描述符更新、与 RenderTarget/Pipeline 的集成。 |
 
-#### 3.3.8 天空盒与帧合成
+#### 3.3.8 环境与背景渲染
 
 | 组件 | 说明 |
 |------|------|
-| `SkyboxRenderer` | 天空盒渲染器。立方体贴图/HDR 等距矩形输入、与 IBL 环境图联动。 |
-| `FrameComposerHost` | 帧合成宿主。管理最终帧合成 Pass：Scene Target + 后处理栈 + UI Overlay → Swapchain。 |
+| `SkyEnvironmentGpuHost` | 天空环境 GPU 宿主。管理天空环境 Register/Update 缓存 (基于 `EquivalentState` 去重)、GPU 参数构建 (tint/exposure/rotation/IBL 强度/SH9 球谐系数)、IBL 数据追踪 (irradiance/prefiltered/brdf_lut texture IDs)、惰性烘焙描述符 (`SkyEnvironmentBakeDesc`)。持有每环境 `VkDescriptorSet`。 |
+| `SkyEnvironmentPass` | 天空环境渲染 Pass。6 种渲染模式 (none/solid_color/gradient/cubemap/equirectangular_hdr/procedural_atmosphere)、摄像机对齐全屏四边形、Push Constant 分发 (渐变/等距矩形/大气散射参数)。Prepare→Record 两阶段设计。 |
+| `BackgroundPass2D` | 2D 背景 Pass。5 种模式 (none/solid_color/gradient/sprite/surface_entity)、全屏四边形渲染、Push Constant 驱动。与 `SurfaceRenderer2D` 集成处理 sprite/surface_entity 模式。 |
+| `FrameComposerHost` | 帧合成宿主。管理最终帧合成 Pass：场景渲染目标 + 后处理栈 + UI Overlay → Swapchain。 |
+| `SceneBackgroundTraits` | 编译期背景 trait。2D→surface path, 3D→environment GPU path。通过模板特化实现零开销分支选择。 |
 
 #### 3.3.9 动画帧协调器
 
@@ -494,6 +497,28 @@ Profile 系统通过编译期模板参数决定哪些 Service 被包含和激活
 
 ---
 
+### 3.7 Scene 场景抽象层 (`vr/scene`)
+
+Scene 层提供统一的场景抽象，将背景/环境管理、Scene Root 组件和提交构建从 ECS 和 Recorder 中分离为独立层。
+
+| 组件 | 说明 |
+|------|------|
+| `Scene<Dim, Background>` | 场景模板类。聚合 `SceneRoot<Dim>` + `Background` (2D: `SpriteBackground`, 3D: `SkyEnvironment`) + 场景修订号。`scene_revision` 用于追踪场景级脏状态。 |
+| `SceneTraits<Dim, Background>` | 场景 trait。编译期类型映射：`[Dimension, Background]` → `RenderState` → `View` → `Packet` → `BackgroundTraits`。零开销编译期派发。 |
+| `SceneRoot<Dim>` | 场景根组件 (POD)。指向 active_camera_entity、background_entity、environment_entity。携带场景级 flags 和 revision。 |
+| `ScenePrepare<Dim, Background>` | 场景准备器。静态方法 `Resolve(Scene)` 从 Scene 解析背景/环境渲染状态。2D→`Background2DRenderState`, 3D→`SkyEnvironmentRenderState`。 |
+| `SceneSubmissionBuilder<Dim, Background>` | 场景提交构建器。`Build()` 从 Scene + RenderViews 构建 `RenderScenePacket`，注入背景/环境数据到 `packet.extra.background` / `packet.extra.environment`。支持 `BackgroundOverrideMode` (inherit/override_state/disabled) 允许 View 覆写场景背景。 |
+
+**背景类型**:
+
+| 类型 | 维度 | 渲染路径 |
+|------|------|---------|
+| `SpriteBackground` | 2D | Surface 路径 → `BackgroundPass2D` |
+| `SkyEnvironment` | 3D | Environment GPU 路径 → `SkyEnvironmentGpuHost` + `SkyEnvironmentPass` |
+
+**天空环境模式**: none / solid_color / gradient / cubemap / equirectangular_hdr / procedural_atmosphere
+**2D 背景模式**: none / solid_color / gradient / sprite / surface_entity
+
 ## 4. 帧协调器管线流程
 
 Appearance、Light、Shadow、Animation 四套协调器协同工作，形成完整的每帧渲染准备管线：
@@ -525,10 +550,18 @@ RenderRuntime::Tick()
   │   ├── ParticleEmitterSystem::Emit   (新粒子生成)
   │   └── ParticleUploadHost::Upload    (粒子数据→GPU)
   │
+  ├── ScenePrepare::ResolveEnvironment    (解析 SkyEnvironment 渲染状态)
+  ├── SkyEnvironmentGpuHost::PrepareFrame  (Register/Update 环境 → GPU 参数 + IBL 数据)
+  │   ├── TryBakePendingEnvironment        (惰性 IBL: 检查待烘焙 → 触发 IblBakeHost)
+  │   └── EnsureIblEnvironment             (按需注册 IBL 环境)
+  │
+  ├── SceneSubmissionBuilder::Build       (构建 RenderScenePacket + 背景/环境注入)
+  │
   ├── SceneRecorder3D::Record       (Multi-view packet 路由 → 场景 Pass)
+  │   ├── SkyEnvironmentPass::Record (天空环境渲染 → 深度预填充或后处理)
   │   ├── SceneRenderStage           (Opaque → Transparent 阶段)
   │   ├── ParticleRenderer::Render  (粒子绘制)
-  │   └── SkyboxRenderer::Render    (天空盒)
+  │   └── BackgroundPass2D (2D only) (2D 背景渲染)
   │
   ├── IBLHost::Bind                  (绑定 Irradiance/Specular/BRDF LUT)
   ├── SceneRenderTargetSet::Acquire  (获取场景渲染目标)
@@ -562,7 +595,12 @@ RenderRuntime::Tick()
 | `render_target_bloom_prefilter.frag` | Bloom Prefilter (亮度阈值提取) |
 | `render_target_bloom_blur.frag` | Bloom Blur (多级降采样/升采样高斯模糊) |
 | `render_target_bloom_combine.frag` | Bloom Combine (模糊结果与源图混合) |
-| `skybox.frag` | Skybox 片段着色器 (立方体贴图/HDR 等距矩形采样) |
+| `render_target_composite_far.vert` | 远平面合成顶点着色器 (天空环境全屏四边形) |
+| `background_2d.frag` | 2D 背景 (solid/gradient/sprite/surface_entity) |
+| `sky_environment.frag` | 天空环境入口 (模式分发) |
+| `sky_environment_image.frag` | 天空环境图像 (立方体贴图采样) |
+| `sky_environment_equirect.frag` | 天空环境等距矩形 (HDR 映射) |
+| `sky_environment_atmosphere.frag` | 天空环境大气散射 (太阳角/Mie/Rayleigh) |
 
 ### 5.2 粒子着色器
 
@@ -675,12 +713,13 @@ vr.types
 
 ### 8.1 测试 (`tests/`)
 
-基于自定义轻量框架 (`test_framework.hpp/cpp`)。约 62 个测试文件，覆盖：
+基于自定义轻量框架 (`test_framework.hpp/cpp`)。约 65 个测试文件，覆盖：
 - ECS 组件/系统单元测试 (Transform, Camera, Bounds, Culling, Geometry, Surface, Text, Light, Shadow, Appearance, Animation, Particle)
 - 动画系统单元测试 (Clock/Curve/Property/Material/Camera/Path/Skeletal/Morph/VertexDeform/FrameSequence)
 - 动画 Host 单元测试 (Clip/Skeletal/Morph/VertexDeform/FrameSequence)
 - 粒子系统单元测试 (Component/RuntimeSystem/SimulationHost)
-- 运行时集成测试 (含 Particle 2D/3D 渲染器集成, TextRenderer 集成)
+- Scene 背景核心测试 (SpriteBackground + SkyEnvironment)
+- 运行时集成测试 (含 Particle 2D/3D 渲染器集成, TextRenderer 集成, SkyEnvironment 集成)
 - GPU 资源类型测试
 - FreeType/Glyph 渲染测试
 - FrameRetire 回收测试
@@ -723,3 +762,5 @@ vr.types
 20. **GPU Compute 粒子系统**: 粒子模拟完全在 GPU 端通过 Compute Shader 执行 (Build→Update→Sort 三阶段)，CPU 仅管理发射逻辑。减少 CPU-GPU 带宽需求，支持百万级粒子。
 21. **类型化服务与 Profile 驱动**: 新一代 `Runtime<Profile>` 将每个 Host 包装为编译期类型安全的 Service，通过静态依赖 DAG 管理生命周期。Profile (Minimal/2D/3D) 编译期裁剪未使用的 Service，减小二进制体积。
 22. **质量分级测试框架**: `scripts/testing/` 引入 Quality Profiles (Critical/High/Medium/Low)，通过 `vr_quality_runner.py` 自动化测试编排。`quality_profiles.json` 定义可配置的门禁规则，支持 CI 集成。
+23. **Scene 场景抽象层**: 将场景背景/环境管理从 ECS 组件和 Recorder 中分离为独立 `vr/scene/` 层。`Scene<Dim, Background>` 模板通过编译期 trait 派发实现零开销的 2D/3D 分支选择。
+24. **天空环境重构与惰性 IBL**: `SkyboxRenderer` 被三件套替换：`SkyEnvironment` (POD 数据) + `SkyEnvironmentGpuHost` (GPU 资源管理 + 惰性烘焙协调) + `SkyEnvironmentPass` (6 种渲染模式)。IBL 管线从主动烘焙改为惰性模式：`SkyEnvironmentGpuHost` 追踪待烘焙环境，通过 `TryBakePendingEnvironment` 按需触发 `IblBakeHost`，仅在环境首次可见或参数变更时才烘焙。

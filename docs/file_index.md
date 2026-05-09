@@ -1,6 +1,6 @@
 # VulkanRender_New 代码文件索引
 
-> 统计 (当前分支 `develop`, commit `23ac879`): 约 177 个头文件, 51 个源文件, 29 个着色器 + 2 个 GLSL 头文件, 13 个示例, 62 个测试文件, 20 个基准文件, 16 个文档, 8 个脚本, 4 个工具, 1 个 CMake Presets
+> 统计 (当前分支 `develop`, commit `33c7e24`): 约 184 个头文件, 53 个源文件, 33 个着色器 + 2 个 GLSL 头文件, 13 个示例, 65 个测试文件, 21 个基准文件, 16 个文档, 8 个脚本, 4 个工具, 1 个 CMake Presets
 
 ---
 
@@ -115,19 +115,46 @@
 
 | 文件 | 类/结构 | 说明 |
 |------|---------|------|
-| `ibl_host.hpp` | `IBLHost`, `IBLHostCreateInfo`, `IBLProbeRoute`, `IBLEnvironmentMap` | IBL 宿主。Irradiance Diffuse IBL、Specular Prefilter + BRDF LUT 管理。接收外部 HDR/cubemap 数据或已预卷积数据。 |
-| `ibl_bake_host.hpp` | `IBLBakeHost`, `IBLBakeHostCreateInfo`, `IBLBakeConfig` | IBL 烘焙宿主。将 HDR 环境贴图烘焙为 Irradiance Map + Prefiltered Environment Map + BRDF Integration LUT。 |
+| `ibl_host.hpp` | `IBLHost`, `IBLHostCreateInfo`, `IBLProbeRoute`, `IBLEnvironmentMap` | IBL 宿主。Irradiance Diffuse IBL、Specular Prefilter + BRDF LUT 管理。支持惰性 IBL 管线：环境注册 → 延迟烘焙 → 自动应用。接收外部 HDR/cubemap 数据或已预卷积数据。 |
+| `ibl_bake_host.hpp` | `IBLBakeHost`, `IBLBakeHostCreateInfo`, `IBLBakeConfig` | IBL 烘焙宿主。将 HDR 环境贴图烘焙为 Irradiance Map + Prefiltered Environment Map + BRDF Integration LUT。Compute Shader 驱动。与 `SkyEnvironmentGpuHost` 协调惰性烘焙流程。 |
 | `ibl_bake_coordinator.hpp` | `IBLBakeCoordinator` | IBL 烘焙协调器。管理烘焙 Pass 编排、描述符更新、与 RenderTarget 和 Pipeline 的集成。 |
 
-#### 2.4.8 天空盒 / 帧合成
+#### 2.4.8 环境与背景渲染 (`include/vr/render/environment/`)
 
 | 文件 | 类/结构 | 说明 |
 |------|---------|------|
-| `skybox_renderer.hpp` | `SkyboxRenderer`, `SkyboxRendererCreateInfo` | 天空盒渲染器。立方体贴图天空盒、HDR/等距矩形输入支持、与 IBL 环境图联动。 |
+| `sky_environment_gpu_host.hpp` | `SkyEnvironmentGpuHost`, `SkyEnvironmentGpuHostCreateInfo`, `SkyEnvironmentGpuParams`, `SkyEnvironmentBakeDesc`, `SkyEnvironmentBakeResult`, `SkyEnvironmentIblData`, `SkyEnvironmentGpuHostStats` | 天空环境 GPU 宿主。管理天空环境 Register/Update、GPU 参数 (tint/exposure/rotation/IBL intensity/SH9)、IBL 数据缓存、延迟烘焙描述符、与 `IblBakeHost` 的惰性 IBL 管线集成。 |
+| `sky_environment_pass.hpp` | `SkyEnvironmentPass`, `SkyEnvironmentPassCreateInfo`, `SkyEnvironmentPassStats` | 天空环境渲染 Pass。支持 6 种模式 (none/solid_color/gradient/cubemap/equirectangular_hdr/procedural_atmosphere)、摄像机对齐全屏四边形、Push Constant (渐变/等距矩形/大气散射参数)。 |
+| `background_pass_2d.hpp` | `BackgroundPass2D`, `BackgroundPass2DCreateInfo`, `BackgroundPass2DStats` | 2D 背景渲染 Pass。支持 5 种模式 (none/solid_color/gradient/sprite/surface_entity)、Push Constant (颜色/透明度/模式)。 |
 | `frame_composer_host.hpp` | `FrameComposerHost`, `FrameComposerCreateInfo` | 帧合成宿主。管理最终帧的合成 Pass：场景渲染目标 + 后处理栈 + UI overlay → Swapchain。 |
+
+#### 2.4.9 动画帧协调器
+
+| 文件 | 类/结构 | 说明 |
+|------|---------|------|
 | `animation_frame_coordinator.hpp` | `AnimationFrameCoordinator<Dim>` | 动画帧协调器。统一协调 AnimationClock、Evaluation、Host 的每帧更新，将动画输出注入 SceneRecorder。 |
 
-#### 2.4.9 粒子渲染框架
+### 2.5 Scene 场景层 (`include/vr/scene/`)
+
+Scene 层提供统一的场景抽象，将背景/环境管理、Scene Root 组件和提交构建从 ECS 和 Recorder 中分离。
+
+| 文件 | 类/结构 | 说明 |
+|------|---------|------|
+| `scene.hpp` | `Scene<Dim, Background>`, `Scene2D`, `Scene3D` | 场景模板类。聚合 `SceneRoot<Dim>` + `Background<Dim>` + 场景修订号。`Scene2D = Scene<Dim2, SpriteBackground>`, `Scene3D = Scene<Dim3, SkyEnvironment>`。 |
+| `scene_traits.hpp` | `SceneTraits<Dim, Background>`, `SceneBackgroundTraits<Dim, Background>` | 场景 trait。编译期类型映射：Dimension→Background→RenderState→View→Packet。`BackgroundTraits` 标记渲染路径 (2D surface path / 3D environment GPU)。 |
+| `scene_root_component.hpp` | `SceneRoot<Dim>` | 场景根组件 (POD)。指向 active_camera_entity、background_entity、environment_entity，携带场景标志和修订号。 |
+| `scene_prepare.hpp` | `ScenePrepare<Dim, Background>` | 场景准备器。从 `Scene<Dim, Background>` 解析背景/环境渲染状态 (Background2DRenderState / SkyEnvironmentRenderState)。 |
+| `scene_submission_builder.hpp` | `SceneSubmissionBuilder<Dim, Background>` | 场景提交构建器。从 Scene 和 RenderView 构建 `RenderScenePacket`，注入背景/环境数据到 packet.extra。支持 BackgroundOverrideMode (inherit/override/disabled)。 |
+
+#### 2.5.1 背景与环境类型 (`include/vr/scene/background/`)
+
+| 文件 | 类/结构 | 说明 |
+|------|---------|------|
+| `background_traits.hpp` | `SceneBackgroundTraits<Dim, Background>` | 背景 trait 特化。2D/SpriteBackground→surface path, 3D/SkyEnvironment→environment GPU path。 |
+| `sprite_background.hpp` | `SpriteBackground`, `Background2DMode`, `BackgroundScaleMode`, `Background2DRenderState` | 2D Sprite 背景 (POD)。模式 (none/solid/gradient/sprite/surface_entity)、color0/color1、opacity、layer、parallax 缩放模式。 |
+| `sky_environment.hpp` | `SkyEnvironment`, `SkyEnvironmentMode`, `SkyEnvironmentDrawOrder`, `SkyEnvironmentGpuHandle`, `SkyEnvironmentRenderState` | 天空环境 (POD)。6 种模式、天空/辐照度/预过滤/BRDF LUT 纹理引用、天顶/地平线/地面颜色、大气散射参数 (太阳角/密度/Mie/Rayleigh)、IBL 强度、旋转、曝光。 |
+
+#### 2.4.10 粒子渲染框架
 
 | 文件 | 类/结构 | 说明 |
 |------|---------|------|
@@ -137,11 +164,11 @@
 | `include/vr/particle/particle_renderer_2d.hpp` | `ParticleRenderer2D`, `ParticleRenderer2DCreateInfo`, `ParticleRenderer2DStats` | 2D 粒子渲染器。粒子四边形绘制、混合模式、纹理动画、透明度排序。 |
 | `include/vr/particle/particle_renderer_3d.hpp` | `ParticleRenderer3D`, `ParticleRenderer3DCreateInfo`, `ParticleRenderer3DStats` | 3D 粒子渲染器。世界空间粒子、Billboard 摄像机对齐、GPU 实例化绘制、Z 排序。 |
 
-### 2.5 Runtime 层 (`include/vr/runtime/`)
+### 2.6 Runtime 层 (`include/vr/runtime/`)
 
 Runtime 层是围绕类型化服务 (Typed Services) 和执行模型的新一代运行时核心。每个现有子系统 (Host/Renderer) 都被包装为可组合的 Service，通过 `RuntimeKernel` 进行生命周期编排。
 
-#### 2.5.1 Runtime 核心
+#### 2.6.1 Runtime 核心
 
 | 文件 | 类/结构 | 说明 |
 |------|---------|------|
@@ -162,7 +189,7 @@ Runtime 层是围绕类型化服务 (Typed Services) 和执行模型的新一代
 | `include/vr/runtime/frame_retire_service.hpp` | `FrameRetireService` | 帧退役服务。延迟 GPU 资源回收的 Service 化接口。 |
 | `include/vr/runtime/queue_timeline.hpp` | `QueueTimeline`, `QueueSubmitPoint` | 队列时间线。跨队列提交点追踪、信号量/栅栏协调、同步保证。 |
 
-#### 2.5.2 Runtime 子服务 (`include/vr/runtime/services/`)
+#### 2.6.2 Runtime 子服务 (`include/vr/runtime/services/`)
 
 每项服务将现有 Host/Renderer 包装为统一的 `RuntimeService` 接口，声明依赖和生命周期回调。
 
@@ -185,16 +212,17 @@ Runtime 层是围绕类型化服务 (Typed Services) 和执行模型的新一代
 | `render_target_pool_service.hpp` | RenderTargetPool | 渲染目标池服务。 |
 | `render_target_service.hpp` | RenderTargetHost | 渲染目标管理服务。 |
 | `sampler_service.hpp` | SamplerHost | 采样器缓存服务。VkSampler 哈希去重。 |
+| `sky_environment_service.hpp` | SkyEnvironmentGpuHost + SkyEnvironmentPass | 天空环境服务。天空环境渲染与 GPU 参数管理的 Service 化包装。 |
 | `texture_service.hpp` | TextureHost | 资产纹理服务。外部像素数据→GPU Image。 |
 | `upload_service.hpp` | UploadHost | Staging Buffer 上传服务。 |
 
-### 2.6 ECS 概念层 (`include/vr/ecs/concept/`)
+### 2.7 ECS 概念层 (`include/vr/ecs/concept/`)
 
 | 文件 | 类/结构 | 说明 |
 |------|---------|------|
 | `dimension.hpp` | `Dim2`, `Dim3`, `SceneDimension`, `DimensionTag` concept | 维度标签类型。`Dim2` = 2D, `Dim3` = 3D。`DimensionTag` concept 约束模板参数。 |
 
-### 2.7 ECS 组件层 (`include/vr/ecs/component/`)
+### 2.8 ECS 组件层 (`include/vr/ecs/component/`)
 
 | 文件 | 主要结构/类 | 说明 |
 |------|------------|------|
@@ -212,9 +240,9 @@ Runtime 层是围绕类型化服务 (Typed Services) 和执行模型的新一代
 | `particle_component.hpp` | `Particle<Dim2/3>`, `ParticleStyle2D/3D`, `ParticleRuntime2D/3D`, `ParticleEmissionState` | 粒子组件 (POD)。粒子生命周期 (age/lifetime)、位置/速度/加速度、颜色/大小/旋转、纹理索引、排序键。GPU Compute 驱动更新。 |
 | `particle_emitter_component.hpp` | `ParticleEmitter<Dim2/3>`, `EmitterShape`, `EmitterBurst`, `EmitterRate` | 粒子发射器组件 (POD)。发射形状 (Point/Circle/Sphere/Cone/Box)、发射速率/爆发、初始速度/颜色/大小范围、生命周期分布。 |
 
-### 2.8 ECS 系统层 (`include/vr/ecs/system/`)
+### 2.9 ECS 系统层 (`include/vr/ecs/system/`)
 
-#### 2.8.1 核心空间系统
+#### 2.9.1 核心空间系统
 
 | 文件 | 主要类/结构 | 说明 |
 |------|------------|------|
@@ -224,7 +252,7 @@ Runtime 层是围绕类型化服务 (Typed Services) 和执行模型的新一代
 | `bounds_system.hpp` | `BoundsSystem<Dim>` | 包围盒系统。世界空间 AABB 变换 (中心+范围法)、多种 UpdateAligned 变体、点包含/相交测试。修订追踪与脏标记传播、Transform 分离快速路径。 |
 | `culling_system.hpp` | `CullingSystem<Dim>`, `CullingScratch<Dim>`, `CullingBuildOptions`, `CullingBuildStats`, `PreparedCamera`, `FrustumPlanes` | 裁剪系统。视锥体平面提取 (从 VP 矩阵)、球体拒绝 + AABB 细化、可见性掩码过滤、候选列表接口、可见集签名哈希、VisibilityStamp epoch 机制。模板展开的零分支扫描。 |
 
-#### 2.8.2 几何系统组
+#### 2.9.2 几何系统组
 
 | 文件 | 主要类/结构 | 说明 |
 |------|------------|------|
@@ -234,7 +262,7 @@ Runtime 层是围绕类型化服务 (Typed Services) 和执行模型的新一代
 | `geometry_path_system.hpp` | `GeometryPathSystem`, `GeometryPathCommandView`, `GeometryPathMoveToCommand`, `GeometryPathLineToCommand`, `GeometryPathQuadToCommand`, `GeometryPathCubicToCommand`, `GeometryPathCloseCommand`, `GeometryPathCommandType` | 2D 路径命令系统。内联路径数据解析、命令迭代 (ForEachCommandRaw)、路径数据哈希。 |
 | `geometry_runtime_system.hpp` | `GeometryRuntimeSystem<Dim2/3>`, `Geometry2DPathPrimitive`, `Geometry3DGpuInstance`, `Geometry2DDrawBatch`, `Geometry3DDrawBatch`, 各种 RuntimeBuildConfig/BuildStats/Cache/Scratch | 几何运行时系统。2D: 路径→线段图元细分 (Quad/Cubic) + 样式打包 + 批次合并。3D: 组件→GPU 实例 (世界矩阵+PBR+包围盒) + 批次合并 + 增量变换更新。支持运行时缓存 (签名/epoch 追踪)。 |
 
-#### 2.8.3 Surface 系统组
+#### 2.9.3 Surface 系统组
 
 | 文件 | 主要类/结构 | 说明 |
 |------|------------|------|
@@ -243,7 +271,7 @@ Runtime 层是围绕类型化服务 (Typed Services) 和执行模型的新一代
 | `surface_runtime_system.hpp` | `SurfaceRuntimeSystem<Dim2/3>`, `Surface2DGpuInstance`, `Surface3DGpuInstance`, `Surface2DDrawBatch`, `Surface3DDrawBatch` | Surface 运行时系统。GPU 实例生成 + 批次合并 + 缓存。 |
 | `surface_upload_plan_system.hpp` | `SurfaceUploadPlanSystem`, `SurfaceUploadPatchRange`, `SurfaceUploadPlanStats`, `SurfaceUploadPlanBuildOptions`, `SurfaceUploadPlanScratch` | Surface 上传计划系统。识别需要上传的脏组件、页面调度。 |
 
-#### 2.8.4 文本系统组
+#### 2.9.4 文本系统组
 
 | 文件 | 主要类/结构 | 说明 |
 |------|------------|------|
@@ -252,7 +280,7 @@ Runtime 层是围绕类型化服务 (Typed Services) 和执行模型的新一代
 | `text_runtime_system.hpp` | `TextRuntimeSystem<Dim2/3>`, `TextGlyphQuad` | 文本运行时系统。字形四边形生成 (x0/y0/x1/y1 + uv 坐标)、字形缓存、批次合并。 |
 | `text_render_3d_system.hpp` | `TextRender3DSystem`, `Text3DGpuInstance`, `Text3DDrawBatch`, `Text3DFrameData`, `TextRender3DScratch` | 3D 文本特殊系统。3D 文本 GPU 实例 (rect、UV、world position、billboard 参数、颜色、大小限制)。 |
 
-#### 2.8.5 光照系统组
+#### 2.9.5 光照系统组
 
 | 文件 | 主要类/结构 | 说明 |
 |------|------------|------|
@@ -261,7 +289,7 @@ Runtime 层是围绕类型化服务 (Typed Services) 和执行模型的新一代
 | `light_runtime_system.hpp` | `LightRuntimeSystem<Dim>` | 光照运行时系统。GPU 光源数据 (UBO/SSBO) 生成、光照参数打包。 |
 | `light_gpu_layout.hpp` | `LightGpuLayout` | 光源 GPU Layout 定义。UBO/SSBO 内存布局结构。 |
 
-#### 2.8.6 阴影系统组
+#### 2.9.6 阴影系统组
 
 | 文件 | 主要类/结构 | 说明 |
 |------|------------|------|
@@ -270,13 +298,13 @@ Runtime 层是围绕类型化服务 (Typed Services) 和执行模型的新一代
 | `shadow_runtime_system.hpp` | `ShadowRuntimeSystem<Dim>` | 阴影运行时系统。Shadow Map 渲染调度、深度变换矩阵生成。 |
 | `shadow_gpu_layout.hpp` | `ShadowGpuLayout` | 阴影 GPU Layout 定义。Shadow Map 相关 GPU 内存布局。 |
 
-#### 2.8.7 透明度与混合系统
+#### 2.9.7 透明度与混合系统
 
 | 文件 | 主要类/结构 | 说明 |
 |------|------------|------|
 | `transparency_render_policy.hpp` | `TransparencyRenderPolicy` | 透明度渲染策略。统一管理跨渲染器 (Text/Geometry/Surface) 的透明排序、混合模式路由、Blend State 策略。结合 Appearance 材质路由实现分层透明渲染。 |
 
-#### 2.8.8 Appearance 系统组
+#### 2.9.8 Appearance 系统组
 
 | 文件 | 主要类/结构 | 说明 |
 |------|------------|------|
@@ -284,7 +312,7 @@ Runtime 层是围绕类型化服务 (Typed Services) 和执行模型的新一代
 | `appearance_link_system.hpp` | `AppearanceLinkSystem` | Appearance 链接系统。链接 Geometry/Surface 到 Appearance 记录、跨渲染器协调。 |
 | `appearance_runtime_system.hpp` | `AppearanceRuntimeSystem<Dim>` | Appearance 运行时系统。运行时 appearance 数据生成、缓存、与渲染器批量对接。 |
 
-#### 2.8.9 动画系统组
+#### 2.9.9 动画系统组
 
 | 文件 | 主要类/结构 | 说明 |
 |------|------------|------|
@@ -305,7 +333,7 @@ Runtime 层是围绕类型化服务 (Typed Services) 和执行模型的新一代
 | `animation_frame_sequence_evaluation_system.hpp` | `AnimationFrameSequenceEvaluationSystem<Dim>` | 帧序列求值系统。Frame Sequence 轨道采样、A/B 帧混合权重、子网格帧索引路由。 |
 | `animation_resource_track_system.hpp` | `AnimationResourceTrackSystem` | 资源轨道系统。管理动画资源轨道的生命周期和路由。 |
 
-#### 2.8.10 粒子系统组
+#### 2.9.10 粒子系统组
 
 | 文件 | 主要类/结构 | 说明 |
 |------|------------|------|
@@ -314,7 +342,7 @@ Runtime 层是围绕类型化服务 (Typed Services) 和执行模型的新一代
 | `particle_emitter_system.hpp` | `ParticleEmitterSystem<Dim>` | 粒子发射器系统。发射形状采样、爆发/持续发射、初始属性随机化、发射计数管理。 |
 | `transparency_render_policy.hpp` | `TransparencyRenderPolicy` | 透明度渲染策略。(已移至 2.8.7) 统一管理跨渲染器的透明排序与混合模式路由。 |
 
-### 2.9 文本渲染 (`include/vr/text/`)
+### 2.10 文本渲染 (`include/vr/text/`)
 
 | 文件 | 类/结构 | 说明 |
 |------|---------|------|
@@ -326,7 +354,7 @@ Runtime 层是围绕类型化服务 (Typed Services) 和执行模型的新一代
 | `text_renderer_3d.hpp` | `TextRenderer3D` | 3D 文本渲染器。世界空间文本、Billboard 矩阵、深度测试参数。 |
 | `text_runtime_contract.hpp` | `TextRuntimeContract`, `TextContractValidation`, `TextUploadContract` | 文本运行时契约。定义 Text 系统与 Renderer 之间的资源契约、上传策略、字形页面调度协议、诊断统计。 |
 
-### 2.10 几何渲染 (`include/vr/geometry/`)
+### 2.11 几何渲染 (`include/vr/geometry/`)
 
 | 文件 | 类/结构 | 说明 |
 |------|---------|------|
@@ -339,7 +367,7 @@ Runtime 层是围绕类型化服务 (Typed Services) 和执行模型的新一代
 | `geometry_renderer_3d.hpp` | `GeometryRenderer3D`, `GeometryRenderer3DCreateInfo`, `GeometryRenderer3DStats` | 3D 几何渲染器。GPU 实例化绘制 (instanced draw)、PBR 材质绑定、管线状态。集成 Appearance 和 Shadow 支持。 |
 | `geometry_skeletal_palette_builder.hpp` | `GeometrySkeletalPaletteBuilder`, `SkeletalPaletteUpload` | GPU 骨骼调色板构建器。从 AnimationSkeletalHost 消费 Joint Palette，构建用于 GPU Skinning 的骨骼矩阵 UBO/SSBO。 |
 
-### 2.11 动画子系统 (`include/vr/animation/`)
+### 2.12 动画子系统 (`include/vr/animation/`)
 
 | 文件 | 类/结构 | 说明 |
 |------|---------|------|
@@ -350,13 +378,13 @@ Runtime 层是围绕类型化服务 (Typed Services) 和执行模型的新一代
 | `animation_vertex_deform_host.hpp` | `AnimationVertexDeformHost<Dim>`, `VertexDeformBuffer`, `VertexDeformPayload` | 顶点变形宿主。GPU 顶点变形缓冲区、变形负载上传、与 Geometry 渲染器集成。 |
 | `animation_frame_sequence_host.hpp` | `AnimationFrameSequenceHost<Dim>`, `FrameSequenceState`, `FrameSequenceBlend` | 帧序列动画宿主。子网格帧序列播放、A/B 帧混合、帧索引路由。 |
 
-### 2.12 资产层 (`include/vr/asset/`)
+### 2.13 资产层 (`include/vr/asset/`)
 
 | 文件 | 类/结构 | 说明 |
 |------|---------|------|
 | `texture_host.hpp` | `TextureHost`, `TextureHostCreateInfo`, `TextureResource`, `TextureUploadDesc` | 资产纹理宿主。接收外部已解码像素数据、创建/接管 GPU Image、Mipmap 生成、格式协商。不包含 PNG/KTX2 解码逻辑，仅消费已准备数据。 |
 
-### 2.13 Surface 渲染 (`include/vr/surface/`)
+### 2.14 Surface 渲染 (`include/vr/surface/`)
 
 | 文件 | 类/结构 | 说明 |
 |------|---------|------|
@@ -366,7 +394,7 @@ Runtime 层是围绕类型化服务 (Typed Services) 和执行模型的新一代
 | `surface_renderer_2d.hpp` | `SurfaceRenderer2D`, `SurfaceRenderer2DCreateInfo`, `SurfaceRenderer2DStats` | 2D Surface 渲染器。精灵绘制、混合模式 (alpha/additive/multiply/screen)、UV 变换、tint color。集成 Appearance 和运行时上传支持。 |
 | `surface_renderer_3d.hpp` | `SurfaceRenderer3D`, `SurfaceRenderer3DCreateInfo`, `SurfaceRenderer3DStats` | 3D Surface 渲染器。世界空间贴图、纹理过滤 (linear/nearest/anisotropic)、寻址模式、双面渲染。 |
 
-### 2.14 Light/Shadow 渲染 (`include/vr/light/`, `include/vr/shadow/`)
+### 2.15 Light/Shadow 渲染 (`include/vr/light/`, `include/vr/shadow/`)
 
 | 文件 | 类/结构 | 说明 |
 |------|---------|------|
@@ -375,7 +403,7 @@ Runtime 层是围绕类型化服务 (Typed Services) 和执行模型的新一代
 | `include/vr/shadow/shadow_renderer_2d.hpp` | `ShadowRenderer2D`, `ShadowRenderer2DCreateInfo` | 2D 阴影渲染器。2D 遮挡物深度图渲染、光源关联。 |
 | `include/vr/shadow/shadow_renderer_3d.hpp` | `ShadowRenderer3D`, `ShadowRenderer3DCreateInfo` | 3D 阴影渲染器。3D Shadow Map 渲染、深度管线。 |
 
-### 2.15 粒子渲染 (`include/vr/particle/`)
+### 2.16 粒子渲染 (`include/vr/particle/`)
 
 | 文件 | 类/结构 | 说明 |
 |------|---------|------|
@@ -413,8 +441,10 @@ Runtime 层是围绕类型化服务 (Typed Services) 和执行模型的新一代
 | `src/render/scene_recorder_2d.cpp` | `SceneRecorder2D` 实现：2D 场景统一编排、Layer 分流、UI-only/Mixed packet 路线。 |
 | `src/render/scene_recorder_3d.cpp` | `SceneRecorder3D` 实现：3D 场景统一编排、Multi-view/Light/Shadow/PostProcess 管线。 |
 | `src/render/ibl_host.cpp` | `IBLHost` 实现：Irradiance/Specular IBL 资源管理、BRDF LUT。 |
-| `src/render/ibl_bake_host.cpp` | `IBLBakeHost` 实现：HDR 环境图烘焙→Irradiance Map + Prefiltered Map + BRDF LUT (1039 行)。 |
-| `src/render/skybox_renderer.cpp` | `SkyboxRenderer` 实现：立方体贴图天空盒、等距矩形输入。 |
+| `src/render/ibl_bake_host.cpp` | `IBLBakeHost` 实现：HDR 环境图烘焙→Irradiance Map + Prefiltered Map + BRDF LUT。支持惰性 IBL 管线与 `SkyEnvironmentGpuHost` 协调。 |
+| `src/render/sky_environment_gpu_host.cpp` | `SkyEnvironmentGpuHost` 实现 (858 行)：天空环境 Register/Update 缓存、GPU 参数构建 (tint/exposure/IBL intensity/SH9)、IBL 数据追踪、惰性烘焙协调。 |
+| `src/render/sky_environment_pass.cpp` | `SkyEnvironmentPass` 实现 (1100 行)：6 种天空环境模式渲染、摄像机对齐、Push Constant、VkPipeline 管理。 |
+| `src/render/background_pass_2d.cpp` | `BackgroundPass2D` 实现 (217 行)：2D 背景渲染、solid/gradient/sprite/surface_entity 模式。 |
 | `src/render/frame_composer_host.cpp` | `FrameComposerHost` 实现：最终帧合成与 Swapchain 输出管理。 |
 
 ### 3.3 动画 (`src/animation/`)
@@ -522,7 +552,12 @@ Runtime 层是围绕类型化服务 (Typed Services) 和执行模型的新一代
 | `shaders/render_target_bloom_prefilter.frag` | Bloom Prefilter 片段着色器 (亮度阈值提取) |
 | `shaders/render_target_bloom_blur.frag` | Bloom Blur 片段着色器 (多级高斯模糊) |
 | `shaders/render_target_bloom_combine.frag` | Bloom Combine 片段着色器 (模糊结果与源图混合) |
-| `shaders/skybox.frag` | Skybox 片段着色器 (立方体贴图采样、HDR 色调映射、与 IBL 环境图联动) |
+| `shaders/background_2d.frag` | 2D 背景片段着色器 (solid/gradient/sprite/surface_entity 模式) |
+| `shaders/render_target_composite_far.vert` | 远平面合成顶点着色器 (天空环境渲染用全屏四边形) |
+| `shaders/sky_environment.frag` | 天空环境入口片段着色器 (模式分发→solid/gradient/cubemap/equirect HDR/大气散射) |
+| `shaders/sky_environment_image.frag` | 天空环境图像片段着色器 (立方体贴图采样 → SkyEnvironment Pass) |
+| `shaders/sky_environment_equirect.frag` | 天空环境等距矩形片段着色器 (HDR equirectangular 映射 → SkyEnvironment Pass) |
+| `shaders/sky_environment_atmosphere.frag` | 天空环境大气散射片段着色器 (过程化大气散射、太阳角、Mie/Rayleigh 散射 → SkyEnvironment Pass) |
 
 ### 4.1 粒子着色器
 
@@ -674,6 +709,9 @@ SPIR-V 编译产物嵌入到 `build/generated/vr/{text,geometry,surface,particle
 | `runtime_text_renderer_integration_tests.cpp` | 2D TextRenderer 集成测试 (新增, 307 行) |
 | `runtime_configuration_tests.cpp` | Runtime/Profile 配置测试 (已扩展至 436 行) |
 | `runtime_integration_tests.cpp` | 运行时集成测试 (已扩展至 281 行) |
+| `runtime_sky_environment_integration_tests.cpp` | SkyEnvironmentGpuHost + SkyEnvironmentPass 集成测试 (645 行) |
+| `runtime_scene_3d_unified_integration_tests.cpp` | 3D 统一场景集成测试 (已扩展至 +236 行，含 SkyEnvironment 集成) |
+| `scene_background_core_tests.cpp` | Scene 背景核心测试 (666 行)。SpriteBackground + SkyEnvironment 组件测试。 |
 
 ---
 
@@ -714,6 +752,7 @@ SPIR-V 编译产物嵌入到 `build/generated/vr/{text,geometry,surface,particle
 | `ecs_particle_runtime_system_bench.cpp` | ParticleRuntimeSystem 性能基准 |
 | `runtime_diagnostics_bench.cpp` | RuntimeDiagnostics 性能基准 |
 | `runtime_steady_state_allocation_bench.cpp` | 运行时稳态内存分配基准 (325 行) |
+| `scene_background_runtime_bench.cpp` | Scene 背景运行时性能基准 (222 行) |
 
 ### 7.3 基准测试数据 (`bench/baselines/`)
 
@@ -827,14 +866,14 @@ vr.types
 
 | 类别 | 文件数 |
 |------|--------|
-| 公开头文件 (.hpp) | 177 |
-| 源文件 (.cpp) | 51 |
-| 着色器 (.vert/.frag/.comp) + GLSL 头文件 | 29 + 2 |
+| 公开头文件 (.hpp) | 184 |
+| 源文件 (.cpp) | 53 |
+| 着色器 (.vert/.frag/.comp) + GLSL 头文件 | 33 + 2 |
 | 示例文件 | 13 |
-| 测试用例 | 62 |
-| 基准测试用例 | 20 (含 4 support files) |
+| 测试用例 | 65 |
+| 基准测试用例 | 21 (含 4 support files) |
 | 文档 | 16 |
 | 脚本/工具 | 8 + 4 |
 | CMake Presets | 1 |
 | C++20 模块文件 (feature 分支) | 12 |
-| **总计** | **375+** |
+| **总计** | **395+** |
