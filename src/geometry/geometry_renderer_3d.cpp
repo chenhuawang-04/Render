@@ -617,7 +617,15 @@ void GeometryRenderer3D::PrepareFrame(const render::GeometryRenderer3DPrepareVie
     culling_stats = {};
     appearance_runtime_stats = {};
     appearance_link_stats = {};
-    ibl_host->PrepareFrame(render::MakeIblHostPrepareView(prepare_view_));
+    const render::IblEnvironmentId ibl_environment_id{prepare_view_.ibl_environment_id};
+    const asset::TextureId ibl_brdf_lut_texture_id{prepare_view_.ibl_brdf_lut_texture_id};
+    if (ibl_environment_id.IsValid() || ibl_brdf_lut_texture_id.IsValid()) {
+        ibl_host->PrepareEnvironmentFrame(render::MakeIblHostPrepareView(prepare_view_),
+                                          ibl_environment_id,
+                                          ibl_brdf_lut_texture_id);
+    } else {
+        ibl_host->PrepareFrame(render::MakeIblHostPrepareView(prepare_view_));
+    }
     const auto appearance_prepare_result = appearance_prepare_bridge.PrepareGeometry(
         geometry_components,
         component_count,

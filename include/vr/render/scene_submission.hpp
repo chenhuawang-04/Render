@@ -35,6 +35,7 @@ template<>
 struct RenderScenePacketExtra<ecs::Dim3> final {
     scene::SkyEnvironmentRenderState environment{};
     scene::SkyEnvironmentGpuHandle environment_gpu{};
+    std::uint32_t ibl_environment_id = 0U;
 };
 
 template<ecs::DimensionTag DimensionT>
@@ -115,6 +116,8 @@ template<ecs::DimensionTag DimensionT>
                               static_cast<std::uint64_t>(packet_.extra.environment_gpu.index));
         RenderViewHashCombine(hash,
                               static_cast<std::uint64_t>(packet_.extra.environment_gpu.generation));
+        RenderViewHashCombine(hash,
+                              static_cast<std::uint64_t>(packet_.extra.ibl_environment_id));
     }
     RenderViewHashCombine(hash, packet_.submission_id);
     for (std::uint32_t view_index = 0U; view_index < packet_.view_count; ++view_index) {

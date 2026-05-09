@@ -99,12 +99,13 @@ public:
 
             environment_id = prepare_view_.ibl->RegisterEnvironment(prepare_view_.device,
                                                                     environment_desc);
-            prepare_view_.ibl->SetActiveEnvironment(environment_id);
             environment_registered = true;
         }
 
         if (environment_registered) {
-            prepare_view_.ibl->PrepareFrame(vr::render::MakeIblHostPrepareView(prepare_view_));
+            prepare_view_.ibl->PrepareEnvironmentFrame(vr::render::MakeIblHostPrepareView(prepare_view_),
+                                                       environment_id,
+                                                       brdf_lut_texture_id);
             active_descriptor_set = prepare_view_.ibl->ActiveDescriptorSet(prepare_view_.frame.frame_index);
             active_params = prepare_view_.ibl->ActiveParams();
             active_brdf_lut = prepare_view_.ibl->BrdfLut();
@@ -252,6 +253,59 @@ private:
     static constexpr vr::asset::TextureId brdf_lut_texture_id{7002U};
 };
 
+class IblFallbackPrepareRecorder final {
+public:
+    void PrepareFrame(const vr::render::SceneRecorder3DPrepareView& prepare_view_) {
+        if (prepare_view_.ibl == nullptr) {
+            throw std::runtime_error("IblFallbackPrepareRecorder requires a valid IBL host");
+        }
+
+        if (!environment_registered) {
+            vr::render::IblEnvironmentAssetDesc environment_desc{};
+            environment_desc.intensity = 1.5F;
+            environment_desc.rotation_y_radians = -0.35F;
+            environment_desc.tint_color = {0.90F, 0.92F, 1.00F};
+            environment_desc.sh9[0] = {0.28F, 0.24F, 0.20F, 0.0F};
+            environment_desc.sh9[1] = {0.05F, 0.03F, 0.01F, 0.0F};
+            environment_desc.sh9[2] = {0.02F, 0.04F, 0.06F, 0.0F};
+
+            environment_id = prepare_view_.ibl->RegisterEnvironment(prepare_view_.device,
+                                                                    environment_desc);
+            environment_registered = true;
+        }
+
+        prepare_view_.ibl->PrepareEnvironmentFrame(vr::render::MakeIblHostPrepareView(prepare_view_),
+                                                   environment_id);
+        active_descriptor_set = prepare_view_.ibl->ActiveDescriptorSet(prepare_view_.frame.frame_index);
+        active_params = prepare_view_.ibl->ActiveParams();
+        active_brdf_lut = prepare_view_.ibl->BrdfLut();
+        active_specular_texture = prepare_view_.ibl->ActiveSpecularTexture();
+        active_skybox_texture = prepare_view_.ibl->ActiveSkyboxTexture();
+        ++prepare_count;
+    }
+
+    void Record(const vr::render::FrameRecordContext& record_context_) {
+        (void)record_context_;
+    }
+
+    [[nodiscard]] bool HasActiveCapture() const noexcept {
+        return environment_registered &&
+               active_descriptor_set != VK_NULL_HANDLE &&
+               active_brdf_lut.IsValid() &&
+               active_specular_texture.IsValid() &&
+               active_skybox_texture.IsValid();
+    }
+
+    std::uint32_t prepare_count = 0U;
+    bool environment_registered = false;
+    vr::render::IblEnvironmentId environment_id{};
+    vr::asset::TextureId active_brdf_lut{};
+    vr::asset::TextureId active_specular_texture{};
+    vr::asset::TextureId active_skybox_texture{};
+    VkDescriptorSet active_descriptor_set = VK_NULL_HANDLE;
+    vr::render::IblGpuParams active_params{};
+};
+
 VR_TEST_CASE(RuntimeIntegration_ibl_host_prepares_default_and_explicit_environment,
              "integration;gpu;sdl;runtime;ibl") {
     Runtime runtime{};
@@ -279,7 +333,6 @@ VR_TEST_CASE(RuntimeIntegration_ibl_host_prepares_default_and_explicit_environme
         const auto first_tick = runtime.Tick(recorder);
         VR_CHECK(first_tick.running);
         VR_CHECK(recorder.HasFallbackCapture());
-        VR_CHECK(!runtime.Ibl().ActiveEnvironment().IsValid());
         VR_CHECK(runtime.Ibl().ActiveParams().tint_intensity[3] == 0.0F);
         VR_CHECK(runtime.Ibl().Stats().default_texture_build_count >= 2U);
 
@@ -287,7 +340,6 @@ VR_TEST_CASE(RuntimeIntegration_ibl_host_prepares_default_and_explicit_environme
         VR_CHECK(second_tick.running);
         VR_REQUIRE(recorder.environment_id.IsValid());
         VR_CHECK(recorder.HasActiveCapture());
-        VR_CHECK(runtime.Ibl().ActiveEnvironment().value == recorder.environment_id.value);
         VR_CHECK(runtime.Ibl().BrdfLut().value == recorder.active_brdf_lut.value);
         VR_CHECK(runtime.Ibl().ActiveSpecularTexture().value == recorder.active_specular_texture.value);
         VR_CHECK(runtime.Ibl().ActiveSkyboxTexture().value == recorder.active_skybox_texture.value);
@@ -302,6 +354,62 @@ VR_TEST_CASE(RuntimeIntegration_ibl_host_prepares_default_and_explicit_environme
         VR_CHECK(recorder.active_params.rotation_max_lod_flags[3] == 0.0F);
         VR_CHECK(recorder.active_params.sh9[0][0] == 0.1F);
         VR_CHECK(recorder.active_params.sh9[1][2] == 0.6F);
+
+        runtime.Shutdown();
+        runtime_initialized = false;
+    } catch (const std::exception& exception_) {
+        if (runtime_initialized && runtime.IsInitialized()) {
+            runtime.Shutdown();
+            runtime_initialized = false;
+        }
+
+        if (IsEnvironmentSkipError(exception_.what())) {
+            VR_SKIP(exception_.what());
+        }
+        throw;
+    }
+}
+
+VR_TEST_CASE(RuntimeIntegration_ibl_host_prepares_environment_without_explicit_specular_cube,
+             "integration;gpu;sdl;runtime;ibl") {
+    Runtime runtime{};
+    IblFallbackPrepareRecorder recorder{};
+    bool runtime_initialized = false;
+
+    try {
+        Runtime::CreateInfo create_info{};
+        create_info.platform.window.title = "vr_tests_runtime_ibl_host_fallback";
+        create_info.platform.window.width = 320;
+        create_info.platform.window.height = 240;
+        create_info.platform.window.resizable = false;
+        create_info.platform.window.high_pixel_density = false;
+        create_info.platform.instance.enable_validation = false;
+        create_info.platform.device.required_vulkan13_features.dynamicRendering = VK_TRUE;
+        create_info.platform.device.required_vulkan13_features.synchronization2 = VK_TRUE;
+        create_info.render_loop.swapchain.enable_vsync = false;
+        runtime.Initialize(create_info);
+        runtime_initialized = true;
+
+        VR_REQUIRE(runtime.HasIblHost());
+
+        const auto tick_result = runtime.Tick(recorder);
+        VR_CHECK(tick_result.running);
+        VR_REQUIRE(recorder.environment_id.IsValid());
+        VR_REQUIRE(recorder.HasActiveCapture());
+        VR_CHECK(runtime.Ibl().Stats().environment_count == 1U);
+        VR_CHECK(runtime.Ibl().Stats().prepared_frame_count >= 1U);
+        VR_CHECK(runtime.Ibl().Stats().default_texture_build_count >= 2U);
+        VR_CHECK(recorder.active_brdf_lut.IsValid());
+        VR_CHECK(recorder.active_specular_texture.IsValid());
+        VR_CHECK(recorder.active_skybox_texture.value == recorder.active_specular_texture.value);
+        VR_CHECK(recorder.active_params.tint_intensity[0] == 0.90F);
+        VR_CHECK(recorder.active_params.tint_intensity[1] == 0.92F);
+        VR_CHECK(recorder.active_params.tint_intensity[2] == 1.00F);
+        VR_CHECK(recorder.active_params.tint_intensity[3] == 1.5F);
+        VR_CHECK(recorder.active_params.rotation_max_lod_flags[2] == 0.0F);
+        VR_CHECK(recorder.active_params.rotation_max_lod_flags[3] == 0.0F);
+        VR_CHECK(recorder.active_params.sh9[0][0] == 0.28F);
+        VR_CHECK(recorder.active_params.sh9[2][2] == 0.06F);
 
         runtime.Shutdown();
         runtime_initialized = false;

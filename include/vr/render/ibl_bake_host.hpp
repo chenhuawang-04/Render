@@ -69,7 +69,6 @@ struct IblBakeRequest final {
     bool bake_skybox = true;
     bool bake_specular = true;
     bool bake_sh9 = true;
-    bool set_active_environment = true;
 };
 
 struct IblBakeResult final {

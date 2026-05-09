@@ -58,7 +58,6 @@ struct IblHostStats final {
     std::uint32_t environment_count = 0U;
     std::uint32_t prepared_frame_count = 0U;
     std::uint32_t descriptor_update_count = 0U;
-    std::uint32_t active_environment_switch_count = 0U;
     std::uint32_t removed_environment_count = 0U;
     std::uint32_t default_texture_build_count = 0U;
     std::uint32_t revision = 0U;
@@ -88,11 +87,12 @@ public:
 
     [[nodiscard]] bool RemoveEnvironment(IblEnvironmentId environment_id_) noexcept;
 
-    void SetActiveEnvironment(IblEnvironmentId environment_id_) noexcept;
-    void ClearActiveEnvironment() noexcept;
     void SetBrdfLut(asset::TextureId brdf_lut_) noexcept;
 
     void PrepareFrame(const IblHostPrepareView& prepare_view_);
+    void PrepareEnvironmentFrame(const IblHostPrepareView& prepare_view_,
+                                 IblEnvironmentId environment_id_,
+                                 asset::TextureId brdf_lut_texture_id_ = {});
 
     [[nodiscard]] const IblEnvironmentAssetDesc* FindEnvironment(IblEnvironmentId environment_id_) const noexcept;
     [[nodiscard]] VkDescriptorSet ActiveDescriptorSet(std::uint32_t frame_index_) const;
@@ -101,7 +101,6 @@ public:
     [[nodiscard]] asset::TextureId BrdfLut() const noexcept;
     [[nodiscard]] asset::TextureId ActiveSpecularTexture() const noexcept;
     [[nodiscard]] asset::TextureId ActiveSkyboxTexture() const noexcept;
-    [[nodiscard]] IblEnvironmentId ActiveEnvironment() const noexcept;
     [[nodiscard]] const IblHostStats& Stats() const noexcept;
     [[nodiscard]] bool IsInitialized() const noexcept;
 
@@ -129,7 +128,7 @@ private:
     void UploadDefaultSpecularCube(const IblHostPrepareView& prepare_view_);
     void UploadDefaultBrdfLut(const IblHostPrepareView& prepare_view_);
     void DestroyFrameResources(VulkanContext& context_) noexcept;
-    [[nodiscard]] const EnvironmentRecord* ResolveActiveEnvironmentRecord() const noexcept;
+    [[nodiscard]] const EnvironmentRecord* FindEnvironmentRecord(IblEnvironmentId environment_id_) const noexcept;
     [[nodiscard]] const asset::TextureHost::TextureRecord& RequireCubeTexture(asset::TextureId texture_id_,
                                                                               const char* label_) const;
     [[nodiscard]] const asset::TextureHost::TextureRecord& RequireBrdfTexture(asset::TextureId texture_id_,
@@ -137,6 +136,10 @@ private:
     [[nodiscard]] IblGpuParams BuildResolvedParams(const EnvironmentRecord* record_,
                                                    const asset::TextureHost::TextureRecord& specular_record_,
                                                    bool has_explicit_skybox_) const noexcept;
+    void PrepareResolvedFrame(const IblHostPrepareView& prepare_view_,
+                              const EnvironmentRecord* record_,
+                              IblEnvironmentId prepared_environment_id_,
+                              asset::TextureId brdf_lut_texture_id_);
     void UpdateDescriptorSetForFrame(VulkanContext& context_,
                                      std::uint32_t frame_index_,
                                      const asset::TextureHost::TextureRecord& specular_record_,
@@ -160,7 +163,6 @@ private:
     asset::TextureId active_brdf_lut_texture_id{};
     asset::TextureId active_specular_texture_id{};
     asset::TextureId active_skybox_texture_id{};
-    IblEnvironmentId active_environment_id{};
     IblGpuParams active_params{};
     IblHostStats stats{};
     std::uint32_t next_environment_id = 1U;

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Center/Memory/Container/Vector/McVector.hpp"
+#include "vr/ecs/component/spatial_types.hpp"
 #include "vr/render/retire_bus.hpp"
 #include "vr/render/upload_host.hpp"
 #include "vr/resource/image_host.hpp"
@@ -46,6 +47,7 @@ struct TextureCreateInfo final {
     VkImageLayout shader_read_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     VkImageAspectFlags aspect_mask = VK_IMAGE_ASPECT_COLOR_BIT;
     bool force_recreate = false;
+    bool retain_cpu_upload_data = false;
 };
 
 struct TextureSubresourceUploadInfo final {
@@ -79,6 +81,21 @@ struct TextureHostStats final {
 
 class TextureHost final {
 public:
+    struct CpuFloatLayerSnapshot final {
+        std::uint32_t array_layer = 0U;
+        std::uint32_t width = 0U;
+        std::uint32_t height = 0U;
+        std::uint32_t row_pitch_pixels = 0U;
+        TextureMcVector<ecs::Float4> pixels{};
+    };
+
+    struct CpuFloatBaseLevelSnapshot final {
+        bool valid = false;
+        VkFormat format = VK_FORMAT_UNDEFINED;
+        VkImageViewType default_view_type = VK_IMAGE_VIEW_TYPE_2D;
+        TextureMcVector<CpuFloatLayerSnapshot> layers{};
+    };
+
     struct TextureRecord final {
         TextureId texture_id{};
         VkImageCreateFlags image_flags = 0U;
@@ -95,6 +112,8 @@ public:
         VkImageAspectFlags aspect_mask = VK_IMAGE_ASPECT_COLOR_BIT;
         resource::ImageResource resource{};
         std::uint32_t revision = 0U;
+        bool retain_cpu_upload_data = false;
+        CpuFloatBaseLevelSnapshot cpu_base_level_snapshot{};
     };
 
     TextureHost() = default;
@@ -128,6 +147,8 @@ public:
                                      std::uint64_t completed_submit_value_);
 
     [[nodiscard]] const TextureRecord* FindTexture(TextureId texture_id_) const noexcept;
+    [[nodiscard]] const CpuFloatBaseLevelSnapshot* FindCpuFloatBaseLevelSnapshot(
+        TextureId texture_id_) const noexcept;
     [[nodiscard]] bool IsInitialized() const noexcept;
     [[nodiscard]] const TextureHostStats& Stats() const noexcept;
 

@@ -1316,6 +1316,93 @@ VR_TEST_CASE(SceneRecorder3D_postprocess_disabled_falls_back_to_direct_scene_out
     VR_CHECK(recorder.Stats().postprocess_enabled == 0U);
 }
 
+VR_TEST_CASE(SceneRecorder3D_sky_before_opaque_loads_scene_first_pass_color,
+             "unit;core;render_target") {
+    vr::render::SceneRecorder3D recorder{};
+    recorder.Initialize({});
+
+    FakeSceneRecorderRenderer scene_renderer{};
+    recorder.RegisterOpaqueSceneRenderer(scene_renderer, vr::render::SceneRenderPassRole::single, 0x1U);
+
+    vr::ecs::Camera<vr::ecs::Dim3> camera{};
+    camera.style.viewport = vr::ecs::CameraViewport{.origin_x = 0.0F,
+                                                    .origin_y = 0.0F,
+                                                    .width = 640.0F,
+                                                    .height = 360.0F};
+    vr::render::RenderView3D view = vr::render::MakeRenderViewFromCamera(camera);
+    view.layer_mask = 0x1U;
+    view.targets.color_target = vr::render::RenderTargetHandle{41U, 1U};
+    view.targets.color_final_state = vr::render::RenderTargetStateKind::shader_read;
+    view.targets.depth_target = vr::render::RenderTargetHandle{42U, 1U};
+    view.targets.depth_final_state = vr::render::RenderTargetStateKind::depth_read_only;
+    vr::render::RefreshRenderViewSignature(view);
+
+    vr::render::RenderScenePacket3D packet =
+        vr::render::MakeSingleViewScenePacket(view, 110U);
+    packet.extra.environment.mode = vr::scene::SkyEnvironmentMode::solid_color;
+    packet.extra.environment.zenith_color = vr::ecs::Float4{.x = 0.2F, .y = 0.3F, .z = 0.4F, .w = 1.0F};
+    packet.extra.environment.horizon_color = packet.extra.environment.zenith_color;
+    packet.extra.environment.revision = 1U;
+    vr::render::RefreshRenderScenePacketSignature(packet);
+    recorder.SetFramePacket(&packet);
+
+    static vr::render::PipelineHost pipeline{};
+    auto prepare_view = MakeSceneRecorder3DPrepareViewForTests();
+    prepare_view.pipeline = &pipeline;
+    recorder.PrepareFrame(prepare_view);
+
+    VR_CHECK(scene_renderer.color_set);
+    VR_CHECK(scene_renderer.depth_set);
+    VR_CHECK(scene_renderer.color_output.load_op == VK_ATTACHMENT_LOAD_OP_LOAD);
+    VR_CHECK(scene_renderer.color_output.final_state == vr::render::RenderTargetStateKind::shader_read);
+    VR_CHECK(scene_renderer.depth_output.load_op == VK_ATTACHMENT_LOAD_OP_CLEAR);
+}
+
+VR_TEST_CASE(SceneRecorder3D_sky_after_opaque_keeps_scene_first_pass_clear,
+             "unit;core;render_target") {
+    vr::render::SceneRecorder3D recorder{};
+    recorder.Initialize({});
+
+    FakeSceneRecorderRenderer scene_renderer{};
+    recorder.RegisterOpaqueSceneRenderer(scene_renderer, vr::render::SceneRenderPassRole::single, 0x1U);
+
+    vr::ecs::Camera<vr::ecs::Dim3> camera{};
+    camera.style.viewport = vr::ecs::CameraViewport{.origin_x = 0.0F,
+                                                    .origin_y = 0.0F,
+                                                    .width = 640.0F,
+                                                    .height = 360.0F};
+    vr::render::RenderView3D view = vr::render::MakeRenderViewFromCamera(camera);
+    view.layer_mask = 0x1U;
+    view.targets.color_target = vr::render::RenderTargetHandle{51U, 1U};
+    view.targets.color_final_state = vr::render::RenderTargetStateKind::shader_read;
+    view.targets.depth_target = vr::render::RenderTargetHandle{52U, 1U};
+    view.targets.depth_final_state = vr::render::RenderTargetStateKind::depth_read_only;
+    vr::render::RefreshRenderViewSignature(view);
+
+    vr::render::RenderScenePacket3D packet =
+        vr::render::MakeSingleViewScenePacket(view, 111U);
+    packet.extra.environment.mode = vr::scene::SkyEnvironmentMode::solid_color;
+    packet.extra.environment.draw_order =
+        vr::scene::SkyEnvironmentDrawOrder::after_opaque_depth_tested;
+    packet.extra.environment.zenith_color = vr::ecs::Float4{.x = 0.2F, .y = 0.3F, .z = 0.4F, .w = 1.0F};
+    packet.extra.environment.horizon_color = packet.extra.environment.zenith_color;
+    packet.extra.environment.revision = 2U;
+    vr::render::RefreshRenderScenePacketSignature(packet);
+    recorder.SetFramePacket(&packet);
+
+    static vr::render::PipelineHost pipeline{};
+    auto prepare_view = MakeSceneRecorder3DPrepareViewForTests();
+    prepare_view.pipeline = &pipeline;
+    recorder.PrepareFrame(prepare_view);
+
+    VR_CHECK(scene_renderer.color_set);
+    VR_CHECK(scene_renderer.depth_set);
+    VR_CHECK(scene_renderer.color_output.load_op == VK_ATTACHMENT_LOAD_OP_CLEAR);
+    VR_CHECK(scene_renderer.color_output.final_state == vr::render::RenderTargetStateKind::color_attachment);
+    VR_CHECK(scene_renderer.depth_output.load_op == VK_ATTACHMENT_LOAD_OP_CLEAR);
+    VR_CHECK(scene_renderer.depth_output.final_state == vr::render::RenderTargetStateKind::depth_attachment);
+}
+
 VR_TEST_CASE(SceneRecorder3D_multi_view_packet_tracks_active_reflection_view,
              "unit;core;render_target") {
     vr::render::SceneRecorder3D recorder{};

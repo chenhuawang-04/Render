@@ -236,10 +236,13 @@ set(VR_PARTICLE_SORT_3D_COMP_HEADER "${VR_GENERATED_PARTICLE_SHADER_DIR}/particl
 set(VR_SHADOW_2D_VERT_HEADER "${VR_GENERATED_SHADOW_SHADER_DIR}/shadow_depth_2d_vert_spv.hpp")
 set(VR_SHADOW_3D_VERT_HEADER "${VR_GENERATED_SHADOW_SHADER_DIR}/shadow_depth_3d_vert_spv.hpp")
 set(VR_RENDER_TARGET_COMPOSITE_VERT_HEADER "${VR_GENERATED_RENDER_SHADER_DIR}/render_target_composite_vert_spv.hpp")
+set(VR_RENDER_TARGET_COMPOSITE_FAR_VERT_HEADER "${VR_GENERATED_RENDER_SHADER_DIR}/render_target_composite_far_vert_spv.hpp")
 set(VR_RENDER_TARGET_COMPOSITE_FRAG_HEADER "${VR_GENERATED_RENDER_SHADER_DIR}/render_target_composite_frag_spv.hpp")
 set(VR_BACKGROUND_2D_FRAG_HEADER "${VR_GENERATED_RENDER_SHADER_DIR}/background_2d_frag_spv.hpp")
 set(VR_SKY_ENVIRONMENT_FRAG_HEADER "${VR_GENERATED_RENDER_SHADER_DIR}/sky_environment_frag_spv.hpp")
-set(VR_SKYBOX_FRAG_HEADER "${VR_GENERATED_RENDER_SHADER_DIR}/skybox_frag_spv.hpp")
+set(VR_SKY_ENVIRONMENT_IMAGE_FRAG_HEADER "${VR_GENERATED_RENDER_SHADER_DIR}/sky_environment_image_frag_spv.hpp")
+set(VR_SKY_ENVIRONMENT_EQUIRECT_FRAG_HEADER "${VR_GENERATED_RENDER_SHADER_DIR}/sky_environment_equirect_frag_spv.hpp")
+set(VR_SKY_ENVIRONMENT_ATMOSPHERE_FRAG_HEADER "${VR_GENERATED_RENDER_SHADER_DIR}/sky_environment_atmosphere_frag_spv.hpp")
 set(VR_RENDER_TARGET_BLOOM_PREFILTER_FRAG_HEADER "${VR_GENERATED_RENDER_SHADER_DIR}/render_target_bloom_prefilter_frag_spv.hpp")
 set(VR_RENDER_TARGET_BLOOM_BLUR_FRAG_HEADER "${VR_GENERATED_RENDER_SHADER_DIR}/render_target_bloom_blur_frag_spv.hpp")
 set(VR_RENDER_TARGET_BLOOM_COMBINE_FRAG_HEADER "${VR_GENERATED_RENDER_SHADER_DIR}/render_target_bloom_combine_frag_spv.hpp")
@@ -364,6 +367,11 @@ vr_compile_shader_to_header("${VR_SHADER_SOURCE_DIR}/render_target_composite.ver
                             "k_render_target_composite_vert_spv"
                             "${VR_RENDER_TARGET_COMPOSITE_VERT_HEADER}"
                             "vr::render::generated")
+vr_compile_shader_to_header("${VR_SHADER_SOURCE_DIR}/render_target_composite_far.vert"
+                            "vert"
+                            "k_render_target_composite_far_vert_spv"
+                            "${VR_RENDER_TARGET_COMPOSITE_FAR_VERT_HEADER}"
+                            "vr::render::generated")
 vr_compile_shader_to_header("${VR_SHADER_SOURCE_DIR}/render_target_composite.frag"
                             "frag"
                             "k_render_target_composite_frag_spv"
@@ -379,10 +387,20 @@ vr_compile_shader_to_header("${VR_SHADER_SOURCE_DIR}/sky_environment.frag"
                             "k_sky_environment_frag_spv"
                             "${VR_SKY_ENVIRONMENT_FRAG_HEADER}"
                             "vr::render::generated")
-vr_compile_shader_to_header("${VR_SHADER_SOURCE_DIR}/skybox.frag"
+vr_compile_shader_to_header("${VR_SHADER_SOURCE_DIR}/sky_environment_image.frag"
                             "frag"
-                            "k_skybox_frag_spv"
-                            "${VR_SKYBOX_FRAG_HEADER}"
+                            "k_sky_environment_image_frag_spv"
+                            "${VR_SKY_ENVIRONMENT_IMAGE_FRAG_HEADER}"
+                            "vr::render::generated")
+vr_compile_shader_to_header("${VR_SHADER_SOURCE_DIR}/sky_environment_equirect.frag"
+                            "frag"
+                            "k_sky_environment_equirect_frag_spv"
+                            "${VR_SKY_ENVIRONMENT_EQUIRECT_FRAG_HEADER}"
+                            "vr::render::generated")
+vr_compile_shader_to_header("${VR_SHADER_SOURCE_DIR}/sky_environment_atmosphere.frag"
+                            "frag"
+                            "k_sky_environment_atmosphere_frag_spv"
+                            "${VR_SKY_ENVIRONMENT_ATMOSPHERE_FRAG_HEADER}"
                             "vr::render::generated")
 vr_compile_shader_to_header("${VR_SHADER_SOURCE_DIR}/render_target_bloom_prefilter.frag"
                             "frag"
@@ -425,10 +443,13 @@ add_custom_target(vr_generated_shaders
         "${VR_SHADOW_2D_VERT_HEADER}"
         "${VR_SHADOW_3D_VERT_HEADER}"
         "${VR_RENDER_TARGET_COMPOSITE_VERT_HEADER}"
+        "${VR_RENDER_TARGET_COMPOSITE_FAR_VERT_HEADER}"
         "${VR_RENDER_TARGET_COMPOSITE_FRAG_HEADER}"
         "${VR_BACKGROUND_2D_FRAG_HEADER}"
         "${VR_SKY_ENVIRONMENT_FRAG_HEADER}"
-        "${VR_SKYBOX_FRAG_HEADER}"
+        "${VR_SKY_ENVIRONMENT_IMAGE_FRAG_HEADER}"
+        "${VR_SKY_ENVIRONMENT_EQUIRECT_FRAG_HEADER}"
+        "${VR_SKY_ENVIRONMENT_ATMOSPHERE_FRAG_HEADER}"
         "${VR_RENDER_TARGET_BLOOM_PREFILTER_FRAG_HEADER}"
         "${VR_RENDER_TARGET_BLOOM_BLUR_FRAG_HEADER}"
         "${VR_RENDER_TARGET_BLOOM_COMBINE_FRAG_HEADER}"
@@ -470,7 +491,6 @@ add_library(vulkan_init STATIC
     src/render/ibl_host.cpp
     src/render/sky_environment_gpu_host.cpp
     src/render/sky_environment_pass.cpp
-    src/render/skybox_renderer.cpp
     src/render/upload_host.cpp
     src/render/descriptor_host.cpp
     src/render/pipeline_host.cpp

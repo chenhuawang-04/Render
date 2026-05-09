@@ -400,7 +400,15 @@ void SurfaceRenderer3D::PrepareFrame(const render::SurfaceRenderer3DPrepareView&
         surface_image_host->BeginFrame(*context, completed_submit_value_seen);
     }
     EnsureFallbackTexture(*context, *upload_host, active_frame_index);
-    ibl_host->PrepareFrame(render::MakeIblHostPrepareView(prepare_view_));
+    const render::IblEnvironmentId ibl_environment_id{prepare_view_.ibl_environment_id};
+    const asset::TextureId ibl_brdf_lut_texture_id{prepare_view_.ibl_brdf_lut_texture_id};
+    if (ibl_environment_id.IsValid() || ibl_brdf_lut_texture_id.IsValid()) {
+        ibl_host->PrepareEnvironmentFrame(render::MakeIblHostPrepareView(prepare_view_),
+                                          ibl_environment_id,
+                                          ibl_brdf_lut_texture_id);
+    } else {
+        ibl_host->PrepareFrame(render::MakeIblHostPrepareView(prepare_view_));
+    }
     active_ibl_descriptor_set = ibl_host->ActiveDescriptorSet(active_frame_index);
     if (active_ibl_descriptor_set == VK_NULL_HANDLE) {
         throw std::runtime_error("SurfaceRenderer3D::PrepareFrame failed to resolve IBL descriptor set");

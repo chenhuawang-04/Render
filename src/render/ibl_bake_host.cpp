@@ -1033,9 +1033,6 @@ IblBakeResult IblBakeHost::BakeEnvironment(const IblBakeHostPrepareView& prepare
                                                                        result.environment);
         result.environment.environment_id = result.environment_id;
         result.registered_with_ibl_host = true;
-        if (request_.set_active_environment) {
-            resolved_ibl_host->SetActiveEnvironment(result.environment_id);
-        }
     } else {
         result.environment_id = result.environment.environment_id;
     }

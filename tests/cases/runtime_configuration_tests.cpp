@@ -22,6 +22,7 @@
 #include "vr/runtime/services/render_target_pool_service.hpp"
 #include "vr/runtime/services/render_target_service.hpp"
 #include "vr/runtime/services/sampler_service.hpp"
+#include "vr/runtime/services/sky_environment_service.hpp"
 #include "vr/runtime/services/texture_service.hpp"
 #include "vr/runtime/services/upload_service.hpp"
 #include "vr/text/text_runtime_contract.hpp"
@@ -209,6 +210,7 @@ VR_TEST_CASE(RuntimeConfig_modules_default_to_enabled, "unit;core;runtime") {
     VR_CHECK(modules.enable_frame_composer_host);
     VR_CHECK(modules.enable_ibl_host);
     VR_CHECK(!modules.enable_ibl_bake_host);
+    VR_CHECK(modules.enable_sky_environment_gpu_host);
     VR_CHECK(modules.enable_upload_host);
     VR_CHECK(modules.enable_descriptor_host);
     VR_CHECK(modules.enable_pipeline_host);
@@ -231,6 +233,7 @@ VR_TEST_CASE(RuntimeConfig_default_state_before_initialize_is_safe, "unit;core;r
     VR_CHECK(!runtime.HasFrameComposerHost());
     VR_CHECK(!runtime.HasIblHost());
     VR_CHECK(!runtime.HasIblBakeHost());
+    VR_CHECK(!runtime.HasSkyEnvironmentHost());
     VR_CHECK(!runtime.HasUploadHost());
     VR_CHECK(!runtime.HasDescriptorHost());
     VR_CHECK(!runtime.HasPipelineHost());
@@ -244,6 +247,7 @@ VR_TEST_CASE(RuntimeConfig_default_state_before_initialize_is_safe, "unit;core;r
     VR_CHECK(!runtime.HasParticleSimulationHost());
     VR_CHECK(!runtime.ParticleUploadService().IsAvailable());
     VR_CHECK(!runtime.ParticleSimulationService().IsAvailable());
+    VR_CHECK(!runtime.SkyEnvironmentService().IsAvailable());
     VR_CHECK(!runtime.Particles().IsAvailable());
 
     const Runtime::CreateInfo& config = runtime.Config();
@@ -252,6 +256,7 @@ VR_TEST_CASE(RuntimeConfig_default_state_before_initialize_is_safe, "unit;core;r
     VR_CHECK(config.modules.enable_frame_composer_host);
     VR_CHECK(config.modules.enable_ibl_host);
     VR_CHECK(!config.modules.enable_ibl_bake_host);
+    VR_CHECK(config.modules.enable_sky_environment_gpu_host);
     VR_CHECK(config.modules.enable_descriptor_host);
     VR_CHECK(config.modules.enable_pipeline_host);
     VR_CHECK(config.modules.enable_render_target_host);
@@ -301,6 +306,7 @@ VR_TEST_CASE(RuntimeConfig_unavailable_modules_throw_before_initialize, "unit;co
     VR_CHECK(ThrowsAnyException([&]() { (void)runtime.FrameComposer(); }));
     VR_CHECK(ThrowsAnyException([&]() { (void)runtime.Ibl(); }));
     VR_CHECK(ThrowsAnyException([&]() { (void)runtime.IblBake(); }));
+    VR_CHECK(ThrowsAnyException([&]() { (void)runtime.SkyEnvironment(); }));
     VR_CHECK(ThrowsAnyException([&]() { (void)runtime.Upload(); }));
     VR_CHECK(ThrowsAnyException([&]() { (void)runtime.Descriptor(); }));
     VR_CHECK(ThrowsAnyException([&]() { (void)runtime.Pipeline(); }));
@@ -322,6 +328,7 @@ VR_TEST_CASE(RuntimeConfig_particle_service_dependency_contract_matches_runtime_
 
     static_assert(RuntimeService<GpuMemoryService>);
     static_assert(RuntimeService<ParticleRenderService>);
+    static_assert(RuntimeService<SkyEnvironmentService>);
 
     static_assert(service_depends_on_v<UploadService, GpuMemoryService>);
     static_assert(service_depends_on_v<TextureService, GpuMemoryService>);
@@ -330,6 +337,12 @@ VR_TEST_CASE(RuntimeConfig_particle_service_dependency_contract_matches_runtime_
     static_assert(service_depends_on_v<RenderTargetPoolService, RenderTargetService>);
     static_assert(service_depends_on_v<FrameComposerService, RenderTargetPoolService>);
     static_assert(service_depends_on_v<IblService, TextureService>);
+    static_assert(service_depends_on_v<SkyEnvironmentService, TextureService>);
+    static_assert(service_depends_on_v<SkyEnvironmentService, DescriptorService>);
+    static_assert(service_depends_on_v<SkyEnvironmentService, PipelineService>);
+    static_assert(service_depends_on_v<SkyEnvironmentService, SamplerService>);
+    static_assert(service_depends_on_v<SkyEnvironmentService, UploadService>);
+    static_assert(service_depends_on_v<SkyEnvironmentService, GpuMemoryService>);
     static_assert(service_depends_on_v<IblBakeService, IblService>);
     static_assert(service_depends_on_v<GlyphAtlasService, FreeTypeService>);
     static_assert(service_depends_on_v<GlyphUploadService, GlyphAtlasService>);
@@ -352,8 +365,10 @@ VR_TEST_CASE(RuntimeConfig_particle_service_dependency_contract_matches_runtime_
     static_assert(profile_contains_v<Runtime2DProfile, ParticleUploadService>);
     static_assert(profile_contains_v<Runtime2DProfile, ParticleSimulationService>);
     static_assert(profile_contains_v<Runtime2DProfile, ParticleRenderService>);
+    static_assert(!profile_contains_v<Runtime2DProfile, SkyEnvironmentService>);
     static_assert(profile_contains_v<Runtime3DProfile, FrameComposerService>);
     static_assert(profile_contains_v<Runtime3DProfile, IblService>);
+    static_assert(profile_contains_v<Runtime3DProfile, SkyEnvironmentService>);
     static_assert(profile_contains_v<Runtime3DProfile, IblBakeService>);
     static_assert(profile_contains_v<Runtime3DProfile, ParticleUploadService>);
     static_assert(profile_contains_v<Runtime3DProfile, ParticleSimulationService>);
@@ -363,6 +378,7 @@ VR_TEST_CASE(RuntimeConfig_particle_service_dependency_contract_matches_runtime_
     static_assert(profile_satisfies_service_dependencies_v<Runtime2DProfile, ParticleSimulationService>);
     static_assert(profile_satisfies_service_dependencies_v<Runtime2DProfile, ParticleRenderService>);
     static_assert(profile_satisfies_service_dependencies_v<Runtime3DProfile, IblBakeService>);
+    static_assert(profile_satisfies_service_dependencies_v<Runtime3DProfile, SkyEnvironmentService>);
     static_assert(profile_satisfies_service_dependencies_v<Runtime3DProfile, ParticleRenderService>);
 
     VR_CHECK(true);
@@ -378,17 +394,20 @@ VR_TEST_CASE(RuntimeConfig_runtime_services_registry_exposes_profiled_typed_acce
 
     static_assert(Runtime::RuntimeServicesType::Contains<ParticleRenderService>());
     static_assert(Runtime::RuntimeServicesType::Contains<FrameComposerService>());
+    static_assert(Runtime::RuntimeServicesType::Contains<SkyEnvironmentService>());
     static_assert(!Runtime::RuntimeServicesType::Contains<int>());
 
     VR_CHECK(services.TryGet<ParticleRenderService>() != nullptr);
     VR_CHECK(services.TryGet<ParticleSimulationService>() != nullptr);
     VR_CHECK(services.TryGet<FrameComposerService>() != nullptr);
     VR_CHECK(services.TryGet<IblService>() != nullptr);
+    VR_CHECK(services.TryGet<SkyEnvironmentService>() != nullptr);
 
     VR_CHECK(!services.Get<ParticleRenderService>().IsAvailable());
     VR_CHECK(!services.Get<ParticleSimulationService>().IsAvailable());
     VR_CHECK(!services.Get<FrameComposerService>().IsAvailable());
     VR_CHECK(!services.Get<IblService>().IsAvailable());
+    VR_CHECK(!services.Get<SkyEnvironmentService>().IsAvailable());
 }
 
 VR_TEST_CASE(RuntimeConfig_runtime_services_lifecycle_dispatch_uses_forward_init_and_reverse_shutdown,

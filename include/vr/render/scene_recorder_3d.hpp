@@ -42,6 +42,7 @@ struct SceneRecorder3DStats final {
     std::uint32_t frame_packet_prepare_count = 0U;
     std::uint32_t frame_packet_record_count = 0U;
     std::uint32_t animation_binding_refresh_count = 0U;
+    std::uint32_t environment_gpu_resolve_count = 0U;
     std::uint32_t environment_prepare_count = 0U;
     std::uint32_t environment_record_count = 0U;
     std::uint32_t frame_view_count = 0U;
@@ -212,6 +213,8 @@ public:
     [[nodiscard]] const SceneRecorder3DStats& Stats() const noexcept;
     [[nodiscard]] const RenderScenePacket3D* FramePacket() const noexcept;
     [[nodiscard]] const RenderView3D* ActiveView() const noexcept;
+    [[nodiscard]] SkyEnvironmentPass& EnvironmentPass() noexcept;
+    [[nodiscard]] const SkyEnvironmentPass& EnvironmentPass() const noexcept;
     [[nodiscard]] SceneBloomPostStack& PostStack() noexcept;
     [[nodiscard]] const SceneBloomPostStack& PostStack() const noexcept;
 
@@ -328,11 +331,6 @@ private:
                                  candidate_.PrepareFrame(renderer_prepare_view_);
                              }) {
             renderer_ref.PrepareFrame(MakeSurfaceRenderer3DPrepareView(prepare_view_));
-        } else if constexpr (requires(RendererT& candidate_,
-                                      const SkyboxRendererPrepareView& renderer_prepare_view_) {
-                                 candidate_.PrepareFrame(renderer_prepare_view_);
-                             }) {
-            renderer_ref.PrepareFrame(MakeSkyboxRendererPrepareView(prepare_view_));
         } else if constexpr (requires(RendererT& candidate_,
                                       const SceneRecorder3DPrepareView& renderer_prepare_view_) {
                                  candidate_.PrepareFrame(renderer_prepare_view_);
@@ -570,12 +568,19 @@ private:
     [[nodiscard]] bool IsOverlayEnabledForSubmission() const noexcept;
     [[nodiscard]] bool IsPostProcessEnabledForSubmission() const noexcept;
     [[nodiscard]] bool HasSkyEnvironmentPassForSubmission() const noexcept;
+    [[nodiscard]] bool HasVisibleSceneRendererForSubmission() const noexcept;
+    [[nodiscard]] bool HasVisibleOpaqueSceneRendererForSubmission() const noexcept;
+    [[nodiscard]] bool HasDepthTargetForSkyAfterOpaqueSubmission() const noexcept;
+    [[nodiscard]] scene::SkyEnvironmentDrawOrder SkyEnvironmentDrawOrderForSubmission() const noexcept;
+    [[nodiscard]] bool ShouldRecordSkyEnvironmentBeforeOpaque() const noexcept;
+    [[nodiscard]] bool ShouldRecordSkyEnvironmentAfterOpaque() const noexcept;
     [[nodiscard]] bool IsLayerVisibleForSubmission(std::uint32_t submission_layer_mask_) const noexcept;
     [[nodiscard]] bool IsOverlayLayerVisibleForSubmission(std::uint32_t submission_layer_mask_) const noexcept;
     [[nodiscard]] bool IsFirstSceneRendererEntryForRenderer(
         const SceneRendererEntry& entry_) const noexcept;
     void ConfigureSkyEnvironmentPassForTargets();
     [[nodiscard]] RenderTargetColorOutputConfig BuildSkyEnvironmentOutputConfig() const noexcept;
+    [[nodiscard]] RenderTargetDepthOutputConfig BuildSkyEnvironmentDepthOutputConfig() const noexcept;
     void EnsureInitialized(const char* operation_) const;
     void EnsureRuntimeBinding(const char* operation_) const;
 
@@ -598,6 +603,7 @@ private:
     const RenderView3D* active_view = nullptr;
     const RenderView3D* scene_view = nullptr;
     const RenderView3D* overlay_view = nullptr;
+    scene::SkyEnvironmentGpuHandle resolved_environment_gpu{};
     std::uint64_t active_view_signature = 0U;
     render::LightShadowLinkCoordinator3D light_shadow_link_coordinator{};
     render::ShadowAtlasBindingCoordinator shadow_atlas_binding_coordinator{};

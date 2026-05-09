@@ -2,6 +2,7 @@
 
 #include "vr/asset/texture_host.hpp"
 #include "vr/render/frame_composer_host.hpp"
+#include "vr/render/environment/sky_environment_gpu_host.hpp"
 #include "vr/render/ibl_bake_host.hpp"
 #include "vr/render/ibl_host.hpp"
 #include "vr/platform/render_host.hpp"
@@ -27,6 +28,7 @@
 #include "vr/runtime/services/render_target_pool_service.hpp"
 #include "vr/runtime/services/render_target_service.hpp"
 #include "vr/runtime/services/sampler_service.hpp"
+#include "vr/runtime/services/sky_environment_service.hpp"
 #include "vr/runtime/services/texture_service.hpp"
 #include "vr/runtime/services/upload_service.hpp"
 #include "vr/render/descriptor_host.hpp"
@@ -57,6 +59,7 @@ struct RuntimeModulesCreateInfo {
     bool enable_frame_composer_host = true;
     bool enable_ibl_host = true;
     bool enable_ibl_bake_host = false;
+    bool enable_sky_environment_gpu_host = true;
     bool enable_upload_host = true;
     bool enable_descriptor_host = true;
     bool enable_pipeline_host = true;
@@ -110,6 +113,7 @@ public:
         FrameComposerHostCreateInfo frame_composer{};
         IblHostCreateInfo ibl{};
         IblBakeHostCreateInfo ibl_bake{};
+        SkyEnvironmentGpuHostCreateInfo sky_environment{};
         UploadHostCreateInfo upload{};
         DescriptorHostCreateInfo descriptor{};
         PipelineHostCreateInfo pipeline{};
@@ -258,6 +262,21 @@ public:
                 ibl_bake_initialized = true;
             }
 
+            if (create_info_cache.modules.enable_sky_environment_gpu_host) {
+                if (!texture_initialized) {
+                    throw std::runtime_error(
+                        "RenderRuntimeHost::Initialize requires TextureHost when sky_environment_gpu_host is enabled");
+                }
+                if (!descriptor_initialized) {
+                    throw std::runtime_error(
+                        "RenderRuntimeHost::Initialize requires DescriptorHost when sky_environment_gpu_host is enabled");
+                }
+                if (!sampler_initialized) {
+                    throw std::runtime_error(
+                        "RenderRuntimeHost::Initialize requires SamplerHost when sky_environment_gpu_host is enabled");
+                }
+            }
+
             if (create_info_cache.modules.enable_pipeline_host) {
                 pipeline_host.Initialize(platform_host.Context(), create_info_cache.pipeline);
                 pipeline_initialized = true;
@@ -306,6 +325,21 @@ public:
                 upload_host.Initialize(platform_host.Context(), gpu_memory_host, upload_info);
                 upload_initialized = true;
                 InitializeUploadSyncObjects(platform_host.Context());
+            }
+
+            if (create_info_cache.modules.enable_sky_environment_gpu_host) {
+                if (!upload_initialized) {
+                    throw std::runtime_error(
+                        "RenderRuntimeHost::Initialize requires UploadHost when sky_environment_gpu_host is enabled");
+                }
+                SkyEnvironmentGpuHostCreateInfo sky_environment_info = create_info_cache.sky_environment;
+                sky_environment_info.frames_in_flight = frames_in_flight_v;
+                sky_environment_gpu_host.Initialize(platform_host.Context(),
+                                                    texture_host,
+                                                    descriptor_host,
+                                                    sampler_host,
+                                                    sky_environment_info);
+                sky_environment_initialized = true;
             }
 
             if (create_info_cache.modules.enable_glyph_upload_host) {
@@ -368,6 +402,10 @@ public:
             if (particle_simulation_initialized) {
                 particle_simulation_host.Shutdown(platform_host.Context());
                 particle_simulation_initialized = false;
+            }
+            if (sky_environment_initialized) {
+                sky_environment_gpu_host.Shutdown(platform_host.Context());
+                sky_environment_initialized = false;
             }
             if (particle_upload_initialized) {
                 particle_upload_host.Shutdown(platform_host.Context());
@@ -468,6 +506,11 @@ public:
         if (particle_simulation_initialized) {
             particle_simulation_host.Shutdown(platform_host.Context());
             particle_simulation_initialized = false;
+        }
+
+        if (sky_environment_initialized) {
+            sky_environment_gpu_host.Shutdown(platform_host.Context());
+            sky_environment_initialized = false;
         }
 
         if (particle_upload_initialized) {
@@ -806,6 +849,10 @@ public:
         return ibl_bake_initialized;
     }
 
+    [[nodiscard]] bool HasSkyEnvironmentHost() const noexcept {
+        return sky_environment_initialized;
+    }
+
     [[nodiscard]] bool HasUploadHost() const noexcept {
         return upload_initialized;
     }
@@ -991,6 +1038,22 @@ public:
         return ibl_bake_host;
     }
 
+    [[nodiscard]] SkyEnvironmentGpuHost& SkyEnvironment() {
+        if (!sky_environment_initialized) {
+            throw std::runtime_error(
+                "RenderRuntimeHost::SkyEnvironment requested but host is not initialized");
+        }
+        return sky_environment_gpu_host;
+    }
+
+    [[nodiscard]] const SkyEnvironmentGpuHost& SkyEnvironment() const {
+        if (!sky_environment_initialized) {
+            throw std::runtime_error(
+                "RenderRuntimeHost::SkyEnvironment requested but host is not initialized");
+        }
+        return sky_environment_gpu_host;
+    }
+
     [[nodiscard]] UploadHost& Upload() {
         if (!upload_initialized) {
             throw std::runtime_error("RenderRuntimeHost::Upload requested but host is not initialized");
@@ -1096,6 +1159,14 @@ public:
 
     [[nodiscard]] const runtime::services::ParticleSimulationService& ParticleSimulationService() const noexcept {
         return particle_simulation_service_ref;
+    }
+
+    [[nodiscard]] runtime::services::SkyEnvironmentService& SkyEnvironmentService() noexcept {
+        return sky_environment_service_ref;
+    }
+
+    [[nodiscard]] const runtime::services::SkyEnvironmentService& SkyEnvironmentService() const noexcept {
+        return sky_environment_service_ref;
     }
 
     [[nodiscard]] runtime::services::ParticleRenderService& Particles() noexcept {
@@ -1348,6 +1419,12 @@ private:
             ibl_bake_service_ref.Reset();
         }
 
+        if (sky_environment_initialized) {
+            sky_environment_service_ref.Bind(sky_environment_gpu_host);
+        } else {
+            sky_environment_service_ref.Reset();
+        }
+
         if (freetype_initialized) {
             freetype_service_ref.Bind(freetype_host);
         } else {
@@ -1393,6 +1470,7 @@ private:
                           render_target_pool_service_ref,
                           frame_composer_service_ref,
                           ibl_service_ref,
+                          sky_environment_service_ref,
                           ibl_bake_service_ref,
                           freetype_service_ref,
                           glyph_atlas_service_ref,
@@ -1436,6 +1514,7 @@ private:
                 .frame_composer = frame_composer_initialized ? &frame_composer_host : nullptr,
                 .ibl = ibl_initialized ? &ibl_host : nullptr,
                 .ibl_bake = ibl_bake_initialized ? &ibl_bake_host : nullptr,
+                .sky_environment = sky_environment_initialized ? &sky_environment_gpu_host : nullptr,
                 .pipeline = pipeline_initialized ? &pipeline_host : nullptr,
                 .render_target = render_target_host,
                 .render_target_pool = render_target_pool_initialized ? &render_target_pool : nullptr,
@@ -1684,20 +1763,6 @@ private:
                 .gpu_memory = gpu_memory_host,
                 .descriptor = descriptor_host,
                 .pipeline = pipeline_host,
-                .frame = frame,
-                .progress = progress,
-            });
-        } else if constexpr (requires(RecorderT& recorder_ref_,
-                                      const SkyboxRendererPrepareView& prepare_view_) {
-                                 recorder_ref_.PrepareFrame(prepare_view_);
-                             }) {
-            recorder_.PrepareFrame(SkyboxRendererPrepareView{
-                .device = device,
-                .gpu_memory = gpu_memory_host,
-                .upload = upload_host,
-                .descriptor = descriptor_host,
-                .pipeline = pipeline_host,
-                .ibl = ibl_host,
                 .frame = frame,
                 .progress = progress,
             });
@@ -2064,6 +2129,7 @@ private:
     FrameComposerHost frame_composer_host{};
     IblHost ibl_host{};
     IblBakeHost ibl_bake_host{};
+    SkyEnvironmentGpuHost sky_environment_gpu_host{};
     UploadHost upload_host{};
     DescriptorHost descriptor_host{};
     PipelineHost pipeline_host{};
@@ -2087,6 +2153,7 @@ private:
     runtime::services::SamplerService sampler_service_ref{};
     runtime::services::FrameComposerService frame_composer_service_ref{};
     runtime::services::IblService ibl_service_ref{};
+    runtime::services::SkyEnvironmentService sky_environment_service_ref{};
     runtime::services::IblBakeService ibl_bake_service_ref{};
     runtime::services::FreeTypeService freetype_service_ref{};
     runtime::services::GlyphAtlasService glyph_atlas_service_ref{};
@@ -2105,6 +2172,7 @@ private:
     bool frame_composer_initialized = false;
     bool ibl_initialized = false;
     bool ibl_bake_initialized = false;
+    bool sky_environment_initialized = false;
     bool upload_initialized = false;
     bool descriptor_initialized = false;
     bool pipeline_initialized = false;

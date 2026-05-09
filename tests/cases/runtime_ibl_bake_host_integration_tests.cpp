@@ -95,17 +95,17 @@ public:
             request.intensity = 1.75F;
             request.rotation_y_radians = 0.65F;
             request.tint_color = {0.85F, 0.90F, 1.05F};
-            request.set_active_environment = true;
             bake_result = prepare_view_.ibl_bake->BakeEnvironment(
                 vr::render::MakeIblBakeHostPrepareView(prepare_view_),
                 request);
             baked_once = true;
         }
 
-        prepare_view_.ibl->PrepareFrame(vr::render::MakeIblHostPrepareView(prepare_view_));
+        prepare_view_.ibl->PrepareEnvironmentFrame(vr::render::MakeIblHostPrepareView(prepare_view_),
+                                                   bake_result.environment_id,
+                                                   bake_result.brdf_lut);
         active_descriptor_set = prepare_view_.ibl->ActiveDescriptorSet(prepare_view_.frame.frame_index);
         active_params = prepare_view_.ibl->ActiveParams();
-        active_environment = prepare_view_.ibl->ActiveEnvironment();
         active_brdf_lut = prepare_view_.ibl->BrdfLut();
     }
 
@@ -121,7 +121,6 @@ public:
     vr::render::IblBakeResult bake_result{};
     VkDescriptorSet active_descriptor_set = VK_NULL_HANDLE;
     vr::render::IblGpuParams active_params{};
-    vr::render::IblEnvironmentId active_environment{};
     vr::asset::TextureId active_brdf_lut{};
 };
 
@@ -158,7 +157,6 @@ VR_TEST_CASE(RuntimeIntegration_ibl_bake_host_bakes_environment_and_registers_ru
         VR_REQUIRE(recorder.bake_result.brdf_lut.IsValid());
         VR_REQUIRE(recorder.bake_result.environment_id.IsValid());
         VR_CHECK(recorder.bake_result.registered_with_ibl_host);
-        VR_CHECK(recorder.active_environment.value == recorder.bake_result.environment_id.value);
         VR_CHECK(recorder.active_descriptor_set != VK_NULL_HANDLE);
         VR_CHECK(recorder.active_brdf_lut.value == recorder.bake_result.brdf_lut.value);
 

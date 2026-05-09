@@ -11,7 +11,7 @@ layout(set = 0, binding = 0, std140) uniform IblParamsBuffer {
 
 layout(set = 0, binding = 3) uniform samplerCube ibl_skybox_cube;
 
-layout(push_constant) uniform SkyboxPushConstants {
+layout(push_constant) uniform EnvironmentImagePushConstants {
     vec4 camera_right_scale_x;
     vec4 camera_up_scale_y;
     vec4 camera_forward_reserved;

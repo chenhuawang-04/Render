@@ -337,6 +337,10 @@ public:
         return host.IblBake();
     }
 
+    [[nodiscard]] vr::render::SkyEnvironmentGpuHost& SkyEnvironment() {
+        return host.SkyEnvironment();
+    }
+
     [[nodiscard]] vr::render::UploadHost& Upload() {
         return host.Upload();
     }
@@ -389,6 +393,10 @@ public:
         return host.ParticleSimulationService();
     }
 
+    [[nodiscard]] runtime::services::SkyEnvironmentService& SkyEnvironmentService() noexcept {
+        return host.SkyEnvironmentService();
+    }
+
     [[nodiscard]] runtime::services::ParticleRenderService& Particles() noexcept {
         return host.Particles();
     }
@@ -407,6 +415,10 @@ public:
 
     [[nodiscard]] bool HasIblBakeHost() const noexcept {
         return host.HasIblBakeHost();
+    }
+
+    [[nodiscard]] bool HasSkyEnvironmentHost() const noexcept {
+        return host.HasSkyEnvironmentHost();
     }
 
     [[nodiscard]] bool HasUploadHost() const noexcept {

@@ -103,6 +103,7 @@ struct SceneRecorder3DPrepareView final {
     FrameComposerHost* frame_composer = nullptr;
     IblHost* ibl = nullptr;
     IblBakeHost* ibl_bake = nullptr;
+    SkyEnvironmentGpuHost* sky_environment = nullptr;
     PipelineHost* pipeline = nullptr;
     RenderTargetHost& render_target;
     RenderTargetPool* render_target_pool = nullptr;
@@ -112,6 +113,8 @@ struct SceneRecorder3DPrepareView final {
     text::GlyphUploadHost* glyph_upload = nullptr;
     particle::ParticleUploadHost* particle_upload = nullptr;
     particle::ParticleSimulationHost* particle_simulation = nullptr;
+    std::uint32_t ibl_environment_id = 0U;
+    std::uint32_t ibl_brdf_lut_texture_id = 0U;
     FrameStaticContext frame{};
     FrameGpuProgressContext progress{};
 };
@@ -207,8 +210,16 @@ struct SkyEnvironmentGpuPrepareView final {
 
 struct SkyEnvironmentPassPrepareView final {
     VulkanContext& device;
+    resource::GpuMemoryHost* gpu_memory = nullptr;
+    asset::TextureHost* texture = nullptr;
+    UploadHost* upload = nullptr;
+    DescriptorHost* descriptor = nullptr;
+    IblHost* ibl = nullptr;
     PipelineHost& pipeline;
     RenderTargetHost& render_target;
+    resource::SamplerHost* sampler = nullptr;
+    std::uint32_t ibl_environment_id = 0U;
+    std::uint32_t ibl_brdf_lut_texture_id = 0U;
     FrameStaticContext frame{};
     FrameGpuProgressContext progress{};
 };
@@ -262,6 +273,8 @@ struct GeometryRenderer3DPrepareView final {
     IblHost& ibl;
     resource::SamplerHost& sampler;
     RenderTargetHost* render_target = nullptr;
+    std::uint32_t ibl_environment_id = 0U;
+    std::uint32_t ibl_brdf_lut_texture_id = 0U;
     FrameStaticContext frame{};
     FrameGpuProgressContext progress{};
 };
@@ -275,6 +288,8 @@ struct SurfaceRenderer3DPrepareView final {
     IblHost& ibl;
     resource::SamplerHost& sampler;
     RenderTargetHost* render_target = nullptr;
+    std::uint32_t ibl_environment_id = 0U;
+    std::uint32_t ibl_brdf_lut_texture_id = 0U;
     FrameStaticContext frame{};
     FrameGpuProgressContext progress{};
 };
@@ -284,17 +299,6 @@ struct ShadowRenderer3DPrepareView final {
     resource::GpuMemoryHost& gpu_memory;
     DescriptorHost& descriptor;
     PipelineHost& pipeline;
-    FrameStaticContext frame{};
-    FrameGpuProgressContext progress{};
-};
-
-struct SkyboxRendererPrepareView final {
-    VulkanContext& device;
-    resource::GpuMemoryHost& gpu_memory;
-    UploadHost& upload;
-    DescriptorHost& descriptor;
-    PipelineHost& pipeline;
-    IblHost& ibl;
     FrameStaticContext frame{};
     FrameGpuProgressContext progress{};
 };
@@ -407,10 +411,18 @@ template<typename T>
     const SceneRecorder3DPrepareView& prepare_view_) {
     return {
         .device = prepare_view_.device,
+        .gpu_memory = prepare_view_.gpu_memory,
+        .texture = prepare_view_.texture,
+        .upload = prepare_view_.upload,
+        .descriptor = prepare_view_.descriptor,
+        .ibl = prepare_view_.ibl,
         .pipeline = detail::RequirePrepareService(prepare_view_.pipeline,
                                                   "pipeline",
                                                   "SkyEnvironmentPassPrepareView"),
         .render_target = prepare_view_.render_target,
+        .sampler = prepare_view_.sampler,
+        .ibl_environment_id = prepare_view_.ibl_environment_id,
+        .ibl_brdf_lut_texture_id = prepare_view_.ibl_brdf_lut_texture_id,
         .frame = prepare_view_.frame,
         .progress = prepare_view_.progress,
     };
@@ -642,30 +654,6 @@ template<typename T>
     };
 }
 
-[[nodiscard]] inline SkyboxRendererPrepareView MakeSkyboxRendererPrepareView(
-    const SceneRecorder3DPrepareView& prepare_view_) {
-    return {
-        .device = prepare_view_.device,
-        .gpu_memory = detail::RequirePrepareService(prepare_view_.gpu_memory,
-                                                    "gpu_memory",
-                                                    "SkyboxRendererPrepareView"),
-        .upload = detail::RequirePrepareService(prepare_view_.upload,
-                                                "upload",
-                                                "SkyboxRendererPrepareView"),
-        .descriptor = detail::RequirePrepareService(prepare_view_.descriptor,
-                                                    "descriptor",
-                                                    "SkyboxRendererPrepareView"),
-        .pipeline = detail::RequirePrepareService(prepare_view_.pipeline,
-                                                  "pipeline",
-                                                  "SkyboxRendererPrepareView"),
-        .ibl = detail::RequirePrepareService(prepare_view_.ibl,
-                                             "ibl",
-                                             "SkyboxRendererPrepareView"),
-        .frame = prepare_view_.frame,
-        .progress = prepare_view_.progress,
-    };
-}
-
 [[nodiscard]] inline RenderTargetBloomRendererPrepareView MakeRenderTargetBloomRendererPrepareView(
     const SceneBloomPostStackPrepareView& prepare_view_) {
     return {
@@ -707,12 +695,18 @@ template<typename T>
 }
 
 [[nodiscard]] inline IblHostPrepareView MakeIblHostPrepareView(
-    const SkyboxRendererPrepareView& prepare_view_) {
+    const SkyEnvironmentPassPrepareView& prepare_view_) {
     return {
         .device = prepare_view_.device,
-        .gpu_memory = prepare_view_.gpu_memory,
-        .upload = prepare_view_.upload,
-        .descriptor = prepare_view_.descriptor,
+        .gpu_memory = detail::RequirePrepareService(prepare_view_.gpu_memory,
+                                                    "gpu_memory",
+                                                    "IblHostPrepareView"),
+        .upload = detail::RequirePrepareService(prepare_view_.upload,
+                                                "upload",
+                                                "IblHostPrepareView"),
+        .descriptor = detail::RequirePrepareService(prepare_view_.descriptor,
+                                                    "descriptor",
+                                                    "IblHostPrepareView"),
         .frame = prepare_view_.frame,
         .progress = prepare_view_.progress,
     };
@@ -741,6 +735,8 @@ template<typename T>
                                                  "sampler",
                                                  "GeometryRenderer3DPrepareView"),
         .render_target = &prepare_view_.render_target,
+        .ibl_environment_id = prepare_view_.ibl_environment_id,
+        .ibl_brdf_lut_texture_id = prepare_view_.ibl_brdf_lut_texture_id,
         .frame = prepare_view_.frame,
         .progress = prepare_view_.progress,
     };
@@ -769,6 +765,8 @@ template<typename T>
                                                  "sampler",
                                                  "SurfaceRenderer3DPrepareView"),
         .render_target = &prepare_view_.render_target,
+        .ibl_environment_id = prepare_view_.ibl_environment_id,
+        .ibl_brdf_lut_texture_id = prepare_view_.ibl_brdf_lut_texture_id,
         .frame = prepare_view_.frame,
         .progress = prepare_view_.progress,
     };

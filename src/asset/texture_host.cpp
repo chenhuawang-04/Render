@@ -2,6 +2,7 @@
 
 #include "vr/resource/gpu_memory_host.hpp"
 
+#include <bit>
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
@@ -10,6 +11,164 @@
 #include <utility>
 
 namespace vr::asset {
+
+namespace {
+
+[[nodiscard]] float HalfBitsToFloat(std::uint16_t value_) noexcept {
+    const std::uint32_t sign = (static_cast<std::uint32_t>(value_ & 0x8000U)) << 16U;
+    const std::uint32_t exponent = (value_ >> 10U) & 0x1FU;
+    std::uint32_t mantissa = value_ & 0x03FFU;
+
+    if (exponent == 0U) {
+        if (mantissa == 0U) {
+            return std::bit_cast<float>(sign);
+        }
+
+        std::int32_t adjusted_exponent = -14;
+        while ((mantissa & 0x0400U) == 0U) {
+            mantissa <<= 1U;
+            --adjusted_exponent;
+        }
+        mantissa &= 0x03FFU;
+        const std::uint32_t bits = sign |
+                                   static_cast<std::uint32_t>((adjusted_exponent + 127) << 23U) |
+                                   (mantissa << 13U);
+        return std::bit_cast<float>(bits);
+    } else if (exponent == 31U) {
+        const std::uint32_t inf_nan_bits = sign | 0x7F800000U | (mantissa << 13U);
+        return std::bit_cast<float>(inf_nan_bits);
+    }
+
+    const std::uint32_t adjusted_exponent = exponent + (127U - 15U);
+    const std::uint32_t bits = sign | (adjusted_exponent << 23U) | (mantissa << 13U);
+    return std::bit_cast<float>(bits);
+}
+
+[[nodiscard]] bool SupportsCpuSnapshotFormat(VkFormat format_) noexcept {
+    switch (format_) {
+    case VK_FORMAT_R16G16B16A16_SFLOAT:
+    case VK_FORMAT_R8G8B8A8_UNORM:
+        return true;
+    default:
+        break;
+    }
+    return false;
+}
+
+[[nodiscard]] std::uint32_t BytesPerTexelForSnapshot(VkFormat format_) noexcept {
+    switch (format_) {
+    case VK_FORMAT_R16G16B16A16_SFLOAT:
+        return 8U;
+    case VK_FORMAT_R8G8B8A8_UNORM:
+        return 4U;
+    default:
+        break;
+    }
+    return 0U;
+}
+
+[[nodiscard]] ecs::Float4 DecodeSnapshotTexel(const std::uint8_t* pixels_,
+                                              VkFormat format_) noexcept {
+    switch (format_) {
+    case VK_FORMAT_R16G16B16A16_SFLOAT: {
+        const auto* half = reinterpret_cast<const std::uint16_t*>(pixels_);
+        return ecs::Float4{
+            .x = HalfBitsToFloat(half[0U]),
+            .y = HalfBitsToFloat(half[1U]),
+            .z = HalfBitsToFloat(half[2U]),
+            .w = HalfBitsToFloat(half[3U]),
+        };
+    }
+    case VK_FORMAT_R8G8B8A8_UNORM:
+        return ecs::Float4{
+            .x = static_cast<float>(pixels_[0U]) / 255.0F,
+            .y = static_cast<float>(pixels_[1U]) / 255.0F,
+            .z = static_cast<float>(pixels_[2U]) / 255.0F,
+            .w = static_cast<float>(pixels_[3U]) / 255.0F,
+        };
+    default:
+        break;
+    }
+    return {};
+}
+
+void CaptureCpuBaseLevelSnapshot(TextureHost::TextureRecord& record_,
+                                 const TextureUploadInfo& upload_info_) {
+    record_.cpu_base_level_snapshot = {};
+    if (!record_.retain_cpu_upload_data ||
+        !SupportsCpuSnapshotFormat(record_.format)) {
+        return;
+    }
+
+    const std::uint32_t bytes_per_texel = BytesPerTexelForSnapshot(record_.format);
+    if (bytes_per_texel == 0U) {
+        return;
+    }
+
+    for (std::uint32_t subresource_index = 0U;
+         subresource_index < upload_info_.subresource_count;
+         ++subresource_index) {
+        const TextureSubresourceUploadInfo& subresource = upload_info_.subresources[subresource_index];
+        if (subresource.mip_level != 0U ||
+            subresource.pixels == nullptr ||
+            subresource.image_offset.x != 0 ||
+            subresource.image_offset.y != 0 ||
+            subresource.image_offset.z != 0 ||
+            subresource.image_extent.depth != 1U ||
+            subresource.layer_count == 0U) {
+            continue;
+        }
+
+        const std::uint32_t row_pitch_pixels =
+            subresource.buffer_row_length > 0U ? subresource.buffer_row_length
+                                               : subresource.image_extent.width;
+        const std::uint32_t image_height =
+            subresource.buffer_image_height > 0U ? subresource.buffer_image_height
+                                                 : subresource.image_extent.height;
+        if (row_pitch_pixels < subresource.image_extent.width ||
+            image_height < subresource.image_extent.height) {
+            continue;
+        }
+
+        const std::size_t layer_texel_count =
+            static_cast<std::size_t>(row_pitch_pixels) * image_height;
+        const std::size_t layer_byte_count = layer_texel_count * bytes_per_texel;
+        if (subresource.size_bytes <
+            static_cast<VkDeviceSize>(layer_byte_count * subresource.layer_count)) {
+            continue;
+        }
+
+        const auto* layer_bytes = static_cast<const std::uint8_t*>(subresource.pixels);
+        for (std::uint32_t layer_index = 0U; layer_index < subresource.layer_count; ++layer_index) {
+            TextureHost::CpuFloatLayerSnapshot snapshot_layer{};
+            snapshot_layer.array_layer = subresource.base_array_layer + layer_index;
+            snapshot_layer.width = subresource.image_extent.width;
+            snapshot_layer.height = subresource.image_extent.height;
+            snapshot_layer.row_pitch_pixels = subresource.image_extent.width;
+            snapshot_layer.pixels.resize(
+                static_cast<std::size_t>(snapshot_layer.width) * snapshot_layer.height);
+
+            const std::uint8_t* source_bytes = layer_bytes + layer_byte_count * layer_index;
+            for (std::uint32_t y = 0U; y < snapshot_layer.height; ++y) {
+                for (std::uint32_t x = 0U; x < snapshot_layer.width; ++x) {
+                    const std::size_t source_index =
+                        (static_cast<std::size_t>(y) * row_pitch_pixels + x) * bytes_per_texel;
+                    const std::size_t target_index =
+                        static_cast<std::size_t>(y) * snapshot_layer.width + x;
+                    snapshot_layer.pixels[target_index] =
+                        DecodeSnapshotTexel(source_bytes + source_index, record_.format);
+                }
+            }
+            record_.cpu_base_level_snapshot.layers.push_back(std::move(snapshot_layer));
+        }
+    }
+
+    record_.cpu_base_level_snapshot.valid = !record_.cpu_base_level_snapshot.layers.empty();
+    record_.cpu_base_level_snapshot.format = record_.format;
+    record_.cpu_base_level_snapshot.default_view_type = record_.default_view_type;
+}
+
+} // namespace
 
 void TextureHost::Initialize(VulkanContext& context_,
                              resource::GpuMemoryHost& gpu_memory_host_,
@@ -110,6 +269,7 @@ void TextureHost::UploadTexture(VulkanContext& context_,
     }
 
     TextureRecord& record = textures[lower_bound_index];
+    record.retain_cpu_upload_data = upload_info_.create.retain_cpu_upload_data;
     const bool compatible_existing =
         record.resource.image != VK_NULL_HANDLE &&
         !upload_info_.create.force_recreate &&
@@ -151,6 +311,7 @@ void TextureHost::UploadTexture(VulkanContext& context_,
         record.usage = upload_info_.create.usage;
         record.shader_read_layout = upload_info_.create.shader_read_layout;
         record.aspect_mask = upload_info_.create.aspect_mask;
+        record.cpu_base_level_snapshot = {};
     } else {
         ++stats.updated_texture_count;
     }
@@ -241,6 +402,7 @@ void TextureHost::UploadTexture(VulkanContext& context_,
     }
 
     record.current_layout = record.shader_read_layout;
+    CaptureCpuBaseLevelSnapshot(record, upload_info_);
     ++record.revision;
     stats.uploaded_bytes += uploaded_bytes;
     stats.texture_count = static_cast<std::uint32_t>(textures.size());
@@ -291,6 +453,15 @@ const TextureHost::TextureRecord* TextureHost::FindTexture(TextureId texture_id_
         return nullptr;
     }
     return &record;
+}
+
+const TextureHost::CpuFloatBaseLevelSnapshot* TextureHost::FindCpuFloatBaseLevelSnapshot(
+    TextureId texture_id_) const noexcept {
+    const TextureRecord* record = FindTexture(texture_id_);
+    if (record == nullptr || !record->retain_cpu_upload_data || !record->cpu_base_level_snapshot.valid) {
+        return nullptr;
+    }
+    return &record->cpu_base_level_snapshot;
 }
 
 bool TextureHost::IsInitialized() const noexcept {

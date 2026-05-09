@@ -47,6 +47,7 @@ add_executable(${VR_BENCH_TARGET}
     cases/runtime_diagnostics_bench.cpp
     cases/runtime_steady_state_allocation_bench.cpp
     cases/runtime_text_renderer_bench.cpp
+    cases/scene_background_runtime_bench.cpp
 )
 
 target_link_libraries(${VR_BENCH_TARGET}
@@ -65,4 +66,40 @@ add_test(
 )
 set_tests_properties(vr_bench.smoke PROPERTIES
     LABELS "bench;performance;fast"
+)
+
+add_test(
+    NAME vr_bench.scene_background_smoke
+    COMMAND ${VR_BENCH_TARGET}
+            --filter ScenePrepare_dim3_resolve_environment_steady_state
+            --warmup 1
+            --runs 3
+            --min-duration-ms 5
+)
+set_tests_properties(vr_bench.scene_background_smoke PROPERTIES
+    LABELS "bench;performance;scene;background;fast"
+)
+
+add_test(
+    NAME vr_bench.sky_environment_gpu_cache_hit_smoke
+    COMMAND ${VR_BENCH_TARGET}
+            --filter SkyEnvironmentGpuHost_register_or_update_static_cache_hit
+            --warmup 1
+            --runs 3
+            --min-duration-ms 5
+)
+set_tests_properties(vr_bench.sky_environment_gpu_cache_hit_smoke PROPERTIES
+    LABELS "bench;performance;scene;background;gpu_host;fast"
+)
+
+add_test(
+    NAME vr_bench.scene_recorder_static_environment_smoke
+    COMMAND ${VR_BENCH_TARGET}
+            --filter SceneRecorder3D_prepare_static_environment_cpu
+            --warmup 1
+            --runs 3
+            --min-duration-ms 5
+)
+set_tests_properties(vr_bench.scene_recorder_static_environment_smoke PROPERTIES
+    LABELS "bench;performance;scene;background;recorder;fast"
 )

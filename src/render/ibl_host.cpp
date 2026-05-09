@@ -59,7 +59,6 @@ void IblHost::Initialize(VulkanContext& context_,
     active_params = {};
     active_params.tint_intensity = {1.0F, 1.0F, 1.0F, 0.0F};
     active_params.rotation_max_lod_flags = {0.0F, 1.0F, 0.0F, 0.0F};
-    active_environment_id = {};
     active_brdf_lut_texture_id = {};
     active_specular_texture_id = {};
     active_skybox_texture_id = {};
@@ -151,7 +150,6 @@ void IblHost::Shutdown(VulkanContext& context_) {
     active_brdf_lut_texture_id = {};
     active_specular_texture_id = {};
     active_skybox_texture_id = {};
-    active_environment_id = {};
     active_params = {};
     stats = {};
     next_environment_id = 1U;
@@ -166,11 +164,9 @@ IblEnvironmentId IblHost::RegisterEnvironment(VulkanContext& context_,
     if (!initialized || texture_host == nullptr) {
         throw std::runtime_error("IblHost::RegisterEnvironment called before Initialize");
     }
-    if (!desc_.specular_cube.IsValid()) {
-        throw std::invalid_argument("IblHost::RegisterEnvironment requires a valid specular cube texture");
+    if (desc_.specular_cube.IsValid()) {
+        (void)RequireCubeTexture(desc_.specular_cube, "IblHost::RegisterEnvironment specular cube");
     }
-
-    (void)RequireCubeTexture(desc_.specular_cube, "IblHost::RegisterEnvironment specular cube");
     if (desc_.skybox_cube.IsValid()) {
         (void)RequireCubeTexture(desc_.skybox_cube, "IblHost::RegisterEnvironment skybox cube");
     }
@@ -220,26 +216,10 @@ bool IblHost::RemoveEnvironment(IblEnvironmentId environment_id_) noexcept {
     }
 
     environments.erase(environments.begin() + static_cast<std::ptrdiff_t>(lower_bound_index));
-    if (active_environment_id.value == environment_id_.value) {
-        active_environment_id = {};
-    }
     stats.environment_count = static_cast<std::uint32_t>(environments.size());
     ++stats.removed_environment_count;
     ++stats.revision;
     return true;
-}
-
-void IblHost::SetActiveEnvironment(IblEnvironmentId environment_id_) noexcept {
-    if (active_environment_id.value == environment_id_.value) {
-        return;
-    }
-    active_environment_id = environment_id_;
-    ++stats.active_environment_switch_count;
-    ++stats.revision;
-}
-
-void IblHost::ClearActiveEnvironment() noexcept {
-    SetActiveEnvironment({});
 }
 
 void IblHost::SetBrdfLut(asset::TextureId brdf_lut_) noexcept {
@@ -251,6 +231,22 @@ void IblHost::SetBrdfLut(asset::TextureId brdf_lut_) noexcept {
 }
 
 void IblHost::PrepareFrame(const IblHostPrepareView& prepare_view_) {
+    PrepareResolvedFrame(prepare_view_, nullptr, {}, active_brdf_lut_texture_id);
+}
+
+void IblHost::PrepareEnvironmentFrame(const IblHostPrepareView& prepare_view_,
+                                      IblEnvironmentId environment_id_,
+                                      asset::TextureId brdf_lut_texture_id_) {
+    PrepareResolvedFrame(prepare_view_,
+                         FindEnvironmentRecord(environment_id_),
+                         environment_id_,
+                         brdf_lut_texture_id_.IsValid() ? brdf_lut_texture_id_ : active_brdf_lut_texture_id);
+}
+
+void IblHost::PrepareResolvedFrame(const IblHostPrepareView& prepare_view_,
+                                   const EnvironmentRecord* record_,
+                                   IblEnvironmentId prepared_environment_id_,
+                                   asset::TextureId brdf_lut_texture_id_) {
     if (!initialized || texture_host == nullptr || descriptor_host == nullptr || sampler_host == nullptr) {
         throw std::runtime_error("IblHost::PrepareFrame called before Initialize");
     }
@@ -261,15 +257,16 @@ void IblHost::PrepareFrame(const IblHostPrepareView& prepare_view_) {
     EnsureFrameResources(prepare_view_);
     EnsureDefaultTextures(prepare_view_);
 
-    const EnvironmentRecord* active_record = ResolveActiveEnvironmentRecord();
     const asset::TextureHost::TextureRecord* specular_record = nullptr;
     const asset::TextureHost::TextureRecord* skybox_record = nullptr;
 
-    if (active_record != nullptr) {
-        specular_record = &RequireCubeTexture(active_record->desc.specular_cube,
-                                              "IblHost::PrepareFrame active specular cube");
-        if (active_record->desc.skybox_cube.IsValid()) {
-            skybox_record = &RequireCubeTexture(active_record->desc.skybox_cube,
+    if (record_ != nullptr) {
+        if (record_->desc.specular_cube.IsValid()) {
+            specular_record = &RequireCubeTexture(record_->desc.specular_cube,
+                                                  "IblHost::PrepareFrame active specular cube");
+        }
+        if (record_->desc.skybox_cube.IsValid()) {
+            skybox_record = &RequireCubeTexture(record_->desc.skybox_cube,
                                                 "IblHost::PrepareFrame active skybox cube");
         }
     }
@@ -282,7 +279,7 @@ void IblHost::PrepareFrame(const IblHostPrepareView& prepare_view_) {
         skybox_record = specular_record;
     }
 
-    asset::TextureId brdf_texture_id = active_brdf_lut_texture_id;
+    asset::TextureId brdf_texture_id = brdf_lut_texture_id_;
     if (!brdf_texture_id.IsValid() && create_info_cache.create_default_brdf_lut) {
         brdf_texture_id = default_brdf_lut_texture_id;
     }
@@ -293,7 +290,7 @@ void IblHost::PrepareFrame(const IblHostPrepareView& prepare_view_) {
     const asset::TextureHost::TextureRecord& brdf_record =
         RequireBrdfTexture(brdf_texture_id, "IblHost::PrepareFrame BRDF LUT");
 
-    active_params = BuildResolvedParams(active_record,
+    active_params = BuildResolvedParams(record_,
                                         *specular_record,
                                         skybox_record->texture_id.value != specular_record->texture_id.value);
     active_specular_texture_id = specular_record->texture_id;
@@ -304,7 +301,7 @@ void IblHost::PrepareFrame(const IblHostPrepareView& prepare_view_) {
         frame.prepared &&
         frame.prepared_frame_index == prepare_view_.frame.frame_index &&
         frame.prepared_last_submitted_value == prepare_view_.progress.last_submitted_value &&
-        frame.prepared_environment_id.value == active_environment_id.value &&
+        frame.prepared_environment_id.value == prepared_environment_id_.value &&
         frame.prepared_brdf_lut.value == brdf_record.texture_id.value &&
         frame.prepared_specular_texture.value == specular_record->texture_id.value &&
         frame.prepared_skybox_texture.value == skybox_record->texture_id.value &&
@@ -322,7 +319,7 @@ void IblHost::PrepareFrame(const IblHostPrepareView& prepare_view_) {
                                     brdf_record,
                                     *skybox_record);
 
-        frame.prepared_environment_id = active_environment_id;
+        frame.prepared_environment_id = prepared_environment_id_;
         frame.prepared_brdf_lut = brdf_record.texture_id;
         frame.prepared_specular_texture = specular_record->texture_id;
         frame.prepared_skybox_texture = skybox_record->texture_id;
@@ -352,6 +349,25 @@ const IblEnvironmentAssetDesc* IblHost::FindEnvironment(IblEnvironmentId environ
     }
 
     return &record.desc;
+}
+
+const IblHost::EnvironmentRecord* IblHost::FindEnvironmentRecord(
+    IblEnvironmentId environment_id_) const noexcept {
+    if (!initialized || !environment_id_.IsValid()) {
+        return nullptr;
+    }
+
+    const std::size_t lower_bound_index = LowerBoundEnvironmentIndex(environment_id_);
+    if (lower_bound_index >= environments.size()) {
+        return nullptr;
+    }
+
+    const EnvironmentRecord& record = environments[lower_bound_index];
+    if (record.desc.environment_id.value != environment_id_.value) {
+        return nullptr;
+    }
+
+    return &record;
 }
 
 VkDescriptorSet IblHost::ActiveDescriptorSet(std::uint32_t frame_index_) const {
@@ -388,10 +404,6 @@ asset::TextureId IblHost::ActiveSpecularTexture() const noexcept {
 
 asset::TextureId IblHost::ActiveSkyboxTexture() const noexcept {
     return active_skybox_texture_id;
-}
-
-IblEnvironmentId IblHost::ActiveEnvironment() const noexcept {
-    return active_environment_id;
 }
 
 const IblHostStats& IblHost::Stats() const noexcept {
@@ -447,10 +459,7 @@ void IblHost::EnsureFrameResources(const IblHostPrepareView& prepare_view_) {
 }
 
 void IblHost::EnsureDefaultTextures(const IblHostPrepareView& prepare_view_) {
-    const bool needs_default_specular =
-        create_info_cache.create_default_environment_textures &&
-        (!active_environment_id.IsValid() || ResolveActiveEnvironmentRecord() == nullptr);
-    if (!default_specular_cube_uploaded && needs_default_specular) {
+    if (!default_specular_cube_uploaded && create_info_cache.create_default_environment_textures) {
         UploadDefaultSpecularCube(prepare_view_);
     }
     const bool needs_default_brdf = create_info_cache.create_default_brdf_lut &&
@@ -565,24 +574,6 @@ void IblHost::DestroyFrameResources(VulkanContext& context_) noexcept {
         }
         frame = {};
     }
-}
-
-const IblHost::EnvironmentRecord* IblHost::ResolveActiveEnvironmentRecord() const noexcept {
-    if (!active_environment_id.IsValid()) {
-        return nullptr;
-    }
-
-    const std::size_t lower_bound_index = LowerBoundEnvironmentIndex(active_environment_id);
-    if (lower_bound_index >= environments.size()) {
-        return nullptr;
-    }
-
-    const EnvironmentRecord& record = environments[lower_bound_index];
-    if (record.desc.environment_id.value != active_environment_id.value) {
-        return nullptr;
-    }
-
-    return &record;
 }
 
 const asset::TextureHost::TextureRecord& IblHost::RequireCubeTexture(asset::TextureId texture_id_,

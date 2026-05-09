@@ -2,6 +2,7 @@
 
 #include "vr/ecs/component/spatial_types.hpp"
 
+#include <array>
 #include <cstdint>
 #include <type_traits>
 
@@ -14,6 +15,11 @@ enum class SkyEnvironmentMode : std::uint8_t {
     cubemap = 3U,
     equirectangular_hdr = 4U,
     procedural_atmosphere = 5U,
+};
+
+enum class SkyEnvironmentDrawOrder : std::uint8_t {
+    before_opaque = 0U,
+    after_opaque_depth_tested = 1U,
 };
 
 struct SkyEnvironment final {
@@ -37,6 +43,7 @@ struct SkyEnvironment final {
     float specular_ibl_intensity;
     float rotation_y;
     float max_specular_lod;
+    SkyEnvironmentDrawOrder draw_order;
 
     float sun_elevation;
     float sun_azimuth;
@@ -69,6 +76,7 @@ struct SkyEnvironmentRenderState final {
     ecs::Float4 horizon_color;
     ecs::Float4 ground_color;
     ecs::Float4 tint;
+    std::array<ecs::Float4, 9U> sh9;
 
     float exposure;
     float sky_intensity;
@@ -76,6 +84,12 @@ struct SkyEnvironmentRenderState final {
     float specular_ibl_intensity;
     float rotation_y;
     float max_specular_lod;
+    SkyEnvironmentDrawOrder draw_order;
+    float sun_elevation;
+    float sun_azimuth;
+    float atmosphere_density;
+    float mie_scattering;
+    float rayleigh_scattering;
 
     std::uint32_t flags;
     std::uint32_t revision;
