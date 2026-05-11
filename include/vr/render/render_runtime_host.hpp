@@ -32,6 +32,7 @@
 #include "vr/runtime/services/texture_service.hpp"
 #include "vr/runtime/services/upload_service.hpp"
 #include "vr/render/descriptor_host.hpp"
+#include "vr/render/bindless_resource_system.hpp"
 #include "vr/render/pipeline_host.hpp"
 #include "vr/render/render_target_host.hpp"
 #include "vr/render/render_target_pool.hpp"
@@ -116,6 +117,7 @@ public:
         SkyEnvironmentGpuHostCreateInfo sky_environment{};
         UploadHostCreateInfo upload{};
         DescriptorHostCreateInfo descriptor{};
+        BindlessResourceSystemCreateInfo bindless{};
         PipelineHostCreateInfo pipeline{};
         RenderTargetHostCreateInfo render_target{};
         RenderTargetPoolCreateInfo render_target_pool{};
@@ -179,10 +181,19 @@ public:
     RenderRuntimeHost(RenderRuntimeHost&&) = delete;
     RenderRuntimeHost& operator=(RenderRuntimeHost&&) = delete;
 
+    [[nodiscard]] BindlessResourceSystem& BindlessResources() noexcept {
+        return bindless_resource_system;
+    }
+
+    [[nodiscard]] const BindlessResourceSystem& BindlessResources() const noexcept {
+        return bindless_resource_system;
+    }
+
     void Initialize(const CreateInfo& create_info_ = {}) {
         Shutdown();
 
         create_info_cache = create_info_;
+        EnableRecommendedBindlessOptionalFeatures(create_info_cache.platform.device);
         runtime_frame_id = 0U;
         last_tick_frame_index = 0U;
         last_tick_image_index = 0U;
@@ -226,6 +237,19 @@ public:
                 descriptor_info.frames_in_flight = frames_in_flight_v;
                 descriptor_host.Initialize(platform_host.Context(), descriptor_info);
                 descriptor_initialized = true;
+            }
+
+            if (texture_initialized &&
+                sampler_initialized &&
+                descriptor_initialized &&
+                platform_host.Context().DescriptorIndexingCapsInfo().enabled) {
+                bindless_resource_system.Initialize(platform_host.Context(),
+                                                   gpu_memory_host,
+                                                   descriptor_host,
+                                                   sampler_host,
+                                                   create_info_cache.bindless);
+                bindless_resource_system.ConfigureTextureHost(texture_host);
+                bindless_resources_initialized = true;
             }
 
             if (create_info_cache.modules.enable_ibl_host) {
@@ -428,6 +452,13 @@ public:
                 ibl_bake_host.Shutdown(platform_host.Context());
                 ibl_bake_initialized = false;
             }
+            if (bindless_resources_initialized) {
+                if (texture_initialized) {
+                    texture_host.ConfigureBindless({});
+                }
+                bindless_resource_system.Shutdown(platform_host.Context());
+                bindless_resources_initialized = false;
+            }
             if (texture_initialized) {
                 texture_host.Shutdown(platform_host.Context());
                 texture_initialized = false;
@@ -531,6 +562,14 @@ public:
         if (ibl_bake_initialized) {
             ibl_bake_host.Shutdown(platform_host.Context());
             ibl_bake_initialized = false;
+        }
+
+        if (bindless_resources_initialized) {
+            if (texture_initialized) {
+                texture_host.ConfigureBindless({});
+            }
+            bindless_resource_system.Shutdown(platform_host.Context());
+            bindless_resources_initialized = false;
         }
 
         if (texture_initialized) {
@@ -1509,6 +1548,7 @@ private:
                 .device = device,
                 .gpu_memory = &gpu_memory_host,
                 .texture = texture_initialized ? &texture_host : nullptr,
+                .bindless = bindless_resources_initialized ? &bindless_resource_system : nullptr,
                 .upload = upload_initialized ? &upload_host : nullptr,
                 .descriptor = descriptor_initialized ? &descriptor_host : nullptr,
                 .frame_composer = frame_composer_initialized ? &frame_composer_host : nullptr,
@@ -1535,6 +1575,7 @@ private:
                 .device = device,
                 .gpu_memory = &gpu_memory_host,
                 .texture = texture_initialized ? &texture_host : nullptr,
+                .bindless = bindless_resources_initialized ? &bindless_resource_system : nullptr,
                 .upload = upload_initialized ? &upload_host : nullptr,
                 .descriptor = descriptor_initialized ? &descriptor_host : nullptr,
                 .frame_composer = frame_composer_initialized ? &frame_composer_host : nullptr,
@@ -1719,6 +1760,7 @@ private:
                 .pipeline = pipeline_host,
                 .sampler = sampler_host,
                 .texture = texture_initialized ? &texture_host : nullptr,
+                .bindless = bindless_resources_initialized ? &bindless_resource_system : nullptr,
                 .particle_upload = particle_upload_initialized ? &particle_upload_host : nullptr,
                 .particle_simulation = particle_simulation_initialized ? &particle_simulation_host : nullptr,
                 .render_target = render_target_initialized ? &render_target_host : nullptr,
@@ -1737,6 +1779,7 @@ private:
                 .pipeline = pipeline_host,
                 .sampler = sampler_host,
                 .texture = texture_initialized ? &texture_host : nullptr,
+                .bindless = bindless_resources_initialized ? &bindless_resource_system : nullptr,
                 .particle_upload = particle_upload_initialized ? &particle_upload_host : nullptr,
                 .particle_simulation = particle_simulation_initialized ? &particle_simulation_host : nullptr,
                 .render_target = render_target_initialized ? &render_target_host : nullptr,
@@ -2059,8 +2102,13 @@ private:
             diagnostics.descriptor.total_allocated_set_count = descriptor_host.TotalAllocatedSetCount();
             diagnostics.descriptor.frame_allocated_set_count =
                 descriptor_host.FrameAllocatedSetCount(result_.render.frame_index);
+            diagnostics.descriptor.descriptor_indexing = platform_host.Context().DescriptorIndexingCapsInfo();
+            diagnostics.descriptor.host = descriptor_host.Stats();
             diagnostics.descriptor.validation = descriptor_host.ValidationStats();
             diagnostics.allocations.descriptor_total_pool_count = diagnostics.descriptor.total_pool_count;
+        }
+        if (bindless_resources_initialized) {
+            diagnostics.bindless.resources = bindless_resource_system.Stats();
         }
         if (pipeline_initialized) {
             diagnostics.pipeline = pipeline_host.Stats();
@@ -2132,6 +2180,7 @@ private:
     SkyEnvironmentGpuHost sky_environment_gpu_host{};
     UploadHost upload_host{};
     DescriptorHost descriptor_host{};
+    BindlessResourceSystem bindless_resource_system{};
     PipelineHost pipeline_host{};
     RenderTargetHost render_target_host{};
     RenderTargetPool render_target_pool{};
@@ -2175,6 +2224,7 @@ private:
     bool sky_environment_initialized = false;
     bool upload_initialized = false;
     bool descriptor_initialized = false;
+    bool bindless_resources_initialized = false;
     bool pipeline_initialized = false;
     bool render_target_initialized = false;
     bool render_target_pool_initialized = false;

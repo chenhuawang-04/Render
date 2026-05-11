@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Center/Memory/Container/Vector/McVector.hpp"
+#include "vr/render/bindless_types.hpp"
 #include "vr/vulkan_context.hpp"
 
 #include <cstdint>
@@ -76,6 +77,16 @@ struct DescriptorValidationStats {
     std::uint64_t begin_frame_invalidation_count = 0U;
 };
 
+struct DescriptorHostStats {
+    std::uint64_t transient_update_call_count = 0U;
+    std::uint64_t transient_descriptor_write_count = 0U;
+    std::uint64_t bindless_table_count = 0U;
+    std::uint64_t bindless_pending_write_count = 0U;
+    std::uint64_t bindless_descriptor_write_count = 0U;
+    std::uint64_t bindless_live_slot_count = 0U;
+    std::uint64_t bindless_slot_recycle_count = 0U;
+};
+
 class DescriptorHost final {
 public:
     DescriptorHost() = default;
@@ -134,6 +145,38 @@ public:
                    const DescriptorMcVector<DescriptorImageWrite>& image_writes_,
                    const DescriptorMcVector<DescriptorTexelBufferWrite>& texel_writes_ = {});
 
+    [[nodiscard]] BindlessTableId CreateBindlessTable(VulkanContext& context_,
+                                                      const BindlessTableDesc& table_desc_);
+    [[nodiscard]] VkDescriptorSet GetBindlessDescriptorSet(BindlessTableId table_id_) const;
+    [[nodiscard]] VkDescriptorSetLayout GetBindlessLayout(BindlessTableId table_id_) const;
+    [[nodiscard]] uint32_t GetBindlessCapacity(BindlessTableId table_id_) const;
+    [[nodiscard]] BindlessTableStats GetBindlessTableStats(BindlessTableId table_id_) const;
+
+    [[nodiscard]] BindlessSlot AllocateBindlessSlot(BindlessTableId table_id_);
+    void FreeBindlessSlotDeferred(BindlessTableId table_id_,
+                                  BindlessSlot slot_,
+                                  std::uint64_t retire_value_);
+
+    void QueueBindlessImageWrite(BindlessTableId table_id_,
+                                 BindlessSlot slot_,
+                                 VkImageView image_view_,
+                                 VkImageLayout image_layout_);
+    void QueueBindlessSamplerWrite(BindlessTableId table_id_,
+                                   BindlessSlot slot_,
+                                   VkSampler sampler_);
+    void QueueBindlessCombinedImageSamplerWrite(BindlessTableId table_id_,
+                                                BindlessSlot slot_,
+                                                VkSampler sampler_,
+                                                VkImageView image_view_,
+                                                VkImageLayout image_layout_);
+    void QueueBindlessPlaceholderWrite(BindlessTableId table_id_,
+                                       BindlessSlot slot_);
+    void FlushBindlessWrites(VulkanContext& context_,
+                             std::uint64_t completed_submit_value_);
+
+    [[nodiscard]] bool IsBindlessSlotAlive(BindlessTableId table_id_,
+                                           BindlessSlot slot_) const noexcept;
+
     [[nodiscard]] bool IsInitialized() const noexcept;
     [[nodiscard]] uint32_t FramesInFlight() const noexcept;
     [[nodiscard]] uint32_t MaxSetsPerPool() const noexcept;
@@ -144,6 +187,7 @@ public:
     [[nodiscard]] uint32_t FrameAllocatedSetCount(uint32_t frame_index_) const;
     [[nodiscard]] bool ValidationEnabled() const noexcept;
     [[nodiscard]] DescriptorValidationStats ValidationStats() const noexcept;
+    [[nodiscard]] const DescriptorHostStats& Stats() const noexcept;
 #if VR_ENABLE_DESCRIPTOR_VALIDATION
     [[nodiscard]] bool IsDescriptorSetAlive(VkDescriptorSet set_) const noexcept;
 #endif
@@ -191,6 +235,40 @@ private:
         DescriptorMcVector<VkDescriptorImageInfo> image_infos{};
         DescriptorMcVector<VkBufferView> texel_views{};
     };
+
+    struct PendingBindlessWrite {
+        uint32_t slot_index = 0U;
+        std::uint64_t revision = 0U;
+        VkDescriptorImageInfo image_info{};
+    };
+
+    struct DeferredBindlessFree {
+        BindlessSlot slot{};
+        std::uint64_t retire_value = 0U;
+    };
+
+    struct BindlessTable {
+        BindlessTableDesc desc{};
+        DescriptorSetLayoutId layout_id{};
+        VkDescriptorPool pool = VK_NULL_HANDLE;
+        VkDescriptorSet set = VK_NULL_HANDLE;
+        uint32_t capacity = 0U;
+        uint32_t live_count = 0U;
+        std::uint64_t next_write_revision = 0U;
+
+        DescriptorMcVector<uint32_t> generations{};
+        DescriptorMcVector<uint8_t> initialized{};
+        DescriptorMcVector<uint8_t> pending_free{};
+        DescriptorMcVector<std::uint64_t> queued_write_revisions{};
+        DescriptorMcVector<uint32_t> free_list{};
+        DescriptorMcVector<PendingBindlessWrite> pending_writes{};
+        DescriptorMcVector<DeferredBindlessFree> deferred_frees{};
+    };
+
+    struct BindlessUpdateScratch {
+        DescriptorMcVector<VkWriteDescriptorSet> writes{};
+        DescriptorMcVector<VkDescriptorImageInfo> image_infos{};
+    };
 #if VR_ENABLE_DESCRIPTOR_VALIDATION
     struct DescriptorSetValidationNode {
         uint64_t descriptor_set_bits = 0U;
@@ -210,13 +288,30 @@ private:
     static DescriptorMcVector<DescriptorPoolSizeRatio> DefaultPoolRatios();
     [[nodiscard]] static uint32_t IdToIndex(uint32_t id_value_);
     [[nodiscard]] static DescriptorSetLayoutId MakeLayoutId(uint32_t entry_index_);
+    [[nodiscard]] static uint32_t TableIdToIndex(uint32_t table_id_value_);
+    [[nodiscard]] static BindlessTableId MakeTableId(uint32_t entry_index_);
 
     FramePoolArena& ArenaAt(uint32_t frame_index_);
     const FramePoolArena& ArenaAt(uint32_t frame_index_) const;
+    BindlessTable& TableAt(BindlessTableId table_id_);
+    const BindlessTable& TableAt(BindlessTableId table_id_) const;
 
     VkDescriptorPool CreatePool(VulkanContext& context_) const;
     VkDescriptorPool AcquirePoolForFrame(VulkanContext& context_,
                                          FramePoolArena& arena_);
+    [[nodiscard]] static bool DescriptorTypeSupportsImageInfo(VkDescriptorType descriptor_type_) noexcept;
+    [[nodiscard]] static bool IsPlaceholderImageInfoValid(VkDescriptorType descriptor_type_,
+                                                          const VkDescriptorImageInfo& image_info_) noexcept;
+    static void IncrementGeneration(uint32_t& generation_) noexcept;
+    static void RequireBindlessCapsForTable(const VulkanContext& context_,
+                                            const BindlessTableDesc& table_desc_);
+    static void RequireAliveBindlessSlot(const BindlessTable& table_,
+                                         BindlessSlot slot_,
+                                         const char* action_);
+    void QueueBindlessImageInfoWrite(BindlessTable& table_,
+                                     BindlessSlot slot_,
+                                     const VkDescriptorImageInfo& image_info_);
+    void RefreshBindlessStats() noexcept;
 #if VR_ENABLE_DESCRIPTOR_VALIDATION
     static uint64_t DescriptorSetHandleBits(VkDescriptorSet set_) noexcept;
     static uint32_t LowerBoundDescriptorSetBits(const DescriptorMcVector<DescriptorSetValidationNode>& nodes_,
@@ -239,6 +334,9 @@ private:
     DescriptorMcVector<LayoutCacheEntry> layout_cache{};
     DescriptorMcVector<HashLookupNode> layout_lookup{};
     UpdateScratch update_scratch{};
+    DescriptorMcVector<BindlessTable> bindless_tables{};
+    BindlessUpdateScratch bindless_update_scratch{};
+    DescriptorHostStats stats{};
 #if VR_ENABLE_DESCRIPTOR_VALIDATION
     DescriptorMcVector<DescriptorSetValidationNode> descriptor_set_validation_nodes{};
     DescriptorMcVector<uint64_t> frame_validation_generations{};

@@ -7,6 +7,7 @@
 
 namespace vr::render {
 class UploadHost;
+class BindlessResourceSystem;
 class DescriptorHost;
 class FrameComposerHost;
 class IblHost;
@@ -76,6 +77,7 @@ struct SceneRecorder2DPrepareView final {
     VulkanContext& device;
     resource::GpuMemoryHost* gpu_memory = nullptr;
     asset::TextureHost* texture = nullptr;
+    BindlessResourceSystem* bindless = nullptr;
     UploadHost* upload = nullptr;
     DescriptorHost* descriptor = nullptr;
     FrameComposerHost* frame_composer = nullptr;
@@ -98,6 +100,7 @@ struct SceneRecorder3DPrepareView final {
     VulkanContext& device;
     resource::GpuMemoryHost* gpu_memory = nullptr;
     asset::TextureHost* texture = nullptr;
+    BindlessResourceSystem* bindless = nullptr;
     UploadHost* upload = nullptr;
     DescriptorHost* descriptor = nullptr;
     FrameComposerHost* frame_composer = nullptr;
@@ -311,6 +314,7 @@ struct ParticleRenderer2DPrepareView final {
     PipelineHost& pipeline;
     resource::SamplerHost& sampler;
     asset::TextureHost* texture = nullptr;
+    BindlessResourceSystem* bindless = nullptr;
     particle::ParticleUploadHost* particle_upload = nullptr;
     particle::ParticleSimulationHost* particle_simulation = nullptr;
     RenderTargetHost* render_target = nullptr;
@@ -326,6 +330,7 @@ struct ParticleRenderer3DPrepareView final {
     PipelineHost& pipeline;
     resource::SamplerHost& sampler;
     asset::TextureHost* texture = nullptr;
+    BindlessResourceSystem* bindless = nullptr;
     particle::ParticleUploadHost* particle_upload = nullptr;
     particle::ParticleSimulationHost* particle_simulation = nullptr;
     RenderTargetHost* render_target = nullptr;
@@ -580,6 +585,7 @@ template<typename T>
                                                  "sampler",
                                                  "ParticleRenderer2DPrepareView"),
         .texture = prepare_view_.texture,
+        .bindless = prepare_view_.bindless,
         .particle_upload = prepare_view_.particle_upload,
         .particle_simulation = prepare_view_.particle_simulation,
         .render_target = &prepare_view_.render_target,
@@ -792,6 +798,7 @@ template<typename T>
                                                  "sampler",
                                                  "ParticleRenderer3DPrepareView"),
         .texture = prepare_view_.texture,
+        .bindless = prepare_view_.bindless,
         .particle_upload = prepare_view_.particle_upload,
         .particle_simulation = prepare_view_.particle_simulation,
         .render_target = &prepare_view_.render_target,

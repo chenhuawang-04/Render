@@ -1,11 +1,13 @@
 #include "vr/particle/particle_simulation_host.hpp"
 
+#include "vr/asset/texture_host.hpp"
 #include "vr/ecs/system/transparency_render_policy.hpp"
 #include "vr/particle/generated/particle_build_2d_comp_spv.hpp"
 #include "vr/particle/generated/particle_build_3d_comp_spv.hpp"
 #include "vr/particle/generated/particle_sort_3d_comp_spv.hpp"
 #include "vr/particle/generated/particle_update_2d_comp_spv.hpp"
 #include "vr/particle/generated/particle_update_3d_comp_spv.hpp"
+#include "vr/render/bindless_resource_system.hpp"
 #include "vr/render/upload_host.hpp"
 #include "vr/resource/gpu_memory_host.hpp"
 
@@ -37,6 +39,28 @@ constexpr VkBufferUsageFlags k_list_buffer_usage =
 constexpr VkBufferUsageFlags k_spawn_buffer_usage =
     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
     VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+
+[[nodiscard]] std::uint32_t ResolveBindlessTextureSlot(
+    const asset::TextureHost* texture_host_,
+    const render::BindlessResourceSystem& bindless_resources_,
+    std::uint32_t texture_id_) noexcept {
+    if (texture_id_ == 0U || texture_host_ == nullptr || !texture_host_->IsInitialized()) {
+        return bindless_resources_.PlaceholderImageSlot().index;
+    }
+    return bindless_resources_.ResolveTextureImageSlot(*texture_host_,
+                                                       asset::TextureId{texture_id_}).index;
+}
+
+[[nodiscard]] std::uint32_t ResolveBindlessSamplerSlot(
+    const asset::TextureHost* texture_host_,
+    const render::BindlessResourceSystem& bindless_resources_,
+    std::uint32_t texture_id_) noexcept {
+    if (texture_id_ == 0U || texture_host_ == nullptr || !texture_host_->IsInitialized()) {
+        return bindless_resources_.DefaultSamplerSlot().index;
+    }
+    return bindless_resources_.ResolveTextureSamplerSlot(*texture_host_,
+                                                         asset::TextureId{texture_id_}).index;
+}
 
 constexpr VkBufferUsageFlags k_draw_instance_buffer_usage =
     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
@@ -1081,7 +1105,9 @@ ParticleSimulationGpuBuildResult ParticleSimulationHost::PrepareGpuBuild2D(
     const ecs::ParticleRuntimeBuildConfig& build_config_,
     bool cpu_seeded_this_frame_,
     ecs::Particle2DRuntimeScratch& runtime_scratch_,
-    const ecs::ParticleRuntimeBuildStats& runtime_stats_) {
+    const ecs::ParticleRuntimeBuildStats& runtime_stats_,
+    const asset::TextureHost* texture_host_,
+    const render::BindlessResourceSystem& bindless_resources_) {
     ParticleSimulationGpuBuildResult result{};
     result.resources = frame_resources_;
     if (frame_resources_.resolved_path == ParticleSimulationResolvedPath::cpu) {
@@ -1116,6 +1142,16 @@ ParticleSimulationGpuBuildResult ParticleSimulationHost::PrepareGpuBuild2D(
     BuildIndirectCommands(runtime_scratch_.draw_batches,
                           gpu_build_scratch_2d.component_ranges,
                           gpu_build_scratch_2d.indirect_commands);
+
+    for (auto& record : gpu_build_scratch_2d.state_records) {
+        const std::uint32_t raw_texture_id = record.texture_id;
+        record.texture_id = ResolveBindlessTextureSlot(texture_host_,
+                                                       bindless_resources_,
+                                                       raw_texture_id);
+        record.material_id = ResolveBindlessSamplerSlot(texture_host_,
+                                                        bindless_resources_,
+                                                        raw_texture_id);
+    }
 
     result.state_record_count = static_cast<std::uint32_t>(gpu_build_scratch_2d.state_records.size());
     result.resources.spawn_packets = MakeBufferView(context_, build_path.spawn_packets);

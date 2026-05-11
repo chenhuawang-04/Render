@@ -23,12 +23,75 @@ _STAGE_BY_EXTENSION: dict[str, str] = {
     ".tese": "tese",
     ".comp": "comp",
 }
+_INCLUDE_PATTERN = re.compile(
+    r'^\s*#\s*include\s*[<"](?P<path>[^">]+)[">]\s*$',
+    flags=re.MULTILINE,
+)
 
 
 def _strip_glsl_comments(source_text_: str) -> str:
     without_block = re.sub(r"/\*.*?\*/", "", source_text_, flags=re.DOTALL)
     without_line = re.sub(r"//.*?$", "", without_block, flags=re.MULTILINE)
     return without_line
+
+
+def _default_include_roots(source_path_: pathlib.Path) -> list[pathlib.Path]:
+    roots: list[pathlib.Path] = [source_path_.parent]
+    for parent in source_path_.parents:
+        if parent.name != "shaders":
+            continue
+        roots.append(parent)
+        include_root = parent / "include"
+        if include_root.exists():
+            roots.append(include_root)
+        break
+
+    deduplicated: list[pathlib.Path] = []
+    seen: set[pathlib.Path] = set()
+    for root in roots:
+        resolved = root.resolve()
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        deduplicated.append(resolved)
+    return deduplicated
+
+
+def _resolve_include_path(include_path_: str,
+                          current_path_: pathlib.Path,
+                          include_roots_: list[pathlib.Path]) -> pathlib.Path:
+    candidates = [current_path_.parent / include_path_]
+    candidates.extend(root / include_path_ for root in include_roots_)
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate.resolve()
+
+    searched = "\n".join(f"  - {candidate}" for candidate in candidates)
+    raise RuntimeError(
+        f"Failed to resolve shader include '{include_path_}' from '{current_path_}'.\nSearched:\n{searched}"
+    )
+
+
+def _expand_glsl_includes(source_path_: pathlib.Path,
+                          include_roots_: list[pathlib.Path],
+                          include_stack_: tuple[pathlib.Path, ...] = ()) -> str:
+    resolved_source_path = source_path_.resolve()
+    if resolved_source_path in include_stack_:
+        chain = " -> ".join(str(path) for path in (*include_stack_, resolved_source_path))
+        raise RuntimeError(f"Detected recursive shader include chain: {chain}")
+
+    source_text = _strip_glsl_comments(source_path_.read_text(encoding="utf-8"))
+
+    def replace_include(match_: re.Match[str]) -> str:
+        include_path = match_.group("path")
+        resolved_include_path = _resolve_include_path(include_path,
+                                                      resolved_source_path,
+                                                      include_roots_)
+        return _expand_glsl_includes(resolved_include_path,
+                                     include_roots_,
+                                     (*include_stack_, resolved_source_path))
+
+    return _INCLUDE_PATTERN.sub(replace_include, source_text)
 
 
 def _parse_source_descriptors(source_text_: str) -> list[dict[str, int]]:
@@ -108,7 +171,9 @@ def main() -> int:
     reflect_path = pathlib.Path(args.reflect)
     output_path = pathlib.Path(args.output)
 
-    source_text = _strip_glsl_comments(source_path.read_text(encoding="utf-8"))
+    source_text = _strip_glsl_comments(
+        _expand_glsl_includes(source_path, _default_include_roots(source_path))
+    )
     reflect_json = json.loads(reflect_path.read_text(encoding="utf-8"))
 
     source_descriptors = _parse_source_descriptors(source_text)

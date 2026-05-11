@@ -4,6 +4,8 @@ layout(location = 0) in vec2 in_position;
 layout(location = 1) in vec2 in_size;
 layout(location = 2) in float in_rotation_radians;
 layout(location = 3) in vec4 in_color;
+layout(location = 4) in uint in_texture_slot;
+layout(location = 5) in uint in_sampler_slot;
 
 layout(push_constant) uniform Particle2DPushConstants {
     vec4 viewport;
@@ -15,6 +17,8 @@ layout(push_constant) uniform Particle2DPushConstants {
 
 layout(location = 0) out vec2 out_uv;
 layout(location = 1) out vec4 out_color;
+layout(location = 2) flat out uint out_texture_slot;
+layout(location = 3) flat out uint out_sampler_slot;
 
 vec2 corner01_for_vertex(uint vertex_index) {
     switch (vertex_index) {
@@ -53,4 +57,6 @@ void main() {
     gl_Position = vec4(to_ndc(world), 0.0, 1.0);
     out_uv = corner01;
     out_color = in_color;
+    out_texture_slot = in_texture_slot;
+    out_sampler_slot = in_sampler_slot;
 }

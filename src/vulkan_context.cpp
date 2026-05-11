@@ -449,6 +449,174 @@ void AppendMissingVulkan13NamedFeatures(std::ostringstream& stream_,
            HasRequiredVulkan13Features(required_features_);
 }
 
+void MergeSupportedOptionalVulkan12Features(
+    VkPhysicalDeviceVulkan12Features& enabled_features_,
+    const VkPhysicalDeviceVulkan12Features& optional_features_,
+    const VkPhysicalDeviceVulkan12Features& supported_features_) noexcept {
+    constexpr std::size_t first_feature_offset = Vulkan12FirstFeatureOffset();
+    constexpr std::size_t feature_count = Vulkan12FeatureCount();
+
+    auto* enabled = reinterpret_cast<VkBool32*>(
+        reinterpret_cast<char*>(&enabled_features_) + first_feature_offset);
+    const auto* optional_bits = reinterpret_cast<const VkBool32*>(
+        reinterpret_cast<const char*>(&optional_features_) + first_feature_offset);
+    const auto* supported_bits = reinterpret_cast<const VkBool32*>(
+        reinterpret_cast<const char*>(&supported_features_) + first_feature_offset);
+
+    for (std::size_t i = 0U; i < feature_count; ++i) {
+        if (enabled[i] == VK_FALSE &&
+            optional_bits[i] == VK_TRUE &&
+            supported_bits[i] == VK_TRUE) {
+            enabled[i] = VK_TRUE;
+        }
+    }
+}
+
+void MergeSupportedOptionalVulkan13Features(
+    VkPhysicalDeviceVulkan13Features& enabled_features_,
+    const VkPhysicalDeviceVulkan13Features& optional_features_,
+    const VkPhysicalDeviceVulkan13Features& supported_features_) noexcept {
+    constexpr std::size_t first_feature_offset = Vulkan13FirstFeatureOffset();
+    constexpr std::size_t feature_count = Vulkan13FeatureCount();
+
+    auto* enabled = reinterpret_cast<VkBool32*>(
+        reinterpret_cast<char*>(&enabled_features_) + first_feature_offset);
+    const auto* optional_bits = reinterpret_cast<const VkBool32*>(
+        reinterpret_cast<const char*>(&optional_features_) + first_feature_offset);
+    const auto* supported_bits = reinterpret_cast<const VkBool32*>(
+        reinterpret_cast<const char*>(&supported_features_) + first_feature_offset);
+
+    for (std::size_t i = 0U; i < feature_count; ++i) {
+        if (enabled[i] == VK_FALSE &&
+            optional_bits[i] == VK_TRUE &&
+            supported_bits[i] == VK_TRUE) {
+            enabled[i] = VK_TRUE;
+        }
+    }
+}
+
+[[nodiscard]] uint32_t MinNonZero(uint32_t lhs_, uint32_t rhs_) noexcept {
+    if (lhs_ == 0U) {
+        return rhs_;
+    }
+    if (rhs_ == 0U) {
+        return lhs_;
+    }
+    return std::min(lhs_, rhs_);
+}
+
+[[nodiscard]] DescriptorSetLayoutSupportInfo QueryDescriptorSetLayoutSupportInfo(
+    VkDevice device_,
+    const VkDescriptorSetLayoutCreateInfo& create_info_) {
+    if (device_ == VK_NULL_HANDLE) {
+        throw std::runtime_error(
+            "Descriptor set layout support query requires initialized Vulkan device");
+    }
+
+    DescriptorSetLayoutSupportInfo result{};
+    VkDescriptorSetVariableDescriptorCountLayoutSupport variable_count_support{};
+    variable_count_support.sType =
+        VK_STRUCTURE_TYPE_DESCRIPTOR_SET_VARIABLE_DESCRIPTOR_COUNT_LAYOUT_SUPPORT;
+
+    VkDescriptorSetLayoutSupport support{};
+    support.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_SUPPORT;
+    support.pNext = &variable_count_support;
+
+    vkGetDescriptorSetLayoutSupport(device_, &create_info_, &support);
+    result.supported = support.supported == VK_TRUE;
+    result.max_variable_descriptor_count = variable_count_support.maxVariableDescriptorCount;
+    return result;
+}
+
+[[nodiscard]] DescriptorIndexingCaps QueryDescriptorIndexingCaps(
+    VkInstance instance_,
+    VkPhysicalDevice physical_device_) {
+    DescriptorIndexingCaps caps{};
+    if (instance_ == VK_NULL_HANDLE || physical_device_ == VK_NULL_HANDLE) {
+        return caps;
+    }
+
+    const auto get_features2_fn =
+        reinterpret_cast<PFN_vkGetPhysicalDeviceFeatures2>(
+            vkGetInstanceProcAddr(instance_, "vkGetPhysicalDeviceFeatures2"));
+    if (get_features2_fn == nullptr) {
+        return caps;
+    }
+
+    VkPhysicalDeviceFeatures2 supported_features2{};
+    supported_features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+
+    VkPhysicalDeviceDescriptorIndexingFeatures descriptor_indexing_features{};
+    descriptor_indexing_features.sType =
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES;
+
+    VkPhysicalDeviceVulkan12Features supported_vulkan12_features{};
+    supported_vulkan12_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+    supported_features2.pNext = &descriptor_indexing_features;
+    descriptor_indexing_features.pNext = &supported_vulkan12_features;
+
+    get_features2_fn(physical_device_, &supported_features2);
+
+    caps.sampled_image_array_dynamic_indexing =
+        supported_features2.features.shaderSampledImageArrayDynamicIndexing == VK_TRUE;
+    caps.runtime_descriptor_array =
+        descriptor_indexing_features.runtimeDescriptorArray == VK_TRUE;
+    caps.descriptor_binding_partially_bound =
+        descriptor_indexing_features.descriptorBindingPartiallyBound == VK_TRUE;
+    caps.descriptor_binding_variable_descriptor_count =
+        descriptor_indexing_features.descriptorBindingVariableDescriptorCount == VK_TRUE;
+    caps.sampled_image_array_non_uniform_indexing =
+        descriptor_indexing_features.shaderSampledImageArrayNonUniformIndexing == VK_TRUE;
+    caps.sampler_array_non_uniform_indexing =
+        descriptor_indexing_features.shaderSampledImageArrayNonUniformIndexing == VK_TRUE;
+    caps.sampled_image_update_after_bind =
+        descriptor_indexing_features.descriptorBindingSampledImageUpdateAfterBind == VK_TRUE;
+    caps.update_unused_while_pending =
+        descriptor_indexing_features.descriptorBindingUpdateUnusedWhilePending == VK_TRUE;
+    caps.null_descriptor = false;
+
+    VkPhysicalDeviceProperties2 properties2{};
+    properties2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+
+    VkPhysicalDeviceDescriptorIndexingProperties descriptor_indexing_properties{};
+    descriptor_indexing_properties.sType =
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_PROPERTIES;
+    properties2.pNext = &descriptor_indexing_properties;
+
+    vkGetPhysicalDeviceProperties2(physical_device_, &properties2);
+
+    caps.max_sampled_image_slots = MinNonZero(
+        properties2.properties.limits.maxPerStageDescriptorSampledImages,
+        properties2.properties.limits.maxDescriptorSetSampledImages);
+    caps.max_sampler_slots = MinNonZero(
+        properties2.properties.limits.maxPerStageDescriptorSamplers,
+        properties2.properties.limits.maxDescriptorSetSamplers);
+    caps.max_update_after_bind_sampled_images = MinNonZero(
+        descriptor_indexing_properties.maxPerStageDescriptorUpdateAfterBindSampledImages,
+        descriptor_indexing_properties.maxDescriptorSetUpdateAfterBindSampledImages);
+    caps.max_update_after_bind_samplers = MinNonZero(
+        descriptor_indexing_properties.maxPerStageDescriptorUpdateAfterBindSamplers,
+        descriptor_indexing_properties.maxDescriptorSetUpdateAfterBindSamplers);
+    caps.max_per_stage_resources = properties2.properties.limits.maxPerStageResources;
+    caps.max_update_after_bind_resources =
+        descriptor_indexing_properties.maxPerStageUpdateAfterBindResources;
+
+    caps.supported =
+        caps.sampled_image_array_dynamic_indexing &&
+        caps.runtime_descriptor_array &&
+        caps.descriptor_binding_partially_bound &&
+        caps.descriptor_binding_variable_descriptor_count &&
+        caps.sampled_image_array_non_uniform_indexing;
+    caps.sampler_update_after_bind =
+        caps.max_update_after_bind_samplers > 0U &&
+        caps.runtime_descriptor_array &&
+        caps.descriptor_binding_partially_bound &&
+        caps.descriptor_binding_variable_descriptor_count;
+    caps.max_variable_descriptor_count = caps.max_sampled_image_slots;
+
+    return caps;
+}
+
 [[nodiscard]] QueueFamilyIndices FindQueueFamilies(VkPhysicalDevice physical_device_, VkSurfaceKHR surface_) {
     uint32_t family_count = 0U;
     vkGetPhysicalDeviceQueueFamilyProperties(physical_device_, &family_count, nullptr);
@@ -623,6 +791,16 @@ VulkanInstanceCreateInfo::VulkanInstanceCreateInfo() {
     validation_layers.push_back("VK_LAYER_KHRONOS_validation");
 }
 
+void EnableRecommendedBindlessOptionalFeatures(VulkanDeviceCreateInfo& create_info_) noexcept {
+    create_info_.required_features.shaderSampledImageArrayDynamicIndexing = VK_TRUE;
+    create_info_.optional_vulkan12_features.runtimeDescriptorArray = VK_TRUE;
+    create_info_.optional_vulkan12_features.descriptorBindingPartiallyBound = VK_TRUE;
+    create_info_.optional_vulkan12_features.descriptorBindingVariableDescriptorCount = VK_TRUE;
+    create_info_.optional_vulkan12_features.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
+    create_info_.optional_vulkan12_features.descriptorBindingSampledImageUpdateAfterBind = VK_TRUE;
+    create_info_.optional_vulkan12_features.descriptorBindingUpdateUnusedWhilePending = VK_TRUE;
+}
+
 bool QueueFamilyIndices::Complete(bool needs_present_) const noexcept {
     if (!graphics.has_value()) {
         return false;
@@ -672,6 +850,7 @@ VulkanContext& VulkanContext::operator=(VulkanContext&& other_) noexcept {
     enabled_features = std::exchange(other_.enabled_features, {});
     enabled_vulkan12_features = std::exchange(other_.enabled_vulkan12_features, {});
     enabled_vulkan13_features = std::exchange(other_.enabled_vulkan13_features, {});
+    descriptor_indexing_caps = std::exchange(other_.descriptor_indexing_caps, {});
 
     validation_enabled = std::exchange(other_.validation_enabled, false);
     enabled_validation_layers = std::move(other_.enabled_validation_layers);
@@ -737,6 +916,7 @@ void VulkanContext::ShutdownDevice() {
     enabled_vulkan12_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
     enabled_vulkan13_features = {};
     enabled_vulkan13_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
+    descriptor_indexing_caps = {};
 }
 
 void VulkanContext::Shutdown() {
@@ -822,6 +1002,15 @@ const VkPhysicalDeviceVulkan12Features& VulkanContext::EnabledVulkan12Features()
 
 const VkPhysicalDeviceVulkan13Features& VulkanContext::EnabledVulkan13Features() const noexcept {
     return enabled_vulkan13_features;
+}
+
+const DescriptorIndexingCaps& VulkanContext::DescriptorIndexingCapsInfo() const noexcept {
+    return descriptor_indexing_caps;
+}
+
+DescriptorSetLayoutSupportInfo VulkanContext::QueryDescriptorSetLayoutSupport(
+    const VkDescriptorSetLayoutCreateInfo& create_info_) const {
+    return QueryDescriptorSetLayoutSupportInfo(device, create_info_);
 }
 
 VkCommandBuffer VulkanContext::BeginSingleTimeCommands() const {
@@ -1234,6 +1423,7 @@ void VulkanContext::PickPhysicalDevice(const VulkanDeviceCreateInfo& create_info
 
     physical_device = best_device;
     queue_family_indices = best_indices;
+    descriptor_indexing_caps = QueryDescriptorIndexingCaps(instance, physical_device);
 
     if (DeviceSelectionVerboseLogEnabled()) {
         std::cerr << diagnostics_stream.str();
@@ -1295,10 +1485,68 @@ void VulkanContext::CreateLogicalDevice(const VulkanDeviceCreateInfo& create_inf
     enabled_vulkan12_features_local.pNext = nullptr;
     NormalizeVulkan12FeatureBits(enabled_vulkan12_features_local);
 
+    VkPhysicalDeviceVulkan12Features optional_vulkan12_features_local = create_info_.optional_vulkan12_features;
+    optional_vulkan12_features_local.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+    optional_vulkan12_features_local.pNext = nullptr;
+    NormalizeVulkan12FeatureBits(optional_vulkan12_features_local);
+
     VkPhysicalDeviceVulkan13Features enabled_vulkan13_features_local = create_info_.required_vulkan13_features;
     enabled_vulkan13_features_local.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
     enabled_vulkan13_features_local.pNext = nullptr;
     NormalizeVulkan13FeatureBits(enabled_vulkan13_features_local);
+
+    VkPhysicalDeviceVulkan13Features optional_vulkan13_features_local = create_info_.optional_vulkan13_features;
+    optional_vulkan13_features_local.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
+    optional_vulkan13_features_local.pNext = nullptr;
+    NormalizeVulkan13FeatureBits(optional_vulkan13_features_local);
+
+    const bool needs_required_vulkan12_features =
+        HasRequiredVulkan12Features(enabled_vulkan12_features_local);
+    const bool needs_required_vulkan13_features =
+        HasRequiredVulkan13Features(enabled_vulkan13_features_local);
+    const bool wants_optional_vulkan12_features =
+        HasRequiredVulkan12Features(optional_vulkan12_features_local);
+    const bool wants_optional_vulkan13_features =
+        HasRequiredVulkan13Features(optional_vulkan13_features_local);
+    const auto get_features2_fn =
+        reinterpret_cast<PFN_vkGetPhysicalDeviceFeatures2>(
+            vkGetInstanceProcAddr(instance, "vkGetPhysicalDeviceFeatures2"));
+    if (get_features2_fn == nullptr &&
+        (needs_required_vulkan12_features ||
+         needs_required_vulkan13_features ||
+         wants_optional_vulkan12_features ||
+         wants_optional_vulkan13_features ||
+         create_info_.required_features_pnext != nullptr)) {
+        throw std::runtime_error(
+            "Required Vulkan12/13 feature query unavailable: vkGetPhysicalDeviceFeatures2 is not supported");
+    }
+
+    if (get_features2_fn != nullptr &&
+        (needs_required_vulkan12_features ||
+         needs_required_vulkan13_features ||
+         wants_optional_vulkan12_features ||
+         wants_optional_vulkan13_features)) {
+        VkPhysicalDeviceFeatures2 supported_features2{};
+        supported_features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+
+        VkPhysicalDeviceVulkan12Features supported_vulkan12_features{};
+        supported_vulkan12_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+
+        VkPhysicalDeviceVulkan13Features supported_vulkan13_features{};
+        supported_vulkan13_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
+
+        supported_features2.pNext = &supported_vulkan12_features;
+        supported_vulkan12_features.pNext = &supported_vulkan13_features;
+        supported_vulkan13_features.pNext = nullptr;
+        get_features2_fn(physical_device, &supported_features2);
+
+        MergeSupportedOptionalVulkan12Features(enabled_vulkan12_features_local,
+                                               optional_vulkan12_features_local,
+                                               supported_vulkan12_features);
+        MergeSupportedOptionalVulkan13Features(enabled_vulkan13_features_local,
+                                               optional_vulkan13_features_local,
+                                               supported_vulkan13_features);
+    }
 
     VkBaseOutStructure* feature_chain_head = nullptr;
     VkBaseOutStructure** feature_chain_next = &feature_chain_head;
@@ -1352,6 +1600,31 @@ void VulkanContext::CreateLogicalDevice(const VulkanDeviceCreateInfo& create_inf
     enabled_vulkan12_features.pNext = nullptr;
     enabled_vulkan13_features = enabled_vulkan13_features_local;
     enabled_vulkan13_features.pNext = nullptr;
+    descriptor_indexing_caps.runtime_descriptor_array =
+        enabled_vulkan12_features.runtimeDescriptorArray == VK_TRUE;
+    descriptor_indexing_caps.descriptor_binding_partially_bound =
+        enabled_vulkan12_features.descriptorBindingPartiallyBound == VK_TRUE;
+    descriptor_indexing_caps.descriptor_binding_variable_descriptor_count =
+        enabled_vulkan12_features.descriptorBindingVariableDescriptorCount == VK_TRUE;
+    descriptor_indexing_caps.sampled_image_array_non_uniform_indexing =
+        enabled_vulkan12_features.shaderSampledImageArrayNonUniformIndexing == VK_TRUE;
+    descriptor_indexing_caps.sampler_array_non_uniform_indexing =
+        enabled_vulkan12_features.shaderSampledImageArrayNonUniformIndexing == VK_TRUE;
+    descriptor_indexing_caps.sampled_image_update_after_bind =
+        enabled_vulkan12_features.descriptorBindingSampledImageUpdateAfterBind == VK_TRUE;
+    descriptor_indexing_caps.sampled_image_array_dynamic_indexing =
+        enabled_features.shaderSampledImageArrayDynamicIndexing == VK_TRUE;
+    descriptor_indexing_caps.update_unused_while_pending =
+        enabled_vulkan12_features.descriptorBindingUpdateUnusedWhilePending == VK_TRUE;
+    descriptor_indexing_caps.enabled =
+        enabled_features.shaderSampledImageArrayDynamicIndexing == VK_TRUE &&
+        enabled_vulkan12_features.runtimeDescriptorArray == VK_TRUE &&
+        enabled_vulkan12_features.descriptorBindingPartiallyBound == VK_TRUE &&
+        enabled_vulkan12_features.descriptorBindingVariableDescriptorCount == VK_TRUE &&
+        enabled_vulkan12_features.shaderSampledImageArrayNonUniformIndexing == VK_TRUE;
+    descriptor_indexing_caps.sampler_update_after_bind =
+        descriptor_indexing_caps.max_update_after_bind_samplers > 0U &&
+        descriptor_indexing_caps.enabled;
 }
 
 void VulkanContext::CreateDefaultCommandPools() {

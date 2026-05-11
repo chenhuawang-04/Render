@@ -3,6 +3,7 @@
 #include "vr/asset/texture_host.hpp"
 #include "vr/particle/particle_simulation_host.hpp"
 #include "vr/particle/particle_upload_host.hpp"
+#include "vr/render/bindless_resource_system.hpp"
 #include "vr/render/descriptor_host.hpp"
 #include "vr/render/frame_composer_host.hpp"
 #include "vr/render/ibl_bake_host.hpp"
@@ -68,7 +69,13 @@ struct DescriptorStats final {
     std::uint32_t frame_pool_count = 0U;
     std::uint32_t total_allocated_set_count = 0U;
     std::uint32_t frame_allocated_set_count = 0U;
+    vr::DescriptorIndexingCaps descriptor_indexing{};
+    vr::render::DescriptorHostStats host{};
     vr::render::DescriptorValidationStats validation{};
+};
+
+struct BindlessStats final {
+    vr::render::BindlessResourceSystemStats resources{};
 };
 
 struct ParticleRenderStats final {
@@ -93,6 +100,7 @@ struct RuntimeFrameDiagnosticsV2 final {
 
     vr::render::UploadFrameStats upload{};
     DescriptorStats descriptor{};
+    BindlessStats bindless{};
     vr::render::PipelineHostStats pipeline{};
     vr::render::RenderTargetHostStats render_target{};
     vr::render::RenderTargetPoolStats render_target_pool{};

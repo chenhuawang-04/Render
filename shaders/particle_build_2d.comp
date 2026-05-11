@@ -39,8 +39,8 @@ struct Particle2DGpuInstance {
     float rotation_radians;
     float normalized_age;
     uint color_rgba8;
-    uint texture_id;
-    uint material_id;
+    uint texture_slot;
+    uint sampler_slot;
     uint component_index;
     uint user_data;
 };
@@ -190,8 +190,8 @@ void main() {
     dst.rotation_radians = src.rotation_radians;
     dst.normalized_age = normalized_age;
     dst.color_rgba8 = pack_color(color);
-    dst.texture_id = src.texture_id;
-    dst.material_id = src.material_id;
+    dst.texture_slot = src.texture_id;
+    dst.sampler_slot = src.material_id;
     dst.component_index = src.component_index;
     dst.user_data = src.user_data;
     instance_buffer.instances[alive_entry.compacted_instance_index - 1u] = dst;

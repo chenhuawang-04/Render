@@ -30,6 +30,15 @@ public:
                               vr::runtime::detail::ResolveFrameIndex(context_));
         }
     }
+
+    template<typename ContextT>
+    void PreRecord(ContextT& context_) {
+        if (auto* host_ = this->HostPtr()) {
+            host_->FlushBindlessWrites(
+                vr::runtime::detail::ResolveDevice(context_),
+                vr::runtime::detail::ResolveGraphicsCompleted(context_));
+        }
+    }
 };
 
 } // namespace vr::runtime::services

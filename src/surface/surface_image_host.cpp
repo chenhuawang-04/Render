@@ -1,5 +1,6 @@
 #include "vr/surface/surface_image_host.hpp"
 
+#include "vr/render/descriptor_host.hpp"
 #include "vr/resource/gpu_memory_host.hpp"
 
 #include <algorithm>
@@ -19,6 +20,7 @@ void SurfaceImageHost::Initialize(VulkanContext& context_,
     }
 
     gpu_memory_host = &gpu_memory_host_;
+    bindless_config = {};
     create_info_cache = create_info_;
     images.clear();
     retired_images.Clear();
@@ -51,6 +53,7 @@ void SurfaceImageHost::Shutdown(VulkanContext& context_) {
     DestroyRetiredImages(context_);
 
     gpu_memory_host = nullptr;
+    bindless_config = {};
     create_info_cache = {};
     stats = {};
     initialized = false;
@@ -65,6 +68,10 @@ void SurfaceImageHost::BeginFrame(VulkanContext& context_,
     CollectRetiredImages(context_, completed_submit_value_);
     stats.image_count = static_cast<std::uint32_t>(images.size());
     stats.retired_image_count = retired_images.PendingCount();
+}
+
+void SurfaceImageHost::ConfigureBindless(const SurfaceImageHostBindlessConfig& bindless_config_) noexcept {
+    bindless_config = bindless_config_;
 }
 
 void SurfaceImageHost::UploadImage(VulkanContext& context_,
@@ -201,6 +208,18 @@ void SurfaceImageHost::UploadImage(VulkanContext& context_,
 
     record.current_layout = record.shader_read_layout;
     ++record.revision;
+    if (bindless_config.Enabled()) {
+        if (!record.bindless.image_slot.IsValid()) {
+            record.bindless.image_slot =
+                bindless_config.descriptor_host->AllocateBindlessSlot(bindless_config.image_table);
+        }
+        bindless_config.descriptor_host->QueueBindlessImageWrite(
+            bindless_config.image_table,
+            record.bindless.image_slot,
+            record.resource.default_view,
+            record.shader_read_layout);
+        record.bindless.revision_written = record.revision;
+    }
     stats.uploaded_bytes += upload_size_bytes;
     stats.image_count = static_cast<std::uint32_t>(images.size());
     stats.retired_image_count = retired_images.PendingCount();
@@ -226,6 +245,16 @@ bool SurfaceImageHost::RemoveImage(VulkanContext& context_,
     }
 
     ImageRecord& record = images[lower_bound_index];
+    if (bindless_config.Enabled() && record.bindless.image_slot.IsValid()) {
+        bindless_config.descriptor_host->QueueBindlessPlaceholderWrite(
+            bindless_config.image_table,
+            record.bindless.image_slot);
+        bindless_config.descriptor_host->FreeBindlessSlotDeferred(
+            bindless_config.image_table,
+            record.bindless.image_slot,
+            last_submitted_value_);
+        record.bindless.retire_value = last_submitted_value_;
+    }
     RetireImage(record, last_submitted_value_);
     images.erase(images.begin() + static_cast<std::ptrdiff_t>(lower_bound_index));
 
@@ -252,12 +281,21 @@ const SurfaceImageHost::ImageRecord* SurfaceImageHost::FindImage(std::uint32_t i
     return &record;
 }
 
+render::BindlessSlot SurfaceImageHost::ResolveBindlessImageSlot(std::uint32_t image_id_) const noexcept {
+    const ImageRecord* record = FindImage(image_id_);
+    return record != nullptr ? record->bindless.image_slot : render::BindlessSlot{};
+}
+
 bool SurfaceImageHost::IsInitialized() const noexcept {
     return initialized;
 }
 
 const SurfaceImageHostStats& SurfaceImageHost::Stats() const noexcept {
     return stats;
+}
+
+const SurfaceImageHostBindlessConfig& SurfaceImageHost::BindlessConfig() const noexcept {
+    return bindless_config;
 }
 
 std::size_t SurfaceImageHost::LowerBoundImageIndex(std::uint32_t image_id_) const noexcept {

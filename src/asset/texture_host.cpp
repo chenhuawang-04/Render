@@ -1,5 +1,6 @@
 #include "vr/asset/texture_host.hpp"
 
+#include "vr/render/descriptor_host.hpp"
 #include "vr/resource/gpu_memory_host.hpp"
 
 #include <bit>
@@ -178,6 +179,7 @@ void TextureHost::Initialize(VulkanContext& context_,
     }
 
     gpu_memory_host = &gpu_memory_host_;
+    bindless_config = {};
     create_info_cache = create_info_;
     textures.clear();
     retired_textures.Clear();
@@ -210,6 +212,7 @@ void TextureHost::Shutdown(VulkanContext& context_) {
     DestroyRetiredTextures(context_);
 
     gpu_memory_host = nullptr;
+    bindless_config = {};
     create_info_cache = {};
     stats = {};
     initialized = false;
@@ -224,6 +227,10 @@ void TextureHost::BeginFrame(VulkanContext& context_,
     CollectRetiredTextures(context_, completed_submit_value_);
     stats.texture_count = static_cast<std::uint32_t>(textures.size());
     stats.retired_texture_count = retired_textures.PendingCount();
+}
+
+void TextureHost::ConfigureBindless(const TextureHostBindlessConfig& bindless_config_) noexcept {
+    bindless_config = bindless_config_;
 }
 
 void TextureHost::UploadTexture(VulkanContext& context_,
@@ -404,6 +411,21 @@ void TextureHost::UploadTexture(VulkanContext& context_,
     record.current_layout = record.shader_read_layout;
     CaptureCpuBaseLevelSnapshot(record, upload_info_);
     ++record.revision;
+    if (bindless_config.Enabled()) {
+        if (!record.bindless.image_slot.IsValid()) {
+            record.bindless.image_slot =
+                bindless_config.descriptor_host->AllocateBindlessSlot(bindless_config.image_table);
+        }
+        if (bindless_config.default_sampler_slot.IsValid()) {
+            record.bindless.default_sampler_slot = bindless_config.default_sampler_slot;
+        }
+        bindless_config.descriptor_host->QueueBindlessImageWrite(
+            bindless_config.image_table,
+            record.bindless.image_slot,
+            record.resource.default_view,
+            record.shader_read_layout);
+        record.bindless.image_revision_written = record.revision;
+    }
     stats.uploaded_bytes += uploaded_bytes;
     stats.texture_count = static_cast<std::uint32_t>(textures.size());
     stats.retired_texture_count = retired_textures.PendingCount();
@@ -429,6 +451,16 @@ bool TextureHost::RemoveTexture(VulkanContext& context_,
     }
 
     TextureRecord& record = textures[lower_bound_index];
+    if (bindless_config.Enabled() && record.bindless.image_slot.IsValid()) {
+        bindless_config.descriptor_host->QueueBindlessPlaceholderWrite(
+            bindless_config.image_table,
+            record.bindless.image_slot);
+        bindless_config.descriptor_host->FreeBindlessSlotDeferred(
+            bindless_config.image_table,
+            record.bindless.image_slot,
+            last_submitted_value_);
+        record.bindless.retire_value = last_submitted_value_;
+    }
     RetireTexture(record, last_submitted_value_);
     textures.erase(textures.begin() + static_cast<std::ptrdiff_t>(lower_bound_index));
 
@@ -455,6 +487,19 @@ const TextureHost::TextureRecord* TextureHost::FindTexture(TextureId texture_id_
     return &record;
 }
 
+render::BindlessSlot TextureHost::ResolveBindlessImageSlot(TextureId texture_id_) const noexcept {
+    const TextureRecord* record = FindTexture(texture_id_);
+    return record != nullptr ? record->bindless.image_slot : render::BindlessSlot{};
+}
+
+render::BindlessSlot TextureHost::ResolveBindlessSamplerSlot(TextureId texture_id_) const noexcept {
+    const TextureRecord* record = FindTexture(texture_id_);
+    if (record != nullptr && record->bindless.default_sampler_slot.IsValid()) {
+        return record->bindless.default_sampler_slot;
+    }
+    return bindless_config.default_sampler_slot;
+}
+
 const TextureHost::CpuFloatBaseLevelSnapshot* TextureHost::FindCpuFloatBaseLevelSnapshot(
     TextureId texture_id_) const noexcept {
     const TextureRecord* record = FindTexture(texture_id_);
@@ -470,6 +515,10 @@ bool TextureHost::IsInitialized() const noexcept {
 
 const TextureHostStats& TextureHost::Stats() const noexcept {
     return stats;
+}
+
+const TextureHostBindlessConfig& TextureHost::BindlessConfig() const noexcept {
+    return bindless_config;
 }
 
 bool TextureHost::SupportsSampledFormat(VulkanContext& context_,

@@ -43,7 +43,7 @@ using TransformSystem2D = vr::ecs::TransformSystem<vr::ecs::Dim2>;
 }
 
 [[nodiscard]] bool IsEnvironmentSkipError(std::string_view message_) {
-    constexpr std::array<std::string_view, 15U> patterns{
+    constexpr std::array<std::string_view, 18U> patterns{
         "sdl_initsubsystem",
         "sdl_createwindow",
         "sdl_vulkan_getinstanceextensions",
@@ -57,6 +57,9 @@ using TransformSystem2D = vr::ecs::TransformSystem<vr::ecs::Dim2>;
         "vkgetphysicaldevicesurfacesupportkhr",
         "vkgetphysicaldevicesurfaceformatskhr",
         "vkgetphysicaldevicesurfacepresentmodeskhr",
+        "bindlessresourcesystem",
+        "descriptor indexing",
+        "runtime descriptor array",
         "dynamicrendering",
         "synchronization2"
     };
@@ -93,6 +96,27 @@ struct ParticleRecorder2D final {
     }
 };
 
+void ConfigureParticle2DRuntimeCreateInfo(Runtime::CreateInfo& create_info_,
+                                          const char* window_title_) {
+    create_info_.platform.window.title = window_title_;
+    create_info_.platform.window.width = 640;
+    create_info_.platform.window.height = 360;
+    create_info_.platform.window.resizable = true;
+    create_info_.platform.window.high_pixel_density = true;
+    create_info_.platform.instance.enable_validation = false;
+    create_info_.platform.device.required_vulkan12_features.runtimeDescriptorArray = VK_TRUE;
+    create_info_.platform.device.required_vulkan12_features.descriptorBindingPartiallyBound = VK_TRUE;
+    create_info_.platform.device.required_vulkan12_features.descriptorBindingVariableDescriptorCount = VK_TRUE;
+    create_info_.platform.device.required_vulkan12_features.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
+    create_info_.platform.device.required_vulkan13_features.dynamicRendering = VK_TRUE;
+    create_info_.platform.device.required_vulkan13_features.synchronization2 = VK_TRUE;
+    create_info_.render_loop.swapchain.enable_vsync = false;
+    create_info_.render_loop.swapchain.preferred_image_count = 2U;
+    create_info_.render_loop.commands.initial_primary_per_frame = 2U;
+    create_info_.render_loop.commands.primary_growth_chunk = 2U;
+    create_info_.poll_events_each_tick = true;
+}
+
 VR_TEST_CASE(RuntimeIntegration_particle_renderer_2d_hybrid_smoke,
              "integration;gpu;sdl;runtime;particle;render2d") {
     Runtime runtime{};
@@ -103,19 +127,7 @@ VR_TEST_CASE(RuntimeIntegration_particle_renderer_2d_hybrid_smoke,
 
     try {
         Runtime::CreateInfo create_info{};
-        create_info.platform.window.title = "vr_tests_runtime_particle_2d";
-        create_info.platform.window.width = 640;
-        create_info.platform.window.height = 360;
-        create_info.platform.window.resizable = true;
-        create_info.platform.window.high_pixel_density = true;
-        create_info.platform.instance.enable_validation = false;
-        create_info.platform.device.required_vulkan13_features.dynamicRendering = VK_TRUE;
-        create_info.platform.device.required_vulkan13_features.synchronization2 = VK_TRUE;
-        create_info.render_loop.swapchain.enable_vsync = false;
-        create_info.render_loop.swapchain.preferred_image_count = 2U;
-        create_info.render_loop.commands.initial_primary_per_frame = 2U;
-        create_info.render_loop.commands.primary_growth_chunk = 2U;
-        create_info.poll_events_each_tick = true;
+        ConfigureParticle2DRuntimeCreateInfo(create_info, "vr_tests_runtime_particle_2d");
         runtime.Initialize(create_info);
         runtime_initialized = true;
 
@@ -238,19 +250,7 @@ VR_TEST_CASE(RuntimeIntegration_particle_renderer_2d_gpu_persistent_seed_once,
 
     try {
         Runtime::CreateInfo create_info{};
-        create_info.platform.window.title = "vr_tests_runtime_particle_2d_gpu";
-        create_info.platform.window.width = 640;
-        create_info.platform.window.height = 360;
-        create_info.platform.window.resizable = true;
-        create_info.platform.window.high_pixel_density = true;
-        create_info.platform.instance.enable_validation = false;
-        create_info.platform.device.required_vulkan13_features.dynamicRendering = VK_TRUE;
-        create_info.platform.device.required_vulkan13_features.synchronization2 = VK_TRUE;
-        create_info.render_loop.swapchain.enable_vsync = false;
-        create_info.render_loop.swapchain.preferred_image_count = 2U;
-        create_info.render_loop.commands.initial_primary_per_frame = 2U;
-        create_info.render_loop.commands.primary_growth_chunk = 2U;
-        create_info.poll_events_each_tick = true;
+        ConfigureParticle2DRuntimeCreateInfo(create_info, "vr_tests_runtime_particle_2d_gpu");
         runtime.Initialize(create_info);
         runtime_initialized = true;
 
@@ -347,13 +347,13 @@ VR_TEST_CASE(RuntimeIntegration_particle_renderer_2d_gpu_persistent_seed_once,
         runtime_initialized = false;
     } catch (const std::exception& e) {
         if (IsEnvironmentSkipError(e.what())) {
-        if (renderer_initialized) {
-            particle_renderer.Shutdown(runtime.Context());
-            renderer_initialized = false;
-        }
-        if (runtime_initialized) {
-            runtime.Shutdown();
-            runtime_initialized = false;
+            if (renderer_initialized) {
+                particle_renderer.Shutdown(runtime.Context());
+                renderer_initialized = false;
+            }
+            if (runtime_initialized) {
+                runtime.Shutdown();
+                runtime_initialized = false;
             }
             VR_SKIP(e.what());
         }

@@ -493,6 +493,7 @@ add_library(vulkan_init STATIC
     src/render/sky_environment_pass.cpp
     src/render/upload_host.cpp
     src/render/descriptor_host.cpp
+    src/render/bindless_resource_system.cpp
     src/render/pipeline_host.cpp
     src/render/render_target_host.cpp
     src/render/render_target_pass.cpp

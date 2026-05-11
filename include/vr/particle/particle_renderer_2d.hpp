@@ -29,6 +29,7 @@ namespace vr::render {
 struct ParticleRenderer2DPrepareView;
 struct FrameRecordContext;
 class UploadHost;
+class BindlessResourceSystem;
 }
 
 namespace vr::resource {
@@ -128,21 +129,16 @@ private:
         std::uint32_t reserved2;
     };
 
-    struct TextureSetEntry final {
-        std::uint32_t texture_id = 0U;
-        VkDescriptorSet descriptor_set = VK_NULL_HANDLE;
-    };
-
     static_assert(sizeof(PushConstants) == 32U);
 
     [[nodiscard]] static std::size_t BlendModeIndex(BlendModeKind blend_mode_) noexcept;
     [[nodiscard]] static BlendModeKind DecodeBlendModeKind(std::uint32_t pipeline_state_) noexcept;
-    [[nodiscard]] static std::size_t LowerBoundTextureSetIndex(
-        const ParticleRenderer2DMcVector<TextureSetEntry>& entries_,
-        std::uint32_t texture_id_) noexcept;
+    [[nodiscard]] static std::uint64_t ComposeBindlessUploadRevision(
+        const ecs::ParticleRuntimeBuildStats& runtime_stats_,
+        std::uint32_t texture_revision_) noexcept;
 
     void EnsurePipelineObjects(VulkanContext& context_,
-                               render::DescriptorHost& descriptor_host_,
+                               render::BindlessResourceSystem& bindless_resources_,
                                render::PipelineHost& pipeline_host_,
                                VkFormat color_format_);
     [[nodiscard]] render::GraphicsPipelineId EnsurePipelineForBlendMode(
@@ -150,11 +146,9 @@ private:
         render::PipelineHost& pipeline_host_,
         VkFormat color_format_,
         BlendModeKind blend_mode_);
-    void EnsureFallbackTexture(VulkanContext& context_,
-                               render::UploadHost& upload_host_,
-                               std::uint32_t frame_index_);
-    [[nodiscard]] VkDescriptorSet AcquireTextureDescriptorSet(std::uint32_t frame_index_,
-                                                              std::uint32_t texture_id_);
+    void RemapCpuInstancesToBindless();
+    [[nodiscard]] std::uint32_t ResolveTextureSlot(std::uint32_t texture_id_) const noexcept;
+    [[nodiscard]] std::uint32_t ResolveSamplerSlot(std::uint32_t texture_id_) const noexcept;
 
 private:
     ParticleRenderer2DCreateInfo create_info_cache{};
@@ -179,8 +173,8 @@ private:
     VulkanContext* context = nullptr;
     render::UploadHost* upload_host = nullptr;
     render::DescriptorHost* descriptor_host = nullptr;
+    render::BindlessResourceSystem* bindless_resources = nullptr;
     render::PipelineHost* pipeline_host = nullptr;
-    resource::GpuMemoryHost* gpu_memory_host = nullptr;
     resource::SamplerHost* sampler_host = nullptr;
 
     std::uint32_t active_frame_index = 0U;
@@ -189,21 +183,12 @@ private:
     std::uint64_t last_submitted_value_seen = 0U;
     std::uint64_t completed_submit_value_seen = 0U;
 
-    render::DescriptorSetLayoutId descriptor_layout_id{};
     render::PipelineLayoutId pipeline_layout_id{};
     render::ShaderModuleId shader_vertex_id{};
     render::ShaderModuleId shader_fragment_id{};
     std::array<render::GraphicsPipelineId, static_cast<std::size_t>(BlendModeKind::count)> pipeline_ids{};
     VkFormat pipeline_color_format = VK_FORMAT_UNDEFINED;
 
-    ParticleRenderer2DMcVector<ParticleRenderer2DMcVector<TextureSetEntry>> frame_texture_sets{};
-    render::DescriptorMcVector<render::DescriptorBufferWrite> descriptor_buffer_write_scratch{};
-    render::DescriptorMcVector<render::DescriptorImageWrite> descriptor_image_write_scratch{};
-    render::DescriptorMcVector<render::DescriptorTexelBufferWrite> descriptor_texel_write_scratch{};
-
-    resource::ImageResource fallback_texture{};
-    VkImageLayout fallback_texture_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    resource::SamplerId texture_sampler_id{};
     render::RenderTargetColorOutputConfig output_target_config{};
     ParticleRenderer2DMcVector<std::uint8_t> image_initialized{};
     bool initialized = false;

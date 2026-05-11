@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Center/Memory/Container/Vector/McVector.hpp"
+#include "vr/render/bindless_types.hpp"
 #include "vr/render/retire_bus.hpp"
 #include "vr/render/upload_host.hpp"
 #include "vr/resource/image_host.hpp"
@@ -10,6 +11,10 @@
 
 namespace vr::resource {
 class GpuMemoryHost;
+}
+
+namespace vr::render {
+class DescriptorHost;
 }
 
 namespace vr::surface {
@@ -47,9 +52,24 @@ struct SurfaceImageHostStats final {
     std::uint64_t uploaded_bytes = 0U;
 };
 
+struct SurfaceImageHostBindlessConfig final {
+    render::DescriptorHost* descriptor_host = nullptr;
+    render::BindlessTableId image_table{};
+
+    [[nodiscard]] bool Enabled() const noexcept {
+        return descriptor_host != nullptr && image_table.IsValid();
+    }
+};
+
 class SurfaceImageHost final {
 public:
     struct ImageRecord final {
+        struct SurfaceImageBindlessState final {
+            render::BindlessSlot image_slot{};
+            std::uint32_t revision_written = 0U;
+            std::uint64_t retire_value = 0U;
+        };
+
         std::uint32_t image_id = 0U;
         std::uint32_t width = 0U;
         std::uint32_t height = 0U;
@@ -60,6 +80,7 @@ public:
         VkImageAspectFlags aspect_mask = VK_IMAGE_ASPECT_COLOR_BIT;
         resource::ImageResource resource{};
         std::uint32_t revision = 0U;
+        SurfaceImageBindlessState bindless{};
     };
 
     SurfaceImageHost() = default;
@@ -80,6 +101,8 @@ public:
     void BeginFrame(VulkanContext& context_,
                     std::uint64_t completed_submit_value_);
 
+    void ConfigureBindless(const SurfaceImageHostBindlessConfig& bindless_config_) noexcept;
+
     void UploadImage(VulkanContext& context_,
                      render::UploadHost& upload_host_,
                      std::uint32_t frame_index_,
@@ -93,8 +116,10 @@ public:
                                    std::uint64_t completed_submit_value_);
 
     [[nodiscard]] const ImageRecord* FindImage(std::uint32_t image_id_) const noexcept;
+    [[nodiscard]] render::BindlessSlot ResolveBindlessImageSlot(std::uint32_t image_id_) const noexcept;
     [[nodiscard]] bool IsInitialized() const noexcept;
     [[nodiscard]] const SurfaceImageHostStats& Stats() const noexcept;
+    [[nodiscard]] const SurfaceImageHostBindlessConfig& BindlessConfig() const noexcept;
 
 private:
     [[nodiscard]] std::size_t LowerBoundImageIndex(std::uint32_t image_id_) const noexcept;
@@ -123,6 +148,7 @@ private:
 
 private:
     resource::GpuMemoryHost* gpu_memory_host = nullptr;
+    SurfaceImageHostBindlessConfig bindless_config{};
     SurfaceImageHostCreateInfo create_info_cache{};
     SurfaceImageMcVector<ImageRecord> images{};
     render::RetireBus<resource::ImageResource> retired_images{};

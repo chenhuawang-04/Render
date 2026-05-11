@@ -34,6 +34,8 @@ struct VulkanDeviceCreateInfo {
     VkPhysicalDeviceFeatures required_features{};
     VkPhysicalDeviceVulkan12Features required_vulkan12_features{};
     VkPhysicalDeviceVulkan13Features required_vulkan13_features{};
+    VkPhysicalDeviceVulkan12Features optional_vulkan12_features{};
+    VkPhysicalDeviceVulkan13Features optional_vulkan13_features{};
     // `minimal_required`：仅当对应 struct 中存在至少一个 VK_TRUE feature bit 时，
     // 才把 Vulkan 1.2 / 1.3 feature struct 接入 vkCreateDevice 的 pNext 链。
     // 这是默认策略，可保持 pNext 链最小化。
@@ -47,6 +49,8 @@ struct VulkanDeviceCreateInfo {
     bool require_dedicated_transfer_queue = false;
 };
 
+void EnableRecommendedBindlessOptionalFeatures(VulkanDeviceCreateInfo& create_info_) noexcept;
+
 struct QueueFamilyIndices {
     std::optional<uint32_t> graphics{};
     std::optional<uint32_t> present{};
@@ -54,6 +58,37 @@ struct QueueFamilyIndices {
     std::optional<uint32_t> transfer{};
 
     [[nodiscard]] bool Complete(bool needs_present_) const noexcept;
+};
+
+struct DescriptorIndexingCaps {
+    bool supported = false;
+    bool enabled = false;
+
+    bool sampled_image_array_dynamic_indexing = false;
+    bool runtime_descriptor_array = false;
+    bool descriptor_binding_partially_bound = false;
+    bool descriptor_binding_variable_descriptor_count = false;
+
+    bool sampled_image_array_non_uniform_indexing = false;
+    bool sampler_array_non_uniform_indexing = false;
+
+    bool sampled_image_update_after_bind = false;
+    bool sampler_update_after_bind = false;
+    bool update_unused_while_pending = false;
+    bool null_descriptor = false;
+
+    std::uint32_t max_sampled_image_slots = 0U;
+    std::uint32_t max_sampler_slots = 0U;
+    std::uint32_t max_variable_descriptor_count = 0U;
+    std::uint32_t max_update_after_bind_sampled_images = 0U;
+    std::uint32_t max_update_after_bind_samplers = 0U;
+    std::uint32_t max_per_stage_resources = 0U;
+    std::uint32_t max_update_after_bind_resources = 0U;
+};
+
+struct DescriptorSetLayoutSupportInfo {
+    bool supported = false;
+    std::uint32_t max_variable_descriptor_count = 0U;
 };
 
 class VulkanContext final {
@@ -97,6 +132,10 @@ public:
     [[nodiscard]] const VkPhysicalDeviceFeatures& EnabledFeatures() const noexcept;
     [[nodiscard]] const VkPhysicalDeviceVulkan12Features& EnabledVulkan12Features() const noexcept;
     [[nodiscard]] const VkPhysicalDeviceVulkan13Features& EnabledVulkan13Features() const noexcept;
+    [[nodiscard]] const DescriptorIndexingCaps& DescriptorIndexingCapsInfo() const noexcept;
+
+    [[nodiscard]] DescriptorSetLayoutSupportInfo QueryDescriptorSetLayoutSupport(
+        const VkDescriptorSetLayoutCreateInfo& create_info_) const;
 
     [[nodiscard]] VkCommandBuffer BeginSingleTimeCommands() const;
     void EndSingleTimeCommands(VkCommandBuffer command_buffer_) const;
@@ -127,6 +166,7 @@ private:
     VkPhysicalDeviceFeatures enabled_features{};
     VkPhysicalDeviceVulkan12Features enabled_vulkan12_features{};
     VkPhysicalDeviceVulkan13Features enabled_vulkan13_features{};
+    DescriptorIndexingCaps descriptor_indexing_caps{};
 
     bool validation_enabled = false;
     McVector<const char*> enabled_validation_layers{};

@@ -5,12 +5,12 @@
 #include "vr/particle/generated/particle_2d_frag_spv.hpp"
 #include "vr/particle/generated/particle_2d_vert_spv.hpp"
 #include "vr/particle/particle_simulation_host.hpp"
+#include "vr/render/bindless_resource_system.hpp"
 #include "vr/render/color_blend_state.hpp"
 #include "vr/render/render_loop_host.hpp"
 #include "vr/render/runtime_prepare_views.hpp"
 #include "vr/render/upload_host.hpp"
 #include "vr/resource/buffer_host.hpp"
-#include "vr/resource/gpu_memory_host.hpp"
 #include "vr/vulkan_context.hpp"
 
 #include <algorithm>
@@ -102,22 +102,17 @@ ParticleRenderer2D::BlendModeKind ParticleRenderer2D::DecodeBlendModeKind(
     }
 }
 
-std::size_t ParticleRenderer2D::LowerBoundTextureSetIndex(
-    const ParticleRenderer2DMcVector<TextureSetEntry>& entries_,
-    std::uint32_t texture_id_) noexcept {
-    std::size_t first = 0U;
-    std::size_t count = entries_.size();
-    while (count > 0U) {
-        const std::size_t step = count / 2U;
-        const std::size_t it = first + step;
-        if (entries_[it].texture_id < texture_id_) {
-            first = it + 1U;
-            count -= step + 1U;
-        } else {
-            count = step;
-        }
-    }
-    return first;
+std::uint64_t ParticleRenderer2D::ComposeBindlessUploadRevision(
+    const ecs::ParticleRuntimeBuildStats& runtime_stats_,
+    std::uint32_t texture_revision_) noexcept {
+    std::uint64_t revision = ParticleUploadHost::ComposeUploadRevision(
+        runtime_stats_.component_signature,
+        runtime_stats_.transform_signature,
+        runtime_stats_.visible_signature,
+        runtime_stats_.runtime_state_signature);
+    revision ^= static_cast<std::uint64_t>(texture_revision_) + 0x9e3779b97f4a7c15ULL +
+                (revision << 6U) + (revision >> 2U);
+    return revision;
 }
 
 void ParticleRenderer2D::Initialize(const ParticleRenderer2DCreateInfo& create_info_) {
@@ -129,11 +124,6 @@ void ParticleRenderer2D::Initialize(const ParticleRenderer2DCreateInfo& create_i
                                                        create_info_cache.reserve_particle_count);
     }
 
-    descriptor_image_write_scratch.reserve(1U);
-    descriptor_buffer_write_scratch.reserve(0U);
-    descriptor_texel_write_scratch.reserve(0U);
-
-    descriptor_layout_id = {};
     pipeline_layout_id = {};
     shader_vertex_id = {};
     shader_fragment_id = {};
@@ -142,10 +132,6 @@ void ParticleRenderer2D::Initialize(const ParticleRenderer2DCreateInfo& create_i
     }
     pipeline_color_format = VK_FORMAT_UNDEFINED;
 
-    frame_texture_sets.clear();
-    fallback_texture = {};
-    fallback_texture_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    texture_sampler_id = {};
     image_initialized.clear();
     output_target_config = {};
     last_runtime_build_stats = {};
@@ -164,8 +150,8 @@ void ParticleRenderer2D::Initialize(const ParticleRenderer2DCreateInfo& create_i
     context = nullptr;
     upload_host = nullptr;
     descriptor_host = nullptr;
+    bindless_resources = nullptr;
     pipeline_host = nullptr;
-    gpu_memory_host = nullptr;
     sampler_host = nullptr;
     active_frame_index = 0U;
     swapchain_extent = {};
@@ -185,12 +171,6 @@ void ParticleRenderer2D::Shutdown(VulkanContext& context_) {
         (void)vkDeviceWaitIdle(context_.Device());
     }
 
-    if (context_.Device() != VK_NULL_HANDLE) {
-        resource::ImageHost::DestroyImage(context_, fallback_texture);
-    } else {
-        fallback_texture = {};
-    }
-
     particle_components = nullptr;
     particle_emitters = nullptr;
     transforms = nullptr;
@@ -201,11 +181,10 @@ void ParticleRenderer2D::Shutdown(VulkanContext& context_) {
     context = nullptr;
     upload_host = nullptr;
     descriptor_host = nullptr;
+    bindless_resources = nullptr;
     pipeline_host = nullptr;
-    gpu_memory_host = nullptr;
     sampler_host = nullptr;
 
-    descriptor_layout_id = {};
     pipeline_layout_id = {};
     shader_vertex_id = {};
     shader_fragment_id = {};
@@ -214,12 +193,6 @@ void ParticleRenderer2D::Shutdown(VulkanContext& context_) {
     }
     pipeline_color_format = VK_FORMAT_UNDEFINED;
 
-    frame_texture_sets.clear();
-    descriptor_buffer_write_scratch.clear();
-    descriptor_image_write_scratch.clear();
-    descriptor_texel_write_scratch.clear();
-    fallback_texture_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    texture_sampler_id = {};
     image_initialized.clear();
     output_target_config = {};
 
@@ -304,10 +277,16 @@ void ParticleRenderer2D::PrepareFrame(const render::ParticleRenderer2DPrepareVie
     upload_host = &prepare_view_.upload;
     descriptor_host = &prepare_view_.descriptor;
     pipeline_host = &prepare_view_.pipeline;
-    gpu_memory_host = &prepare_view_.gpu_memory;
     sampler_host = &prepare_view_.sampler;
     if (prepare_view_.texture != nullptr) {
         texture_host = prepare_view_.texture;
+    }
+    if (prepare_view_.bindless != nullptr) {
+        bindless_resources = prepare_view_.bindless;
+    }
+    if (bindless_resources == nullptr || !bindless_resources->IsInitialized()) {
+        throw std::runtime_error(
+            "ParticleRenderer2D::PrepareFrame requires initialized BindlessResourceSystem");
     }
 
     active_frame_index = prepare_view_.frame.frame_index;
@@ -315,13 +294,6 @@ void ParticleRenderer2D::PrepareFrame(const render::ParticleRenderer2DPrepareVie
     swapchain_format = prepare_view_.frame.swapchain_format;
     last_submitted_value_seen = prepare_view_.progress.last_submitted_value;
     completed_submit_value_seen = prepare_view_.progress.completed_submit_value;
-
-    EnsureFallbackTexture(*context, *upload_host, active_frame_index);
-
-    if (active_frame_index >= frame_texture_sets.size()) {
-        frame_texture_sets.resize(active_frame_index + 1U);
-    }
-    frame_texture_sets[active_frame_index].clear();
 
     stats = {};
     stats.component_count = component_count;
@@ -395,7 +367,9 @@ void ParticleRenderer2D::PrepareFrame(const render::ParticleRenderer2DPrepareVie
                 build_config,
                 cpu_seeded_this_frame,
                 runtime_scratch,
-                last_runtime_build_stats);
+                last_runtime_build_stats,
+                texture_host,
+                *bindless_resources);
             gpu_build_active = last_gpu_build_result.used_gpu_build;
         }
     }
@@ -418,19 +392,34 @@ void ParticleRenderer2D::PrepareFrame(const render::ParticleRenderer2DPrepareVie
         return;
     }
 
-    last_upload_result = particle_upload_host->PrepareRuntimeAndUpload2D(
-        *context,
-        *upload_host,
-        active_frame_index,
-        prepare_view_.progress.last_submitted_value,
-        prepare_view_.progress.completed_submit_value,
+    particle_upload_host->BeginFrame(*context,
+                                     active_frame_index,
+                                     prepare_view_.progress.last_submitted_value,
+                                     prepare_view_.progress.completed_submit_value);
+
+    last_upload_result.runtime = ecs::ParticleRuntimeSystem<ecs::Dim2>::Build(
         particle_components,
         particle_emitters,
         transforms,
         component_count,
         runtime_scratch,
-        {},
-        create_info_cache.runtime_upload_options);
+        create_info_cache.runtime_upload_options.runtime_build,
+        {});
+
+    if (!runtime_scratch.instances.empty() &&
+        last_upload_result.runtime.emitted_instance_count > 0U) {
+        RemapCpuInstancesToBindless();
+        last_upload_result.upload = particle_upload_host->Upload2DInstances(
+            *context,
+            *upload_host,
+            active_frame_index,
+            runtime_scratch.instances.data(),
+            static_cast<std::uint32_t>(runtime_scratch.instances.size()),
+            ComposeBindlessUploadRevision(
+                last_upload_result.runtime,
+                texture_host != nullptr ? texture_host->Stats().revision : 0U));
+    }
+    last_upload_result.skipped_upload = !last_upload_result.upload.uploaded;
 
     stats.visible_component_count = last_upload_result.runtime.candidate_emitter_count;
     stats.emitter_count = last_upload_result.runtime.emitter_count;
@@ -475,7 +464,10 @@ void ParticleRenderer2D::Record(const render::FrameRecordContext& record_context
         create_info_cache.clear_swapchain,
         create_info_cache.clear_color,
         has_previous_content);
-    EnsurePipelineObjects(*context, *descriptor_host, *pipeline_host, color_pass.target.format);
+    if (bindless_resources == nullptr || !bindless_resources->IsInitialized()) {
+        throw std::runtime_error("ParticleRenderer2D::Record missing initialized BindlessResourceSystem");
+    }
+    EnsurePipelineObjects(*context, *bindless_resources, *pipeline_host, color_pass.target.format);
 
     if (gpu_build_active && particle_simulation_host != nullptr) {
         particle_simulation_host->RecordBuild2D(*context,
@@ -531,8 +523,25 @@ void ParticleRenderer2D::Record(const render::FrameRecordContext& record_context
         push_constants.params |= create_info_cache.input_positions_pixel_space ? 0x1U : 0U;
         push_constants.params |= create_info_cache.pixel_space_origin_top_left ? 0x2U : 0U;
 
+        const std::array<VkDescriptorSet, 2U> bindless_sets{
+            bindless_resources->SampledImageSet(),
+            bindless_resources->SamplerSet()
+        };
+        if (bindless_sets[0U] == VK_NULL_HANDLE || bindless_sets[1U] == VK_NULL_HANDLE) {
+            throw std::runtime_error(
+                "ParticleRenderer2D::Record requires valid bindless descriptor sets");
+        }
+        vkCmdBindDescriptorSets(record_context_.command_buffer,
+                                VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                pipeline_host->GetPipelineLayout(pipeline_layout_id),
+                                0U,
+                                static_cast<std::uint32_t>(bindless_sets.size()),
+                                bindless_sets.data(),
+                                0U,
+                                nullptr);
+        ++stats.descriptor_set_bind_count;
+
         render::GraphicsPipelineId bound_pipeline{};
-        VkDescriptorSet bound_descriptor_set = VK_NULL_HANDLE;
 
         std::uint32_t batch_index = 0U;
         for (const ecs::ParticleDrawBatch& batch : runtime_scratch.draw_batches) {
@@ -552,13 +561,6 @@ void ParticleRenderer2D::Record(const render::FrameRecordContext& record_context
                 continue;
             }
 
-            const VkDescriptorSet descriptor_set = AcquireTextureDescriptorSet(active_frame_index,
-                                                                               batch.texture_id);
-            if (descriptor_set == VK_NULL_HANDLE) {
-                ++stats.skipped_batch_count;
-                continue;
-            }
-
             if (bound_pipeline.value != pipeline_id.value) {
                 vkCmdBindPipeline(record_context_.command_buffer,
                                   VK_PIPELINE_BIND_POINT_GRAPHICS,
@@ -570,20 +572,6 @@ void ParticleRenderer2D::Record(const render::FrameRecordContext& record_context
                                    sizeof(PushConstants),
                                    &push_constants);
                 bound_pipeline = pipeline_id;
-                bound_descriptor_set = VK_NULL_HANDLE;
-            }
-
-            if (bound_descriptor_set != descriptor_set) {
-                vkCmdBindDescriptorSets(record_context_.command_buffer,
-                                        VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                        pipeline_host->GetPipelineLayout(pipeline_layout_id),
-                                        0U,
-                                        1U,
-                                        &descriptor_set,
-                                        0U,
-                                        nullptr);
-                bound_descriptor_set = descriptor_set;
-                ++stats.descriptor_set_bind_count;
             }
 
             if (gpu_build_active) {
@@ -647,17 +635,12 @@ const ParticleRenderer2DStats& ParticleRenderer2D::Stats() const noexcept {
 }
 
 void ParticleRenderer2D::EnsurePipelineObjects(VulkanContext& context_,
-                                               render::DescriptorHost& descriptor_host_,
+                                               render::BindlessResourceSystem& bindless_resources_,
                                                render::PipelineHost& pipeline_host_,
                                                VkFormat color_format_) {
     if (context_.EnabledVulkan13Features().dynamicRendering != VK_TRUE ||
         context_.EnabledVulkan13Features().synchronization2 != VK_TRUE) {
         throw std::runtime_error("ParticleRenderer2D requires Vulkan 1.3 dynamicRendering + synchronization2");
-    }
-
-    if (descriptor_layout_id.IsValid() &&
-        descriptor_host_.CachedLayoutCount() < descriptor_layout_id.value) {
-        descriptor_layout_id = {};
     }
 
     const render::PipelineHostStats& pipeline_stats = pipeline_host_.Stats();
@@ -676,18 +659,6 @@ void ParticleRenderer2D::EnsurePipelineObjects(VulkanContext& context_,
         }
     }
 
-    if (!descriptor_layout_id.IsValid()) {
-        render::DescriptorSetLayoutDesc layout_desc{};
-        layout_desc.bindings.push_back({
-            .binding = 0U,
-            .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-            .descriptorCount = 1U,
-            .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
-            .pImmutableSamplers = nullptr
-        });
-        descriptor_layout_id = descriptor_host_.RegisterLayout(context_, layout_desc);
-    }
-
     if (!shader_vertex_id.IsValid()) {
         render::ShaderModuleCreateInfo shader_create_info{};
         shader_create_info.code_words = generated::k_particle_2d_vert_spv;
@@ -702,8 +673,17 @@ void ParticleRenderer2D::EnsurePipelineObjects(VulkanContext& context_,
     }
 
     if (!pipeline_layout_id.IsValid()) {
+        const VkDescriptorSetLayout sampled_image_layout =
+            bindless_resources_.SampledImageLayout();
+        const VkDescriptorSetLayout sampler_layout =
+            bindless_resources_.SamplerLayout();
+        if (sampled_image_layout == VK_NULL_HANDLE || sampler_layout == VK_NULL_HANDLE) {
+            throw std::runtime_error(
+                "ParticleRenderer2D::EnsurePipelineObjects requires valid bindless set layouts");
+        }
         render::PipelineLayoutDesc pipeline_layout_desc{};
-        pipeline_layout_desc.set_layouts.push_back(descriptor_host_.GetLayout(descriptor_layout_id));
+        pipeline_layout_desc.set_layouts.push_back(sampled_image_layout);
+        pipeline_layout_desc.set_layouts.push_back(sampler_layout);
         pipeline_layout_desc.push_constant_ranges.push_back({
             .stage_flags = VK_SHADER_STAGE_VERTEX_BIT,
             .offset = 0U,
@@ -725,7 +705,7 @@ render::GraphicsPipelineId ParticleRenderer2D::EnsurePipelineForBlendMode(
     render::PipelineHost& pipeline_host_,
     VkFormat color_format_,
     BlendModeKind blend_mode_) {
-    EnsurePipelineObjects(context_, *descriptor_host, pipeline_host_, color_format_);
+    EnsurePipelineObjects(context_, *bindless_resources, pipeline_host_, color_format_);
 
     render::GraphicsPipelineId& cached_pipeline_id = pipeline_ids[BlendModeIndex(blend_mode_)];
     if (cached_pipeline_id.IsValid() && pipeline_color_format == color_format_) {
@@ -781,6 +761,18 @@ render::GraphicsPipelineId ParticleRenderer2D::EnsurePipelineForBlendMode(
         .format = VK_FORMAT_R8G8B8A8_UNORM,
         .offset = static_cast<std::uint32_t>(offsetof(ecs::Particle2DGpuInstance, color_rgba8))
     });
+    pipeline_desc.vertex_input.attributes.push_back({
+        .location = 4U,
+        .binding = 0U,
+        .format = VK_FORMAT_R32_UINT,
+        .offset = static_cast<std::uint32_t>(offsetof(ecs::Particle2DGpuInstance, texture_slot))
+    });
+    pipeline_desc.vertex_input.attributes.push_back({
+        .location = 5U,
+        .binding = 0U,
+        .format = VK_FORMAT_R32_UINT,
+        .offset = static_cast<std::uint32_t>(offsetof(ecs::Particle2DGpuInstance, sampler_slot))
+    });
 
     pipeline_desc.input_assembly.topology = k_particle_topology;
     pipeline_desc.input_assembly.primitive_restart_enable = false;
@@ -825,183 +817,38 @@ render::GraphicsPipelineId ParticleRenderer2D::EnsurePipelineForBlendMode(
     return cached_pipeline_id;
 }
 
-void ParticleRenderer2D::EnsureFallbackTexture(VulkanContext& context_,
-                                               render::UploadHost& upload_host_,
-                                               std::uint32_t frame_index_) {
-    if (sampler_host == nullptr) {
-        throw std::runtime_error("ParticleRenderer2D::EnsureFallbackTexture missing SamplerHost");
+void ParticleRenderer2D::RemapCpuInstancesToBindless() {
+    if (bindless_resources == nullptr || !bindless_resources->IsInitialized()) {
+        throw std::runtime_error(
+            "ParticleRenderer2D::RemapCpuInstancesToBindless requires initialized bindless resources");
     }
-    if (gpu_memory_host == nullptr) {
-        throw std::runtime_error("ParticleRenderer2D::EnsureFallbackTexture missing GpuMemoryHost");
+    for (auto& instance : runtime_scratch.instances) {
+        const std::uint32_t raw_texture_id = instance.texture_slot;
+        instance.texture_slot = ResolveTextureSlot(raw_texture_id);
+        instance.sampler_slot = ResolveSamplerSlot(raw_texture_id);
     }
-    if (context_.EnabledVulkan13Features().synchronization2 != VK_TRUE) {
-        throw std::runtime_error("ParticleRenderer2D::EnsureFallbackTexture requires synchronization2");
-    }
-
-    if (!texture_sampler_id.IsValid()) {
-        resource::SamplerDesc sampler_desc{};
-        sampler_desc.mag_filter = VK_FILTER_LINEAR;
-        sampler_desc.min_filter = VK_FILTER_LINEAR;
-        sampler_desc.mipmap_mode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
-        sampler_desc.address_mode_u = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-        sampler_desc.address_mode_v = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-        sampler_desc.address_mode_w = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-        sampler_desc.max_lod = 0.0F;
-        texture_sampler_id = sampler_host->RegisterSampler(context_, sampler_desc);
-    }
-
-    if (fallback_texture.image != VK_NULL_HANDLE && fallback_texture.default_view != VK_NULL_HANDLE) {
-        return;
-    }
-
-    resource::ImageCreateInfo create_info{};
-    create_info.image_type = VK_IMAGE_TYPE_2D;
-    create_info.format = VK_FORMAT_R8G8B8A8_UNORM;
-    create_info.extent = VkExtent3D{1U, 1U, 1U};
-    create_info.mip_levels = 1U;
-    create_info.array_layers = 1U;
-    create_info.samples = VK_SAMPLE_COUNT_1_BIT;
-    create_info.tiling = VK_IMAGE_TILING_OPTIMAL;
-    create_info.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
-    create_info.sharing_mode = VK_SHARING_MODE_EXCLUSIVE;
-    create_info.initial_layout = VK_IMAGE_LAYOUT_UNDEFINED;
-    create_info.memory_properties = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
-    create_info.create_default_view = true;
-    create_info.default_view_type = VK_IMAGE_VIEW_TYPE_2D;
-    create_info.default_view_aspect = VK_IMAGE_ASPECT_COLOR_BIT;
-    create_info.default_base_mip_level = 0U;
-    create_info.default_level_count = 1U;
-    create_info.default_base_array_layer = 0U;
-    create_info.default_layer_count = 1U;
-    fallback_texture = resource::ImageHost::CreateImage(context_, create_info, *gpu_memory_host);
-
-    VkImageMemoryBarrier2 to_transfer{};
-    to_transfer.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-    to_transfer.srcStageMask = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
-    to_transfer.srcAccessMask = 0U;
-    to_transfer.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
-    to_transfer.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-    to_transfer.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    to_transfer.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-    to_transfer.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    to_transfer.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    to_transfer.image = fallback_texture.image;
-    to_transfer.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    to_transfer.subresourceRange.baseMipLevel = 0U;
-    to_transfer.subresourceRange.levelCount = 1U;
-    to_transfer.subresourceRange.baseArrayLayer = 0U;
-    to_transfer.subresourceRange.layerCount = 1U;
-    upload_host_.RecordImageBarrier2(frame_index_, to_transfer);
-
-    const std::uint32_t white_rgba8 = 0xFFFF'FFFFU;
-    VkBufferImageCopy copy_region{};
-    copy_region.bufferOffset = 0U;
-    copy_region.bufferRowLength = 0U;
-    copy_region.bufferImageHeight = 0U;
-    copy_region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    copy_region.imageSubresource.mipLevel = 0U;
-    copy_region.imageSubresource.baseArrayLayer = 0U;
-    copy_region.imageSubresource.layerCount = 1U;
-    copy_region.imageOffset = VkOffset3D{0, 0, 0};
-    copy_region.imageExtent = VkExtent3D{1U, 1U, 1U};
-    upload_host_.StageAndRecordCopyImage(frame_index_,
-                                         fallback_texture.image,
-                                         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                                         copy_region,
-                                         &white_rgba8,
-                                         sizeof(white_rgba8),
-                                         alignof(std::uint32_t));
-
-    VkImageMemoryBarrier2 to_shader_read{};
-    to_shader_read.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-    to_shader_read.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
-    to_shader_read.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-    to_shader_read.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
-    to_shader_read.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
-    to_shader_read.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-    to_shader_read.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    to_shader_read.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    to_shader_read.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    to_shader_read.image = fallback_texture.image;
-    to_shader_read.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    to_shader_read.subresourceRange.baseMipLevel = 0U;
-    to_shader_read.subresourceRange.levelCount = 1U;
-    to_shader_read.subresourceRange.baseArrayLayer = 0U;
-    to_shader_read.subresourceRange.layerCount = 1U;
-    upload_host_.RecordImageBarrier2(frame_index_, to_shader_read);
-    fallback_texture_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 }
 
-VkDescriptorSet ParticleRenderer2D::AcquireTextureDescriptorSet(std::uint32_t frame_index_,
-                                                                std::uint32_t texture_id_) {
-    if (context == nullptr || descriptor_host == nullptr || sampler_host == nullptr) {
-        throw std::runtime_error("ParticleRenderer2D::AcquireTextureDescriptorSet missing runtime hosts");
+std::uint32_t ParticleRenderer2D::ResolveTextureSlot(std::uint32_t texture_id_) const noexcept {
+    if (bindless_resources == nullptr || !bindless_resources->IsInitialized()) {
+        return 0U;
     }
-    if (!descriptor_layout_id.IsValid()) {
-        return VK_NULL_HANDLE;
+    if (texture_id_ == 0U || texture_host == nullptr || !texture_host->IsInitialized()) {
+        return bindless_resources->PlaceholderImageSlot().index;
     }
-    if (frame_index_ >= frame_texture_sets.size()) {
-        throw std::out_of_range("ParticleRenderer2D::AcquireTextureDescriptorSet frame index out of range");
-    }
+    return bindless_resources->ResolveTextureImageSlot(*texture_host,
+                                                       asset::TextureId{texture_id_}).index;
+}
 
-    const asset::TextureHost::TextureRecord* texture_record = nullptr;
-    if (texture_id_ != 0U && texture_host != nullptr && texture_host->IsInitialized()) {
-        texture_record = texture_host->FindTexture(asset::TextureId{texture_id_});
+std::uint32_t ParticleRenderer2D::ResolveSamplerSlot(std::uint32_t texture_id_) const noexcept {
+    if (bindless_resources == nullptr || !bindless_resources->IsInitialized()) {
+        return 0U;
     }
-
-    const std::uint32_t effective_texture_id = (texture_record != nullptr) ? texture_id_ : 0U;
-    auto& entries = frame_texture_sets[frame_index_];
-    const std::size_t lower_bound_index = LowerBoundTextureSetIndex(entries, effective_texture_id);
-    if (lower_bound_index < entries.size() && entries[lower_bound_index].texture_id == effective_texture_id) {
-        return entries[lower_bound_index].descriptor_set;
+    if (texture_id_ == 0U || texture_host == nullptr || !texture_host->IsInitialized()) {
+        return bindless_resources->DefaultSamplerSlot().index;
     }
-
-    VkImageView image_view = fallback_texture.default_view;
-    VkImageLayout image_layout = fallback_texture_layout;
-    if (texture_record != nullptr &&
-        texture_record->resource.default_view != VK_NULL_HANDLE &&
-        texture_record->current_layout != VK_IMAGE_LAYOUT_UNDEFINED) {
-        image_view = texture_record->resource.default_view;
-        image_layout = texture_record->current_layout;
-    }
-
-    const VkSampler sampler = sampler_host->GetSampler(texture_sampler_id);
-    if (sampler == VK_NULL_HANDLE || image_view == VK_NULL_HANDLE) {
-        return VK_NULL_HANDLE;
-    }
-
-    const VkDescriptorSet descriptor_set =
-        descriptor_host->AllocateSet(*context, frame_index_, descriptor_layout_id);
-    descriptor_buffer_write_scratch.clear();
-    descriptor_image_write_scratch.clear();
-    descriptor_texel_write_scratch.clear();
-    descriptor_image_write_scratch.push_back({
-        .binding = 0U,
-        .array_element = 0U,
-        .descriptor_type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-        .sampler = sampler,
-        .image_view = image_view,
-        .image_layout = image_layout
-    });
-    descriptor_host->UpdateSet(*context,
-                               descriptor_set,
-                               descriptor_buffer_write_scratch,
-                               descriptor_image_write_scratch,
-                               descriptor_texel_write_scratch);
-    ++stats.descriptor_set_update_count;
-
-    const std::size_t old_size = entries.size();
-    entries.resize(old_size + 1U);
-    if (lower_bound_index < old_size) {
-        for (std::size_t index = old_size; index > lower_bound_index; --index) {
-            entries[index] = std::move(entries[index - 1U]);
-        }
-    }
-    entries[lower_bound_index] = TextureSetEntry{
-        .texture_id = effective_texture_id,
-        .descriptor_set = descriptor_set
-    };
-    return descriptor_set;
+    return bindless_resources->ResolveTextureSamplerSlot(*texture_host,
+                                                         asset::TextureId{texture_id_}).index;
 }
 
 } // namespace vr::particle

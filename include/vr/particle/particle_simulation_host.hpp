@@ -17,8 +17,13 @@ namespace vr::resource {
 class GpuMemoryHost;
 }
 
+namespace vr::asset {
+class TextureHost;
+}
+
 namespace vr::render {
 class UploadHost;
+class BindlessResourceSystem;
 }
 
 namespace vr::particle {
@@ -278,7 +283,9 @@ public:
         const ecs::ParticleRuntimeBuildConfig& build_config_,
         bool cpu_seeded_this_frame_,
         ecs::Particle2DRuntimeScratch& runtime_scratch_,
-        const ecs::ParticleRuntimeBuildStats& runtime_stats_);
+        const ecs::ParticleRuntimeBuildStats& runtime_stats_,
+        const asset::TextureHost* texture_host_,
+        const render::BindlessResourceSystem& bindless_resources_);
 
     [[nodiscard]] ParticleSimulationGpuBuildResult PrepareGpuBuild3D(
         VulkanContext& context_,

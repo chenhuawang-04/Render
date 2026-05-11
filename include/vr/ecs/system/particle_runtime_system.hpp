@@ -29,8 +29,8 @@ struct Particle2DGpuInstance final {
     float rotation_radians;
     float normalized_age;
     std::uint32_t color_rgba8;
-    std::uint32_t texture_id;
-    std::uint32_t material_id;
+    std::uint32_t texture_slot;
+    std::uint32_t sampler_slot;
     std::uint32_t component_index;
     std::uint32_t user_data;
 };
@@ -941,8 +941,8 @@ private:
             instance.rotation_radians = emitter_state_.particles.rotation_radians[particle_index_];
             instance.normalized_age = normalized_age;
             instance.color_rgba8 = color_rgba8;
-            instance.texture_id = component_.runtime.route.texture_id;
-            instance.material_id = ResolveEffectiveMaterialId(component_.runtime.route);
+            instance.texture_slot = component_.runtime.route.texture_id;
+            instance.sampler_slot = 0U;
             instance.component_index = component_index_;
             instance.user_data = component_.runtime.route.user_data;
             return instance;
