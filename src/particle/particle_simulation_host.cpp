@@ -1414,7 +1414,9 @@ ParticleSimulationGpuBuildResult ParticleSimulationHost::PrepareGpuBuild3D(
     const ecs::ParticleRuntimeBuildConfig& build_config_,
     bool cpu_seeded_this_frame_,
     ecs::Particle3DRuntimeScratch& runtime_scratch_,
-    const ecs::ParticleRuntimeBuildStats& runtime_stats_) {
+    const ecs::ParticleRuntimeBuildStats& runtime_stats_,
+    const asset::TextureHost* texture_host_,
+    const render::BindlessResourceSystem& bindless_resources_) {
     ParticleSimulationGpuBuildResult result{};
     result.resources = frame_resources_;
     if (frame_resources_.resolved_path == ParticleSimulationResolvedPath::cpu) {
@@ -1449,6 +1451,16 @@ ParticleSimulationGpuBuildResult ParticleSimulationHost::PrepareGpuBuild3D(
     BuildIndirectCommands(runtime_scratch_.draw_batches,
                           gpu_build_scratch_3d.component_ranges,
                           gpu_build_scratch_3d.indirect_commands);
+
+    for (auto& record : gpu_build_scratch_3d.state_records) {
+        const std::uint32_t raw_texture_id = record.texture_id;
+        record.texture_id = ResolveBindlessTextureSlot(texture_host_,
+                                                       bindless_resources_,
+                                                       raw_texture_id);
+        record.material_id = ResolveBindlessSamplerSlot(texture_host_,
+                                                        bindless_resources_,
+                                                        raw_texture_id);
+    }
 
     result.state_record_count = static_cast<std::uint32_t>(gpu_build_scratch_3d.state_records.size());
     result.resources.spawn_packets = MakeBufferView(context_, build_path.spawn_packets);

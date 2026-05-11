@@ -75,6 +75,7 @@ add_executable(${VR_TEST_TARGET}
     cases/runtime_surface_upload_host_integration_tests.cpp
     cases/runtime_particle_renderer_2d_integration_tests.cpp
     cases/runtime_particle_renderer_3d_integration_tests.cpp
+    cases/runtime_surface_renderer_2d_integration_tests.cpp
     cases/runtime_sky_environment_integration_tests.cpp
     cases/runtime_surface_renderer_3d_integration_tests.cpp
     cases/runtime_geometry_renderer_2d_integration_tests.cpp

@@ -48,7 +48,7 @@ using CameraSystem3D = vr::ecs::CameraSystem<vr::ecs::Dim3>;
 }
 
 [[nodiscard]] bool IsEnvironmentSkipError(std::string_view message_) {
-    constexpr std::array<std::string_view, 15U> patterns{
+    constexpr std::array<std::string_view, 18U> patterns{
         "sdl_initsubsystem",
         "sdl_createwindow",
         "sdl_vulkan_getinstanceextensions",
@@ -62,6 +62,9 @@ using CameraSystem3D = vr::ecs::CameraSystem<vr::ecs::Dim3>;
         "vkgetphysicaldevicesurfacesupportkhr",
         "vkgetphysicaldevicesurfaceformatskhr",
         "vkgetphysicaldevicesurfacepresentmodeskhr",
+        "bindlessresourcesystem",
+        "descriptor indexing",
+        "runtime descriptor array",
         "dynamicrendering",
         "synchronization2"
     };
@@ -72,6 +75,27 @@ using CameraSystem3D = vr::ecs::CameraSystem<vr::ecs::Dim3>;
         }
     }
     return false;
+}
+
+void ConfigureSurface3DRuntimeCreateInfo(Runtime::CreateInfo& create_info_,
+                                         const char* window_title_) {
+    create_info_.platform.window.title = window_title_;
+    create_info_.platform.window.width = 640;
+    create_info_.platform.window.height = 360;
+    create_info_.platform.window.resizable = true;
+    create_info_.platform.window.high_pixel_density = true;
+    create_info_.platform.instance.enable_validation = false;
+    create_info_.platform.device.required_vulkan12_features.runtimeDescriptorArray = VK_TRUE;
+    create_info_.platform.device.required_vulkan12_features.descriptorBindingPartiallyBound = VK_TRUE;
+    create_info_.platform.device.required_vulkan12_features.descriptorBindingVariableDescriptorCount = VK_TRUE;
+    create_info_.platform.device.required_vulkan12_features.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
+    create_info_.platform.device.required_vulkan13_features.dynamicRendering = VK_TRUE;
+    create_info_.platform.device.required_vulkan13_features.synchronization2 = VK_TRUE;
+    create_info_.render_loop.swapchain.enable_vsync = false;
+    create_info_.render_loop.swapchain.preferred_image_count = 2U;
+    create_info_.render_loop.commands.initial_primary_per_frame = 2U;
+    create_info_.render_loop.commands.primary_growth_chunk = 2U;
+    create_info_.poll_events_each_tick = true;
 }
 
 [[nodiscard]] constexpr std::uint32_t PackRgba8(std::uint8_t r_,
@@ -187,19 +211,7 @@ VR_TEST_CASE(RuntimeIntegration_surface_renderer_3d_bloom_post_stack_smoke,
 
     try {
         Runtime::CreateInfo create_info{};
-        create_info.platform.window.title = "vr_tests_runtime_surface_3d_offscreen";
-        create_info.platform.window.width = 640;
-        create_info.platform.window.height = 360;
-        create_info.platform.window.resizable = true;
-        create_info.platform.window.high_pixel_density = true;
-        create_info.platform.instance.enable_validation = false;
-        create_info.platform.device.required_vulkan13_features.dynamicRendering = VK_TRUE;
-        create_info.platform.device.required_vulkan13_features.synchronization2 = VK_TRUE;
-        create_info.render_loop.swapchain.enable_vsync = false;
-        create_info.render_loop.swapchain.preferred_image_count = 2U;
-        create_info.render_loop.commands.initial_primary_per_frame = 2U;
-        create_info.render_loop.commands.primary_growth_chunk = 2U;
-        create_info.poll_events_each_tick = true;
+        ConfigureSurface3DRuntimeCreateInfo(create_info, "vr_tests_runtime_surface_3d_offscreen");
         runtime.Initialize(create_info);
         runtime_initialized = true;
 
@@ -217,6 +229,7 @@ VR_TEST_CASE(RuntimeIntegration_surface_renderer_3d_bloom_post_stack_smoke,
         image_create_info.reserve_retired_image_count = 16U;
         surface_image_host.Initialize(runtime.Context(), runtime.GpuMemory(), image_create_info);
         image_initialized = true;
+        runtime.BindlessResources().ConfigureSurfaceImageHost(surface_image_host);
 
         vr::resource::SamplerId sampler_linear_repeat_id{};
         {
@@ -361,7 +374,7 @@ VR_TEST_CASE(RuntimeIntegration_surface_renderer_3d_bloom_post_stack_smoke,
         std::uint32_t max_surface_draw_calls = 0U;
         std::uint32_t max_surface_draw_batches = 0U;
         std::uint32_t max_surface_instances = 0U;
-        std::uint32_t max_surface_descriptor_updates = 0U;
+        std::uint32_t max_surface_bindless_set_binds = 0U;
         std::uint32_t max_surface_ibl_descriptor_binds = 0U;
         std::uint32_t max_surface_depth_test_batches = 0U;
         std::uint32_t max_surface_depth_write_batches = 0U;
@@ -409,8 +422,8 @@ VR_TEST_CASE(RuntimeIntegration_surface_renderer_3d_bloom_post_stack_smoke,
             max_surface_draw_calls = std::max(max_surface_draw_calls, surface_stats.draw_call_count);
             max_surface_draw_batches = std::max(max_surface_draw_batches, surface_stats.draw_batch_count);
             max_surface_instances = std::max(max_surface_instances, surface_stats.instance_count);
-            max_surface_descriptor_updates =
-                std::max(max_surface_descriptor_updates, surface_stats.descriptor_set_update_count);
+            max_surface_bindless_set_binds =
+                std::max(max_surface_bindless_set_binds, surface_stats.descriptor_set_bind_count);
             max_surface_ibl_descriptor_binds =
                 std::max(max_surface_ibl_descriptor_binds, surface_stats.ibl_descriptor_set_bind_count);
             max_surface_depth_test_batches =
@@ -435,7 +448,7 @@ VR_TEST_CASE(RuntimeIntegration_surface_renderer_3d_bloom_post_stack_smoke,
         VR_CHECK(max_surface_draw_calls > 0U);
         VR_CHECK(max_surface_draw_batches > 0U);
         VR_CHECK(max_surface_instances > 0U);
-        VR_CHECK(max_surface_descriptor_updates > 0U);
+        VR_CHECK(max_surface_bindless_set_binds > 0U);
         VR_CHECK(max_surface_ibl_descriptor_binds > 0U);
         VR_CHECK(max_surface_depth_test_batches > 0U);
         VR_CHECK(max_surface_depth_write_batches > 0U);
@@ -458,6 +471,8 @@ VR_TEST_CASE(RuntimeIntegration_surface_renderer_3d_bloom_post_stack_smoke,
         VR_CHECK(runtime.TargetPool().Stats().acquire_count > 0U);
         VR_CHECK(runtime.TargetPool().Stats().reuse_hit_count > 0U);
         VR_CHECK(runtime.Ibl().Stats().prepared_frame_count > 0U);
+        VR_CHECK(surface_image_host.ResolveBindlessImageSlot(6101U).IsValid());
+        VR_CHECK(surface_image_host.ResolveBindlessImageSlot(6102U).IsValid());
 
         recorder.Shutdown(runtime.Context());
         surface_renderer.Shutdown(runtime.Context());

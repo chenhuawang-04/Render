@@ -301,7 +301,9 @@ public:
         const ecs::ParticleRuntimeBuildConfig& build_config_,
         bool cpu_seeded_this_frame_,
         ecs::Particle3DRuntimeScratch& runtime_scratch_,
-        const ecs::ParticleRuntimeBuildStats& runtime_stats_);
+        const ecs::ParticleRuntimeBuildStats& runtime_stats_,
+        const asset::TextureHost* texture_host_,
+        const render::BindlessResourceSystem& bindless_resources_);
 
     void RecordBuild2D(VulkanContext& context_,
                        render::PipelineHost& pipeline_host_,

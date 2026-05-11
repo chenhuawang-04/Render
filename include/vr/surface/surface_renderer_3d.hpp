@@ -7,12 +7,12 @@
 #include "vr/ecs/component/transform_component.hpp"
 #include "vr/ecs/system/surface_runtime_system.hpp"
 #include "vr/render/appearance_prepare_bridge.hpp"
+#include "vr/render/bindless_resource_system.hpp"
 #include "vr/render/descriptor_host.hpp"
 #include "vr/render/pipeline_host.hpp"
 #include "vr/render/render_target_pass.hpp"
 #include "vr/render/scene_render_stage.hpp"
 #include "vr/resource/image_host.hpp"
-#include "vr/resource/sampler_host.hpp"
 #include "vr/surface/surface_image_host.hpp"
 #include "vr/surface/surface_upload_host.hpp"
 
@@ -182,11 +182,6 @@ private:
         std::uint64_t retire_value = 0U;
     };
 
-    struct TextureSetEntry final {
-        std::uint64_t binding_key = 0U;
-        VkDescriptorSet descriptor_set = VK_NULL_HANDLE;
-    };
-
     static_assert(sizeof(PushConstants) == 96U);
 
     [[nodiscard]] static bool IsDepthFormatSupported(VulkanContext& context_, VkFormat format_) noexcept;
@@ -197,16 +192,16 @@ private:
     [[nodiscard]] static std::size_t PipelineModeIndex(PipelineMode mode_) noexcept;
     [[nodiscard]] static std::size_t CullModeIndex(CullMode mode_) noexcept;
     [[nodiscard]] static std::size_t BlendModeIndex(BlendMode mode_) noexcept;
-    [[nodiscard]] static std::size_t LowerBoundTextureSetIndex(
-        const SurfaceRenderer3DMcVector<TextureSetEntry>& entries_,
-        std::uint64_t binding_key_) noexcept;
     [[nodiscard]] static PipelineMode ResolvePipelineMode(std::uint32_t batch_params_,
                                                           bool use_depth_) noexcept;
     [[nodiscard]] static CullMode ResolveCullMode(std::uint32_t batch_params_) noexcept;
     [[nodiscard]] static BlendMode ResolveBlendMode(std::uint32_t batch_params_) noexcept;
+    [[nodiscard]] static std::uint64_t ComposeBindlessUploadRevision(
+        const ecs::Surface3DRuntimeBuildStats& runtime_stats_,
+        std::uint32_t image_revision_) noexcept;
 
     void EnsurePipelineObjects(VulkanContext& context_,
-                               render::DescriptorHost& descriptor_host_,
+                               render::BindlessResourceSystem& bindless_resources_,
                                render::PipelineHost& pipeline_host_,
                                VkFormat color_format_,
                                VkFormat depth_format_);
@@ -218,12 +213,10 @@ private:
         BlendMode blend_mode_,
         PipelineMode mode_,
         CullMode cull_mode_);
-    void EnsureFallbackTexture(VulkanContext& context_,
-                               render::UploadHost& upload_host_,
-                               std::uint32_t frame_index_);
-    [[nodiscard]] VkDescriptorSet AcquireTextureDescriptorSet(std::uint32_t frame_index_,
-                                                              std::uint32_t texture_id_,
-                                                              std::uint32_t sampler_id_);
+    void RemapInstancesToBindless(ecs::Surface3DGpuInstance* instances_,
+                                  std::uint32_t instance_count_) noexcept;
+    [[nodiscard]] std::uint32_t ResolveImageSlot(std::uint32_t surface_id_) const noexcept;
+    [[nodiscard]] std::uint32_t ResolveSamplerSlot(std::uint32_t sampler_id_) const noexcept;
 
     void EnsureDepthResources(VulkanContext& context_,
                               std::uint32_t image_count_,
@@ -270,12 +263,11 @@ private:
     VulkanContext* context = nullptr;
     render::UploadHost* upload_host = nullptr;
     render::DescriptorHost* descriptor_host = nullptr;
+    render::BindlessResourceSystem* bindless_resources = nullptr;
     render::PipelineHost* pipeline_host = nullptr;
     render::IblHost* ibl_host = nullptr;
     resource::GpuMemoryHost* gpu_memory_host = nullptr;
-    resource::SamplerHost* sampler_host = nullptr;
 
-    render::DescriptorSetLayoutId descriptor_layout_id{};
     render::PipelineLayoutId pipeline_layout_id{};
     render::ShaderModuleId shader_vertex_id{};
     render::ShaderModuleId shader_fragment_id{};
@@ -290,13 +282,6 @@ private:
     SurfaceRenderer3DMcVector<resource::ImageResource> depth_images{};
     SurfaceRenderer3DMcVector<std::uint8_t> depth_image_initialized{};
     SurfaceRenderer3DMcVector<RetiredDepthImage> retired_depth_images{};
-    SurfaceRenderer3DMcVector<SurfaceRenderer3DMcVector<TextureSetEntry>> frame_texture_sets{};
-    render::DescriptorMcVector<render::DescriptorImageWrite> descriptor_image_write_scratch{};
-    render::DescriptorMcVector<render::DescriptorBufferWrite> descriptor_buffer_write_scratch{};
-    render::DescriptorMcVector<render::DescriptorTexelBufferWrite> descriptor_texel_write_scratch{};
-    resource::ImageResource fallback_texture{};
-    resource::SamplerId fallback_sampler_id{};
-    VkImageLayout fallback_texture_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     VkDescriptorSet active_ibl_descriptor_set = VK_NULL_HANDLE;
     SurfaceRenderer3DMcVector<std::uint8_t> image_initialized{};
 

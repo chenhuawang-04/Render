@@ -45,8 +45,8 @@ struct Particle3DGpuInstance final {
     float normalized_age;
     float stretch_factor;
     std::uint32_t color_rgba8;
-    std::uint32_t texture_id;
-    std::uint32_t material_id;
+    std::uint32_t texture_slot;
+    std::uint32_t sampler_slot;
     std::uint32_t component_index;
     std::uint32_t user_data;
     float velocity_x;
@@ -959,8 +959,8 @@ private:
                 std::sqrt(velocity.x * velocity.x + velocity.y * velocity.y + velocity.z * velocity.z) *
                     component_.style.stretch_velocity_scale;
             instance.color_rgba8 = color_rgba8;
-            instance.texture_id = component_.runtime.route.texture_id;
-            instance.material_id = ResolveEffectiveMaterialId(component_.runtime.route);
+            instance.texture_slot = component_.runtime.route.texture_id;
+            instance.sampler_slot = 0U;
             instance.component_index = component_index_;
             instance.user_data = component_.runtime.route.user_data;
             instance.velocity_x = velocity.x;

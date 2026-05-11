@@ -11,12 +11,12 @@
 #include "vr/ecs/system/particle_runtime_system.hpp"
 #include "vr/particle/particle_simulation_host.hpp"
 #include "vr/particle/particle_upload_host.hpp"
+#include "vr/render/bindless_resource_system.hpp"
 #include "vr/render/descriptor_host.hpp"
 #include "vr/render/pipeline_host.hpp"
 #include "vr/render/render_target_pass.hpp"
 #include "vr/render/scene_render_stage.hpp"
 #include "vr/resource/image_host.hpp"
-#include "vr/resource/sampler_host.hpp"
 
 #include <array>
 #include <cstddef>
@@ -165,11 +165,6 @@ private:
         std::uint32_t reserved2;
     };
 
-    struct TextureSetEntry final {
-        std::uint32_t texture_id = 0U;
-        VkDescriptorSet descriptor_set = VK_NULL_HANDLE;
-    };
-
     struct OrderedVisibleEntry final {
         std::uint32_t component_index = 0U;
         std::uint32_t pass_hint_value = 0U;
@@ -197,12 +192,12 @@ private:
     [[nodiscard]] static ecs::ParticleFacingMode DecodeFacingMode(std::uint32_t pipeline_state_) noexcept;
     [[nodiscard]] static ecs::ParticleRenderMode DecodeRenderMode(std::uint32_t pipeline_state_) noexcept;
     [[nodiscard]] static ecs::ParticleLightingMode DecodeLightingMode(std::uint32_t pipeline_state_) noexcept;
-    [[nodiscard]] static std::size_t LowerBoundTextureSetIndex(
-        const ParticleRenderer3DMcVector<TextureSetEntry>& entries_,
-        std::uint32_t texture_id_) noexcept;
     [[nodiscard]] static DepthPipelineMode ResolveDepthPipelineMode(std::uint32_t pipeline_state_,
                                                                     bool use_depth_,
                                                                     bool reverse_z_) noexcept;
+    [[nodiscard]] static std::uint64_t ComposeBindlessUploadRevision(
+        const ecs::ParticleRuntimeBuildStats& runtime_stats_,
+        std::uint32_t texture_revision_) noexcept;
 
     void BuildOrderedVisibleComponentList();
     [[nodiscard]] float ResolveComponentDistanceSq(std::uint32_t component_index_) const noexcept;
@@ -213,7 +208,7 @@ private:
     [[nodiscard]] ecs::Float3 ResolveCameraForward() const noexcept;
 
     void EnsurePipelineObjects(VulkanContext& context_,
-                               render::DescriptorHost& descriptor_host_,
+                               render::BindlessResourceSystem& bindless_resources_,
                                render::PipelineHost& pipeline_host_,
                                VkFormat color_format_,
                                VkFormat depth_format_);
@@ -224,11 +219,9 @@ private:
         VkFormat depth_format_,
         BlendModeKind blend_mode_,
         DepthPipelineMode depth_mode_);
-    void EnsureFallbackTexture(VulkanContext& context_,
-                               render::UploadHost& upload_host_,
-                               std::uint32_t frame_index_);
-    [[nodiscard]] VkDescriptorSet AcquireTextureDescriptorSet(std::uint32_t frame_index_,
-                                                              std::uint32_t texture_id_);
+    void RemapCpuInstancesToBindless();
+    [[nodiscard]] std::uint32_t ResolveTextureSlot(std::uint32_t texture_id_) const noexcept;
+    [[nodiscard]] std::uint32_t ResolveSamplerSlot(std::uint32_t texture_id_) const noexcept;
 
     void EnsureDepthResources(VulkanContext& context_,
                               std::uint32_t image_count_,
@@ -273,11 +266,10 @@ private:
     VulkanContext* context = nullptr;
     render::UploadHost* upload_host = nullptr;
     render::DescriptorHost* descriptor_host = nullptr;
+    render::BindlessResourceSystem* bindless_resources = nullptr;
     render::PipelineHost* pipeline_host = nullptr;
     resource::GpuMemoryHost* gpu_memory_host = nullptr;
-    resource::SamplerHost* sampler_host = nullptr;
 
-    render::DescriptorSetLayoutId descriptor_layout_id{};
     render::PipelineLayoutId pipeline_layout_id{};
     render::ShaderModuleId shader_vertex_id{};
     render::ShaderModuleId shader_fragment_id{};
@@ -292,15 +284,6 @@ private:
     ParticleRenderer3DMcVector<std::uint8_t> depth_image_initialized{};
     ParticleRenderer3DMcVector<RetiredDepthImage> retired_depth_images{};
     ParticleRenderer3DMcVector<std::uint8_t> image_initialized{};
-
-    ParticleRenderer3DMcVector<ParticleRenderer3DMcVector<TextureSetEntry>> frame_texture_sets{};
-    render::DescriptorMcVector<render::DescriptorBufferWrite> descriptor_buffer_write_scratch{};
-    render::DescriptorMcVector<render::DescriptorImageWrite> descriptor_image_write_scratch{};
-    render::DescriptorMcVector<render::DescriptorTexelBufferWrite> descriptor_texel_write_scratch{};
-
-    resource::ImageResource fallback_texture{};
-    VkImageLayout fallback_texture_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    resource::SamplerId texture_sampler_id{};
 
     std::uint32_t active_frame_index = 0U;
     VkExtent2D swapchain_extent{};

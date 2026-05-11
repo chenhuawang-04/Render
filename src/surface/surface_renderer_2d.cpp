@@ -1,6 +1,7 @@
 #include "vr/surface/surface_renderer_2d.hpp"
 
 #include "vr/render/color_blend_state.hpp"
+#include "vr/render/bindless_resource_system.hpp"
 #include "vr/render/render_loop_host.hpp"
 #include "vr/render/render_target_pass.hpp"
 #include "vr/render/runtime_prepare_views.hpp"
@@ -50,24 +51,6 @@ SurfaceRenderer2D::BlendModeKind SurfaceRenderer2D::ResolveBlendModeFromBatchPar
     return premultiplied_alpha ? BlendModeKind::premultiplied_alpha : BlendModeKind::alpha;
 }
 
-std::size_t SurfaceRenderer2D::LowerBoundTextureSetIndex(
-    const SurfaceRenderer2DMcVector<TextureSetEntry>& entries_,
-    std::uint32_t image_id_) noexcept {
-    std::size_t first = 0U;
-    std::size_t count = entries_.size();
-    while (count > 0U) {
-        const std::size_t step = count / 2U;
-        const std::size_t it = first + step;
-        if (entries_[it].image_id < image_id_) {
-            first = it + 1U;
-            count -= step + 1U;
-        } else {
-            count = step;
-        }
-    }
-    return first;
-}
-
 void SurfaceRenderer2D::Initialize(const SurfaceRenderer2DCreateInfo& create_info_) {
     create_info_cache = create_info_;
 
@@ -86,7 +69,6 @@ void SurfaceRenderer2D::Initialize(const SurfaceRenderer2DCreateInfo& create_inf
             create_info_cache.reserve_instance_count);
     }
 
-    descriptor_layout_id = {};
     lighting_descriptor_layout_id = {};
     pipeline_layout_id = {};
     shader_vertex_id = {};
@@ -96,7 +78,6 @@ void SurfaceRenderer2D::Initialize(const SurfaceRenderer2DCreateInfo& create_inf
     }
     pipeline_color_format = VK_FORMAT_UNDEFINED;
 
-    frame_texture_sets.clear();
     frame_lighting_resources.clear();
     descriptor_image_write_scratch.clear();
     descriptor_buffer_write_scratch.clear();
@@ -124,12 +105,14 @@ void SurfaceRenderer2D::Initialize(const SurfaceRenderer2DCreateInfo& create_inf
     context = nullptr;
     upload_host = nullptr;
     descriptor_host = nullptr;
+    bindless_resources = nullptr;
     pipeline_host = nullptr;
     gpu_memory_host = nullptr;
     sampler_host = nullptr;
 
     active_frame_index = 0U;
     swapchain_extent = {};
+    bindless_mapping_revision = 0U;
     swapchain_format = VK_FORMAT_UNDEFINED;
     last_submitted_value_seen = 0U;
     completed_submit_value_seen = 0U;
@@ -180,11 +163,11 @@ void SurfaceRenderer2D::Shutdown(VulkanContext& context_) {
     context = nullptr;
     upload_host = nullptr;
     descriptor_host = nullptr;
+    bindless_resources = nullptr;
     pipeline_host = nullptr;
     gpu_memory_host = nullptr;
     sampler_host = nullptr;
 
-    descriptor_layout_id = {};
     lighting_descriptor_layout_id = {};
     pipeline_layout_id = {};
     shader_vertex_id = {};
@@ -194,7 +177,6 @@ void SurfaceRenderer2D::Shutdown(VulkanContext& context_) {
     }
     pipeline_color_format = VK_FORMAT_UNDEFINED;
 
-    frame_texture_sets.clear();
     frame_lighting_resources.clear();
     descriptor_image_write_scratch.clear();
     descriptor_buffer_write_scratch.clear();
@@ -221,6 +203,7 @@ void SurfaceRenderer2D::Shutdown(VulkanContext& context_) {
 
     active_frame_index = 0U;
     swapchain_extent = {};
+    bindless_mapping_revision = 0U;
     swapchain_format = VK_FORMAT_UNDEFINED;
     last_submitted_value_seen = 0U;
     completed_submit_value_seen = 0U;
@@ -351,6 +334,13 @@ void SurfaceRenderer2D::PrepareFrame(const render::SurfaceRenderer2DPrepareView&
     pipeline_host = &prepare_view_.pipeline;
     gpu_memory_host = &prepare_view_.gpu_memory;
     sampler_host = &prepare_view_.sampler;
+    if (prepare_view_.bindless != nullptr) {
+        bindless_resources = prepare_view_.bindless;
+    }
+    if (bindless_resources == nullptr || !bindless_resources->IsInitialized()) {
+        throw std::runtime_error("SurfaceRenderer2D::PrepareFrame requires initialized BindlessResourceSystem");
+    }
+
     active_frame_index = prepare_view_.frame.frame_index;
     last_submitted_value_seen = std::max(last_submitted_value_seen, prepare_view_.progress.last_submitted_value);
     completed_submit_value_seen = std::max(completed_submit_value_seen,
@@ -365,18 +355,11 @@ void SurfaceRenderer2D::PrepareFrame(const render::SurfaceRenderer2DPrepareView&
     }
     EnsureFallbackTexture(*context, *upload_host, active_frame_index);
 
-    if (active_frame_index >= frame_texture_sets.size()) {
-        frame_texture_sets.resize(active_frame_index + 1U);
-    }
-    frame_texture_sets[active_frame_index].clear();
     if (active_frame_index >= frame_lighting_resources.size()) {
         frame_lighting_resources.resize(active_frame_index + 1U);
     }
     {
         FrameLightingResources& frame_resources = frame_lighting_resources[active_frame_index];
-        // DescriptorHost::BeginFrame 会对当前 frame arena 执行 vkResetDescriptorPool�?
-        // 该操作会使此前为�?frame 分配的所�?VkDescriptorSet 句柄立即失效�?
-        // 因此必须在每�?Prepare 阶段强制失效本地缓存句柄，避免绑定悬空集合�?
         frame_resources.descriptor_set = VK_NULL_HANDLE;
         frame_resources.descriptor_buffer_signature = 0U;
         frame_resources.descriptor_image_signature = 0U;
@@ -406,6 +389,7 @@ void SurfaceRenderer2D::PrepareFrame(const render::SurfaceRenderer2DPrepareView&
     if (surface_components == nullptr || component_count == 0U) {
         runtime_scratch.instances.clear();
         runtime_scratch.draw_batches.clear();
+        bindless_mapping_revision = 0U;
         pending_dirty_component_indices = nullptr;
         pending_dirty_component_count = 0U;
         return;
@@ -415,25 +399,89 @@ void SurfaceRenderer2D::PrepareFrame(const render::SurfaceRenderer2DPrepareView&
     runtime_build_hint.transform_dirty_component_indices = pending_dirty_component_indices;
     runtime_build_hint.transform_dirty_component_count = pending_dirty_component_count;
 
-    last_upload_result = surface_upload_host->PrepareRuntimeAndUpload2D(
-        *context,
-        *upload_host,
-        active_frame_index,
+    last_upload_result.runtime = ecs::SurfaceRuntimeSystem<ecs::Dim2>::Build(
         surface_components,
         transforms,
         component_count,
         runtime_scratch,
-        plan_scratch,
-        runtime_build_hint,
-        create_info_cache.runtime_upload_options);
+        create_info_cache.runtime_upload_options.runtime_build,
+        runtime_build_hint);
+
+    if (!runtime_scratch.instances.empty() &&
+        last_upload_result.runtime.emitted_instance_count > 0U) {
+        RemapInstancesToBindless(runtime_scratch.instances.data(),
+                                 static_cast<std::uint32_t>(runtime_scratch.instances.size()));
+        const std::uint64_t upload_revision = surface::SurfaceUploadHost::ComposeUploadRevision(
+            last_upload_result.runtime.surface_signature,
+            last_upload_result.runtime.transform_signature) ^
+            (static_cast<std::uint64_t>(bindless_mapping_revision) + 0x9e3779b97f4a7c15ULL);
+
+        if (surface::SurfaceUploadHost::ShouldAttemptPartialUpload(
+                last_upload_result.runtime,
+                runtime_build_hint,
+                create_info_cache.runtime_upload_options)) {
+            last_upload_result.plan = ecs::SurfaceUploadPlanSystem<ecs::Dim2>::BuildRangesFromDirtyComponents(
+                runtime_scratch,
+                runtime_build_hint.transform_dirty_component_indices,
+                runtime_build_hint.transform_dirty_component_count,
+                create_info_cache.runtime_upload_options.plan_build,
+                plan_scratch);
+
+            if (last_upload_result.plan.range_count > 0U &&
+                last_upload_result.plan.covered_instance_count > 0U) {
+                static_assert(sizeof(ecs::SurfaceUploadPatchRange) == sizeof(surface::SurfaceUploadPatch));
+                static_assert(alignof(ecs::SurfaceUploadPatchRange) == alignof(surface::SurfaceUploadPatch));
+                const auto* patches = reinterpret_cast<const surface::SurfaceUploadPatch*>(
+                    plan_scratch.ranges.data());
+                last_upload_result.upload = surface_upload_host->Upload2DInstancePatches(
+                    *context,
+                    *upload_host,
+                    active_frame_index,
+                    runtime_scratch.instances.data(),
+                    static_cast<std::uint32_t>(runtime_scratch.instances.size()),
+                    patches,
+                    last_upload_result.plan.range_count,
+                    upload_revision);
+                last_upload_result.used_partial_upload =
+                    last_upload_result.upload.partial && last_upload_result.upload.uploaded;
+                last_upload_result.skipped_upload = !last_upload_result.upload.uploaded;
+            } else if (last_upload_result.runtime.transform_rewritten_instance_count == 0U) {
+                last_upload_result.skipped_upload = true;
+            } else {
+                last_upload_result.upload = surface_upload_host->Upload2DInstances(
+                    *context,
+                    *upload_host,
+                    active_frame_index,
+                    runtime_scratch.instances.data(),
+                    static_cast<std::uint32_t>(runtime_scratch.instances.size()),
+                    upload_revision);
+                last_upload_result.used_partial_upload = false;
+                last_upload_result.skipped_upload = !last_upload_result.upload.uploaded;
+            }
+        } else {
+            last_upload_result.upload = surface_upload_host->Upload2DInstances(
+                *context,
+                *upload_host,
+                active_frame_index,
+                runtime_scratch.instances.data(),
+                static_cast<std::uint32_t>(runtime_scratch.instances.size()),
+                upload_revision);
+            last_upload_result.used_partial_upload = false;
+            last_upload_result.skipped_upload = !last_upload_result.upload.uploaded;
+        }
+    } else {
+        bindless_mapping_revision = 0U;
+        last_upload_result.skipped_upload = true;
+    }
 
     stats.visible_component_count = last_upload_result.runtime.batch.visible_count;
     stats.instance_count = last_upload_result.runtime.emitted_instance_count;
     stats.draw_batch_count = last_upload_result.runtime.emitted_batch_count;
     stats.uploaded_instance_count = last_upload_result.upload.element_count;
     stats.uploaded_patch_count = last_upload_result.upload.patch_count;
-    stats.uploaded_bytes = last_upload_result.upload.size_bytes;
-    stats.cache_reused = last_upload_result.runtime.cache_reused;
+    stats.uploaded_bytes = last_upload_result.upload.uploaded ? last_upload_result.upload.size_bytes : 0U;
+    stats.cache_reused = !last_upload_result.upload.uploaded &&
+                         last_upload_result.runtime.emitted_instance_count > 0U;
     stats.transform_only_update = last_upload_result.runtime.transform_only_update;
     stats.used_partial_upload = last_upload_result.used_partial_upload;
     stats.skipped_upload = last_upload_result.skipped_upload;
@@ -461,6 +509,9 @@ void SurfaceRenderer2D::Record(const render::FrameRecordContext& record_context_
     }
     if (context == nullptr || descriptor_host == nullptr || pipeline_host == nullptr) {
         throw std::runtime_error("SurfaceRenderer2D::Record called before PrepareFrame");
+    }
+    if (bindless_resources == nullptr || !bindless_resources->IsInitialized()) {
+        throw std::runtime_error("SurfaceRenderer2D::Record requires initialized BindlessResourceSystem");
     }
     if (record_context_.command_buffer == VK_NULL_HANDLE ||
         record_context_.image == VK_NULL_HANDLE ||
@@ -535,8 +586,16 @@ void SurfaceRenderer2D::Record(const render::FrameRecordContext& record_context_
             frame_lighting_descriptor_set = frame_lighting_resources[active_frame_index].descriptor_set;
         }
 
+        const std::array<VkDescriptorSet, 2U> bindless_sets{
+            bindless_resources->SampledImageSet(),
+            bindless_resources->SamplerSet()
+        };
+        if (bindless_sets[0U] == VK_NULL_HANDLE || bindless_sets[1U] == VK_NULL_HANDLE) {
+            throw std::runtime_error("SurfaceRenderer2D::Record requires valid bindless descriptor sets");
+        }
+
         render::GraphicsPipelineId bound_pipeline{};
-        VkDescriptorSet bound_descriptor_set = VK_NULL_HANDLE;
+        bool bindless_sets_bound = false;
         bool lighting_set_bound = false;
         for (const ecs::Surface2DDrawBatch& batch : runtime_scratch.draw_batches) {
             if (frame_lighting_descriptor_set == VK_NULL_HANDLE) {
@@ -549,15 +608,12 @@ void SurfaceRenderer2D::Record(const render::FrameRecordContext& record_context_
             }
 
             const BlendModeKind blend_mode = ResolveBlendModeFromBatchParams(batch.params);
-            const render::GraphicsPipelineId pipeline_id = pipeline_ids[BlendModeIndex(blend_mode)];
+            const render::GraphicsPipelineId pipeline_id = EnsurePipelineForBlendMode(
+                *context,
+                *pipeline_host,
+                color_pass.target.format,
+                blend_mode);
             if (!pipeline_id.IsValid()) {
-                ++stats.skipped_batch_count;
-                continue;
-            }
-
-            const VkDescriptorSet descriptor_set = AcquireTextureDescriptorSet(active_frame_index,
-                                                                               batch.surface_id);
-            if (descriptor_set == VK_NULL_HANDLE) {
                 ++stats.skipped_batch_count;
                 continue;
             }
@@ -573,33 +629,34 @@ void SurfaceRenderer2D::Record(const render::FrameRecordContext& record_context_
                                    sizeof(PushConstants),
                                    &push_constants);
                 bound_pipeline = pipeline_id;
-                bound_descriptor_set = VK_NULL_HANDLE;
-
-                if (!lighting_set_bound && frame_lighting_descriptor_set != VK_NULL_HANDLE) {
-                    vkCmdBindDescriptorSets(record_context_.command_buffer,
-                                            VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                            pipeline_host->GetPipelineLayout(pipeline_layout_id),
-                                            1U,
-                                            1U,
-                                            &frame_lighting_descriptor_set,
-                                            0U,
-                                            nullptr);
-                    lighting_set_bound = true;
-                    ++stats.light_descriptor_set_bind_count;
-                }
+                bindless_sets_bound = false;
+                lighting_set_bound = false;
             }
 
-            if (bound_descriptor_set != descriptor_set) {
+            if (!bindless_sets_bound) {
                 vkCmdBindDescriptorSets(record_context_.command_buffer,
                                         VK_PIPELINE_BIND_POINT_GRAPHICS,
                                         pipeline_host->GetPipelineLayout(pipeline_layout_id),
                                         0U,
-                                        1U,
-                                        &descriptor_set,
+                                        static_cast<std::uint32_t>(bindless_sets.size()),
+                                        bindless_sets.data(),
                                         0U,
                                         nullptr);
-                bound_descriptor_set = descriptor_set;
+                bindless_sets_bound = true;
                 ++stats.descriptor_set_bind_count;
+            }
+
+            if (!lighting_set_bound) {
+                vkCmdBindDescriptorSets(record_context_.command_buffer,
+                                        VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                        pipeline_host->GetPipelineLayout(pipeline_layout_id),
+                                        2U,
+                                        1U,
+                                        &frame_lighting_descriptor_set,
+                                        0U,
+                                        nullptr);
+                lighting_set_bound = true;
+                ++stats.light_descriptor_set_bind_count;
             }
 
             vkCmdDraw(record_context_.command_buffer,
@@ -658,18 +715,27 @@ void SurfaceRenderer2D::EnsurePipelineObjects(VulkanContext& context_,
     if (context_.EnabledVulkan13Features().dynamicRendering != VK_TRUE) {
         throw std::runtime_error("SurfaceRenderer2D requires Vulkan 1.3 dynamicRendering");
     }
-
-    if (!descriptor_layout_id.IsValid()) {
-        render::DescriptorSetLayoutDesc layout_desc{};
-        layout_desc.bindings.push_back({
-            .binding = 0U,
-            .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-            .descriptorCount = 1U,
-            .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
-            .pImmutableSamplers = nullptr
-        });
-        descriptor_layout_id = descriptor_host_.RegisterLayout(context_, layout_desc);
+    if (bindless_resources == nullptr || !bindless_resources->IsInitialized()) {
+        throw std::runtime_error(
+            "SurfaceRenderer2D::EnsurePipelineObjects requires initialized BindlessResourceSystem");
     }
+
+    const render::PipelineHostStats& pipeline_stats = pipeline_host_.Stats();
+    if (shader_vertex_id.IsValid() && pipeline_stats.shader_module_count < shader_vertex_id.value) {
+        shader_vertex_id = {};
+    }
+    if (shader_fragment_id.IsValid() && pipeline_stats.shader_module_count < shader_fragment_id.value) {
+        shader_fragment_id = {};
+    }
+    if (pipeline_layout_id.IsValid() && pipeline_stats.pipeline_layout_count < pipeline_layout_id.value) {
+        pipeline_layout_id = {};
+    }
+    for (auto& pipeline_id : pipeline_ids) {
+        if (pipeline_id.IsValid() && pipeline_stats.graphics_pipeline_count < pipeline_id.value) {
+            pipeline_id = {};
+        }
+    }
+
     EnsureLightingDescriptorObjects(context_, descriptor_host_);
 
     if (!shader_vertex_id.IsValid()) {
@@ -685,9 +751,20 @@ void SurfaceRenderer2D::EnsurePipelineObjects(VulkanContext& context_,
         shader_fragment_id = pipeline_host_.RegisterShaderModule(context_, shader_info);
     }
     if (!pipeline_layout_id.IsValid()) {
+        const VkDescriptorSetLayout sampled_image_layout = bindless_resources->SampledImageLayout();
+        const VkDescriptorSetLayout sampler_layout = bindless_resources->SamplerLayout();
+        const VkDescriptorSetLayout lighting_layout = descriptor_host_.GetLayout(lighting_descriptor_layout_id);
+        if (sampled_image_layout == VK_NULL_HANDLE ||
+            sampler_layout == VK_NULL_HANDLE ||
+            lighting_layout == VK_NULL_HANDLE) {
+            throw std::runtime_error(
+                "SurfaceRenderer2D::EnsurePipelineObjects requires valid bindless/lighting descriptor layouts");
+        }
+
         render::PipelineLayoutDesc layout_desc{};
-        layout_desc.set_layouts.push_back(descriptor_host_.GetLayout(descriptor_layout_id));
-        layout_desc.set_layouts.push_back(descriptor_host_.GetLayout(lighting_descriptor_layout_id));
+        layout_desc.set_layouts.push_back(sampled_image_layout);
+        layout_desc.set_layouts.push_back(sampler_layout);
+        layout_desc.set_layouts.push_back(lighting_layout);
         layout_desc.push_constant_ranges.push_back({
             .stage_flags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
             .offset = 0U,
@@ -702,16 +779,6 @@ void SurfaceRenderer2D::EnsurePipelineObjects(VulkanContext& context_,
             pipeline_id = {};
         }
     }
-
-    for (std::size_t i = 0U; i < static_cast<std::size_t>(BlendModeKind::count); ++i) {
-        if (pipeline_ids[i].IsValid()) {
-            continue;
-        }
-        pipeline_ids[i] = EnsurePipelineForBlendMode(context_,
-                                                     pipeline_host_,
-                                                     color_format_,
-                                                     static_cast<BlendModeKind>(i));
-    }
 }
 
 render::GraphicsPipelineId SurfaceRenderer2D::EnsurePipelineForBlendMode(
@@ -719,6 +786,17 @@ render::GraphicsPipelineId SurfaceRenderer2D::EnsurePipelineForBlendMode(
     render::PipelineHost& pipeline_host_,
     VkFormat color_format_,
     BlendModeKind blend_mode_) {
+    if (descriptor_host == nullptr) {
+        throw std::runtime_error("SurfaceRenderer2D::EnsurePipelineForBlendMode missing DescriptorHost");
+    }
+
+    EnsurePipelineObjects(context_, *descriptor_host, pipeline_host_, color_format_);
+
+    render::GraphicsPipelineId& cached_pipeline_id = pipeline_ids[BlendModeIndex(blend_mode_)];
+    if (cached_pipeline_id.IsValid() && pipeline_color_format == color_format_) {
+        return cached_pipeline_id;
+    }
+
     render::GraphicsPipelineDesc desc{};
     desc.layout = pipeline_host_.GetPipelineLayout(pipeline_layout_id);
     desc.use_dynamic_rendering = true;
@@ -745,20 +823,66 @@ render::GraphicsPipelineId SurfaceRenderer2D::EnsurePipelineForBlendMode(
         .stride = static_cast<std::uint32_t>(sizeof(ecs::Surface2DGpuInstance)),
         .inputRate = VK_VERTEX_INPUT_RATE_INSTANCE
     });
-    desc.vertex_input.attributes.push_back({.location = 0U, .binding = 0U, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = 0U});
-    desc.vertex_input.attributes.push_back({.location = 1U, .binding = 0U, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = 12U});
-    desc.vertex_input.attributes.push_back({.location = 2U, .binding = 0U, .format = VK_FORMAT_R32G32_SFLOAT, .offset = 24U});
-    desc.vertex_input.attributes.push_back({.location = 3U, .binding = 0U, .format = VK_FORMAT_R32G32_SFLOAT, .offset = 32U});
-    desc.vertex_input.attributes.push_back({.location = 4U, .binding = 0U, .format = VK_FORMAT_R32G32B32A32_SFLOAT, .offset = 40U});
-    desc.vertex_input.attributes.push_back({.location = 5U, .binding = 0U, .format = VK_FORMAT_R32_SFLOAT, .offset = 56U});
-    desc.vertex_input.attributes.push_back({.location = 6U, .binding = 0U, .format = VK_FORMAT_R32_UINT, .offset = 60U});
-    desc.vertex_input.attributes.push_back({.location = 7U, .binding = 0U, .format = VK_FORMAT_R32_UINT, .offset = 64U});
-    desc.vertex_input.attributes.push_back({.location = 8U, .binding = 0U, .format = VK_FORMAT_R32_UINT, .offset = 68U});
-    desc.vertex_input.attributes.push_back({.location = 9U, .binding = 0U, .format = VK_FORMAT_R32_UINT, .offset = 72U});
-    desc.vertex_input.attributes.push_back({.location = 10U, .binding = 0U, .format = VK_FORMAT_R32_UINT, .offset = 76U});
-    desc.vertex_input.attributes.push_back({.location = 11U, .binding = 0U, .format = VK_FORMAT_R32_UINT, .offset = 80U});
-    desc.vertex_input.attributes.push_back({.location = 12U, .binding = 0U, .format = VK_FORMAT_R32_UINT, .offset = 84U});
-    desc.vertex_input.attributes.push_back({.location = 13U, .binding = 0U, .format = VK_FORMAT_R32_UINT, .offset = 88U});
+    desc.vertex_input.attributes.push_back({
+        .location = 0U,
+        .binding = 0U,
+        .format = VK_FORMAT_R32G32B32_SFLOAT,
+        .offset = static_cast<std::uint32_t>(offsetof(ecs::Surface2DGpuInstance, world_m00))
+    });
+    desc.vertex_input.attributes.push_back({
+        .location = 1U,
+        .binding = 0U,
+        .format = VK_FORMAT_R32G32B32_SFLOAT,
+        .offset = static_cast<std::uint32_t>(offsetof(ecs::Surface2DGpuInstance, world_m10))
+    });
+    desc.vertex_input.attributes.push_back({
+        .location = 2U,
+        .binding = 0U,
+        .format = VK_FORMAT_R32G32_SFLOAT,
+        .offset = static_cast<std::uint32_t>(offsetof(ecs::Surface2DGpuInstance, size_x))
+    });
+    desc.vertex_input.attributes.push_back({
+        .location = 3U,
+        .binding = 0U,
+        .format = VK_FORMAT_R32G32_SFLOAT,
+        .offset = static_cast<std::uint32_t>(offsetof(ecs::Surface2DGpuInstance, pivot_x))
+    });
+    desc.vertex_input.attributes.push_back({
+        .location = 4U,
+        .binding = 0U,
+        .format = VK_FORMAT_R32G32B32A32_SFLOAT,
+        .offset = static_cast<std::uint32_t>(offsetof(ecs::Surface2DGpuInstance, uv_u0))
+    });
+    desc.vertex_input.attributes.push_back({
+        .location = 5U,
+        .binding = 0U,
+        .format = VK_FORMAT_R32_SFLOAT,
+        .offset = static_cast<std::uint32_t>(offsetof(ecs::Surface2DGpuInstance, opacity))
+    });
+    desc.vertex_input.attributes.push_back({
+        .location = 6U,
+        .binding = 0U,
+        .format = VK_FORMAT_R8G8B8A8_UNORM,
+        .offset = static_cast<std::uint32_t>(offsetof(ecs::Surface2DGpuInstance, tint_rgba8))
+    });
+    desc.vertex_input.attributes.push_back({
+        .location = 7U,
+        .binding = 0U,
+        .format = VK_FORMAT_R32_UINT,
+        .offset = static_cast<std::uint32_t>(offsetof(ecs::Surface2DGpuInstance, params))
+    });
+    desc.vertex_input.attributes.push_back({
+        .location = 8U,
+        .binding = 0U,
+        .format = VK_FORMAT_R32_UINT,
+        .offset = static_cast<std::uint32_t>(offsetof(ecs::Surface2DGpuInstance, image_slot))
+    });
+    desc.vertex_input.attributes.push_back({
+        .location = 9U,
+        .binding = 0U,
+        .format = VK_FORMAT_R32_UINT,
+        .offset = static_cast<std::uint32_t>(offsetof(ecs::Surface2DGpuInstance, sampler_slot))
+    });
 
     desc.input_assembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
     desc.input_assembly.primitive_restart_enable = false;
@@ -800,11 +924,61 @@ render::GraphicsPipelineId SurfaceRenderer2D::EnsurePipelineForBlendMode(
     default:
         break;
     }
-    const VkPipelineColorBlendAttachmentState blend =
-        render::BuildColorBlendAttachment(blend_preset);
-    desc.color_blend.attachments.push_back(blend);
+    desc.color_blend.attachments.push_back(render::BuildColorBlendAttachment(blend_preset));
 
-    return pipeline_host_.RegisterGraphicsPipeline(context_, desc);
+    cached_pipeline_id = pipeline_host_.RegisterGraphicsPipeline(context_, desc);
+    pipeline_color_format = color_format_;
+    return cached_pipeline_id;
+}
+
+void SurfaceRenderer2D::RemapInstancesToBindless(ecs::Surface2DGpuInstance* instances_,
+                                                 std::uint32_t instance_count_) noexcept {
+    if (instances_ == nullptr || instance_count_ == 0U) {
+        bindless_mapping_revision = 0U;
+        return;
+    }
+
+    std::uint64_t hash = 14695981039346656037ULL;
+    auto hash_combine = [](std::uint64_t& hash_, std::uint64_t value_) noexcept {
+        hash_ ^= value_;
+        hash_ *= 1099511628211ULL;
+    };
+
+    for (std::uint32_t index = 0U; index < instance_count_; ++index) {
+        ecs::Surface2DGpuInstance& instance = instances_[index];
+        const std::uint32_t raw_surface_id = instance.image_slot;
+        const std::uint32_t resolved_image_slot = ResolveImageSlot(raw_surface_id);
+        const std::uint32_t resolved_sampler_slot = ResolveSamplerSlot(raw_surface_id);
+        instance.image_slot = resolved_image_slot;
+        instance.sampler_slot = resolved_sampler_slot;
+        hash_combine(hash, static_cast<std::uint64_t>(resolved_image_slot));
+        hash_combine(hash, static_cast<std::uint64_t>(resolved_sampler_slot));
+    }
+
+    hash_combine(hash, static_cast<std::uint64_t>(instance_count_));
+    bindless_mapping_revision = static_cast<std::uint32_t>(hash ^ (hash >> 32U));
+}
+
+std::uint32_t SurfaceRenderer2D::ResolveImageSlot(std::uint32_t surface_id_) const noexcept {
+    if (bindless_resources == nullptr || !bindless_resources->IsInitialized()) {
+        return 0U;
+    }
+
+    const std::uint32_t placeholder_slot = bindless_resources->PlaceholderImageSlot().index;
+    if (surface_id_ == 0U || surface_image_host == nullptr || !surface_image_host->IsInitialized()) {
+        return placeholder_slot;
+    }
+
+    const render::BindlessSlot image_slot = surface_image_host->ResolveBindlessImageSlot(surface_id_);
+    return image_slot.IsValid() ? image_slot.index : placeholder_slot;
+}
+
+std::uint32_t SurfaceRenderer2D::ResolveSamplerSlot(std::uint32_t surface_id_) const noexcept {
+    (void)surface_id_;
+    if (bindless_resources == nullptr || !bindless_resources->IsInitialized()) {
+        return 0U;
+    }
+    return bindless_resources->DefaultSamplerSlot().index;
 }
 
 void SurfaceRenderer2D::EnsureFallbackTexture(VulkanContext& context_,
@@ -1529,81 +1703,6 @@ void SurfaceRenderer2D::PrepareLightingDescriptorSetForFrame(std::uint32_t frame
     hash_combine(descriptor_signature, image_signature);
     frame_resources.descriptor_set_signature = descriptor_signature;
     ++stats.descriptor_set_update_count;
-}
-
-VkDescriptorSet SurfaceRenderer2D::AcquireTextureDescriptorSet(std::uint32_t frame_index_,
-                                                               std::uint32_t image_id_) {
-    if (context == nullptr || descriptor_host == nullptr || sampler_host == nullptr) {
-        throw std::runtime_error("SurfaceRenderer2D::AcquireTextureDescriptorSet missing runtime hosts");
-    }
-    if (!descriptor_layout_id.IsValid()) {
-        return VK_NULL_HANDLE;
-    }
-    if (frame_index_ >= frame_texture_sets.size()) {
-        throw std::out_of_range("SurfaceRenderer2D::AcquireTextureDescriptorSet frame index out of range");
-    }
-
-    const SurfaceImageHost::ImageRecord* image_record = nullptr;
-    if (image_id_ != 0U && surface_image_host != nullptr && surface_image_host->IsInitialized()) {
-        image_record = surface_image_host->FindImage(image_id_);
-    }
-
-    const std::uint32_t effective_image_id =
-        (image_record != nullptr) ? image_id_ : 0U;
-
-    auto& entries = frame_texture_sets[frame_index_];
-    const std::size_t lower_bound_index = LowerBoundTextureSetIndex(entries, effective_image_id);
-    if (lower_bound_index < entries.size() &&
-        entries[lower_bound_index].image_id == effective_image_id) {
-        return entries[lower_bound_index].descriptor_set;
-    }
-
-    VkImageView image_view = fallback_texture.default_view;
-    VkImageLayout image_layout = fallback_texture_layout;
-    if (image_record != nullptr &&
-        image_record->resource.default_view != VK_NULL_HANDLE &&
-        image_record->current_layout != VK_IMAGE_LAYOUT_UNDEFINED) {
-        image_view = image_record->resource.default_view;
-        image_layout = image_record->current_layout;
-    }
-
-    const VkSampler sampler = sampler_host->GetSampler(fallback_sampler_id);
-    if (sampler == VK_NULL_HANDLE || image_view == VK_NULL_HANDLE) {
-        return VK_NULL_HANDLE;
-    }
-
-    const VkDescriptorSet descriptor_set =
-        descriptor_host->AllocateSet(*context, frame_index_, descriptor_layout_id);
-    descriptor_buffer_write_scratch.clear();
-    descriptor_image_write_scratch.clear();
-    descriptor_texel_write_scratch.clear();
-    descriptor_image_write_scratch.push_back({
-        .binding = 0U,
-        .array_element = 0U,
-        .descriptor_type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-        .sampler = sampler,
-        .image_view = image_view,
-        .image_layout = image_layout
-    });
-    descriptor_host->UpdateSet(*context,
-                               descriptor_set,
-                               descriptor_buffer_write_scratch,
-                               descriptor_image_write_scratch,
-                               descriptor_texel_write_scratch);
-    ++stats.descriptor_set_update_count;
-
-    const std::size_t old_size = entries.size();
-    entries.resize(old_size + 1U);
-    if (lower_bound_index < old_size) {
-        for (std::size_t index = old_size; index > lower_bound_index; --index) {
-            entries[index] = std::move(entries[index - 1U]);
-        }
-    }
-    entries[lower_bound_index] = TextureSetEntry{
-        .image_id = effective_image_id,
-        .descriptor_set = descriptor_set
-    };
-    return descriptor_set;
 }
 
 } // namespace vr::surface

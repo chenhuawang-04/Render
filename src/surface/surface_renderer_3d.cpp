@@ -2,6 +2,7 @@
 
 #include "vr/ecs/system/transparency_render_policy.hpp"
 #include "vr/ecs/system/spatial_math.hpp"
+#include "vr/render/bindless_resource_system.hpp"
 #include "vr/render/color_blend_state.hpp"
 #include "vr/render/ibl_host.hpp"
 #include "vr/render/render_loop_host.hpp"
@@ -76,24 +77,6 @@ std::size_t SurfaceRenderer3D::BlendModeIndex(BlendMode mode_) noexcept {
     return static_cast<std::size_t>(mode_);
 }
 
-std::size_t SurfaceRenderer3D::LowerBoundTextureSetIndex(
-    const SurfaceRenderer3DMcVector<TextureSetEntry>& entries_,
-    std::uint64_t binding_key_) noexcept {
-    std::size_t first = 0U;
-    std::size_t count = entries_.size();
-    while (count > 0U) {
-        const std::size_t step = count / 2U;
-        const std::size_t it = first + step;
-        if (entries_[it].binding_key < binding_key_) {
-            first = it + 1U;
-            count -= step + 1U;
-        } else {
-            count = step;
-        }
-    }
-    return first;
-}
-
 SurfaceRenderer3D::PipelineMode SurfaceRenderer3D::ResolvePipelineMode(std::uint32_t batch_params_,
                                                                        bool use_depth_) noexcept {
     if (!use_depth_ || (batch_params_ & 0x1U) == 0U) {
@@ -129,6 +112,17 @@ SurfaceRenderer3D::BlendMode SurfaceRenderer3D::ResolveBlendMode(std::uint32_t b
     return BlendMode::opaque;
 }
 
+std::uint64_t SurfaceRenderer3D::ComposeBindlessUploadRevision(
+    const ecs::Surface3DRuntimeBuildStats& runtime_stats_,
+    std::uint32_t image_revision_) noexcept {
+    std::uint64_t revision = surface::SurfaceUploadHost::ComposeUploadRevision(
+        runtime_stats_.surface_signature,
+        runtime_stats_.transform_signature);
+    revision ^= static_cast<std::uint64_t>(image_revision_) + 0x9e3779b97f4a7c15ULL +
+                (revision << 6U) + (revision >> 2U);
+    return revision;
+}
+
 void SurfaceRenderer3D::Initialize(const SurfaceRenderer3DCreateInfo& create_info_) {
     create_info_cache = create_info_;
 
@@ -149,7 +143,6 @@ void SurfaceRenderer3D::Initialize(const SurfaceRenderer3DCreateInfo& create_inf
             create_info_cache.reserve_instance_count);
     }
 
-    descriptor_layout_id = {};
     pipeline_layout_id = {};
     shader_vertex_id = {};
     shader_fragment_id = {};
@@ -167,13 +160,6 @@ void SurfaceRenderer3D::Initialize(const SurfaceRenderer3DCreateInfo& create_inf
     depth_images.clear();
     depth_image_initialized.clear();
     retired_depth_images.clear();
-    frame_texture_sets.clear();
-    descriptor_image_write_scratch.clear();
-    descriptor_buffer_write_scratch.clear();
-    descriptor_texel_write_scratch.clear();
-    fallback_texture = {};
-    fallback_sampler_id = {};
-    fallback_texture_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     active_ibl_descriptor_set = VK_NULL_HANDLE;
     output_target_config = {};
     depth_output_target_config = {};
@@ -194,10 +180,10 @@ void SurfaceRenderer3D::Initialize(const SurfaceRenderer3DCreateInfo& create_inf
     context = nullptr;
     upload_host = nullptr;
     descriptor_host = nullptr;
+    bindless_resources = nullptr;
     pipeline_host = nullptr;
     ibl_host = nullptr;
     gpu_memory_host = nullptr;
-    sampler_host = nullptr;
 
     last_upload_result = {};
     culling_stats = {};
@@ -220,12 +206,6 @@ void SurfaceRenderer3D::Shutdown(VulkanContext& context_) {
 
     DestroyDepthResources(context_);
     DestroyRetiredDepthResources(context_);
-    if (context_.Device() != VK_NULL_HANDLE) {
-        resource::ImageHost::DestroyImage(context_, fallback_texture);
-    } else {
-        fallback_texture = {};
-    }
-    fallback_sampler_id = {};
 
     surface_components = nullptr;
     transforms = nullptr;
@@ -240,12 +220,11 @@ void SurfaceRenderer3D::Shutdown(VulkanContext& context_) {
     context = nullptr;
     upload_host = nullptr;
     descriptor_host = nullptr;
+    bindless_resources = nullptr;
     pipeline_host = nullptr;
     ibl_host = nullptr;
     gpu_memory_host = nullptr;
-    sampler_host = nullptr;
 
-    descriptor_layout_id = {};
     pipeline_layout_id = {};
     shader_vertex_id = {};
     shader_fragment_id = {};
@@ -274,11 +253,6 @@ void SurfaceRenderer3D::Shutdown(VulkanContext& context_) {
     plan_scratch.instance_indices.clear();
     plan_scratch.ranges.clear();
     plan_scratch.dense_marks.clear();
-    frame_texture_sets.clear();
-    descriptor_image_write_scratch.clear();
-    descriptor_buffer_write_scratch.clear();
-    descriptor_texel_write_scratch.clear();
-    fallback_texture_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     active_ibl_descriptor_set = VK_NULL_HANDLE;
     output_target_config = {};
     depth_output_target_config = {};
@@ -386,7 +360,13 @@ void SurfaceRenderer3D::PrepareFrame(const render::SurfaceRenderer3DPrepareView&
     pipeline_host = &prepare_view_.pipeline;
     ibl_host = &prepare_view_.ibl;
     gpu_memory_host = &prepare_view_.gpu_memory;
-    sampler_host = &prepare_view_.sampler;
+    if (prepare_view_.bindless != nullptr) {
+        bindless_resources = prepare_view_.bindless;
+    }
+    if (bindless_resources == nullptr || !bindless_resources->IsInitialized()) {
+        throw std::runtime_error(
+            "SurfaceRenderer3D::PrepareFrame requires initialized BindlessResourceSystem");
+    }
     active_frame_index = prepare_view_.frame.frame_index;
     last_submitted_value_seen = std::max(last_submitted_value_seen, prepare_view_.progress.last_submitted_value);
     completed_submit_value_seen = std::max(completed_submit_value_seen,
@@ -399,7 +379,6 @@ void SurfaceRenderer3D::PrepareFrame(const render::SurfaceRenderer3DPrepareView&
     if (surface_image_host != nullptr && surface_image_host->IsInitialized()) {
         surface_image_host->BeginFrame(*context, completed_submit_value_seen);
     }
-    EnsureFallbackTexture(*context, *upload_host, active_frame_index);
     const render::IblEnvironmentId ibl_environment_id{prepare_view_.ibl_environment_id};
     const asset::TextureId ibl_brdf_lut_texture_id{prepare_view_.ibl_brdf_lut_texture_id};
     if (ibl_environment_id.IsValid() || ibl_brdf_lut_texture_id.IsValid()) {
@@ -413,11 +392,6 @@ void SurfaceRenderer3D::PrepareFrame(const render::SurfaceRenderer3DPrepareView&
     if (active_ibl_descriptor_set == VK_NULL_HANDLE) {
         throw std::runtime_error("SurfaceRenderer3D::PrepareFrame failed to resolve IBL descriptor set");
     }
-
-    if (active_frame_index >= frame_texture_sets.size()) {
-        frame_texture_sets.resize(active_frame_index + 1U);
-    }
-    frame_texture_sets[active_frame_index].clear();
 
     stats = {};
     stats.component_count = component_count;
@@ -486,17 +460,78 @@ void SurfaceRenderer3D::PrepareFrame(const render::SurfaceRenderer3DPrepareView&
         culling_scratch.visibility_stamps.clear();
     }
 
-    last_upload_result = surface_upload_host->PrepareRuntimeAndUpload3D(
-        *context,
-        *upload_host,
-        active_frame_index,
+    last_upload_result.runtime = ecs::SurfaceRuntimeSystem<ecs::Dim3>::Build(
         surface_components,
         transforms,
         component_count,
         runtime_scratch,
-        plan_scratch,
-        runtime_build_hint,
-        create_info_cache.runtime_upload_options);
+        create_info_cache.runtime_upload_options.runtime_build,
+        runtime_build_hint);
+
+    if (!runtime_scratch.instances.empty() &&
+        last_upload_result.runtime.emitted_instance_count > 0U) {
+        RemapInstancesToBindless(runtime_scratch.instances.data(),
+                                 static_cast<std::uint32_t>(runtime_scratch.instances.size()));
+        const std::uint64_t upload_revision = ComposeBindlessUploadRevision(
+            last_upload_result.runtime,
+            surface_image_host != nullptr ? surface_image_host->Stats().revision : 0U);
+
+        if (surface::SurfaceUploadHost::ShouldAttemptPartialUpload(
+                last_upload_result.runtime,
+                runtime_build_hint,
+                create_info_cache.runtime_upload_options)) {
+            last_upload_result.plan = ecs::SurfaceUploadPlanSystem<ecs::Dim3>::BuildRangesFromDirtyComponents(
+                runtime_scratch,
+                runtime_build_hint.transform_dirty_component_indices,
+                runtime_build_hint.transform_dirty_component_count,
+                create_info_cache.runtime_upload_options.plan_build,
+                plan_scratch);
+
+            if (last_upload_result.plan.range_count > 0U &&
+                last_upload_result.plan.covered_instance_count > 0U) {
+                static_assert(sizeof(ecs::SurfaceUploadPatchRange) == sizeof(surface::SurfaceUploadPatch));
+                static_assert(alignof(ecs::SurfaceUploadPatchRange) == alignof(surface::SurfaceUploadPatch));
+                const auto* patches = reinterpret_cast<const surface::SurfaceUploadPatch*>(
+                    plan_scratch.ranges.data());
+                last_upload_result.upload = surface_upload_host->Upload3DInstancePatches(
+                    *context,
+                    *upload_host,
+                    active_frame_index,
+                    runtime_scratch.instances.data(),
+                    static_cast<std::uint32_t>(runtime_scratch.instances.size()),
+                    patches,
+                    last_upload_result.plan.range_count,
+                    upload_revision);
+                last_upload_result.used_partial_upload =
+                    last_upload_result.upload.partial && last_upload_result.upload.uploaded;
+                last_upload_result.skipped_upload = !last_upload_result.upload.uploaded;
+            } else if (last_upload_result.runtime.transform_rewritten_instance_count == 0U) {
+                last_upload_result.skipped_upload = true;
+            } else {
+                last_upload_result.upload = surface_upload_host->Upload3DInstances(
+                    *context,
+                    *upload_host,
+                    active_frame_index,
+                    runtime_scratch.instances.data(),
+                    static_cast<std::uint32_t>(runtime_scratch.instances.size()),
+                    upload_revision);
+                last_upload_result.used_partial_upload = false;
+                last_upload_result.skipped_upload = !last_upload_result.upload.uploaded;
+            }
+        } else {
+            last_upload_result.upload = surface_upload_host->Upload3DInstances(
+                *context,
+                *upload_host,
+                active_frame_index,
+                runtime_scratch.instances.data(),
+                static_cast<std::uint32_t>(runtime_scratch.instances.size()),
+                upload_revision);
+            last_upload_result.used_partial_upload = false;
+            last_upload_result.skipped_upload = !last_upload_result.upload.uploaded;
+        }
+    } else {
+        last_upload_result.skipped_upload = true;
+    }
 
     stats.visible_component_count = last_upload_result.runtime.batch.visible_count;
     stats.instance_count = last_upload_result.runtime.emitted_instance_count;
@@ -531,11 +566,12 @@ void SurfaceRenderer3D::RecordInternal(const render::FrameRecordContext& record_
         throw std::runtime_error("SurfaceRenderer3D::Record called before Initialize");
     }
     if (context == nullptr ||
-        descriptor_host == nullptr ||
         pipeline_host == nullptr ||
-        sampler_host == nullptr ||
         gpu_memory_host == nullptr) {
         throw std::runtime_error("SurfaceRenderer3D::Record called before PrepareFrame");
+    }
+    if (bindless_resources == nullptr || !bindless_resources->IsInitialized()) {
+        throw std::runtime_error("SurfaceRenderer3D::Record requires initialized BindlessResourceSystem");
     }
     if (record_context_.command_buffer == VK_NULL_HANDLE) {
         throw std::runtime_error("SurfaceRenderer3D::Record requires valid command buffer");
@@ -646,7 +682,7 @@ void SurfaceRenderer3D::RecordInternal(const render::FrameRecordContext& record_
     }
 
     EnsurePipelineObjects(*context,
-                          *descriptor_host,
+                          *bindless_resources,
                           *pipeline_host,
                           color_pass.target.format,
                           active_depth_format);
@@ -677,6 +713,7 @@ void SurfaceRenderer3D::RecordInternal(const render::FrameRecordContext& record_
                                1U,
                                &vertex_buffer,
                                &vertex_offset);
+        const VkPipelineLayout pipeline_layout = pipeline_host->GetPipelineLayout(pipeline_layout_id);
 
         PushConstants push_constants{};
         if (camera_component != nullptr) {
@@ -699,9 +736,20 @@ void SurfaceRenderer3D::RecordInternal(const render::FrameRecordContext& record_
         push_constants.reserved1 = 0U;
         push_constants.reserved2 = 0U;
 
+        const std::array<VkDescriptorSet, 3U> descriptor_sets{
+            bindless_resources->SampledImageSet(),
+            bindless_resources->SamplerSet(),
+            active_ibl_descriptor_set
+        };
+        if (descriptor_sets[0U] == VK_NULL_HANDLE || descriptor_sets[1U] == VK_NULL_HANDLE) {
+            throw std::runtime_error("SurfaceRenderer3D::Record requires valid bindless descriptor sets");
+        }
+        if (descriptor_sets[2U] == VK_NULL_HANDLE) {
+            throw std::runtime_error("SurfaceRenderer3D::Record requires valid IBL descriptor set");
+        }
+
         render::GraphicsPipelineId bound_pipeline{};
-        VkDescriptorSet bound_descriptor_set = VK_NULL_HANDLE;
-        VkDescriptorSet bound_ibl_descriptor_set = VK_NULL_HANDLE;
+        bool shared_state_bound = false;
         for (const ecs::Surface3DDrawBatch& batch : runtime_scratch.draw_batches) {
             if (filter_by_pass_bucket_ &&
                 ecs::SurfaceSystem<ecs::Dim3>::ExtractPassBucket(batch.sort_key) != pass_bucket_) {
@@ -728,51 +776,30 @@ void SurfaceRenderer3D::RecordInternal(const render::FrameRecordContext& record_
                 continue;
             }
 
-            const VkDescriptorSet descriptor_set = AcquireTextureDescriptorSet(active_frame_index,
-                                                                               batch.texture_id,
-                                                                               batch.sampler_id);
-            if (descriptor_set == VK_NULL_HANDLE) {
-                ++stats.skipped_batch_count;
-                continue;
-            }
-
             if (bound_pipeline.value != pipeline_id.value) {
                 vkCmdBindPipeline(record_context_.command_buffer,
                                   VK_PIPELINE_BIND_POINT_GRAPHICS,
                                   pipeline_host->GetGraphicsPipeline(pipeline_id));
+                bound_pipeline = pipeline_id;
+            }
+
+            if (!shared_state_bound) {
                 vkCmdPushConstants(record_context_.command_buffer,
-                                   pipeline_host->GetPipelineLayout(pipeline_layout_id),
+                                   pipeline_layout,
                                    VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                                    0U,
                                    sizeof(PushConstants),
                                    &push_constants);
-                bound_pipeline = pipeline_id;
-                bound_descriptor_set = VK_NULL_HANDLE;
-                bound_ibl_descriptor_set = VK_NULL_HANDLE;
-            }
-
-            if (bound_descriptor_set != descriptor_set) {
                 vkCmdBindDescriptorSets(record_context_.command_buffer,
                                         VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                        pipeline_host->GetPipelineLayout(pipeline_layout_id),
+                                        pipeline_layout,
                                         0U,
-                                        1U,
-                                        &descriptor_set,
+                                        static_cast<std::uint32_t>(descriptor_sets.size()),
+                                        descriptor_sets.data(),
                                         0U,
                                         nullptr);
-                bound_descriptor_set = descriptor_set;
+                shared_state_bound = true;
                 ++stats.descriptor_set_bind_count;
-            }
-            if (bound_ibl_descriptor_set != active_ibl_descriptor_set) {
-                vkCmdBindDescriptorSets(record_context_.command_buffer,
-                                        VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                        pipeline_host->GetPipelineLayout(pipeline_layout_id),
-                                        1U,
-                                        1U,
-                                        &active_ibl_descriptor_set,
-                                        0U,
-                                        nullptr);
-                bound_ibl_descriptor_set = active_ibl_descriptor_set;
                 ++stats.ibl_descriptor_set_bind_count;
             }
 
@@ -799,18 +826,11 @@ void SurfaceRenderer3D::RecordInternal(const render::FrameRecordContext& record_
     }
 
     vkCmdEndRendering(record_context_.command_buffer);
-    if (using_external_depth_target) {
-        render::RecordEndColorDepthPass(record_context_, output_target_config, depth_output_target_config);
-    } else {
-        render::RecordEndColorPass(record_context_, output_target_config);
-    }
-
-    image_initialized[record_context_.image_index] = 1U;
-    if (create_info_cache.enable_depth &&
-        !using_external_depth_target &&
-        record_context_.image_index < depth_image_initialized.size()) {
+    render::RecordEndColorPass(record_context_, output_target_config);
+    if (create_info_cache.enable_depth && !using_external_depth_target) {
         depth_image_initialized[record_context_.image_index] = 1U;
     }
+    image_initialized[record_context_.image_index] = 1U;
 }
 
 void SurfaceRenderer3D::OnSwapchainRecreated(std::uint32_t image_count_,
@@ -831,25 +851,12 @@ void SurfaceRenderer3D::OnSwapchainRecreated(std::uint32_t image_count_,
     last_submitted_value_seen = std::max(last_submitted_value_seen, last_submitted_value_);
     completed_submit_value_seen = std::max(completed_submit_value_seen, completed_submit_value_);
 
-    if (context != nullptr && create_info_cache.enable_depth) {
-        RetireDepthResources(last_submitted_value_seen);
-        CollectRetiredDepthResources(*context, completed_submit_value_seen);
-    }
-
+    swapchain_extent = extent_;
+    swapchain_format = format_;
     image_initialized.resize(image_count_);
     for (auto& value : image_initialized) {
         value = 0U;
     }
-
-    if (create_info_cache.enable_depth) {
-        depth_image_initialized.resize(image_count_);
-        for (auto& value : depth_image_initialized) {
-            value = 0U;
-        }
-    }
-
-    swapchain_extent = extent_;
-    swapchain_format = format_;
 }
 
 bool SurfaceRenderer3D::IsInitialized() const noexcept {
@@ -861,23 +868,32 @@ const SurfaceRenderer3DStats& SurfaceRenderer3D::Stats() const noexcept {
 }
 
 void SurfaceRenderer3D::EnsurePipelineObjects(VulkanContext& context_,
-                                              render::DescriptorHost& descriptor_host_,
+                                              render::BindlessResourceSystem& bindless_resources_,
                                               render::PipelineHost& pipeline_host_,
                                               VkFormat color_format_,
                                               VkFormat depth_format_) {
     if (context_.EnabledVulkan13Features().dynamicRendering != VK_TRUE) {
         throw std::runtime_error("SurfaceRenderer3D requires Vulkan 1.3 dynamicRendering");
     }
-    if (!descriptor_layout_id.IsValid()) {
-        render::DescriptorSetLayoutDesc layout_desc{};
-        layout_desc.bindings.push_back({
-            .binding = 0U,
-            .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-            .descriptorCount = 1U,
-            .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
-            .pImmutableSamplers = nullptr
-        });
-        descriptor_layout_id = descriptor_host_.RegisterLayout(context_, layout_desc);
+
+    const render::PipelineHostStats& pipeline_stats = pipeline_host_.Stats();
+    if (shader_vertex_id.IsValid() && pipeline_stats.shader_module_count < shader_vertex_id.value) {
+        shader_vertex_id = {};
+    }
+    if (shader_fragment_id.IsValid() && pipeline_stats.shader_module_count < shader_fragment_id.value) {
+        shader_fragment_id = {};
+    }
+    if (pipeline_layout_id.IsValid() && pipeline_stats.pipeline_layout_count < pipeline_layout_id.value) {
+        pipeline_layout_id = {};
+    }
+    for (auto& per_blend : pipeline_ids) {
+        for (auto& per_mode : per_blend) {
+            for (auto& pipeline_id : per_mode) {
+                if (pipeline_id.IsValid() && pipeline_stats.graphics_pipeline_count < pipeline_id.value) {
+                    pipeline_id = {};
+                }
+            }
+        }
     }
 
     if (!shader_vertex_id.IsValid()) {
@@ -896,9 +912,19 @@ void SurfaceRenderer3D::EnsurePipelineObjects(VulkanContext& context_,
         if (ibl_host == nullptr || !ibl_host->DescriptorLayoutId().IsValid()) {
             throw std::runtime_error("SurfaceRenderer3D requires initialized IBL descriptor layout");
         }
+        const VkDescriptorSetLayout sampled_image_layout = bindless_resources_.SampledImageLayout();
+        const VkDescriptorSetLayout sampler_layout = bindless_resources_.SamplerLayout();
+        const VkDescriptorSetLayout ibl_layout = descriptor_host->GetLayout(ibl_host->DescriptorLayoutId());
+        if (sampled_image_layout == VK_NULL_HANDLE ||
+            sampler_layout == VK_NULL_HANDLE ||
+            ibl_layout == VK_NULL_HANDLE) {
+            throw std::runtime_error(
+                "SurfaceRenderer3D::EnsurePipelineObjects requires valid bindless / IBL layouts");
+        }
         render::PipelineLayoutDesc layout_desc{};
-        layout_desc.set_layouts.push_back(descriptor_host_.GetLayout(descriptor_layout_id));
-        layout_desc.set_layouts.push_back(descriptor_host_.GetLayout(ibl_host->DescriptorLayoutId()));
+        layout_desc.set_layouts.push_back(sampled_image_layout);
+        layout_desc.set_layouts.push_back(sampler_layout);
+        layout_desc.set_layouts.push_back(ibl_layout);
         layout_desc.push_constant_ranges.push_back({
             .stage_flags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
             .offset = 0U,
@@ -929,6 +955,12 @@ render::GraphicsPipelineId SurfaceRenderer3D::EnsurePipelineForMode(
     BlendMode blend_mode_,
     PipelineMode mode_,
     CullMode cull_mode_) {
+    if (bindless_resources == nullptr || !bindless_resources->IsInitialized()) {
+        throw std::runtime_error(
+            "SurfaceRenderer3D::EnsurePipelineForMode requires initialized BindlessResourceSystem");
+    }
+    EnsurePipelineObjects(context_, *bindless_resources, pipeline_host_, color_format_, depth_format_);
+
     const std::size_t blend_index = BlendModeIndex(blend_mode_);
     const std::size_t mode_index = PipelineModeIndex(mode_);
     const std::size_t cull_index = CullModeIndex(cull_mode_);
@@ -1052,213 +1084,47 @@ render::GraphicsPipelineId SurfaceRenderer3D::EnsurePipelineForMode(
     return pipeline_id;
 }
 
-void SurfaceRenderer3D::EnsureFallbackTexture(VulkanContext& context_,
-                                              render::UploadHost& upload_host_,
-                                              std::uint32_t frame_index_) {
-    if (sampler_host == nullptr || gpu_memory_host == nullptr) {
-        throw std::runtime_error("SurfaceRenderer3D::EnsureFallbackTexture missing runtime hosts");
-    }
-    if (context_.EnabledVulkan13Features().synchronization2 != VK_TRUE) {
-        throw std::runtime_error("SurfaceRenderer3D::EnsureFallbackTexture requires synchronization2");
-    }
-
-    if (!fallback_sampler_id.IsValid()) {
-        resource::SamplerDesc sampler_desc{};
-        sampler_desc.mag_filter = VK_FILTER_LINEAR;
-        sampler_desc.min_filter = VK_FILTER_LINEAR;
-        sampler_desc.mipmap_mode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
-        sampler_desc.address_mode_u = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-        sampler_desc.address_mode_v = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-        sampler_desc.address_mode_w = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-        sampler_desc.min_lod = 0.0F;
-        sampler_desc.max_lod = 0.0F;
-        fallback_sampler_id = sampler_host->RegisterSampler(context_, sampler_desc);
-    }
-
-    if (fallback_texture.image != VK_NULL_HANDLE &&
-        fallback_texture.default_view != VK_NULL_HANDLE &&
-        fallback_texture_layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
+void SurfaceRenderer3D::RemapInstancesToBindless(ecs::Surface3DGpuInstance* instances_,
+                                                 std::uint32_t instance_count_) noexcept {
+    if (instances_ == nullptr || instance_count_ == 0U) {
         return;
     }
-
-    if (fallback_texture.image == VK_NULL_HANDLE ||
-        fallback_texture.default_view == VK_NULL_HANDLE) {
-        resource::ImageCreateInfo create_info{};
-        create_info.image_type = VK_IMAGE_TYPE_2D;
-        create_info.format = VK_FORMAT_R8G8B8A8_UNORM;
-        create_info.extent = VkExtent3D{1U, 1U, 1U};
-        create_info.mip_levels = 1U;
-        create_info.array_layers = 1U;
-        create_info.samples = VK_SAMPLE_COUNT_1_BIT;
-        create_info.tiling = VK_IMAGE_TILING_OPTIMAL;
-        create_info.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
-        create_info.sharing_mode = VK_SHARING_MODE_EXCLUSIVE;
-        create_info.initial_layout = VK_IMAGE_LAYOUT_UNDEFINED;
-        create_info.memory_properties = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
-        create_info.create_default_view = true;
-        create_info.default_view_type = VK_IMAGE_VIEW_TYPE_2D;
-        create_info.default_view_aspect = VK_IMAGE_ASPECT_COLOR_BIT;
-        create_info.default_base_mip_level = 0U;
-        create_info.default_level_count = 1U;
-        create_info.default_base_array_layer = 0U;
-        create_info.default_layer_count = 1U;
-        fallback_texture = resource::ImageHost::CreateImage(context_, create_info, *gpu_memory_host);
-        fallback_texture_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+    for (std::uint32_t index = 0U; index < instance_count_; ++index) {
+        ecs::Surface3DGpuInstance& instance = instances_[index];
+        const std::uint32_t raw_surface_id = instance.texture_slot;
+        const std::uint32_t raw_sampler_id = instance.sampler_slot;
+        instance.texture_slot = ResolveImageSlot(raw_surface_id);
+        instance.sampler_slot = ResolveSamplerSlot(raw_sampler_id);
     }
-
-    if (fallback_texture_layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
-        return;
-    }
-
-    VkImageMemoryBarrier2 to_transfer{};
-    to_transfer.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-    to_transfer.srcStageMask = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
-    to_transfer.srcAccessMask = 0U;
-    to_transfer.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
-    to_transfer.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-    to_transfer.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    to_transfer.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-    to_transfer.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    to_transfer.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    to_transfer.image = fallback_texture.image;
-    to_transfer.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    to_transfer.subresourceRange.baseMipLevel = 0U;
-    to_transfer.subresourceRange.levelCount = 1U;
-    to_transfer.subresourceRange.baseArrayLayer = 0U;
-    to_transfer.subresourceRange.layerCount = 1U;
-    upload_host_.RecordImageBarrier2(frame_index_, to_transfer);
-
-    constexpr std::uint32_t white_pixel = 0xFFFFFFFFU;
-    VkBufferImageCopy copy_region{};
-    copy_region.bufferOffset = 0U;
-    copy_region.bufferRowLength = 0U;
-    copy_region.bufferImageHeight = 0U;
-    copy_region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    copy_region.imageSubresource.mipLevel = 0U;
-    copy_region.imageSubresource.baseArrayLayer = 0U;
-    copy_region.imageSubresource.layerCount = 1U;
-    copy_region.imageOffset = VkOffset3D{0, 0, 0};
-    copy_region.imageExtent = VkExtent3D{1U, 1U, 1U};
-    upload_host_.StageAndRecordCopyImage(frame_index_,
-                                         fallback_texture.image,
-                                         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                                         copy_region,
-                                         &white_pixel,
-                                         sizeof(white_pixel),
-                                         4U);
-
-    VkImageMemoryBarrier2 to_shader_read{};
-    to_shader_read.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-    to_shader_read.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
-    to_shader_read.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-    to_shader_read.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
-    to_shader_read.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
-    to_shader_read.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-    to_shader_read.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    to_shader_read.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    to_shader_read.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    to_shader_read.image = fallback_texture.image;
-    to_shader_read.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    to_shader_read.subresourceRange.baseMipLevel = 0U;
-    to_shader_read.subresourceRange.levelCount = 1U;
-    to_shader_read.subresourceRange.baseArrayLayer = 0U;
-    to_shader_read.subresourceRange.layerCount = 1U;
-    upload_host_.RecordImageBarrier2(frame_index_, to_shader_read);
-
-    fallback_texture_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 }
 
-VkDescriptorSet SurfaceRenderer3D::AcquireTextureDescriptorSet(std::uint32_t frame_index_,
-                                                               std::uint32_t texture_id_,
-                                                               std::uint32_t sampler_id_) {
-    if (context == nullptr || descriptor_host == nullptr || sampler_host == nullptr) {
-        throw std::runtime_error("SurfaceRenderer3D::AcquireTextureDescriptorSet missing runtime hosts");
-    }
-    if (!descriptor_layout_id.IsValid()) {
-        return VK_NULL_HANDLE;
-    }
-    if (frame_index_ >= frame_texture_sets.size()) {
-        throw std::out_of_range("SurfaceRenderer3D::AcquireTextureDescriptorSet frame index out of range");
+std::uint32_t SurfaceRenderer3D::ResolveImageSlot(std::uint32_t surface_id_) const noexcept {
+    if (bindless_resources == nullptr || !bindless_resources->IsInitialized()) {
+        return 0U;
     }
 
-    VkSampler sampler = VK_NULL_HANDLE;
-    bool explicit_sampler_valid = false;
-    if (sampler_id_ != 0U) {
-        const resource::SamplerHostStats sampler_stats = sampler_host->Stats();
-        if (sampler_id_ <= sampler_stats.sampler_count) {
-            sampler = sampler_host->GetSampler(resource::SamplerId{sampler_id_});
-            explicit_sampler_valid = sampler != VK_NULL_HANDLE;
-        }
-    }
-    if (sampler == VK_NULL_HANDLE && fallback_sampler_id.IsValid()) {
-        sampler = sampler_host->GetSampler(fallback_sampler_id);
-    }
-    const std::uint32_t effective_sampler_id = explicit_sampler_valid ? sampler_id_ : 0U;
-
-    VkImageView image_view = fallback_texture.default_view;
-    VkImageLayout image_layout = fallback_texture_layout;
-    std::uint32_t effective_texture_id = 0U;
-    if (texture_id_ != 0U && surface_image_host != nullptr && surface_image_host->IsInitialized()) {
-        const SurfaceImageHost::ImageRecord* image_record = surface_image_host->FindImage(texture_id_);
-        if (image_record != nullptr &&
-            image_record->resource.default_view != VK_NULL_HANDLE &&
-            image_record->current_layout != VK_IMAGE_LAYOUT_UNDEFINED) {
-            image_view = image_record->resource.default_view;
-            image_layout = image_record->current_layout;
-            effective_texture_id = texture_id_;
-        }
+    const std::uint32_t placeholder_slot = bindless_resources->PlaceholderImageSlot().index;
+    if (surface_id_ == 0U || surface_image_host == nullptr || !surface_image_host->IsInitialized()) {
+        return placeholder_slot;
     }
 
-    const std::uint64_t binding_key =
-        (static_cast<std::uint64_t>(effective_texture_id) << 32U) |
-        static_cast<std::uint64_t>(effective_sampler_id);
+    const render::BindlessSlot image_slot = surface_image_host->ResolveBindlessImageSlot(surface_id_);
+    return image_slot.IsValid() ? image_slot.index : placeholder_slot;
+}
 
-    SurfaceRenderer3DMcVector<TextureSetEntry>& entries = frame_texture_sets[frame_index_];
-    const std::size_t lower_bound_index = LowerBoundTextureSetIndex(entries, binding_key);
-    if (lower_bound_index < entries.size() &&
-        entries[lower_bound_index].binding_key == binding_key) {
-        return entries[lower_bound_index].descriptor_set;
+std::uint32_t SurfaceRenderer3D::ResolveSamplerSlot(std::uint32_t sampler_id_) const noexcept {
+    if (bindless_resources == nullptr || !bindless_resources->IsInitialized()) {
+        return 0U;
     }
-
-    if (sampler == VK_NULL_HANDLE ||
-        image_view == VK_NULL_HANDLE ||
-        image_layout == VK_IMAGE_LAYOUT_UNDEFINED) {
-        return VK_NULL_HANDLE;
+    if (sampler_id_ == 0U) {
+        return bindless_resources->DefaultSamplerSlot().index;
     }
-
-    const VkDescriptorSet descriptor_set =
-        descriptor_host->AllocateSet(*context, frame_index_, descriptor_layout_id);
-
-    descriptor_buffer_write_scratch.clear();
-    descriptor_image_write_scratch.clear();
-    descriptor_texel_write_scratch.clear();
-    descriptor_image_write_scratch.push_back({
-        .binding = 0U,
-        .array_element = 0U,
-        .descriptor_type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-        .sampler = sampler,
-        .image_view = image_view,
-        .image_layout = image_layout
-    });
-    descriptor_host->UpdateSet(*context,
-                               descriptor_set,
-                               descriptor_buffer_write_scratch,
-                               descriptor_image_write_scratch,
-                               descriptor_texel_write_scratch);
-    ++stats.descriptor_set_update_count;
-
-    const std::size_t old_size = entries.size();
-    entries.resize(old_size + 1U);
-    if (lower_bound_index < old_size) {
-        for (std::size_t index = old_size; index > lower_bound_index; --index) {
-            entries[index] = std::move(entries[index - 1U]);
-        }
+    try {
+        return bindless_resources
+            ->ResolveRegisteredSamplerSlot(resource::SamplerId{sampler_id_}).index;
+    } catch (...) {
+        return bindless_resources->DefaultSamplerSlot().index;
     }
-    entries[lower_bound_index] = TextureSetEntry{
-        .binding_key = binding_key,
-        .descriptor_set = descriptor_set
-    };
-    return descriptor_set;
 }
 
 void SurfaceRenderer3D::EnsureDepthResources(VulkanContext& context_,

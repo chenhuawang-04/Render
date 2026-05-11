@@ -31,6 +31,7 @@ namespace vr::render {
 struct SurfaceRenderer2DPrepareView;
 struct FrameRecordContext;
 class UploadHost;
+class BindlessResourceSystem;
 }
 
 namespace vr::resource {
@@ -169,11 +170,6 @@ private:
         std::uint32_t reserved2;
     };
 
-    struct TextureSetEntry final {
-        std::uint32_t image_id = 0U;
-        VkDescriptorSet descriptor_set = VK_NULL_HANDLE;
-    };
-
     struct alignas(16) LightingParamsGpu final {
         float world_to_ndc_x = 0.0F;
         float world_to_ndc_y = 0.0F;
@@ -220,9 +216,6 @@ private:
 
     [[nodiscard]] static std::size_t BlendModeIndex(BlendModeKind mode_) noexcept;
     [[nodiscard]] static BlendModeKind ResolveBlendModeFromBatchParams(std::uint32_t params_) noexcept;
-    [[nodiscard]] static std::size_t LowerBoundTextureSetIndex(
-        const SurfaceRenderer2DMcVector<TextureSetEntry>& entries_,
-        std::uint32_t image_id_) noexcept;
 
     void EnsurePipelineObjects(VulkanContext& context_,
                                render::DescriptorHost& descriptor_host_,
@@ -241,8 +234,10 @@ private:
     void EnsureLightingResourcesForFrame(VulkanContext& context_);
     void PrepareLightingDescriptorSetForFrame(std::uint32_t frame_index_);
     [[nodiscard]] LightingParamsGpu BuildLightingParamsGpu(VkExtent2D extent_) const noexcept;
-    [[nodiscard]] VkDescriptorSet AcquireTextureDescriptorSet(std::uint32_t frame_index_,
-                                                              std::uint32_t image_id_);
+    void RemapInstancesToBindless(ecs::Surface2DGpuInstance* instances_,
+                                  std::uint32_t instance_count_) noexcept;
+    [[nodiscard]] std::uint32_t ResolveImageSlot(std::uint32_t surface_id_) const noexcept;
+    [[nodiscard]] std::uint32_t ResolveSamplerSlot(std::uint32_t surface_id_) const noexcept;
 
 private:
     SurfaceRenderer2DCreateInfo create_info_cache{};
@@ -265,11 +260,11 @@ private:
     VulkanContext* context = nullptr;
     render::UploadHost* upload_host = nullptr;
     render::DescriptorHost* descriptor_host = nullptr;
+    render::BindlessResourceSystem* bindless_resources = nullptr;
     render::PipelineHost* pipeline_host = nullptr;
     resource::GpuMemoryHost* gpu_memory_host = nullptr;
     resource::SamplerHost* sampler_host = nullptr;
 
-    render::DescriptorSetLayoutId descriptor_layout_id{};
     render::DescriptorSetLayoutId lighting_descriptor_layout_id{};
     render::PipelineLayoutId pipeline_layout_id{};
     render::ShaderModuleId shader_vertex_id{};
@@ -278,7 +273,6 @@ private:
                static_cast<std::size_t>(BlendModeKind::count)> pipeline_ids{};
     VkFormat pipeline_color_format = VK_FORMAT_UNDEFINED;
 
-    SurfaceRenderer2DMcVector<SurfaceRenderer2DMcVector<TextureSetEntry>> frame_texture_sets{};
     SurfaceRenderer2DMcVector<FrameLightingResources> frame_lighting_resources{};
     render::DescriptorMcVector<render::DescriptorImageWrite> descriptor_image_write_scratch{};
     render::DescriptorMcVector<render::DescriptorBufferWrite> descriptor_buffer_write_scratch{};
@@ -295,6 +289,7 @@ private:
     std::uint32_t active_frame_index = 0U;
     VkExtent2D swapchain_extent{};
     VkFormat swapchain_format = VK_FORMAT_UNDEFINED;
+    std::uint32_t bindless_mapping_revision = 0U;
     std::uint64_t last_submitted_value_seen = 0U;
     std::uint64_t completed_submit_value_seen = 0U;
     render::LightFrameCoordinator<ecs::Dim2>* light_frame_coordinator = nullptr;

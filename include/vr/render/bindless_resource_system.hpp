@@ -4,6 +4,7 @@
 #include "vr/resource/image_host.hpp"
 
 #include <cstdint>
+#include <vector>
 
 namespace vr {
 class VulkanContext;
@@ -78,6 +79,7 @@ public:
                                                        asset::TextureId texture_id_) const noexcept;
     [[nodiscard]] BindlessSlot ResolveTextureSamplerSlot(const asset::TextureHost& texture_host_,
                                                          asset::TextureId texture_id_) const noexcept;
+    [[nodiscard]] BindlessSlot ResolveRegisteredSamplerSlot(resource::SamplerId sampler_id_) const noexcept;
 
     [[nodiscard]] VkDescriptorSet SampledImageSet() const noexcept;
     [[nodiscard]] VkDescriptorSet SamplerSet() const noexcept;
@@ -95,10 +97,11 @@ public:
     [[nodiscard]] bool IsInitialized() const noexcept;
 
 private:
-    void RefreshStats(DescriptorHost* descriptor_host_) noexcept;
+    void RefreshStats(DescriptorHost* descriptor_host_) const noexcept;
 
 private:
     DescriptorHost* descriptor_host_ = nullptr;
+    resource::SamplerHost* sampler_host_ = nullptr;
     BindlessResourceSystemCreateInfo create_info_cache{};
     resource::ImageResource placeholder_image_{};
     VkImageLayout placeholder_image_layout_ = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
@@ -107,7 +110,8 @@ private:
     BindlessSlot placeholder_image_slot_{.index = 0U, .generation = 1U};
     BindlessSlot default_sampler_slot_{.index = 0U, .generation = 1U};
     VkSampler default_sampler_ = VK_NULL_HANDLE;
-    BindlessResourceSystemStats stats_{};
+    mutable std::vector<BindlessSlot> registered_sampler_slots_{};
+    mutable BindlessResourceSystemStats stats_{};
     bool initialized_ = false;
 };
 

@@ -85,7 +85,7 @@ constexpr float kUnifiedHdrEnvironmentRotationY = 0.42F;
 }
 
 [[nodiscard]] bool IsEnvironmentSkipError(std::string_view message_) {
-    constexpr std::array<std::string_view, 17U> patterns{
+    constexpr std::array<std::string_view, 20U> patterns{
         "sdl_initsubsystem",
         "sdl_createwindow",
         "sdl_vulkan_getinstanceextensions",
@@ -99,6 +99,9 @@ constexpr float kUnifiedHdrEnvironmentRotationY = 0.42F;
         "vkgetphysicaldevicesurfacesupportkhr",
         "vkgetphysicaldevicesurfaceformatskhr",
         "vkgetphysicaldevicesurfacepresentmodeskhr",
+        "bindlessresourcesystem",
+        "descriptor indexing",
+        "runtime descriptor array",
         "dynamicrendering",
         "synchronization2",
         "ft_new_face",
@@ -111,6 +114,27 @@ constexpr float kUnifiedHdrEnvironmentRotationY = 0.42F;
         }
     }
     return false;
+}
+
+void ConfigureUnifiedScene3DRuntimeCreateInfo(Runtime::CreateInfo& create_info_) {
+    create_info_.platform.window.title = "vr_tests_runtime_unified_scene_3d";
+    create_info_.platform.window.width = 800;
+    create_info_.platform.window.height = 450;
+    create_info_.platform.window.resizable = true;
+    create_info_.platform.window.high_pixel_density = true;
+    create_info_.platform.instance.enable_validation = false;
+    create_info_.platform.device.required_vulkan12_features.runtimeDescriptorArray = VK_TRUE;
+    create_info_.platform.device.required_vulkan12_features.descriptorBindingPartiallyBound = VK_TRUE;
+    create_info_.platform.device.required_vulkan12_features.descriptorBindingVariableDescriptorCount = VK_TRUE;
+    create_info_.platform.device.required_vulkan12_features.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
+    create_info_.platform.device.required_vulkan13_features.dynamicRendering = VK_TRUE;
+    create_info_.platform.device.required_vulkan13_features.synchronization2 = VK_TRUE;
+    create_info_.modules.enable_ibl_bake_host = true;
+    create_info_.render_loop.swapchain.enable_vsync = false;
+    create_info_.render_loop.swapchain.preferred_image_count = 2U;
+    create_info_.render_loop.commands.initial_primary_per_frame = 2U;
+    create_info_.render_loop.commands.primary_growth_chunk = 2U;
+    create_info_.poll_events_each_tick = true;
 }
 
 [[nodiscard]] std::uint16_t FloatToHalfBits(float value_) noexcept {
@@ -510,20 +534,7 @@ VR_TEST_CASE(RuntimeIntegration_unified_scene_3d_bloom_post_stack_smoke,
 
     try {
         Runtime::CreateInfo create_info{};
-        create_info.platform.window.title = "vr_tests_runtime_unified_scene_3d";
-        create_info.platform.window.width = 800;
-        create_info.platform.window.height = 450;
-        create_info.platform.window.resizable = true;
-        create_info.platform.window.high_pixel_density = true;
-        create_info.platform.instance.enable_validation = false;
-        create_info.platform.device.required_vulkan13_features.dynamicRendering = VK_TRUE;
-        create_info.platform.device.required_vulkan13_features.synchronization2 = VK_TRUE;
-        create_info.modules.enable_ibl_bake_host = true;
-        create_info.render_loop.swapchain.enable_vsync = false;
-        create_info.render_loop.swapchain.preferred_image_count = 2U;
-        create_info.render_loop.commands.initial_primary_per_frame = 2U;
-        create_info.render_loop.commands.primary_growth_chunk = 2U;
-        create_info.poll_events_each_tick = true;
+        ConfigureUnifiedScene3DRuntimeCreateInfo(create_info);
         runtime.Initialize(create_info);
         runtime_initialized = true;
 
@@ -568,6 +579,7 @@ VR_TEST_CASE(RuntimeIntegration_unified_scene_3d_bloom_post_stack_smoke,
         surface_image_create_info.reserve_retired_image_count = 8U;
         surface_image_host.Initialize(runtime.Context(), runtime.GpuMemory(), surface_image_create_info);
         surface_image_host_initialized = true;
+        runtime.BindlessResources().ConfigureSurfaceImageHost(surface_image_host);
 
         runtime.Upload().BeginFrame(runtime.Context(), 0U);
 
@@ -1100,6 +1112,7 @@ VR_TEST_CASE(RuntimeIntegration_unified_scene_3d_bloom_post_stack_smoke,
         VR_CHECK(max_geometry_draw_calls > 0U);
         VR_CHECK(max_surface_draw_calls > 0U);
         VR_CHECK(max_surface_ibl_descriptor_binds > 0U);
+        VR_CHECK(surface_image_host.ResolveBindlessImageSlot(6101U).IsValid());
         VR_CHECK(max_text_draw_calls > 0U);
         VR_CHECK(max_combine_draw_calls > 0U);
         VR_CHECK(max_blur_draw_calls > 0U);

@@ -50,7 +50,7 @@ using CameraSystem3D = vr::ecs::CameraSystem<vr::ecs::Dim3>;
 }
 
 [[nodiscard]] bool IsEnvironmentSkipError(std::string_view message_) {
-    constexpr std::array<std::string_view, 15U> patterns{
+    constexpr std::array<std::string_view, 18U> patterns{
         "sdl_initsubsystem",
         "sdl_createwindow",
         "sdl_vulkan_getinstanceextensions",
@@ -64,6 +64,9 @@ using CameraSystem3D = vr::ecs::CameraSystem<vr::ecs::Dim3>;
         "vkgetphysicaldevicesurfacesupportkhr",
         "vkgetphysicaldevicesurfaceformatskhr",
         "vkgetphysicaldevicesurfacepresentmodeskhr",
+        "bindlessresourcesystem",
+        "descriptor indexing",
+        "runtime descriptor array",
         "dynamicrendering",
         "synchronization2"
     };
@@ -74,6 +77,27 @@ using CameraSystem3D = vr::ecs::CameraSystem<vr::ecs::Dim3>;
         }
     }
     return false;
+}
+
+void ConfigureParticle3DRuntimeCreateInfo(Runtime::CreateInfo& create_info_,
+                                          const char* window_title_) {
+    create_info_.platform.window.title = window_title_;
+    create_info_.platform.window.width = 640;
+    create_info_.platform.window.height = 360;
+    create_info_.platform.window.resizable = true;
+    create_info_.platform.window.high_pixel_density = true;
+    create_info_.platform.instance.enable_validation = false;
+    create_info_.platform.device.required_vulkan12_features.runtimeDescriptorArray = VK_TRUE;
+    create_info_.platform.device.required_vulkan12_features.descriptorBindingPartiallyBound = VK_TRUE;
+    create_info_.platform.device.required_vulkan12_features.descriptorBindingVariableDescriptorCount = VK_TRUE;
+    create_info_.platform.device.required_vulkan12_features.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
+    create_info_.platform.device.required_vulkan13_features.dynamicRendering = VK_TRUE;
+    create_info_.platform.device.required_vulkan13_features.synchronization2 = VK_TRUE;
+    create_info_.render_loop.swapchain.enable_vsync = false;
+    create_info_.render_loop.swapchain.preferred_image_count = 2U;
+    create_info_.render_loop.commands.initial_primary_per_frame = 2U;
+    create_info_.render_loop.commands.primary_growth_chunk = 2U;
+    create_info_.poll_events_each_tick = true;
 }
 
 struct ParticleStageRecorder3D final {
@@ -110,19 +134,7 @@ VR_TEST_CASE(RuntimeIntegration_particle_renderer_3d_transparent_stage_smoke,
 
     try {
         Runtime::CreateInfo create_info{};
-        create_info.platform.window.title = "vr_tests_runtime_particle_3d";
-        create_info.platform.window.width = 640;
-        create_info.platform.window.height = 360;
-        create_info.platform.window.resizable = true;
-        create_info.platform.window.high_pixel_density = true;
-        create_info.platform.instance.enable_validation = false;
-        create_info.platform.device.required_vulkan13_features.dynamicRendering = VK_TRUE;
-        create_info.platform.device.required_vulkan13_features.synchronization2 = VK_TRUE;
-        create_info.render_loop.swapchain.enable_vsync = false;
-        create_info.render_loop.swapchain.preferred_image_count = 2U;
-        create_info.render_loop.commands.initial_primary_per_frame = 2U;
-        create_info.render_loop.commands.primary_growth_chunk = 2U;
-        create_info.poll_events_each_tick = true;
+        ConfigureParticle3DRuntimeCreateInfo(create_info, "vr_tests_runtime_particle_3d");
         runtime.Initialize(create_info);
         runtime_initialized = true;
 
@@ -287,19 +299,7 @@ VR_TEST_CASE(RuntimeIntegration_particle_renderer_3d_gpu_persistent_seed_once,
 
     try {
         Runtime::CreateInfo create_info{};
-        create_info.platform.window.title = "vr_tests_runtime_particle_3d_gpu";
-        create_info.platform.window.width = 640;
-        create_info.platform.window.height = 360;
-        create_info.platform.window.resizable = true;
-        create_info.platform.window.high_pixel_density = true;
-        create_info.platform.instance.enable_validation = false;
-        create_info.platform.device.required_vulkan13_features.dynamicRendering = VK_TRUE;
-        create_info.platform.device.required_vulkan13_features.synchronization2 = VK_TRUE;
-        create_info.render_loop.swapchain.enable_vsync = false;
-        create_info.render_loop.swapchain.preferred_image_count = 2U;
-        create_info.render_loop.commands.initial_primary_per_frame = 2U;
-        create_info.render_loop.commands.primary_growth_chunk = 2U;
-        create_info.poll_events_each_tick = true;
+        ConfigureParticle3DRuntimeCreateInfo(create_info, "vr_tests_runtime_particle_3d_gpu");
         runtime.Initialize(create_info);
         runtime_initialized = true;
 

@@ -1,10 +1,13 @@
 #version 460
+#extension GL_GOOGLE_include_directive : require
+
+#include "vr/render/bindless.glsl"
 
 layout(location = 0) in vec2 in_uv;
 layout(location = 1) in vec4 in_color;
 layout(location = 2) flat in uint in_params;
-layout(location = 3) flat in uint in_texture_id;
-layout(location = 4) flat in uint in_sampler_id;
+layout(location = 3) flat in uint in_texture_slot;
+layout(location = 4) flat in uint in_sampler_slot;
 layout(location = 5) flat in uint in_material_id;
 layout(location = 6) flat in uint in_component_index;
 layout(location = 7) flat in uint in_user_data;
@@ -22,16 +25,15 @@ layout(push_constant) uniform Surface3DPushConstants {
     uint reserved2;
 } pc;
 
-layout(set = 0, binding = 0) uniform sampler2D in_surface_texture;
-layout(set = 1, binding = 0, std140) uniform IblParamsBuffer {
+layout(set = 2, binding = 0, std140) uniform IblParamsBuffer {
     vec4 ibl_sh9[9];
     vec4 ibl_tint_intensity;
     vec4 ibl_rotation_max_lod_flags;
 } ibl_params;
 
-layout(set = 1, binding = 1) uniform samplerCube ibl_specular_cube;
-layout(set = 1, binding = 2) uniform sampler2D ibl_brdf_lut;
-layout(set = 1, binding = 3) uniform samplerCube ibl_skybox_cube;
+layout(set = 2, binding = 1) uniform samplerCube ibl_specular_cube;
+layout(set = 2, binding = 2) uniform sampler2D ibl_brdf_lut;
+layout(set = 2, binding = 3) uniform samplerCube ibl_skybox_cube;
 
 layout(location = 0) out vec4 out_color;
 
@@ -104,7 +106,7 @@ vec3 evaluate_surface_ibl(vec3 base_albedo_,
 }
 
 void main() {
-    vec4 color = texture(in_surface_texture, in_uv) * in_color;
+    vec4 color = SampleTexture2D(in_texture_slot, in_sampler_slot, in_uv) * in_color;
     if (color.a <= 1e-5) {
         discard;
     }

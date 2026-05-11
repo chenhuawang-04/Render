@@ -39,8 +39,8 @@ struct Particle3DGpuInstance {
     float normalized_age;
     float stretch_factor;
     uint color_rgba8;
-    uint texture_id;
-    uint material_id;
+    uint texture_slot;
+    uint sampler_slot;
     uint component_index;
     uint user_data;
     float velocity_x;
@@ -226,8 +226,8 @@ void main() {
     dst.normalized_age = normalized_age;
     dst.stretch_factor = 1.0 + speed * max(src.stretch_velocity_scale, 0.0);
     dst.color_rgba8 = pack_color(color);
-    dst.texture_id = src.texture_id;
-    dst.material_id = src.material_id;
+    dst.texture_slot = src.texture_id;
+    dst.sampler_slot = src.material_id;
     dst.component_index = src.component_index;
     dst.user_data = src.user_data;
     dst.velocity_x = src.velocity_x;

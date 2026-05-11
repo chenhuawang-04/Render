@@ -271,6 +271,7 @@ void BindlessResourceSystem::Initialize(VulkanContext& context_,
     try {
         create_info_cache = create_info_;
         descriptor_host_ = &descriptor_host;
+        this->sampler_host_ = &sampler_host_;
         placeholder_image_ = CreatePlaceholderImage(context_, gpu_memory_host_);
         placeholder_image_layout_ = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         default_sampler_ = CreateDefaultSampler(context_, sampler_host_);
@@ -318,6 +319,8 @@ void BindlessResourceSystem::Initialize(VulkanContext& context_,
 
         placeholder_image_slot_ = BindlessSlot{.index = 0U, .generation = 1U};
         default_sampler_slot_ = BindlessSlot{.index = 0U, .generation = 1U};
+        registered_sampler_slots_.clear();
+        registered_sampler_slots_.resize(sampler_host_.Stats().sampler_count);
 
         initialized_ = true;
         RefreshStats(&descriptor_host);
@@ -335,12 +338,14 @@ void BindlessResourceSystem::Shutdown(VulkanContext& context_) noexcept {
 
     create_info_cache = {};
     descriptor_host_ = nullptr;
+    sampler_host_ = nullptr;
     placeholder_image_layout_ = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     sampled_image_table_ = {};
     sampler_table_ = {};
     placeholder_image_slot_ = BindlessSlot{.index = 0U, .generation = 1U};
     default_sampler_slot_ = BindlessSlot{.index = 0U, .generation = 1U};
     default_sampler_ = VK_NULL_HANDLE;
+    registered_sampler_slots_.clear();
     stats_ = {};
     initialized_ = false;
 }
@@ -385,6 +390,32 @@ BindlessSlot BindlessResourceSystem::ResolveTextureSamplerSlot(const asset::Text
     }
     const BindlessSlot resolved = texture_host_.ResolveBindlessSamplerSlot(texture_id_);
     return resolved.IsValid() ? resolved : default_sampler_slot_;
+}
+
+BindlessSlot BindlessResourceSystem::ResolveRegisteredSamplerSlot(resource::SamplerId sampler_id_) const noexcept {
+    if (!initialized_ || descriptor_host_ == nullptr || sampler_host_ == nullptr || !sampler_id_.IsValid()) {
+        return default_sampler_slot_;
+    }
+
+    const std::size_t sampler_index = static_cast<std::size_t>(sampler_id_.value - 1U);
+    if (registered_sampler_slots_.size() <= sampler_index) {
+        registered_sampler_slots_.resize(sampler_index + 1U);
+    }
+
+    BindlessSlot& cached_slot = registered_sampler_slots_[sampler_index];
+    if (cached_slot.IsValid() && descriptor_host_->IsBindlessSlotAlive(sampler_table_, cached_slot)) {
+        return cached_slot;
+    }
+
+    const VkSampler sampler = sampler_host_->GetSampler(sampler_id_);
+    if (sampler == VK_NULL_HANDLE) {
+        return default_sampler_slot_;
+    }
+
+    cached_slot = descriptor_host_->AllocateBindlessSlot(sampler_table_);
+    descriptor_host_->QueueBindlessSamplerWrite(sampler_table_, cached_slot, sampler);
+    RefreshStats(descriptor_host_);
+    return cached_slot;
 }
 
 VkDescriptorSet BindlessResourceSystem::SampledImageSet() const noexcept {
@@ -450,7 +481,7 @@ bool BindlessResourceSystem::IsInitialized() const noexcept {
     return initialized_;
 }
 
-void BindlessResourceSystem::RefreshStats(DescriptorHost* descriptor_host_) noexcept {
+void BindlessResourceSystem::RefreshStats(DescriptorHost* descriptor_host_) const noexcept {
     stats_ = {};
     stats_.initialized = initialized_;
     stats_.sampled_image_table = sampled_image_table_;

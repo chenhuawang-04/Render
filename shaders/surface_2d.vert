@@ -6,14 +6,10 @@ layout(location = 2) in vec2 in_size;
 layout(location = 3) in vec2 in_pivot;
 layout(location = 4) in vec4 in_uv_rect;
 layout(location = 5) in float in_opacity;
-layout(location = 6) in uint in_tint_rgba8;
+layout(location = 6) in vec4 in_tint_color;
 layout(location = 7) in uint in_params;
-layout(location = 8) in uint in_surface_id;
-layout(location = 9) in uint in_material_id;
-layout(location = 10) in uint in_atlas_page_id;
-layout(location = 11) in uint in_component_index;
-layout(location = 12) in uint in_user_data;
-layout(location = 13) in uint in_source_kind;
+layout(location = 8) in uint in_image_slot;
+layout(location = 9) in uint in_sampler_slot;
 
 layout(push_constant) uniform Surface2DPushConstants {
     vec4 viewport;
@@ -26,13 +22,9 @@ layout(push_constant) uniform Surface2DPushConstants {
 layout(location = 0) out vec2 out_uv;
 layout(location = 1) out vec4 out_color;
 layout(location = 2) flat out uint out_params;
-layout(location = 3) flat out uint out_surface_id;
-layout(location = 4) flat out uint out_material_id;
-layout(location = 5) flat out uint out_atlas_page_id;
-layout(location = 6) flat out uint out_component_index;
-layout(location = 7) flat out uint out_user_data;
-layout(location = 8) flat out uint out_source_kind;
-layout(location = 9) out vec2 out_world_position;
+layout(location = 3) flat out uint out_image_slot;
+layout(location = 4) flat out uint out_sampler_slot;
+layout(location = 5) out vec2 out_world_position;
 
 vec2 corner01_for_vertex(uint vertex_index) {
     switch (vertex_index) {
@@ -59,15 +51,6 @@ vec2 to_ndc(vec2 position) {
     return ndc;
 }
 
-vec4 unpack_rgba8(uint packed) {
-    vec4 color;
-    color.r = float((packed >> 0u) & 0xFFu);
-    color.g = float((packed >> 8u) & 0xFFu);
-    color.b = float((packed >> 16u) & 0xFFu);
-    color.a = float((packed >> 24u) & 0xFFu);
-    return color / 255.0;
-}
-
 void main() {
     vec2 corner01 = corner01_for_vertex(uint(gl_VertexIndex));
 
@@ -84,19 +67,12 @@ void main() {
     vec2 world;
     world.x = dot(in_world_row0.xy, local) + in_world_row0.z;
     world.y = dot(in_world_row1.xy, local) + in_world_row1.z;
-    vec2 ndc = to_ndc(world);
 
-    gl_Position = vec4(ndc, 0.0, 1.0);
+    gl_Position = vec4(to_ndc(world), 0.0, 1.0);
     out_uv = mix(in_uv_rect.xy, in_uv_rect.zw, corner01);
-
-    vec4 tint = unpack_rgba8(in_tint_rgba8);
-    out_color = vec4(tint.rgb, tint.a * clamp(in_opacity, 0.0, 1.0));
+    out_color = vec4(in_tint_color.rgb, in_tint_color.a * clamp(in_opacity, 0.0, 1.0));
     out_params = in_params;
-    out_surface_id = in_surface_id;
-    out_material_id = in_material_id;
-    out_atlas_page_id = in_atlas_page_id;
-    out_component_index = in_component_index;
-    out_user_data = in_user_data;
-    out_source_kind = in_source_kind;
+    out_image_slot = in_image_slot;
+    out_sampler_slot = in_sampler_slot;
     out_world_position = world;
 }

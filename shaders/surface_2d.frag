@@ -1,19 +1,15 @@
 #version 460
 #extension GL_GOOGLE_include_directive : require
+
 #include "vr/common/math.glsl"
+#include "vr/render/bindless.glsl"
 
 layout(location = 0) in vec2 in_uv;
 layout(location = 1) in vec4 in_color;
 layout(location = 2) flat in uint in_params;
-layout(location = 3) flat in uint in_surface_id;
-layout(location = 4) flat in uint in_material_id;
-layout(location = 5) flat in uint in_atlas_page_id;
-layout(location = 6) flat in uint in_component_index;
-layout(location = 7) flat in uint in_user_data;
-layout(location = 8) flat in uint in_source_kind;
-layout(location = 9) in vec2 in_world_position;
-
-layout(set = 0, binding = 0) uniform sampler2D in_surface_texture;
+layout(location = 3) flat in uint in_image_slot;
+layout(location = 4) flat in uint in_sampler_slot;
+layout(location = 5) in vec2 in_world_position;
 
 layout(push_constant) uniform Surface2DPushConstants {
     vec4 viewport;
@@ -53,25 +49,25 @@ struct ShadowViewRecord {
     uvec4 layer_view_cascade_flags;
 };
 
-layout(set = 1, binding = 0, std430) readonly buffer LightRecordBuffer {
+layout(set = 2, binding = 0, std430) readonly buffer LightRecordBuffer {
     LightRecord2D light_records[];
 };
 
-layout(set = 1, binding = 1, std430) readonly buffer ClusterHeaderBuffer {
+layout(set = 2, binding = 1, std430) readonly buffer ClusterHeaderBuffer {
     ClusterHeaderPacked cluster_headers[];
 };
 
-layout(set = 1, binding = 2, std430) readonly buffer ClusterIndexBuffer {
+layout(set = 2, binding = 2, std430) readonly buffer ClusterIndexBuffer {
     uint cluster_light_indices[];
 };
 
-layout(set = 1, binding = 3, std430) readonly buffer ShadowViewBuffer {
+layout(set = 2, binding = 3, std430) readonly buffer ShadowViewBuffer {
     ShadowViewRecord shadow_views[];
 };
 
-layout(set = 1, binding = 4) uniform sampler2DArray shadow_atlas_texture;
+layout(set = 2, binding = 4) uniform sampler2DArray shadow_atlas_texture;
 
-layout(set = 1, binding = 5, std140) uniform LightingParamsBuffer {
+layout(set = 2, binding = 5, std140) uniform LightingParamsBuffer {
     vec4 world_to_ndc;
     vec4 light_counts;
     uvec4 tile_reverse;
@@ -250,8 +246,6 @@ vec3 evaluate_light_contribution(LightRecord2D light_record_,
         }
     }
 
-    // 2D 默认走“flat lit”路径（无法线贴图时不做 Lambert 压暗），
-    // 仅在显式要求“法线影响”时才使用 N·L。
     float n_dot_l = 1.0;
     bool affect_normals_only = (light_flags & (1u << 1u)) != 0u;
     if (affect_normals_only) {
@@ -263,7 +257,7 @@ vec3 evaluate_light_contribution(LightRecord2D light_record_,
 }
 
 void main() {
-    vec4 color = texture(in_surface_texture, in_uv) * in_color;
+    vec4 color = SampleTexture2D(in_image_slot, in_sampler_slot, in_uv) * in_color;
     const bool premultiplied = (in_params & 0x10u) != 0u;
     if (color.a <= 1e-5) {
         discard;
@@ -281,12 +275,9 @@ void main() {
 
         uint direct_light_limit = min(light_count, min(max_fragment_lights, max_light_records));
         if (direct_light_limit <= 32u) {
-            // For small light counts, direct iteration avoids tile-boundary seams entirely.
             for (uint i = 0u; i < direct_light_limit; ++i) {
                 LightRecord2D light_record = light_records[i];
-                light_accum += evaluate_light_contribution(light_record,
-                                                           world_position,
-                                                           surface_normal);
+                light_accum += evaluate_light_contribution(light_record, world_position, surface_normal);
                 ++processed;
             }
         } else {
@@ -309,21 +300,15 @@ void main() {
                     }
 
                     LightRecord2D light_record = light_records[light_index];
-                    light_accum += evaluate_light_contribution(light_record,
-                                                               world_position,
-                                                               surface_normal);
+                    light_accum += evaluate_light_contribution(light_record, world_position, surface_normal);
                     ++processed;
                 }
             }
 
-            // Fallback: if this pixel's cluster is empty or mapping mismatched,
-            // evaluate a bounded number of global lights to avoid full blackout.
             if (processed == 0u) {
                 for (uint i = 0u; i < direct_light_limit; ++i) {
                     LightRecord2D light_record = light_records[i];
-                    light_accum += evaluate_light_contribution(light_record,
-                                                               world_position,
-                                                               surface_normal);
+                    light_accum += evaluate_light_contribution(light_record, world_position, surface_normal);
                 }
             }
         }

@@ -189,6 +189,7 @@ struct SurfaceRenderer2DPrepareView final {
     DescriptorHost& descriptor;
     PipelineHost& pipeline;
     resource::SamplerHost& sampler;
+    BindlessResourceSystem* bindless = nullptr;
     FrameStaticContext frame{};
     FrameGpuProgressContext progress{};
 };
@@ -290,6 +291,7 @@ struct SurfaceRenderer3DPrepareView final {
     resource::GpuMemoryHost& gpu_memory;
     IblHost& ibl;
     resource::SamplerHost& sampler;
+    BindlessResourceSystem* bindless = nullptr;
     RenderTargetHost* render_target = nullptr;
     std::uint32_t ibl_environment_id = 0U;
     std::uint32_t ibl_brdf_lut_texture_id = 0U;
@@ -532,6 +534,7 @@ template<typename T>
                                                   "pipeline",
                                                   "SurfaceRenderer2DPrepareView"),
         .sampler = detail::RequirePrepareService(prepare_view_.sampler, "sampler", "SurfaceRenderer2DPrepareView"),
+        .bindless = prepare_view_.bindless,
         .frame = prepare_view_.frame,
         .progress = prepare_view_.progress,
     };
@@ -770,6 +773,7 @@ template<typename T>
         .sampler = detail::RequirePrepareService(prepare_view_.sampler,
                                                  "sampler",
                                                  "SurfaceRenderer3DPrepareView"),
+        .bindless = prepare_view_.bindless,
         .render_target = &prepare_view_.render_target,
         .ibl_environment_id = prepare_view_.ibl_environment_id,
         .ibl_brdf_lut_texture_id = prepare_view_.ibl_brdf_lut_texture_id,
