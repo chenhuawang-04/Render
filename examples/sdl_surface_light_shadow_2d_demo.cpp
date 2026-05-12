@@ -7,6 +7,7 @@
 #include "vr/render/light_frame_coordinator.hpp"
 #include "vr/render/render_runtime_host.hpp"
 #include "vr/render/render_view_submission_utils.hpp"
+#include "vr/runtime/crash_tracer_support.hpp"
 #include "vr/render/scene_recorder_2d.hpp"
 #include "vr/shadow/shadow_renderer_2d.hpp"
 #include "vr/surface/surface_image_host.hpp"
@@ -421,6 +422,7 @@ void InitializeSurfaceComponent(Surface2D& component_,
 } // namespace
 
 int main(int argc_, char** argv_) {
+    vr::runtime::InstallProcessCrashTracer(argc_, argv_);
     Runtime runtime{};
     vr::surface::SurfaceUploadHost surface_upload_host{};
     vr::surface::SurfaceImageHost surface_image_host{};

@@ -8,6 +8,7 @@
 #include "vr/particle/particle_upload_host.hpp"
 #include "vr/render/render_runtime_host.hpp"
 #include "vr/render/render_view_submission_utils.hpp"
+#include "vr/runtime/crash_tracer_support.hpp"
 #include "vr/render/scene_recorder_3d.hpp"
 
 #include <SDL3/SDL.h>
@@ -142,6 +143,7 @@ void InitializeSparkEmitter(Particle3D& particle_,
 
 int main(int argc_,
          char** argv_) {
+    vr::runtime::InstallProcessCrashTracer(argc_, argv_);
     Runtime runtime{};
     vr::render::SceneRecorder3D recorder{};
     vr::particle::ParticleRenderer3D particle_renderer{};

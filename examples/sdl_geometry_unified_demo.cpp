@@ -11,6 +11,7 @@
 #include "vr/geometry/geometry_upload_host.hpp"
 #include "vr/render/render_runtime_host.hpp"
 #include "vr/render/render_view_submission_utils.hpp"
+#include "vr/runtime/crash_tracer_support.hpp"
 #include "vr/render/scene_recorder_3d.hpp"
 
 #include <SDL3/SDL.h>
@@ -150,6 +151,7 @@ void InitializeCurvePath(Geometry2D& component_,
 
 int main(int argc_,
          char** argv_) {
+    vr::runtime::InstallProcessCrashTracer(argc_, argv_);
     Runtime runtime{};
     vr::geometry::GeometryResourceHost geometry_resource_host{};
     vr::geometry::GeometryUploadHost geometry_upload_host{};

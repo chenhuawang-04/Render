@@ -18,8 +18,9 @@
 #include "vr/render/animation_frame_coordinator.hpp"
 #include "vr/render/light_frame_coordinator.hpp"
 #include "vr/render/render_runtime_host.hpp"
-#include "vr/render/scene_recorder_3d.hpp"
 #include "vr/render/render_view_submission_utils.hpp"
+#include "vr/runtime/crash_tracer_support.hpp"
+#include "vr/render/scene_recorder_3d.hpp"
 #include "vr/scene/background/sky_environment.hpp"
 #include "vr/shadow/shadow_renderer_3d.hpp"
 #include "vr/surface/surface_image_host.hpp"
@@ -424,6 +425,7 @@ void ApplySceneSkyEnvironment(vr::render::RenderScenePacket3D& packet_,
 
 int main(int argc_,
          char** argv_) {
+    vr::runtime::InstallProcessCrashTracer(argc_, argv_);
     const std::string font_path = PickDemoFontPath();
     if (font_path.empty()) {
         std::cerr << "sdl_scene_3d_unified_demo failed: no usable system font found.\n";

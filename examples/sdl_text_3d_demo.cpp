@@ -4,6 +4,7 @@
 #include "vr/ecs/system/transform_system.hpp"
 #include "vr/render/render_runtime_host.hpp"
 #include "vr/render/render_view_submission_utils.hpp"
+#include "vr/runtime/crash_tracer_support.hpp"
 #include "vr/render/scene_recorder_3d.hpp"
 #include "vr/text/text_renderer_3d.hpp"
 
@@ -182,6 +183,7 @@ void InitializeTransform(Transform3D& transform_,
 
 int main(int argc_,
          char** argv_) {
+    vr::runtime::InstallProcessCrashTracer(argc_, argv_);
     try {
         const std::uint32_t max_frames = ParseMaxFrames(argc_, argv_);
         const DemoFontPaths fonts = PickDemoFonts();

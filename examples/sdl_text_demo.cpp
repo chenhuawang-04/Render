@@ -1,5 +1,6 @@
 #include "vr/ecs/system/text_system.hpp"
 #include "vr/render/render_runtime_host.hpp"
+#include "vr/runtime/crash_tracer_support.hpp"
 #include "vr/text/text_renderer_2d.hpp"
 
 #include <SDL3/SDL.h>
@@ -124,7 +125,8 @@ void InitializeTextComponent(Text2D& component_,
 
 } // namespace
 
-int main() {
+int main(int argc_, char** argv_) {
+    vr::runtime::InstallProcessCrashTracer(argc_, argv_);
     try {
         const DemoFontPaths fonts = PickDemoFonts();
         if (fonts.primary.empty()) {

@@ -2,7 +2,6 @@ set(VR_BENCH_TARGET vr_bench_runner)
 
 add_library(vr_bench_support STATIC
     support/bench_framework.cpp
-    support/bench_crash_tracer.cpp
 )
 
 target_include_directories(vr_bench_support
@@ -14,17 +13,6 @@ target_link_libraries(vr_bench_support
     PUBLIC
         vulkan_init
 )
-
-if(VR_BENCH_CRASH_TRACER_ENABLED)
-    target_link_libraries(vr_bench_support
-        PRIVATE
-            Center.Debug.CrashTracer
-    )
-    target_compile_definitions(vr_bench_support
-        PRIVATE
-            VR_BENCH_HAS_CRASH_TRACER=1
-    )
-endif()
 
 add_executable(${VR_BENCH_TARGET}
     bench_main.cpp

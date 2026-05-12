@@ -1,8 +1,10 @@
+#include "vr/runtime/crash_tracer_support.hpp"
 #include "vr/vulkan_context.hpp"
 
 #include <iostream>
 
-int main() {
+int main(int argc_, char** argv_) {
+    vr::runtime::InstallProcessCrashTracer(argc_, argv_);
     try {
         vr::VulkanContext context;
 
@@ -24,4 +26,3 @@ int main() {
         return 1;
     }
 }
-

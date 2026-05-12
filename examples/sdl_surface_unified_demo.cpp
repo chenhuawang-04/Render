@@ -4,6 +4,7 @@
 #include "vr/ecs/system/transform_system.hpp"
 #include "vr/render/render_runtime_host.hpp"
 #include "vr/render/render_view_submission_utils.hpp"
+#include "vr/runtime/crash_tracer_support.hpp"
 #include "vr/render/scene_recorder_3d.hpp"
 #include "vr/surface/surface_image_host.hpp"
 #include "vr/surface/surface_renderer_2d.hpp"
@@ -187,6 +188,7 @@ void InitializeSurface3DComponent(Surface3D& component_,
 
 int main(int argc_,
          char** argv_) {
+    vr::runtime::InstallProcessCrashTracer(argc_, argv_);
     Runtime runtime{};
     vr::surface::SurfaceUploadHost surface_upload_host{};
     vr::surface::SurfaceImageHost surface_image_host{};

@@ -1,4 +1,5 @@
 #include "vr/platform/render_host.hpp"
+#include "vr/runtime/crash_tracer_support.hpp"
 #include "vr/render/render_loop_host.hpp"
 
 #include <iostream>
@@ -117,7 +118,8 @@ private:
 
 } // namespace
 
-int main() {
+int main(int argc_, char** argv_) {
+    vr::runtime::InstallProcessCrashTracer(argc_, argv_);
     try {
         vr::platform::RenderHostCreateInfo host_info;
         host_info.window.title = "Vulkan SDL3 RenderLoop Demo";

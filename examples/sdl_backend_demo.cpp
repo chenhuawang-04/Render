@@ -1,9 +1,11 @@
 #include "vr/platform/render_host.hpp"
+#include "vr/runtime/crash_tracer_support.hpp"
 #include "vr/render/swapchain_host.hpp"
 
 #include <iostream>
 
-int main() {
+int main(int argc_, char** argv_) {
+    vr::runtime::InstallProcessCrashTracer(argc_, argv_);
     try {
         vr::platform::RenderHostCreateInfo create_info;
         create_info.window.title = "Vulkan SDL3 Backend Demo";

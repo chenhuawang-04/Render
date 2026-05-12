@@ -117,6 +117,25 @@ if(TARGET freetype)
     set_property(TARGET freetype PROPERTY SOURCES "${_freetype_sources}")
 endif()
 
+set(_vr_default_enable_crash_tracer OFF)
+if(VR_TOP_LEVEL)
+    set(_vr_default_enable_crash_tracer ON)
+endif()
+option(VR_ENABLE_CRASH_TRACER
+    "Enable CrashTracer for demos, tests, and benchmarks"
+    ${_vr_default_enable_crash_tracer})
+set(VR_CRASH_TRACER_ENABLED OFF)
+if(VR_ENABLE_CRASH_TRACER)
+    if(NOT EXISTS "${CRASH_TRACER_ROOT}/CMakeLists.txt")
+        message(FATAL_ERROR "CRASH_TRACER_ROOT is invalid: ${CRASH_TRACER_ROOT}")
+    endif()
+    add_subdirectory("${CRASH_TRACER_ROOT}" "${CMAKE_BINARY_DIR}/_deps/crash_tracer" EXCLUDE_FROM_ALL)
+    if(NOT TARGET Center.Debug.CrashTracer)
+        message(FATAL_ERROR "CrashTracer target Center.Debug.CrashTracer was not found")
+    endif()
+    set(VR_CRASH_TRACER_ENABLED ON)
+endif()
+
 set(VR_GENERATED_INCLUDE_DIR "${CMAKE_BINARY_DIR}/generated")
 set(VR_GENERATED_TEXT_SHADER_DIR "${VR_GENERATED_INCLUDE_DIR}/vr/text/generated")
 set(VR_GENERATED_GEOMETRY_SHADER_DIR "${VR_GENERATED_INCLUDE_DIR}/vr/geometry/generated")
@@ -558,10 +577,36 @@ target_link_libraries(vulkan_init
         freetype
 )
 
+add_library(vr_crash_support STATIC
+    src/runtime/crash_tracer_support.cpp
+)
+
+target_include_directories(vr_crash_support
+    PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
+target_compile_features(vr_crash_support
+    PUBLIC
+        cxx_std_23
+)
+
+if(VR_CRASH_TRACER_ENABLED)
+    target_link_libraries(vr_crash_support
+        PRIVATE
+            Center.Debug.CrashTracer
+    )
+    target_compile_definitions(vr_crash_support
+        PRIVATE
+            VR_HAS_CRASH_TRACER=1
+    )
+endif()
+
 add_library(vulkan_platform_sdl INTERFACE)
 target_link_libraries(vulkan_platform_sdl
     INTERFACE
         vulkan_init
+        vr_crash_support
         SDL3::SDL3
 )
 
@@ -572,6 +617,7 @@ add_executable(vulkan_init_demo
 target_link_libraries(vulkan_init_demo
     PRIVATE
         vulkan_init
+        vr_crash_support
 )
 
 add_executable(sdl_backend_demo
@@ -689,7 +735,6 @@ endif()
 option(VR_BUILD_TESTS "Build VulkanRender_New test suite" ${_vr_default_build_tests})
 
 option(VR_BUILD_BENCHMARKS "Build VulkanRender_New benchmark suite" OFF)
-option(VR_BENCH_ENABLE_CRASH_TRACER "Enable CrashTracer for vr_bench_runner" ON)
 if(VR_BUILD_TESTS OR VR_BUILD_BENCHMARKS)
     enable_testing()
 endif()
@@ -699,17 +744,5 @@ if(VR_BUILD_TESTS)
 endif()
 
 if(VR_BUILD_BENCHMARKS)
-    if(VR_BENCH_ENABLE_CRASH_TRACER)
-        if(NOT EXISTS "${CRASH_TRACER_ROOT}/CMakeLists.txt")
-            message(FATAL_ERROR "CRASH_TRACER_ROOT is invalid: ${CRASH_TRACER_ROOT}")
-        endif()
-        add_subdirectory("${CRASH_TRACER_ROOT}" "${CMAKE_BINARY_DIR}/_deps/crash_tracer" EXCLUDE_FROM_ALL)
-        if(NOT TARGET Center.Debug.CrashTracer)
-            message(FATAL_ERROR "CrashTracer target Center.Debug.CrashTracer was not found")
-        endif()
-        set(VR_BENCH_CRASH_TRACER_ENABLED ON)
-    else()
-        set(VR_BENCH_CRASH_TRACER_ENABLED OFF)
-    endif()
     add_subdirectory(bench)
 endif()
