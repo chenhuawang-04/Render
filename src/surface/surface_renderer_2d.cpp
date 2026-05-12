@@ -340,6 +340,16 @@ void SurfaceRenderer2D::PrepareFrame(const render::SurfaceRenderer2DPrepareView&
     if (bindless_resources == nullptr || !bindless_resources->IsInitialized()) {
         throw std::runtime_error("SurfaceRenderer2D::PrepareFrame requires initialized BindlessResourceSystem");
     }
+    if (surface_image_host != nullptr &&
+        surface_image_host->IsInitialized() &&
+        !surface_image_host->BindlessConfig().Enabled()) {
+        bindless_resources->ConfigureSurfaceImageHost(*surface_image_host);
+    }
+    if (shadow_atlas_host != nullptr &&
+        shadow_atlas_host->IsInitialized() &&
+        !shadow_atlas_host->BindlessConfig().Enabled()) {
+        bindless_resources->ConfigureShadowAtlasHost(*shadow_atlas_host);
+    }
 
     active_frame_index = prepare_view_.frame.frame_index;
     last_submitted_value_seen = std::max(last_submitted_value_seen, prepare_view_.progress.last_submitted_value);
@@ -1159,13 +1169,6 @@ void SurfaceRenderer2D::EnsureLightingDescriptorObjects(VulkanContext& context_,
     });
     layout_desc.bindings.push_back({
         .binding = 4U,
-        .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-        .descriptorCount = 1U,
-        .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
-        .pImmutableSamplers = nullptr
-    });
-    layout_desc.bindings.push_back({
-        .binding = 5U,
         .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
         .descriptorCount = 1U,
         .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
@@ -1454,6 +1457,48 @@ void SurfaceRenderer2D::EnsureLightingResourcesForFrame(VulkanContext& context_)
     lighting_params.light_count = static_cast<float>(stats.light_count);
     lighting_params.shadow_view_count = static_cast<float>(stats.shadow_view_count);
 
+    const VkSampler configured_shadow_sampler = shadow_sampler_id.IsValid()
+        ? sampler_host->GetSampler(shadow_sampler_id)
+        : VK_NULL_HANDLE;
+    const VkSampler fallback_shadow_sampler = fallback_sampler_id.IsValid()
+        ? sampler_host->GetSampler(fallback_sampler_id)
+        : VK_NULL_HANDLE;
+
+    render::ShadowAtlasBindingCoordinator* atlas_binding_coordinator = shadow_atlas_binding_coordinator;
+    if (atlas_binding_coordinator == nullptr) {
+        atlas_binding_coordinator = &local_shadow_atlas_binding_coordinator;
+    }
+
+    render::ShadowAtlasBindingResolveInput resolve_input{};
+    resolve_input.atlas_host = shadow_atlas_host;
+    resolve_input.namespace_id = frame_resources.shadow_namespace_id;
+    resolve_input.fallback_namespace_id = 1U;
+    resolve_input.allow_namespace_fallback = 1U;
+    resolve_input.primary_sampler = configured_shadow_sampler;
+    resolve_input.fallback_view = fallback_shadow_array_view;
+    resolve_input.fallback_sampler = fallback_shadow_sampler;
+    resolve_input.fallback_layout = fallback_texture_layout;
+
+    const render::ShadowAtlasBindingResolveResult binding_result =
+        atlas_binding_coordinator->Resolve(resolve_input);
+    if (binding_result.cache_reused) {
+        ++stats.light_shadow_atlas_binding_cache_hit_count;
+    }
+
+    std::uint32_t shadow_atlas_texture_slot = bindless_resources->PlaceholderImage2DArraySlot().index;
+    if (binding_result.valid &&
+        binding_result.atlas_namespace_id != 0U &&
+        shadow_atlas_host != nullptr) {
+        const auto* atlas_record = shadow_atlas_host->FindAtlas(binding_result.atlas_namespace_id);
+        if (atlas_record != nullptr && atlas_record->bindless.image_slot.IsValid()) {
+            shadow_atlas_texture_slot = atlas_record->bindless.image_slot.index;
+        }
+    }
+    lighting_params.shadow_atlas_texture_slot = shadow_atlas_texture_slot;
+    lighting_params.shadow_atlas_sampler_slot = shadow_sampler_id.IsValid()
+        ? bindless_resources->ResolveRegisteredSamplerSlot(shadow_sampler_id).index
+        : bindless_resources->DefaultSamplerSlot().index;
+
     std::uint64_t upload_signature = 14695981039346656037ULL;
     hash_combine(upload_signature, light_signature);
     hash_combine(upload_signature, shadow_signature);
@@ -1462,6 +1507,8 @@ void SurfaceRenderer2D::EnsureLightingResourcesForFrame(VulkanContext& context_)
     hash_combine(upload_signature, static_cast<std::uint64_t>(cluster_header_count));
     hash_combine(upload_signature, static_cast<std::uint64_t>(cluster_index_count));
     hash_combine(upload_signature, static_cast<std::uint64_t>(frame_resources.shadow_namespace_id));
+    hash_combine(upload_signature, static_cast<std::uint64_t>(lighting_params.shadow_atlas_texture_slot));
+    hash_combine(upload_signature, static_cast<std::uint64_t>(lighting_params.shadow_atlas_sampler_slot));
     frame_resources.upload_signature = upload_signature;
 
     frame_resources.light_records = light_shadow_upload_host.UploadLightRecordsRanges(
@@ -1585,122 +1632,68 @@ void SurfaceRenderer2D::PrepareLightingDescriptorSetForFrame(std::uint32_t frame
         return;
     }
 
-    const VkSampler configured_shadow_sampler = shadow_sampler_id.IsValid()
-        ? sampler_host->GetSampler(shadow_sampler_id)
-        : VK_NULL_HANDLE;
-    const VkSampler fallback_shadow_sampler = fallback_sampler_id.IsValid()
-        ? sampler_host->GetSampler(fallback_sampler_id)
-        : VK_NULL_HANDLE;
-
-    render::ShadowAtlasBindingCoordinator* atlas_binding_coordinator = shadow_atlas_binding_coordinator;
-    if (atlas_binding_coordinator == nullptr) {
-        atlas_binding_coordinator = &local_shadow_atlas_binding_coordinator;
-    }
-
-    render::ShadowAtlasBindingResolveInput resolve_input{};
-    resolve_input.atlas_host = shadow_atlas_host;
-    resolve_input.namespace_id = frame_resources.shadow_namespace_id;
-    resolve_input.fallback_namespace_id = 1U;
-    resolve_input.allow_namespace_fallback = 1U;
-    resolve_input.primary_sampler = configured_shadow_sampler;
-    resolve_input.fallback_view = fallback_shadow_array_view;
-    resolve_input.fallback_sampler = fallback_shadow_sampler;
-    resolve_input.fallback_layout = fallback_texture_layout;
-
-    const render::ShadowAtlasBindingResolveResult binding_result =
-        atlas_binding_coordinator->Resolve(resolve_input);
-    if (binding_result.cache_reused) {
-        ++stats.light_shadow_atlas_binding_cache_hit_count;
-    }
-    if (!binding_result.valid ||
-        binding_result.image_view == VK_NULL_HANDLE ||
-        binding_result.sampler == VK_NULL_HANDLE) {
-        return;
-    }
-
     auto hash_combine = [](std::uint64_t& hash_, std::uint64_t value_) noexcept {
         hash_ ^= value_;
         hash_ *= 1099511628211ULL;
     };
     const std::uint64_t buffer_signature = frame_resources.descriptor_payload_signature;
-    const std::uint64_t image_signature = binding_result.binding_signature;
-    const bool need_buffer_update = frame_resources.descriptor_buffer_signature != buffer_signature;
-    const bool need_image_update = frame_resources.descriptor_image_signature != image_signature;
-    if (!need_buffer_update && !need_image_update) {
+    if (frame_resources.descriptor_buffer_signature == buffer_signature) {
         ++stats.light_descriptor_set_reuse_hit_count;
         return;
     }
 
     descriptor_buffer_write_scratch.clear();
-    descriptor_image_write_scratch.clear();
     descriptor_texel_write_scratch.clear();
-    descriptor_buffer_write_scratch.reserve(need_buffer_update ? 5U : 0U);
-    descriptor_image_write_scratch.reserve(need_image_update ? 1U : 0U);
-
-    if (need_buffer_update) {
-        descriptor_buffer_write_scratch.push_back({
-            .binding = 0U,
-            .array_element = 0U,
-            .descriptor_type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-            .buffer = frame_resources.light_records.buffer,
-            .offset = frame_resources.light_records.offset,
-            .range = frame_resources.light_records.size_bytes
-        });
-        descriptor_buffer_write_scratch.push_back({
-            .binding = 1U,
-            .array_element = 0U,
-            .descriptor_type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-            .buffer = frame_resources.cluster_headers.buffer,
-            .offset = frame_resources.cluster_headers.offset,
-            .range = frame_resources.cluster_headers.size_bytes
-        });
-        descriptor_buffer_write_scratch.push_back({
-            .binding = 2U,
-            .array_element = 0U,
-            .descriptor_type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-            .buffer = frame_resources.cluster_indices.buffer,
-            .offset = frame_resources.cluster_indices.offset,
-            .range = frame_resources.cluster_indices.size_bytes
-        });
-        descriptor_buffer_write_scratch.push_back({
-            .binding = 3U,
-            .array_element = 0U,
-            .descriptor_type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-            .buffer = frame_resources.shadow_views.buffer,
-            .offset = frame_resources.shadow_views.offset,
-            .range = frame_resources.shadow_views.size_bytes
-        });
-        descriptor_buffer_write_scratch.push_back({
-            .binding = 5U,
-            .array_element = 0U,
-            .descriptor_type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-            .buffer = frame_resources.lighting_uniform.buffer,
-            .offset = frame_resources.lighting_uniform.offset,
-            .range = frame_resources.lighting_uniform.size_bytes
-        });
-    }
-
-    if (need_image_update) {
-        descriptor_image_write_scratch.push_back({
-            .binding = 4U,
-            .array_element = 0U,
-            .descriptor_type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-            .sampler = binding_result.sampler,
-            .image_view = binding_result.image_view,
-            .image_layout = binding_result.image_layout
-        });
-    }
+    descriptor_buffer_write_scratch.reserve(5U);
+    descriptor_buffer_write_scratch.push_back({
+        .binding = 0U,
+        .array_element = 0U,
+        .descriptor_type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+        .buffer = frame_resources.light_records.buffer,
+        .offset = frame_resources.light_records.offset,
+        .range = frame_resources.light_records.size_bytes
+    });
+    descriptor_buffer_write_scratch.push_back({
+        .binding = 1U,
+        .array_element = 0U,
+        .descriptor_type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+        .buffer = frame_resources.cluster_headers.buffer,
+        .offset = frame_resources.cluster_headers.offset,
+        .range = frame_resources.cluster_headers.size_bytes
+    });
+    descriptor_buffer_write_scratch.push_back({
+        .binding = 2U,
+        .array_element = 0U,
+        .descriptor_type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+        .buffer = frame_resources.cluster_indices.buffer,
+        .offset = frame_resources.cluster_indices.offset,
+        .range = frame_resources.cluster_indices.size_bytes
+    });
+    descriptor_buffer_write_scratch.push_back({
+        .binding = 3U,
+        .array_element = 0U,
+        .descriptor_type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+        .buffer = frame_resources.shadow_views.buffer,
+        .offset = frame_resources.shadow_views.offset,
+        .range = frame_resources.shadow_views.size_bytes
+    });
+    descriptor_buffer_write_scratch.push_back({
+        .binding = 4U,
+        .array_element = 0U,
+        .descriptor_type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+        .buffer = frame_resources.lighting_uniform.buffer,
+        .offset = frame_resources.lighting_uniform.offset,
+        .range = frame_resources.lighting_uniform.size_bytes
+    });
 
     descriptor_host->UpdateSet(*context,
                                frame_resources.descriptor_set,
                                descriptor_buffer_write_scratch,
-                               descriptor_image_write_scratch,
+                               {},
                                descriptor_texel_write_scratch);
     frame_resources.descriptor_buffer_signature = buffer_signature;
-    frame_resources.descriptor_image_signature = image_signature;
     std::uint64_t descriptor_signature = 14695981039346656037ULL;
     hash_combine(descriptor_signature, buffer_signature);
-    hash_combine(descriptor_signature, image_signature);
     frame_resources.descriptor_set_signature = descriptor_signature;
     ++stats.descriptor_set_update_count;
 }

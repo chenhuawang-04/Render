@@ -37,6 +37,7 @@ namespace vr::render {
 struct GeometryRenderer3DPrepareView;
 struct FrameRecordContext;
 class IblHost;
+class BindlessResourceSystem;
 }
 
 namespace vr::geometry {
@@ -220,8 +221,8 @@ private:
         float uv_bias_v;
         std::uint32_t flags;
         float alpha_cutoff;
-        float reserved0;
-        float reserved1;
+        std::uint32_t texture_slot;
+        std::uint32_t sampler_slot;
     };
 
     struct PushConstants final {
@@ -258,6 +259,11 @@ private:
         float framebuffer_height;
         float shadow_view_count;
         float reserved0;
+
+        std::uint32_t shadow_atlas_texture_slot;
+        std::uint32_t shadow_atlas_sampler_slot;
+        std::uint32_t reserved1;
+        std::uint32_t reserved2;
     };
 
     struct FrameLightingResources final {
@@ -279,12 +285,13 @@ private:
         std::uint64_t descriptor_image_signature = 0U;
         std::uint64_t descriptor_set_signature = 0U;
     };
-    static_assert(sizeof(LightingParamsGpu) == 80U);
+    static_assert(sizeof(LightingParamsGpu) == 96U);
     static_assert(offsetof(LightingParamsGpu, camera_position_x) == 0U);
     static_assert(offsetof(LightingParamsGpu, camera_forward_x) == 16U);
     static_assert(offsetof(LightingParamsGpu, cluster_count_x) == 32U);
     static_assert(offsetof(LightingParamsGpu, near_plane) == 48U);
     static_assert(offsetof(LightingParamsGpu, framebuffer_width) == 64U);
+    static_assert(offsetof(LightingParamsGpu, shadow_atlas_texture_slot) == 80U);
 
     enum class PipelineMode : std::uint8_t {
         no_depth = 0U,
@@ -321,20 +328,11 @@ private:
         std::uint64_t retire_value = 0U;
     };
 
-    struct MaterialSetEntry final {
-        std::uint32_t material_id = 0U;
-        VkDescriptorSet descriptor_set = VK_NULL_HANDLE;
-        MaterialPushConstants material_push_constants{};
-    };
-
     struct ResolvedMaterialEntry final {
         std::uint32_t material_id = 0U;
         std::uint32_t material_revision = 0U;
         std::uint32_t image_id = 0U;
         std::uint32_t image_revision = 0U;
-        VkImageView image_view = VK_NULL_HANDLE;
-        VkImageLayout image_layout = VK_IMAGE_LAYOUT_UNDEFINED;
-        VkSampler sampler = VK_NULL_HANDLE;
         MaterialPushConstants material_push_constants{};
     };
 
@@ -346,9 +344,6 @@ private:
     [[nodiscard]] static std::size_t TopologyModeIndex(TopologyMode mode_) noexcept;
     [[nodiscard]] static std::size_t CullModeIndex(CullMode mode_) noexcept;
     [[nodiscard]] static std::size_t BlendModeIndex(BlendMode mode_) noexcept;
-    [[nodiscard]] static std::size_t LowerBoundMaterialSetIndex(
-        const GeometryRenderer3DMcVector<MaterialSetEntry>& entries_,
-        std::uint32_t material_id_) noexcept;
     [[nodiscard]] static std::size_t LowerBoundResolvedMaterialIndex(
         const GeometryRenderer3DMcVector<ResolvedMaterialEntry>& entries_,
         std::uint32_t material_id_) noexcept;
@@ -379,8 +374,6 @@ private:
                                                  render::PipelineHost& pipeline_host_,
                                                  VkFormat color_format_,
                                                  VkFormat depth_format_);
-    void EnsureMaterialPipelineObjects(VulkanContext& context_,
-                                       render::DescriptorHost& descriptor_host_);
     void EnsureLightingDescriptorObjects(VulkanContext& context_,
                                          render::DescriptorHost& descriptor_host_);
     void EnsureLightingResourcesForFrame(VulkanContext& context_);
@@ -389,17 +382,10 @@ private:
     void DestroySkeletalBuffer(resource::BufferResource& buffer_) noexcept;
     void PrepareLightingDescriptorSetForFrame(std::uint32_t frame_index_);
     [[nodiscard]] LightingParamsGpu BuildLightingParamsGpu(VkExtent2D extent_) const noexcept;
-    void EnsureFallbackMaterialResources(VulkanContext& context_);
     [[nodiscard]] static MaterialPushConstants BuildMaterialPushConstants(
         const GeometryMaterialDesc* material_desc_) noexcept;
     [[nodiscard]] bool ResolveMaterialBinding(std::uint32_t material_id_,
-                                              VkSampler& out_sampler_,
-                                              VkImageView& out_image_view_,
-                                              VkImageLayout& out_image_layout_,
                                               MaterialPushConstants& out_material_push_constants_);
-    [[nodiscard]] VkDescriptorSet AcquireMaterialDescriptorSet(std::uint32_t frame_index_,
-                                                               std::uint32_t material_id_,
-                                                               MaterialPushConstants* out_material_push_constants_ = nullptr);
     void EnsureDepthResources(VulkanContext& context_,
                               std::uint32_t image_count_,
                               VkExtent2D extent_);
@@ -454,11 +440,11 @@ private:
     VulkanContext* context = nullptr;
     render::UploadHost* upload_host = nullptr;
     render::DescriptorHost* descriptor_host = nullptr;
+    render::BindlessResourceSystem* bindless_resources = nullptr;
     render::PipelineHost* pipeline_host = nullptr;
     resource::GpuMemoryHost* gpu_memory_host = nullptr;
     resource::SamplerHost* sampler_host = nullptr;
 
-    render::DescriptorSetLayoutId descriptor_layout_id{};
     render::DescriptorSetLayoutId lighting_descriptor_layout_id{};
     render::PipelineLayoutId pipeline_layout_id{};
     render::ShaderModuleId shader_vertex_id{};
@@ -476,20 +462,12 @@ private:
     GeometryRenderer3DMcVector<std::uint8_t> depth_image_initialized{};
     GeometryRenderer3DMcVector<RetiredDepthImage> retired_depth_images{};
     GeometryRenderer3DMcVector<std::uint8_t> image_initialized{};
-    GeometryRenderer3DMcVector<GeometryRenderer3DMcVector<MaterialSetEntry>> frame_material_sets{};
     GeometryRenderer3DMcVector<FrameLightingResources> frame_lighting_resources{};
     GeometryRenderer3DMcVector<ResolvedMaterialEntry> resolved_materials{};
     GeometryRenderer3DMcVector<GeometrySkeletalComponentGpu> skeletal_component_scratch{};
     GeometryRenderer3DMcVector<GeometrySkeletalMatrixGpu> skeletal_matrix_scratch{};
-    render::DescriptorMcVector<render::DescriptorImageWrite> descriptor_image_write_scratch{};
     render::DescriptorMcVector<render::DescriptorBufferWrite> descriptor_buffer_write_scratch{};
     render::DescriptorMcVector<render::DescriptorTexelBufferWrite> descriptor_texel_write_scratch{};
-
-    resource::ImageResource fallback_material_image{};
-    resource::SamplerId fallback_material_sampler_id{};
-    VkImageLayout fallback_material_layout = VK_IMAGE_LAYOUT_UNDEFINED;
-    VkImageView fallback_shadow_array_view = VK_NULL_HANDLE;
-    resource::SamplerId shadow_sampler_id{};
 
     std::uint32_t active_frame_index = 0U;
     VkExtent2D swapchain_extent{};

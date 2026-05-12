@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Center/Memory/Container/Vector/McVector.hpp"
+#include "vr/render/bindless_types.hpp"
 #include "vr/render/retire_bus.hpp"
 #include "vr/resource/image_host.hpp"
 #include "vr/vulkan_context.hpp"
@@ -9,6 +10,10 @@
 
 namespace vr::resource {
 class GpuMemoryHost;
+}
+
+namespace vr::render {
+class DescriptorHost;
 }
 
 namespace vr::shadow {
@@ -41,9 +46,24 @@ struct ShadowAtlasHostStats final {
     std::uint32_t revision = 0U;
 };
 
+struct ShadowAtlasHostBindlessConfig final {
+    render::DescriptorHost* descriptor_host = nullptr;
+    render::BindlessTableId image_table{};
+
+    [[nodiscard]] bool Enabled() const noexcept {
+        return descriptor_host != nullptr && image_table.IsValid();
+    }
+};
+
 class ShadowAtlasHost final {
 public:
     struct AtlasRecord final {
+        struct AtlasBindlessState final {
+            render::BindlessSlot image_slot{};
+            std::uint32_t revision_written = 0U;
+            std::uint64_t retire_value = 0U;
+        };
+
         std::uint32_t namespace_id = 0U;
         std::uint16_t width = 0U;
         std::uint16_t height = 0U;
@@ -54,6 +74,7 @@ public:
         VkImageView array_view = VK_NULL_HANDLE;
         ShadowAtlasMcVector<VkImageView> layer_views{};
         std::uint32_t revision = 0U;
+        AtlasBindlessState bindless{};
     };
 
     ShadowAtlasHost() = default;
@@ -74,6 +95,8 @@ public:
     void BeginFrame(VulkanContext& context_,
                     std::uint64_t completed_submit_value_);
 
+    void ConfigureBindless(const ShadowAtlasHostBindlessConfig& bindless_config_) noexcept;
+
     void EnsureAtlases(VulkanContext& context_,
                        std::uint64_t last_submitted_value_,
                        std::uint64_t completed_submit_value_,
@@ -82,9 +105,11 @@ public:
 
     [[nodiscard]] const AtlasRecord* FindAtlas(std::uint32_t namespace_id_) const noexcept;
     [[nodiscard]] AtlasRecord* FindAtlas(std::uint32_t namespace_id_) noexcept;
+    [[nodiscard]] render::BindlessSlot ResolveBindlessAtlasSlot(std::uint32_t namespace_id_) const noexcept;
     [[nodiscard]] bool IsInitialized() const noexcept;
     [[nodiscard]] const ShadowAtlasHostStats& Stats() const noexcept;
     [[nodiscard]] VkFormat DepthFormat() const noexcept;
+    [[nodiscard]] const ShadowAtlasHostBindlessConfig& BindlessConfig() const noexcept;
 
 private:
     struct RetiredAtlasPayload final {
@@ -105,9 +130,11 @@ private:
     void DestroyRetiredAtlases(VulkanContext& context_) noexcept;
     [[nodiscard]] AtlasRecord CreateAtlasRecord(VulkanContext& context_,
                                                 const ShadowAtlasRequest& request_) const;
+    void SyncBindlessRecords() noexcept;
 
 private:
     resource::GpuMemoryHost* gpu_memory_host = nullptr;
+    ShadowAtlasHostBindlessConfig bindless_config{};
     ShadowAtlasHostCreateInfo create_info_cache{};
     ShadowAtlasMcVector<AtlasRecord> atlases{};
     render::RetireBus<RetiredAtlasPayload> retired_atlases{};

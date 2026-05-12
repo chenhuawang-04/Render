@@ -188,8 +188,8 @@ private:
 
         float framebuffer_width = 1.0F;
         float framebuffer_height = 1.0F;
-        float reserved1 = 0.0F;
-        float reserved2 = 0.0F;
+        std::uint32_t shadow_atlas_texture_slot = 0U;
+        std::uint32_t shadow_atlas_sampler_slot = 0U;
     };
 
     struct FrameLightingResources final {

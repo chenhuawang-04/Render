@@ -1,5 +1,6 @@
 #include "vr/geometry/geometry_image_host.hpp"
 
+#include "vr/render/descriptor_host.hpp"
 #include "vr/resource/gpu_memory_host.hpp"
 
 #include <algorithm>
@@ -19,6 +20,7 @@ void GeometryImageHost::Initialize(VulkanContext& context_,
     }
 
     gpu_memory_host = &gpu_memory_host_;
+    bindless_config = {};
     create_info_cache = create_info_;
     images.clear();
     retired_images.Clear();
@@ -51,6 +53,7 @@ void GeometryImageHost::Shutdown(VulkanContext& context_) {
     DestroyRetiredImages(context_);
 
     gpu_memory_host = nullptr;
+    bindless_config = {};
     create_info_cache = {};
     stats = {};
     initialized = false;
@@ -63,8 +66,14 @@ void GeometryImageHost::BeginFrame(VulkanContext& context_,
     }
 
     CollectRetiredImages(context_, completed_submit_value_);
+    SyncBindlessRecords();
     stats.image_count = static_cast<std::uint32_t>(images.size());
     stats.retired_image_count = retired_images.PendingCount();
+}
+
+void GeometryImageHost::ConfigureBindless(const GeometryImageHostBindlessConfig& bindless_config_) noexcept {
+    bindless_config = bindless_config_;
+    SyncBindlessRecords();
 }
 
 void GeometryImageHost::UploadImage(VulkanContext& context_,
@@ -201,6 +210,7 @@ void GeometryImageHost::UploadImage(VulkanContext& context_,
 
     record.current_layout = record.shader_read_layout;
     ++record.revision;
+    SyncBindlessRecords();
     stats.uploaded_bytes += upload_size_bytes;
     stats.image_count = static_cast<std::uint32_t>(images.size());
     stats.retired_image_count = retired_images.PendingCount();
@@ -226,6 +236,17 @@ bool GeometryImageHost::RemoveImage(VulkanContext& context_,
     }
 
     ImageRecord& record = images[lower_bound_index];
+    if (bindless_config.Enabled() && record.bindless.image_slot.IsValid()) {
+        bindless_config.descriptor_host->QueueBindlessPlaceholderWrite(
+            bindless_config.image_table,
+            record.bindless.image_slot);
+        bindless_config.descriptor_host->FreeBindlessSlotDeferred(
+            bindless_config.image_table,
+            record.bindless.image_slot,
+            last_submitted_value_);
+        record.bindless.retire_value = last_submitted_value_;
+    }
+
     RetireImage(record, last_submitted_value_);
     images.erase(images.begin() + static_cast<std::ptrdiff_t>(lower_bound_index));
 
@@ -252,12 +273,21 @@ const GeometryImageHost::ImageRecord* GeometryImageHost::FindImage(std::uint32_t
     return &record;
 }
 
+render::BindlessSlot GeometryImageHost::ResolveBindlessImageSlot(std::uint32_t image_id_) const noexcept {
+    const ImageRecord* record = FindImage(image_id_);
+    return record != nullptr ? record->bindless.image_slot : render::BindlessSlot{};
+}
+
 bool GeometryImageHost::IsInitialized() const noexcept {
     return initialized;
 }
 
 const GeometryImageHostStats& GeometryImageHost::Stats() const noexcept {
     return stats;
+}
+
+const GeometryImageHostBindlessConfig& GeometryImageHost::BindlessConfig() const noexcept {
+    return bindless_config;
 }
 
 std::size_t GeometryImageHost::LowerBoundImageIndex(std::uint32_t image_id_) const noexcept {
@@ -286,6 +316,7 @@ void GeometryImageHost::RetireImage(ImageRecord& record_,
 
     record_.resource = {};
     record_.current_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+    record_.bindless.revision_written = 0U;
 }
 
 void GeometryImageHost::CollectRetiredImages(VulkanContext& context_,
@@ -306,6 +337,35 @@ void GeometryImageHost::DestroyRetiredImages(VulkanContext& context_) noexcept {
     (void)retired_images.Flush([&](resource::ImageResource& resource_) {
         resource::ImageHost::DestroyImage(context_, resource_);
     });
+}
+
+void GeometryImageHost::SyncBindlessRecords() noexcept {
+    if (!bindless_config.Enabled()) {
+        return;
+    }
+
+    for (ImageRecord& record : images) {
+        if (record.resource.default_view == VK_NULL_HANDLE ||
+            record.current_layout == VK_IMAGE_LAYOUT_UNDEFINED) {
+            continue;
+        }
+
+        if (!record.bindless.image_slot.IsValid()) {
+            record.bindless.image_slot =
+                bindless_config.descriptor_host->AllocateBindlessSlot(bindless_config.image_table);
+            record.bindless.revision_written = 0U;
+        }
+
+        if (record.bindless.revision_written == record.revision) {
+            continue;
+        }
+
+        bindless_config.descriptor_host->QueueBindlessImageWrite(bindless_config.image_table,
+                                                                 record.bindless.image_slot,
+                                                                 record.resource.default_view,
+                                                                 record.shader_read_layout);
+        record.bindless.revision_written = record.revision;
+    }
 }
 
 resource::ImageResource GeometryImageHost::CreateImageResource(VulkanContext& context_,

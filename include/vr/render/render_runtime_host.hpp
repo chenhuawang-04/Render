@@ -1746,6 +1746,7 @@ private:
                 .gpu_memory = gpu_memory_host,
                 .ibl = ibl_host,
                 .sampler = sampler_host,
+                .bindless = bindless_resources_initialized ? &bindless_resource_system : nullptr,
                 .render_target = render_target_initialized ? &render_target_host : nullptr,
                 .frame = frame,
                 .progress = progress,

@@ -29,10 +29,11 @@ struct alignas(16) IblGpuParams final {
     std::array<std::array<float, 4U>, 9U> sh9{};
     std::array<float, 4U> tint_intensity{1.0F, 1.0F, 1.0F, 0.0F};
     std::array<float, 4U> rotation_max_lod_flags{0.0F, 1.0F, 0.0F, 0.0F};
+    std::array<std::uint32_t, 4U> texture_sampler_slots{};
 };
 
-static_assert(sizeof(IblGpuParams) == sizeof(float) * 44U,
-              "IblGpuParams must remain a tightly packed 11xfloat4 payload");
+static_assert(sizeof(IblGpuParams) == sizeof(float) * 48U,
+              "IblGpuParams must remain a tightly packed 12xfloat4 payload");
 static_assert((sizeof(IblGpuParams) % 16U) == 0U,
               "IblGpuParams must remain 16-byte aligned for uniform-buffer upload");
 
@@ -96,9 +97,7 @@ public:
                                  asset::TextureId brdf_lut_texture_id_ = {});
 
     [[nodiscard]] const IblEnvironmentAssetDesc* FindEnvironment(IblEnvironmentId environment_id_) const noexcept;
-    [[nodiscard]] VkDescriptorSet ActiveDescriptorSet(std::uint32_t frame_index_) const;
     [[nodiscard]] VkDescriptorSet ActiveParamsDescriptorSet(std::uint32_t frame_index_) const;
-    [[nodiscard]] DescriptorSetLayoutId DescriptorLayoutId() const noexcept;
     [[nodiscard]] DescriptorSetLayoutId ParamsDescriptorLayoutId() const noexcept;
     [[nodiscard]] const IblGpuParams& ActiveParams() const noexcept;
     [[nodiscard]] asset::TextureId BrdfLut() const noexcept;
@@ -118,7 +117,6 @@ private:
 
     struct FrameResources final {
         resource::BufferResource gpu_params_buffer{};
-        VkDescriptorSet legacy_descriptor_set = VK_NULL_HANDLE;
         VkDescriptorSet params_descriptor_set = VK_NULL_HANDLE;
         IblEnvironmentId prepared_environment_id{};
         asset::TextureId prepared_brdf_lut{};
@@ -162,9 +160,7 @@ private:
     IblMcVector<EnvironmentRecord> environments{};
     IblMcVector<FrameResources> frame_resources{};
     IblMcVector<DescriptorBufferWrite> descriptor_buffer_write_scratch{};
-    IblMcVector<DescriptorImageWrite> descriptor_image_write_scratch{};
     IblMcVector<DescriptorTexelBufferWrite> descriptor_texel_write_scratch{};
-    DescriptorSetLayoutId descriptor_layout_id{};
     DescriptorSetLayoutId params_descriptor_layout_id{};
     resource::SamplerId sampler_id{};
     asset::TextureId default_specular_cube_texture_id{};

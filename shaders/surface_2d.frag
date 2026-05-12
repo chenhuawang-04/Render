@@ -65,13 +65,13 @@ layout(set = 2, binding = 3, std430) readonly buffer ShadowViewBuffer {
     ShadowViewRecord shadow_views[];
 };
 
-layout(set = 2, binding = 4) uniform sampler2DArray shadow_atlas_texture;
-
-layout(set = 2, binding = 5, std140) uniform LightingParamsBuffer {
+layout(set = 2, binding = 4, std140) uniform LightingParamsBuffer {
     vec4 world_to_ndc;
     vec4 light_counts;
     uvec4 tile_reverse;
-    vec4 framebuffer_size;
+    vec2 framebuffer_size;
+    uint shadow_atlas_texture_slot;
+    uint shadow_atlas_sampler_slot;
 } lighting_params;
 
 layout(location = 0) out vec4 out_color;
@@ -122,7 +122,7 @@ float sample_shadow_view_pcf(uint view_index_, vec3 world_position_) {
     if (depth_value <= 0.0 || depth_value >= 1.0) {
         return 1.0;
     }
-    ivec3 atlas_size = textureSize(shadow_atlas_texture, 0);
+    ivec3 atlas_size = textureSize(g_Textures2DArray[nonuniformEXT(lighting_params.shadow_atlas_texture_slot)], 0);
     vec2 atlas_size_f = vec2(max(atlas_size.x, 1), max(atlas_size.y, 1));
     vec2 rect_origin = vec2(view_record.atlas_rect.x, view_record.atlas_rect.y);
     vec2 rect_extent = vec2(max(view_record.atlas_rect.z, 1u), max(view_record.atlas_rect.w, 1u));
@@ -157,7 +157,10 @@ float sample_shadow_view_pcf(uint view_index_, vec3 world_position_) {
                 sample_count += 1.0;
                 continue;
             }
-            float stored_depth = texture(shadow_atlas_texture, vec3(tap_uv, layer)).r;
+            float stored_depth =
+                SampleTexture2DArray(lighting_params.shadow_atlas_texture_slot,
+                                     lighting_params.shadow_atlas_sampler_slot,
+                                     vec3(tap_uv, layer)).r;
             float visible = 1.0;
             if (!reverse_z) {
                 if (depth_value - combined_bias > stored_depth) {

@@ -1,10 +1,12 @@
 #include "vr/render/bindless_resource_system.hpp"
 
 #include "vr/asset/texture_host.hpp"
+#include "vr/geometry/geometry_image_host.hpp"
 #include "vr/render/descriptor_host.hpp"
 #include "vr/render/render_target_host.hpp"
 #include "vr/resource/gpu_memory_host.hpp"
 #include "vr/resource/sampler_host.hpp"
+#include "vr/shadow/shadow_atlas_host.hpp"
 #include "vr/surface/surface_image_host.hpp"
 #include "vr/vulkan_context.hpp"
 
@@ -242,6 +244,25 @@ resource::ImageResource CreatePlaceholderImage(VulkanContext& context_,
     return image;
 }
 
+VkImageView CreatePlaceholderImageArrayView(VulkanContext& context_,
+                                            const resource::ImageResource& image_) {
+    VkImageViewCreateInfo view_create_info{};
+    view_create_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    view_create_info.image = image_.image;
+    view_create_info.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
+    view_create_info.format = image_.format;
+    view_create_info.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
+    view_create_info.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
+    view_create_info.components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
+    view_create_info.components.a = VK_COMPONENT_SWIZZLE_IDENTITY;
+    view_create_info.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    view_create_info.subresourceRange.baseMipLevel = 0U;
+    view_create_info.subresourceRange.levelCount = 1U;
+    view_create_info.subresourceRange.baseArrayLayer = 0U;
+    view_create_info.subresourceRange.layerCount = 1U;
+    return resource::ImageHost::CreateView(context_, image_.image, view_create_info);
+}
+
 VkSampler CreateDefaultSampler(VulkanContext& context_,
                                resource::SamplerHost& sampler_host_) {
     resource::SamplerDesc sampler_desc{};
@@ -274,6 +295,7 @@ void BindlessResourceSystem::Initialize(VulkanContext& context_,
         descriptor_host_ = &descriptor_host;
         this->sampler_host_ = &sampler_host_;
         placeholder_image_ = CreatePlaceholderImage(context_, gpu_memory_host_);
+        placeholder_image_array_view_ = CreatePlaceholderImageArrayView(context_, placeholder_image_);
         placeholder_image_layout_ = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         default_sampler_ = CreateDefaultSampler(context_, sampler_host_);
 
@@ -319,6 +341,11 @@ void BindlessResourceSystem::Initialize(VulkanContext& context_,
         sampler_table_ = descriptor_host.CreateBindlessTable(context_, sampler_table_desc);
 
         placeholder_image_slot_ = BindlessSlot{.index = 0U, .generation = 1U};
+        placeholder_image_array_slot_ = descriptor_host.AllocateBindlessSlot(sampled_image_table_);
+        descriptor_host.QueueBindlessImageWrite(sampled_image_table_,
+                                                placeholder_image_array_slot_,
+                                                placeholder_image_array_view_,
+                                                placeholder_image_layout_);
         default_sampler_slot_ = BindlessSlot{.index = 0U, .generation = 1U};
         registered_sampler_slots_.clear();
         registered_sampler_slots_.resize(sampler_host_.Stats().sampler_count);
@@ -332,6 +359,10 @@ void BindlessResourceSystem::Initialize(VulkanContext& context_,
 }
 
 void BindlessResourceSystem::Shutdown(VulkanContext& context_) noexcept {
+    if (placeholder_image_array_view_ != VK_NULL_HANDLE) {
+        resource::ImageHost::DestroyView(context_, placeholder_image_array_view_);
+    }
+    placeholder_image_array_view_ = VK_NULL_HANDLE;
     if (placeholder_image_.image != VK_NULL_HANDLE) {
         resource::ImageHost::DestroyImage(context_, placeholder_image_);
     }
@@ -344,6 +375,7 @@ void BindlessResourceSystem::Shutdown(VulkanContext& context_) noexcept {
     sampled_image_table_ = {};
     sampler_table_ = {};
     placeholder_image_slot_ = BindlessSlot{.index = 0U, .generation = 1U};
+    placeholder_image_array_slot_ = {};
     default_sampler_slot_ = BindlessSlot{.index = 0U, .generation = 1U};
     default_sampler_ = VK_NULL_HANDLE;
     registered_sampler_slots_.clear();
@@ -370,6 +402,30 @@ void BindlessResourceSystem::ConfigureSurfaceImageHost(
         return;
     }
     surface_image_host_.ConfigureBindless({
+        .descriptor_host = descriptor_host_,
+        .image_table = sampled_image_table_,
+    });
+}
+
+void BindlessResourceSystem::ConfigureGeometryImageHost(
+    geometry::GeometryImageHost& geometry_image_host_) const noexcept {
+    if (!initialized_) {
+        geometry_image_host_.ConfigureBindless({});
+        return;
+    }
+    geometry_image_host_.ConfigureBindless({
+        .descriptor_host = descriptor_host_,
+        .image_table = sampled_image_table_,
+    });
+}
+
+void BindlessResourceSystem::ConfigureShadowAtlasHost(
+    shadow::ShadowAtlasHost& shadow_atlas_host_) const noexcept {
+    if (!initialized_) {
+        shadow_atlas_host_.ConfigureBindless({});
+        return;
+    }
+    shadow_atlas_host_.ConfigureBindless({
         .descriptor_host = descriptor_host_,
         .image_table = sampled_image_table_,
     });
@@ -466,6 +522,10 @@ BindlessSlot BindlessResourceSystem::PlaceholderImageSlot() const noexcept {
     return placeholder_image_slot_;
 }
 
+BindlessSlot BindlessResourceSystem::PlaceholderImage2DArraySlot() const noexcept {
+    return placeholder_image_array_slot_.IsValid() ? placeholder_image_array_slot_ : placeholder_image_slot_;
+}
+
 BindlessSlot BindlessResourceSystem::DefaultSamplerSlot() const noexcept {
     return default_sampler_slot_;
 }
@@ -499,6 +559,7 @@ void BindlessResourceSystem::RefreshStats(DescriptorHost* descriptor_host_) cons
     stats_.sampled_image_table = sampled_image_table_;
     stats_.sampler_table = sampler_table_;
     stats_.placeholder_image_slot = placeholder_image_slot_;
+    stats_.placeholder_image_array_slot = placeholder_image_array_slot_;
     stats_.default_sampler_slot = default_sampler_slot_;
     if (descriptor_host_ != nullptr) {
         if (sampled_image_table_.IsValid()) {

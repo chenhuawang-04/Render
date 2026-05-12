@@ -1,5 +1,6 @@
 #include "vr/shadow/shadow_atlas_host.hpp"
 
+#include "vr/render/descriptor_host.hpp"
 #include "vr/resource/gpu_memory_host.hpp"
 
 #include <algorithm>
@@ -15,6 +16,7 @@ void ShadowAtlasHost::Initialize(VulkanContext& context_,
     Shutdown(context_);
 
     gpu_memory_host = &gpu_memory_host_;
+    bindless_config = {};
     create_info_cache = create_info_;
     if (create_info_cache.reserve_atlas_count > 0U) {
         atlases.reserve(create_info_cache.reserve_atlas_count);
@@ -44,6 +46,7 @@ void ShadowAtlasHost::Shutdown(VulkanContext& context_) {
     DestroyRetiredAtlases(context_);
 
     gpu_memory_host = nullptr;
+    bindless_config = {};
     create_info_cache = {};
     stats = {};
     initialized = false;
@@ -55,6 +58,12 @@ void ShadowAtlasHost::BeginFrame(VulkanContext& context_,
         return;
     }
     CollectRetiredAtlases(context_, completed_submit_value_);
+    SyncBindlessRecords();
+}
+
+void ShadowAtlasHost::ConfigureBindless(const ShadowAtlasHostBindlessConfig& bindless_config_) noexcept {
+    bindless_config = bindless_config_;
+    SyncBindlessRecords();
 }
 
 void ShadowAtlasHost::EnsureAtlases(VulkanContext& context_,
@@ -137,6 +146,7 @@ void ShadowAtlasHost::EnsureAtlases(VulkanContext& context_,
         ++stats.revision;
     }
 
+    SyncBindlessRecords();
     stats.atlas_count = static_cast<std::uint32_t>(atlases.size());
 }
 
@@ -156,6 +166,11 @@ ShadowAtlasHost::AtlasRecord* ShadowAtlasHost::FindAtlas(std::uint32_t namespace
     return nullptr;
 }
 
+render::BindlessSlot ShadowAtlasHost::ResolveBindlessAtlasSlot(std::uint32_t namespace_id_) const noexcept {
+    const AtlasRecord* record = FindAtlas(namespace_id_);
+    return record != nullptr ? record->bindless.image_slot : render::BindlessSlot{};
+}
+
 bool ShadowAtlasHost::IsInitialized() const noexcept {
     return initialized;
 }
@@ -166,6 +181,10 @@ const ShadowAtlasHostStats& ShadowAtlasHost::Stats() const noexcept {
 
 VkFormat ShadowAtlasHost::DepthFormat() const noexcept {
     return create_info_cache.depth_format;
+}
+
+const ShadowAtlasHostBindlessConfig& ShadowAtlasHost::BindlessConfig() const noexcept {
+    return bindless_config;
 }
 
 std::size_t ShadowAtlasHost::LowerBoundAtlasIndex(std::uint32_t namespace_id_) const noexcept {
@@ -205,6 +224,15 @@ void ShadowAtlasHost::RetireAtlas(AtlasRecord& record_,
     if (record_.resource.image == VK_NULL_HANDLE) {
         record_ = {};
         return;
+    }
+
+    if (bindless_config.Enabled() && record_.bindless.image_slot.IsValid()) {
+        bindless_config.descriptor_host->QueueBindlessPlaceholderWrite(bindless_config.image_table,
+                                                                       record_.bindless.image_slot);
+        bindless_config.descriptor_host->FreeBindlessSlotDeferred(bindless_config.image_table,
+                                                                  record_.bindless.image_slot,
+                                                                  retire_value_);
+        record_.bindless.retire_value = retire_value_;
     }
 
     RetiredAtlasPayload retired{};
@@ -322,6 +350,39 @@ ShadowAtlasHost::AtlasRecord ShadowAtlasHost::CreateAtlasRecord(
     }
 
     return record;
+}
+
+void ShadowAtlasHost::SyncBindlessRecords() noexcept {
+    if (!bindless_config.Enabled()) {
+        return;
+    }
+
+    for (AtlasRecord& record : atlases) {
+        if (record.array_view == VK_NULL_HANDLE) {
+            continue;
+        }
+
+        const VkImageLayout shader_read_layout =
+            record.current_layout == VK_IMAGE_LAYOUT_UNDEFINED
+                ? VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL
+                : record.current_layout;
+
+        if (!record.bindless.image_slot.IsValid()) {
+            record.bindless.image_slot =
+                bindless_config.descriptor_host->AllocateBindlessSlot(bindless_config.image_table);
+            record.bindless.revision_written = 0U;
+        }
+
+        if (record.bindless.revision_written == record.revision) {
+            continue;
+        }
+
+        bindless_config.descriptor_host->QueueBindlessImageWrite(bindless_config.image_table,
+                                                                 record.bindless.image_slot,
+                                                                 record.array_view,
+                                                                 shader_read_layout);
+        record.bindless.revision_written = record.revision;
+    }
 }
 
 } // namespace vr::shadow

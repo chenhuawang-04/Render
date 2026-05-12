@@ -82,7 +82,8 @@ public:
 
         if (prepare_count == 0U) {
             prepare_view_.ibl->PrepareFrame(vr::render::MakeIblHostPrepareView(prepare_view_));
-            fallback_descriptor_set = prepare_view_.ibl->ActiveDescriptorSet(prepare_view_.frame.frame_index);
+            fallback_descriptor_set =
+                prepare_view_.ibl->ActiveParamsDescriptorSet(prepare_view_.frame.frame_index);
             fallback_brdf_lut = prepare_view_.ibl->BrdfLut();
             fallback_specular_texture = prepare_view_.ibl->ActiveSpecularTexture();
         } else if (!environment_registered) {
@@ -106,7 +107,8 @@ public:
             prepare_view_.ibl->PrepareEnvironmentFrame(vr::render::MakeIblHostPrepareView(prepare_view_),
                                                        environment_id,
                                                        brdf_lut_texture_id);
-            active_descriptor_set = prepare_view_.ibl->ActiveDescriptorSet(prepare_view_.frame.frame_index);
+            active_descriptor_set =
+                prepare_view_.ibl->ActiveParamsDescriptorSet(prepare_view_.frame.frame_index);
             active_params = prepare_view_.ibl->ActiveParams();
             active_brdf_lut = prepare_view_.ibl->BrdfLut();
             active_specular_texture = prepare_view_.ibl->ActiveSpecularTexture();
@@ -276,7 +278,8 @@ public:
 
         prepare_view_.ibl->PrepareEnvironmentFrame(vr::render::MakeIblHostPrepareView(prepare_view_),
                                                    environment_id);
-        active_descriptor_set = prepare_view_.ibl->ActiveDescriptorSet(prepare_view_.frame.frame_index);
+        active_descriptor_set =
+            prepare_view_.ibl->ActiveParamsDescriptorSet(prepare_view_.frame.frame_index);
         active_params = prepare_view_.ibl->ActiveParams();
         active_brdf_lut = prepare_view_.ibl->BrdfLut();
         active_specular_texture = prepare_view_.ibl->ActiveSpecularTexture();
@@ -328,13 +331,17 @@ VR_TEST_CASE(RuntimeIntegration_ibl_host_prepares_default_and_explicit_environme
 
         VR_REQUIRE(runtime.HasTextureHost());
         VR_REQUIRE(runtime.HasIblHost());
-        VR_CHECK(runtime.Ibl().DescriptorLayoutId().IsValid());
+        VR_CHECK(runtime.Ibl().ParamsDescriptorLayoutId().IsValid());
 
         const auto first_tick = runtime.Tick(recorder);
         VR_CHECK(first_tick.running);
         VR_CHECK(recorder.HasFallbackCapture());
         VR_CHECK(runtime.Ibl().ActiveParams().tint_intensity[3] == 0.0F);
         VR_CHECK(runtime.Ibl().Stats().default_texture_build_count >= 2U);
+        VR_CHECK(runtime.Ibl().ActiveParams().texture_sampler_slots[0] == runtime.Ibl().ActiveSpecularTextureSlot());
+        VR_CHECK(runtime.Ibl().ActiveParams().texture_sampler_slots[1] == runtime.Ibl().ActiveBrdfLutTextureSlot());
+        VR_CHECK(runtime.Ibl().ActiveParams().texture_sampler_slots[2] == runtime.Ibl().ActiveSkyboxTextureSlot());
+        VR_CHECK(runtime.Ibl().ActiveParams().texture_sampler_slots[3] == runtime.Ibl().ActiveSamplerSlot());
 
         const auto second_tick = runtime.Tick(recorder);
         VR_CHECK(second_tick.running);
@@ -354,6 +361,10 @@ VR_TEST_CASE(RuntimeIntegration_ibl_host_prepares_default_and_explicit_environme
         VR_CHECK(recorder.active_params.rotation_max_lod_flags[3] == 0.0F);
         VR_CHECK(recorder.active_params.sh9[0][0] == 0.1F);
         VR_CHECK(recorder.active_params.sh9[1][2] == 0.6F);
+        VR_CHECK(runtime.Ibl().ActiveSpecularTextureSlot() == recorder.active_params.texture_sampler_slots[0]);
+        VR_CHECK(runtime.Ibl().ActiveBrdfLutTextureSlot() == recorder.active_params.texture_sampler_slots[1]);
+        VR_CHECK(runtime.Ibl().ActiveSkyboxTextureSlot() == recorder.active_params.texture_sampler_slots[2]);
+        VR_CHECK(runtime.Ibl().ActiveSamplerSlot() == recorder.active_params.texture_sampler_slots[3]);
 
         runtime.Shutdown();
         runtime_initialized = false;

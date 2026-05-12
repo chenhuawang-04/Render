@@ -34,11 +34,11 @@ struct SkeletalComponentGpu {
     uint reserved0;
 };
 
-layout(std430, set = 1, binding = 6) readonly buffer SkeletalComponentBuffer {
+layout(std430, set = 2, binding = 5) readonly buffer SkeletalComponentBuffer {
     SkeletalComponentGpu skeletal_components[];
 };
 
-layout(std430, set = 1, binding = 7) readonly buffer SkeletalMatrixBuffer {
+layout(std430, set = 2, binding = 6) readonly buffer SkeletalMatrixBuffer {
     mat4 skeletal_matrices[];
 };
 

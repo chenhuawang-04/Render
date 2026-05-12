@@ -1,6 +1,7 @@
 #version 460
 #extension GL_GOOGLE_include_directive : require
 #include "vr/common/math.glsl"
+#include "vr/render/bindless.glsl"
 
 layout(push_constant) uniform Geometry3DPushConstants {
     mat4 view_projection;
@@ -9,7 +10,8 @@ layout(push_constant) uniform Geometry3DPushConstants {
     vec4 material_uv_transform;
     uint material_flags;
     float alpha_cutoff;
-    vec2 material_reserved;
+    uint material_texture_slot;
+    uint material_sampler_slot;
 } pc;
 
 layout(location = 0) in vec3 in_normal_world;
@@ -18,8 +20,6 @@ layout(location = 2) in vec4 in_material_params;
 layout(location = 3) flat in uint in_instance_params;
 layout(location = 4) in vec2 in_uv;
 layout(location = 5) in vec3 in_world_position;
-
-layout(set = 0, binding = 0) uniform sampler2D in_albedo_texture;
 
 struct LightRecord3D {
     vec4 position_radius;
@@ -52,41 +52,37 @@ struct ShadowViewRecord {
     uvec4 layer_view_cascade_flags;
 };
 
-layout(set = 1, binding = 0, std430) readonly buffer LightRecordBuffer {
+layout(set = 2, binding = 0, std430) readonly buffer LightRecordBuffer {
     LightRecord3D light_records[];
 };
 
-layout(set = 1, binding = 1, std430) readonly buffer ClusterHeaderBuffer {
+layout(set = 2, binding = 1, std430) readonly buffer ClusterHeaderBuffer {
     ClusterHeaderPacked cluster_headers[];
 };
 
-layout(set = 1, binding = 2, std430) readonly buffer ClusterIndexBuffer {
+layout(set = 2, binding = 2, std430) readonly buffer ClusterIndexBuffer {
     uint cluster_light_indices[];
 };
 
-layout(set = 1, binding = 3, std430) readonly buffer ShadowViewBuffer {
+layout(set = 2, binding = 3, std430) readonly buffer ShadowViewBuffer {
     ShadowViewRecord shadow_views[];
 };
 
-layout(set = 1, binding = 4) uniform sampler2DArray shadow_atlas_texture;
-
-layout(set = 1, binding = 5, std140) uniform LightingParamsBuffer {
+layout(set = 2, binding = 4, std140) uniform LightingParamsBuffer {
     vec4 camera_position_light_count;
     vec4 camera_forward_max_lights;
     uvec4 cluster_dims_reverse_z;
     vec4 near_far_scale_bias;
     vec4 framebuffer_shadow_views;
+    uvec4 shadow_atlas_texture_sampler_slots;
 } lighting_params;
 
-layout(set = 2, binding = 0, std140) uniform IblParamsBuffer {
+layout(set = 3, binding = 0, std140) uniform IblParamsBuffer {
     vec4 ibl_sh9[9];
     vec4 ibl_tint_intensity;
     vec4 ibl_rotation_max_lod_flags;
+    uvec4 texture_sampler_slots;
 } ibl_params;
-
-layout(set = 2, binding = 1) uniform samplerCube ibl_specular_cube;
-layout(set = 2, binding = 2) uniform sampler2D ibl_brdf_lut;
-layout(set = 2, binding = 3) uniform samplerCube ibl_skybox_cube;
 
 layout(location = 0) out vec4 out_color;
 
@@ -202,7 +198,8 @@ float sample_shadow_view_pcf(uint view_index_,
     if (depth_value <= 0.0 || depth_value >= 1.0) {
         return 1.0;
     }
-    ivec3 atlas_size = textureSize(shadow_atlas_texture, 0);
+    ivec3 atlas_size =
+        textureSize(g_Textures2DArray[nonuniformEXT(lighting_params.shadow_atlas_texture_sampler_slots.x)], 0);
     vec2 atlas_size_f = vec2(max(atlas_size.x, 1), max(atlas_size.y, 1));
     vec2 rect_origin = vec2(view_record.atlas_rect.x, view_record.atlas_rect.y);
     vec2 rect_extent = vec2(max(view_record.atlas_rect.z, 1u), max(view_record.atlas_rect.w, 1u));
@@ -227,7 +224,10 @@ float sample_shadow_view_pcf(uint view_index_,
     bool reverse_z = (view_record.layer_view_cascade_flags.w & k_shadow_view_flag_reverse_z) != 0u;
 
     if (kernel_radius == 0) {
-        float stored_depth = texture(shadow_atlas_texture, vec3(atlas_uv, layer)).r;
+        float stored_depth =
+            SampleTexture2DArray(lighting_params.shadow_atlas_texture_sampler_slots.x,
+                                 lighting_params.shadow_atlas_texture_sampler_slots.y,
+                                 vec3(atlas_uv, layer)).r;
         if (!reverse_z) {
             return (depth_value - combined_bias > stored_depth) ? 0.0 : 1.0;
         }
@@ -248,7 +248,10 @@ float sample_shadow_view_pcf(uint view_index_,
                 sample_count += 1.0;
                 continue;
             }
-            float stored_depth = texture(shadow_atlas_texture, vec3(tap_uv, layer)).r;
+            float stored_depth =
+                SampleTexture2DArray(lighting_params.shadow_atlas_texture_sampler_slots.x,
+                                     lighting_params.shadow_atlas_texture_sampler_slots.y,
+                                     vec3(tap_uv, layer)).r;
             float visible = 1.0;
             if (!reverse_z) {
                 if (depth_value - combined_bias > stored_depth) {
@@ -411,11 +414,16 @@ vec3 evaluate_ibl(vec3 base_albedo_,
 
     vec3 reflection_dir = rotate_environment_direction(reflect(-view_dir_, normal_world_));
     float max_specular_lod = max(ibl_params.ibl_rotation_max_lod_flags.z, 0.0);
-    vec3 prefiltered_specular = textureLod(ibl_specular_cube,
-                                           reflection_dir,
-                                           roughness * max_specular_lod).rgb;
+    vec3 prefiltered_specular =
+        SampleTextureCubeLod(ibl_params.texture_sampler_slots.x,
+                             ibl_params.texture_sampler_slots.w,
+                             reflection_dir,
+                             roughness * max_specular_lod).rgb;
     float n_dot_v = max(dot(normal_world_, view_dir_), 0.0);
-    vec2 brdf = texture(ibl_brdf_lut, vec2(n_dot_v, roughness)).rg;
+    vec2 brdf =
+        SampleTexture2D(ibl_params.texture_sampler_slots.y,
+                        ibl_params.texture_sampler_slots.w,
+                        vec2(n_dot_v, roughness)).rg;
     vec3 fresnel = f0 + (vec3(1.0) - f0) * pow(1.0 - n_dot_v, 5.0);
     vec3 specular_ibl = prefiltered_specular * (fresnel * brdf.x + brdf.y);
 
@@ -480,7 +488,7 @@ void main() {
     vec3 normal_world = normalize(in_normal_world);
 
     vec2 uv = in_uv * pc.material_uv_transform.xy + pc.material_uv_transform.zw;
-    vec4 sampled_albedo = texture(in_albedo_texture, uv);
+    vec4 sampled_albedo = SampleTexture2D(pc.material_texture_slot, pc.material_sampler_slot, uv);
     vec4 base_albedo = vec4(in_albedo.rgb, in_albedo.a) * sampled_albedo;
     bool alpha_test_enabled = (pc.material_flags & 0x1u) != 0u;
     if (alpha_test_enabled && base_albedo.a < clamp(pc.alpha_cutoff, 0.0, 1.0)) {

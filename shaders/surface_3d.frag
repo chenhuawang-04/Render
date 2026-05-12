@@ -29,6 +29,7 @@ layout(set = 2, binding = 0, std140) uniform IblParamsBuffer {
     vec4 ibl_sh9[9];
     vec4 ibl_tint_intensity;
     vec4 ibl_rotation_max_lod_flags;
+    uvec4 texture_sampler_slots;
 } ibl_params;
 
 layout(location = 0) out vec4 out_color;

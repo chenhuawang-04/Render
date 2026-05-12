@@ -104,7 +104,8 @@ public:
         prepare_view_.ibl->PrepareEnvironmentFrame(vr::render::MakeIblHostPrepareView(prepare_view_),
                                                    bake_result.environment_id,
                                                    bake_result.brdf_lut);
-        active_descriptor_set = prepare_view_.ibl->ActiveDescriptorSet(prepare_view_.frame.frame_index);
+        active_descriptor_set =
+            prepare_view_.ibl->ActiveParamsDescriptorSet(prepare_view_.frame.frame_index);
         active_params = prepare_view_.ibl->ActiveParams();
         active_brdf_lut = prepare_view_.ibl->BrdfLut();
     }
@@ -181,6 +182,10 @@ VR_TEST_CASE(RuntimeIntegration_ibl_bake_host_bakes_environment_and_registers_ru
                           static_cast<float>(specular_record->mip_levels - 1U)) < 1e-4F);
         VR_CHECK(std::abs(recorder.active_params.sh9[0][0]) > 1e-5F);
         VR_CHECK(std::abs(recorder.active_params.sh9[1][1]) > 1e-5F);
+        VR_CHECK(runtime.Ibl().ActiveSpecularTextureSlot() == recorder.active_params.texture_sampler_slots[0]);
+        VR_CHECK(runtime.Ibl().ActiveBrdfLutTextureSlot() == recorder.active_params.texture_sampler_slots[1]);
+        VR_CHECK(runtime.Ibl().ActiveSkyboxTextureSlot() == recorder.active_params.texture_sampler_slots[2]);
+        VR_CHECK(runtime.Ibl().ActiveSamplerSlot() == recorder.active_params.texture_sampler_slots[3]);
 
         runtime.Shutdown();
         runtime_initialized = false;

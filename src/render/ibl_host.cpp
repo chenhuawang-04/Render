@@ -54,7 +54,6 @@ void IblHost::Initialize(VulkanContext& context_,
     environments.clear();
     frame_resources.clear();
     descriptor_buffer_write_scratch.clear();
-    descriptor_image_write_scratch.clear();
     descriptor_texel_write_scratch.clear();
     stats = {};
     active_params = {};
@@ -101,23 +100,6 @@ void IblHost::Initialize(VulkanContext& context_,
 
     params_descriptor_layout_id = descriptor_host_.RegisterLayout(context_, layout_desc);
 
-    binding.binding = 1U;
-    binding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    binding.descriptorCount = 1U;
-    layout_desc.bindings.push_back(binding);
-
-    binding.binding = 2U;
-    binding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    binding.descriptorCount = 1U;
-    layout_desc.bindings.push_back(binding);
-
-    binding.binding = 3U;
-    binding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    binding.descriptorCount = 1U;
-    layout_desc.bindings.push_back(binding);
-
-    descriptor_layout_id = descriptor_host_.RegisterLayout(context_, layout_desc);
-
     initialized = true;
 }
 
@@ -148,9 +130,7 @@ void IblHost::Shutdown(VulkanContext& context_) {
     environments.clear();
     frame_resources.clear();
     descriptor_buffer_write_scratch.clear();
-    descriptor_image_write_scratch.clear();
     descriptor_texel_write_scratch.clear();
-    descriptor_layout_id = {};
     params_descriptor_layout_id = {};
     sampler_id = {};
     default_specular_cube_texture_id = {};
@@ -322,6 +302,12 @@ void IblHost::PrepareResolvedFrame(const IblHostPrepareView& prepare_view_,
         active_sampler_slot =
             prepare_view_.bindless->ResolveRegisteredSamplerSlot(sampler_id).index;
     }
+    active_params.texture_sampler_slots = {
+        active_specular_texture_slot,
+        active_brdf_lut_texture_slot,
+        active_skybox_texture_slot,
+        active_sampler_slot
+    };
 
     FrameResources& frame = frame_resources[prepare_view_.frame.frame_index];
     const bool frame_already_prepared =
@@ -397,16 +383,6 @@ const IblHost::EnvironmentRecord* IblHost::FindEnvironmentRecord(
     return &record;
 }
 
-VkDescriptorSet IblHost::ActiveDescriptorSet(std::uint32_t frame_index_) const {
-    if (!initialized) {
-        throw std::runtime_error("IblHost::ActiveDescriptorSet called before Initialize");
-    }
-    if (frame_index_ >= frame_resources.size()) {
-        throw std::out_of_range("IblHost::ActiveDescriptorSet frame index out of range");
-    }
-    return frame_resources[frame_index_].legacy_descriptor_set;
-}
-
 VkDescriptorSet IblHost::ActiveParamsDescriptorSet(std::uint32_t frame_index_) const {
     if (!initialized) {
         throw std::runtime_error("IblHost::ActiveParamsDescriptorSet called before Initialize");
@@ -415,10 +391,6 @@ VkDescriptorSet IblHost::ActiveParamsDescriptorSet(std::uint32_t frame_index_) c
         throw std::out_of_range("IblHost::ActiveParamsDescriptorSet frame index out of range");
     }
     return frame_resources[frame_index_].params_descriptor_set;
-}
-
-DescriptorSetLayoutId IblHost::DescriptorLayoutId() const noexcept {
-    return descriptor_layout_id;
 }
 
 DescriptorSetLayoutId IblHost::ParamsDescriptorLayoutId() const noexcept {
@@ -705,15 +677,15 @@ void IblHost::UpdateDescriptorSetsForFrame(VulkanContext& context_,
     if (descriptor_host == nullptr || sampler_host == nullptr) {
         throw std::runtime_error("IblHost::UpdateDescriptorSetsForFrame missing descriptor or sampler host");
     }
+    (void)specular_record_;
+    (void)brdf_record_;
+    (void)skybox_record_;
 
     FrameResources& frame = frame_resources[frame_index_];
     frame.params_descriptor_set =
         descriptor_host->AllocateSet(context_, frame_index_, params_descriptor_layout_id);
-    frame.legacy_descriptor_set =
-        descriptor_host->AllocateSet(context_, frame_index_, descriptor_layout_id);
 
     descriptor_buffer_write_scratch.clear();
-    descriptor_image_write_scratch.clear();
     descriptor_texel_write_scratch.clear();
 
     descriptor_buffer_write_scratch.push_back({
@@ -728,39 +700,7 @@ void IblHost::UpdateDescriptorSetsForFrame(VulkanContext& context_,
     descriptor_host->UpdateSet(context_,
                                frame.params_descriptor_set,
                                descriptor_buffer_write_scratch,
-                               descriptor_image_write_scratch,
-                               descriptor_texel_write_scratch);
-
-    const VkSampler sampler = sampler_host->GetSampler(sampler_id);
-    descriptor_image_write_scratch.push_back({
-        .binding = 1U,
-        .array_element = 0U,
-        .descriptor_type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-        .sampler = sampler,
-        .image_view = specular_record_.resource.default_view,
-        .image_layout = specular_record_.shader_read_layout
-    });
-    descriptor_image_write_scratch.push_back({
-        .binding = 2U,
-        .array_element = 0U,
-        .descriptor_type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-        .sampler = sampler,
-        .image_view = brdf_record_.resource.default_view,
-        .image_layout = brdf_record_.shader_read_layout
-    });
-    descriptor_image_write_scratch.push_back({
-        .binding = 3U,
-        .array_element = 0U,
-        .descriptor_type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-        .sampler = sampler,
-        .image_view = skybox_record_.resource.default_view,
-        .image_layout = skybox_record_.shader_read_layout
-    });
-
-    descriptor_host->UpdateSet(context_,
-                               frame.legacy_descriptor_set,
-                               descriptor_buffer_write_scratch,
-                               descriptor_image_write_scratch,
+                               {},
                                descriptor_texel_write_scratch);
     ++stats.descriptor_update_count;
 }
