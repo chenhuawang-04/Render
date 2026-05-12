@@ -12,6 +12,8 @@ layout(push_constant) uniform TextPushConstants {
     float sdf_smooth;
     float bitmap_gamma;
     float bitmap_edge_sharpness;
+    uint texture_slot;
+    uint sampler_slot;
 } pc;
 
 layout(location = 0) out vec2 out_uv;

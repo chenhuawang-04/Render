@@ -1,5 +1,6 @@
 #include "vr/render/ibl_host.hpp"
 
+#include "vr/render/bindless_resource_system.hpp"
 #include "vr/resource/gpu_memory_host.hpp"
 
 #include <algorithm>
@@ -62,6 +63,10 @@ void IblHost::Initialize(VulkanContext& context_,
     active_brdf_lut_texture_id = {};
     active_specular_texture_id = {};
     active_skybox_texture_id = {};
+    active_specular_texture_slot = 0U;
+    active_brdf_lut_texture_slot = 0U;
+    active_skybox_texture_slot = 0U;
+    active_sampler_slot = 0U;
     next_environment_id = 1U;
     default_specular_cube_texture_id = kDefaultSpecularCubeTextureId;
     default_brdf_lut_texture_id = kDefaultBrdfLutTextureId;
@@ -93,6 +98,8 @@ void IblHost::Initialize(VulkanContext& context_,
     binding.descriptorCount = 1U;
     binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     layout_desc.bindings.push_back(binding);
+
+    params_descriptor_layout_id = descriptor_host_.RegisterLayout(context_, layout_desc);
 
     binding.binding = 1U;
     binding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -144,12 +151,17 @@ void IblHost::Shutdown(VulkanContext& context_) {
     descriptor_image_write_scratch.clear();
     descriptor_texel_write_scratch.clear();
     descriptor_layout_id = {};
+    params_descriptor_layout_id = {};
     sampler_id = {};
     default_specular_cube_texture_id = {};
     default_brdf_lut_texture_id = {};
     active_brdf_lut_texture_id = {};
     active_specular_texture_id = {};
     active_skybox_texture_id = {};
+    active_specular_texture_slot = 0U;
+    active_brdf_lut_texture_slot = 0U;
+    active_skybox_texture_slot = 0U;
+    active_sampler_slot = 0U;
     active_params = {};
     stats = {};
     next_environment_id = 1U;
@@ -293,8 +305,23 @@ void IblHost::PrepareResolvedFrame(const IblHostPrepareView& prepare_view_,
     active_params = BuildResolvedParams(record_,
                                         *specular_record,
                                         skybox_record->texture_id.value != specular_record->texture_id.value);
+    active_brdf_lut_texture_id = brdf_record.texture_id;
     active_specular_texture_id = specular_record->texture_id;
     active_skybox_texture_id = skybox_record->texture_id;
+    active_specular_texture_slot = 0U;
+    active_brdf_lut_texture_slot = 0U;
+    active_skybox_texture_slot = 0U;
+    active_sampler_slot = 0U;
+    if (prepare_view_.bindless != nullptr && prepare_view_.bindless->IsInitialized()) {
+        active_specular_texture_slot =
+            prepare_view_.bindless->ResolveTextureImageSlot(*texture_host, specular_record->texture_id).index;
+        active_brdf_lut_texture_slot =
+            prepare_view_.bindless->ResolveTextureImageSlot(*texture_host, brdf_record.texture_id).index;
+        active_skybox_texture_slot =
+            prepare_view_.bindless->ResolveTextureImageSlot(*texture_host, skybox_record->texture_id).index;
+        active_sampler_slot =
+            prepare_view_.bindless->ResolveRegisteredSamplerSlot(sampler_id).index;
+    }
 
     FrameResources& frame = frame_resources[prepare_view_.frame.frame_index];
     const bool frame_already_prepared =
@@ -313,11 +340,11 @@ void IblHost::PrepareResolvedFrame(const IblHostPrepareView& prepare_view_,
             resource::BufferHost::Flush(prepare_view_.device, frame.gpu_params_buffer);
         }
 
-        UpdateDescriptorSetForFrame(prepare_view_.device,
-                                    prepare_view_.frame.frame_index,
-                                    *specular_record,
-                                    brdf_record,
-                                    *skybox_record);
+        UpdateDescriptorSetsForFrame(prepare_view_.device,
+                                     prepare_view_.frame.frame_index,
+                                     *specular_record,
+                                     brdf_record,
+                                     *skybox_record);
 
         frame.prepared_environment_id = prepared_environment_id_;
         frame.prepared_brdf_lut = brdf_record.texture_id;
@@ -377,11 +404,25 @@ VkDescriptorSet IblHost::ActiveDescriptorSet(std::uint32_t frame_index_) const {
     if (frame_index_ >= frame_resources.size()) {
         throw std::out_of_range("IblHost::ActiveDescriptorSet frame index out of range");
     }
-    return frame_resources[frame_index_].descriptor_set;
+    return frame_resources[frame_index_].legacy_descriptor_set;
+}
+
+VkDescriptorSet IblHost::ActiveParamsDescriptorSet(std::uint32_t frame_index_) const {
+    if (!initialized) {
+        throw std::runtime_error("IblHost::ActiveParamsDescriptorSet called before Initialize");
+    }
+    if (frame_index_ >= frame_resources.size()) {
+        throw std::out_of_range("IblHost::ActiveParamsDescriptorSet frame index out of range");
+    }
+    return frame_resources[frame_index_].params_descriptor_set;
 }
 
 DescriptorSetLayoutId IblHost::DescriptorLayoutId() const noexcept {
     return descriptor_layout_id;
+}
+
+DescriptorSetLayoutId IblHost::ParamsDescriptorLayoutId() const noexcept {
+    return params_descriptor_layout_id;
 }
 
 const IblGpuParams& IblHost::ActiveParams() const noexcept {
@@ -404,6 +445,22 @@ asset::TextureId IblHost::ActiveSpecularTexture() const noexcept {
 
 asset::TextureId IblHost::ActiveSkyboxTexture() const noexcept {
     return active_skybox_texture_id;
+}
+
+std::uint32_t IblHost::ActiveSpecularTextureSlot() const noexcept {
+    return active_specular_texture_slot;
+}
+
+std::uint32_t IblHost::ActiveBrdfLutTextureSlot() const noexcept {
+    return active_brdf_lut_texture_slot;
+}
+
+std::uint32_t IblHost::ActiveSkyboxTextureSlot() const noexcept {
+    return active_skybox_texture_slot;
+}
+
+std::uint32_t IblHost::ActiveSamplerSlot() const noexcept {
+    return active_sampler_slot;
 }
 
 const IblHostStats& IblHost::Stats() const noexcept {
@@ -640,17 +697,20 @@ IblGpuParams IblHost::BuildResolvedParams(const EnvironmentRecord* record_,
     return params;
 }
 
-void IblHost::UpdateDescriptorSetForFrame(VulkanContext& context_,
-                                          std::uint32_t frame_index_,
-                                          const asset::TextureHost::TextureRecord& specular_record_,
-                                          const asset::TextureHost::TextureRecord& brdf_record_,
-                                          const asset::TextureHost::TextureRecord& skybox_record_) {
+void IblHost::UpdateDescriptorSetsForFrame(VulkanContext& context_,
+                                           std::uint32_t frame_index_,
+                                           const asset::TextureHost::TextureRecord& specular_record_,
+                                           const asset::TextureHost::TextureRecord& brdf_record_,
+                                           const asset::TextureHost::TextureRecord& skybox_record_) {
     if (descriptor_host == nullptr || sampler_host == nullptr) {
-        throw std::runtime_error("IblHost::UpdateDescriptorSetForFrame missing descriptor or sampler host");
+        throw std::runtime_error("IblHost::UpdateDescriptorSetsForFrame missing descriptor or sampler host");
     }
 
     FrameResources& frame = frame_resources[frame_index_];
-    frame.descriptor_set = descriptor_host->AllocateSet(context_, frame_index_, descriptor_layout_id);
+    frame.params_descriptor_set =
+        descriptor_host->AllocateSet(context_, frame_index_, params_descriptor_layout_id);
+    frame.legacy_descriptor_set =
+        descriptor_host->AllocateSet(context_, frame_index_, descriptor_layout_id);
 
     descriptor_buffer_write_scratch.clear();
     descriptor_image_write_scratch.clear();
@@ -664,6 +724,12 @@ void IblHost::UpdateDescriptorSetForFrame(VulkanContext& context_,
         .offset = 0U,
         .range = sizeof(IblGpuParams)
     });
+
+    descriptor_host->UpdateSet(context_,
+                               frame.params_descriptor_set,
+                               descriptor_buffer_write_scratch,
+                               descriptor_image_write_scratch,
+                               descriptor_texel_write_scratch);
 
     const VkSampler sampler = sampler_host->GetSampler(sampler_id);
     descriptor_image_write_scratch.push_back({
@@ -692,7 +758,7 @@ void IblHost::UpdateDescriptorSetForFrame(VulkanContext& context_,
     });
 
     descriptor_host->UpdateSet(context_,
-                               frame.descriptor_set,
+                               frame.legacy_descriptor_set,
                                descriptor_buffer_write_scratch,
                                descriptor_image_write_scratch,
                                descriptor_texel_write_scratch);

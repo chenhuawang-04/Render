@@ -1,11 +1,13 @@
-#version 460
-
-layout(set = 0, binding = 0) uniform sampler2D source_sampler;
+﻿#version 460
+#extension GL_GOOGLE_include_directive : require
+#include "vr/render/bindless.glsl"
 
 layout(push_constant) uniform CompositePushConstants {
     float exposure;
     float inv_gamma;
     uint flags;
+    uint texture_slot;
+    uint sampler_slot;
     uint reserved0;
 } pc;
 
@@ -17,7 +19,7 @@ vec3 reinhard_tonemap(vec3 value) {
 }
 
 void main() {
-    vec4 sampled = texture(source_sampler, in_uv);
+    vec4 sampled = SampleTexture2D(pc.texture_slot, pc.sampler_slot, in_uv);
     vec3 color = sampled.rgb;
 
     const bool source_is_srgb = (pc.flags & 0x4u) != 0u;

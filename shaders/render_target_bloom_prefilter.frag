@@ -1,19 +1,21 @@
-#version 460
-
-layout(set = 0, binding = 0) uniform sampler2D source_sampler;
+﻿#version 460
+#extension GL_GOOGLE_include_directive : require
+#include "vr/render/bindless.glsl"
 
 layout(push_constant) uniform BloomPrefilterPushConstants {
     float threshold;
     float knee;
+    uint texture_slot;
+    uint sampler_slot;
     float reserved0;
-    float reserved1;
+    uint reserved1;
 } pc;
 
 layout(location = 0) in vec2 in_uv;
 layout(location = 0) out vec4 out_color;
 
 void main() {
-    vec4 sampled = texture(source_sampler, in_uv);
+    vec4 sampled = SampleTexture2D(pc.texture_slot, pc.sampler_slot, in_uv);
     vec3 color = max(sampled.rgb, vec3(0.0));
     float brightness = max(max(color.r, color.g), color.b);
     float knee = max(pc.knee, 0.0001);

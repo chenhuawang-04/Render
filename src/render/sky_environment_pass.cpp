@@ -1,6 +1,7 @@
 #include "vr/render/environment/sky_environment_pass.hpp"
 
 #include "vr/asset/texture_host.hpp"
+#include "vr/render/bindless_resource_system.hpp"
 #include "vr/render/generated/render_target_composite_vert_spv.hpp"
 #include "vr/render/generated/render_target_composite_far_vert_spv.hpp"
 #include "vr/render/generated/sky_environment_atmosphere_frag_spv.hpp"
@@ -67,12 +68,17 @@ void SkyEnvironmentPass::Initialize(const SkyEnvironmentPassCreateInfo& create_i
     stats = {};
     context = nullptr;
     texture_host = nullptr;
+    bindless_resources = nullptr;
     descriptor_host = nullptr;
     pipeline_host = nullptr;
     ibl_host = nullptr;
     sampler_host = nullptr;
-    active_ibl_descriptor_set = VK_NULL_HANDLE;
-    active_equirect_descriptor_set = VK_NULL_HANDLE;
+    active_environment_texture_slot = 0U;
+    active_environment_sampler_slot = 0U;
+    active_equirect_texture_slot = 0U;
+    active_equirect_sampler_slot = 0U;
+    has_active_environment_texture = false;
+    has_active_equirect_texture = false;
     gradient_pipeline_layout_id = {};
     shader_vertex_id = {};
     shader_vertex_far_id = {};
@@ -82,8 +88,6 @@ void SkyEnvironmentPass::Initialize(const SkyEnvironmentPassCreateInfo& create_i
     gradient_depth_tested_pipeline_id = {};
     gradient_depth_tested_pipeline_color_format = VK_FORMAT_UNDEFINED;
     gradient_depth_tested_pipeline_depth_format = VK_FORMAT_UNDEFINED;
-    environment_image_descriptor_layout_id = {};
-    environment_image_pipeline_layout_descriptor_layout_id = {};
     environment_image_pipeline_layout_id = {};
     environment_image_shader_fragment_id = {};
     environment_image_pipeline_id = {};
@@ -91,7 +95,6 @@ void SkyEnvironmentPass::Initialize(const SkyEnvironmentPassCreateInfo& create_i
     environment_image_depth_tested_pipeline_id = {};
     environment_image_depth_tested_pipeline_color_format = VK_FORMAT_UNDEFINED;
     environment_image_depth_tested_pipeline_depth_format = VK_FORMAT_UNDEFINED;
-    equirect_descriptor_layout_id = {};
     equirect_pipeline_layout_id = {};
     equirect_shader_fragment_id = {};
     equirect_pipeline_id = {};
@@ -99,10 +102,6 @@ void SkyEnvironmentPass::Initialize(const SkyEnvironmentPassCreateInfo& create_i
     equirect_depth_tested_pipeline_id = {};
     equirect_depth_tested_pipeline_color_format = VK_FORMAT_UNDEFINED;
     equirect_depth_tested_pipeline_depth_format = VK_FORMAT_UNDEFINED;
-    equirect_sampler_id = {};
-    descriptor_image_write_scratch.clear();
-    descriptor_buffer_write_scratch.clear();
-    descriptor_texel_write_scratch.clear();
     atmosphere_pipeline_layout_id = {};
     atmosphere_shader_fragment_id = {};
     atmosphere_pipeline_id = {};
@@ -126,12 +125,17 @@ void SkyEnvironmentPass::Shutdown(VulkanContext& context_) {
     stats = {};
     context = nullptr;
     texture_host = nullptr;
+    bindless_resources = nullptr;
     descriptor_host = nullptr;
     pipeline_host = nullptr;
     ibl_host = nullptr;
     sampler_host = nullptr;
-    active_ibl_descriptor_set = VK_NULL_HANDLE;
-    active_equirect_descriptor_set = VK_NULL_HANDLE;
+    active_environment_texture_slot = 0U;
+    active_environment_sampler_slot = 0U;
+    active_equirect_texture_slot = 0U;
+    active_equirect_sampler_slot = 0U;
+    has_active_environment_texture = false;
+    has_active_equirect_texture = false;
     gradient_pipeline_layout_id = {};
     shader_vertex_id = {};
     shader_vertex_far_id = {};
@@ -141,8 +145,6 @@ void SkyEnvironmentPass::Shutdown(VulkanContext& context_) {
     gradient_depth_tested_pipeline_id = {};
     gradient_depth_tested_pipeline_color_format = VK_FORMAT_UNDEFINED;
     gradient_depth_tested_pipeline_depth_format = VK_FORMAT_UNDEFINED;
-    environment_image_descriptor_layout_id = {};
-    environment_image_pipeline_layout_descriptor_layout_id = {};
     environment_image_pipeline_layout_id = {};
     environment_image_shader_fragment_id = {};
     environment_image_pipeline_id = {};
@@ -150,7 +152,6 @@ void SkyEnvironmentPass::Shutdown(VulkanContext& context_) {
     environment_image_depth_tested_pipeline_id = {};
     environment_image_depth_tested_pipeline_color_format = VK_FORMAT_UNDEFINED;
     environment_image_depth_tested_pipeline_depth_format = VK_FORMAT_UNDEFINED;
-    equirect_descriptor_layout_id = {};
     equirect_pipeline_layout_id = {};
     equirect_shader_fragment_id = {};
     equirect_pipeline_id = {};
@@ -158,10 +159,6 @@ void SkyEnvironmentPass::Shutdown(VulkanContext& context_) {
     equirect_depth_tested_pipeline_id = {};
     equirect_depth_tested_pipeline_color_format = VK_FORMAT_UNDEFINED;
     equirect_depth_tested_pipeline_depth_format = VK_FORMAT_UNDEFINED;
-    equirect_sampler_id = {};
-    descriptor_image_write_scratch.clear();
-    descriptor_buffer_write_scratch.clear();
-    descriptor_texel_write_scratch.clear();
     atmosphere_pipeline_layout_id = {};
     atmosphere_shader_fragment_id = {};
     atmosphere_pipeline_id = {};
@@ -206,14 +203,23 @@ void SkyEnvironmentPass::PrepareFrame(const SkyEnvironmentPassPrepareView& prepa
 
     context = &prepare_view_.device;
     texture_host = prepare_view_.texture;
+    bindless_resources = prepare_view_.bindless;
     descriptor_host = prepare_view_.descriptor;
     pipeline_host = &prepare_view_.pipeline;
     ibl_host = prepare_view_.ibl;
     sampler_host = prepare_view_.sampler;
-    active_ibl_descriptor_set = VK_NULL_HANDLE;
-    active_equirect_descriptor_set = VK_NULL_HANDLE;
+    active_environment_texture_slot = 0U;
+    active_environment_sampler_slot = 0U;
+    active_equirect_texture_slot = 0U;
+    active_equirect_sampler_slot = 0U;
+    has_active_environment_texture = false;
+    has_active_equirect_texture = false;
 
     if (SupportsCubemapEnvironmentMode(state_.mode) && ibl_host != nullptr) {
+        if (bindless_resources == nullptr || !bindless_resources->IsInitialized() || texture_host == nullptr) {
+            throw std::runtime_error(
+                "SkyEnvironmentPass::PrepareFrame cubemap mode requires initialized BindlessResourceSystem and TextureHost");
+        }
         const IblEnvironmentId environment_id{prepare_view_.ibl_environment_id};
         const asset::TextureId brdf_lut_texture_id{prepare_view_.ibl_brdf_lut_texture_id};
         if (environment_id.IsValid() || brdf_lut_texture_id.IsValid()) {
@@ -223,67 +229,37 @@ void SkyEnvironmentPass::PrepareFrame(const SkyEnvironmentPassPrepareView& prepa
         } else {
             ibl_host->PrepareFrame(MakeIblHostPrepareView(prepare_view_));
         }
-        active_ibl_descriptor_set = ibl_host->ActiveDescriptorSet(prepare_view_.frame.frame_index);
+
+        const asset::TextureId skybox_texture_id = ibl_host->ActiveSkyboxTexture();
+        const asset::TextureHost::TextureRecord* skybox_record = texture_host->FindTexture(skybox_texture_id);
+        if (skybox_record != nullptr &&
+            skybox_record->resource.default_view != VK_NULL_HANDLE &&
+            (skybox_record->default_view_type == VK_IMAGE_VIEW_TYPE_CUBE ||
+             skybox_record->default_view_type == VK_IMAGE_VIEW_TYPE_CUBE_ARRAY)) {
+            active_environment_texture_slot =
+                bindless_resources->ResolveTextureImageSlot(*texture_host, skybox_texture_id).index;
+            active_environment_sampler_slot =
+                bindless_resources->ResolveTextureSamplerSlot(*texture_host, skybox_texture_id).index;
+            has_active_environment_texture = true;
+        }
     }
 
-    if (SupportsEquirectEnvironmentMode(state_.mode) &&
-        descriptor_host != nullptr &&
-        texture_host != nullptr &&
-        sampler_host != nullptr) {
+    if (SupportsEquirectEnvironmentMode(state_.mode)) {
+        if (bindless_resources == nullptr || !bindless_resources->IsInitialized() || texture_host == nullptr) {
+            throw std::runtime_error(
+                "SkyEnvironmentPass::PrepareFrame equirect mode requires initialized BindlessResourceSystem and TextureHost");
+        }
         const asset::TextureId texture_id{state_.sky_texture_id};
         const asset::TextureHost::TextureRecord* texture_record =
             texture_host->FindTexture(texture_id);
         if (texture_record != nullptr &&
             texture_record->resource.default_view != VK_NULL_HANDLE &&
             texture_record->default_view_type == VK_IMAGE_VIEW_TYPE_2D) {
-            if (!equirect_sampler_id.IsValid()) {
-                resource::SamplerDesc sampler_desc{};
-                sampler_desc.mag_filter = VK_FILTER_LINEAR;
-                sampler_desc.min_filter = VK_FILTER_LINEAR;
-                sampler_desc.mipmap_mode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
-                sampler_desc.address_mode_u = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-                sampler_desc.address_mode_v = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-                sampler_desc.address_mode_w = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-                sampler_desc.min_lod = 0.0F;
-                sampler_desc.max_lod = VK_LOD_CLAMP_NONE;
-                equirect_sampler_id = sampler_host->RegisterSampler(*context, sampler_desc);
-            }
-
-            if (equirect_sampler_id.IsValid()) {
-                if (!equirect_descriptor_layout_id.IsValid()) {
-                    DescriptorSetLayoutDesc layout_desc{};
-                    layout_desc.bindings.push_back({
-                        .binding = 0U,
-                        .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                        .descriptorCount = 1U,
-                        .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
-                        .pImmutableSamplers = nullptr
-                    });
-                    equirect_descriptor_layout_id = descriptor_host->RegisterLayout(*context, layout_desc);
-                }
-
-                active_equirect_descriptor_set =
-                    descriptor_host->AllocateSet(*context,
-                                                 prepare_view_.frame.frame_index,
-                                                 equirect_descriptor_layout_id);
-
-                descriptor_buffer_write_scratch.clear();
-                descriptor_image_write_scratch.clear();
-                descriptor_texel_write_scratch.clear();
-                descriptor_image_write_scratch.push_back({
-                    .binding = 0U,
-                    .array_element = 0U,
-                    .descriptor_type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                    .sampler = sampler_host->GetSampler(equirect_sampler_id),
-                    .image_view = texture_record->resource.default_view,
-                    .image_layout = texture_record->shader_read_layout
-                });
-                descriptor_host->UpdateSet(*context,
-                                           active_equirect_descriptor_set,
-                                           descriptor_buffer_write_scratch,
-                                           descriptor_image_write_scratch,
-                                           descriptor_texel_write_scratch);
-            }
+            active_equirect_texture_slot =
+                bindless_resources->ResolveTextureImageSlot(*texture_host, texture_id).index;
+            active_equirect_sampler_slot =
+                bindless_resources->ResolveTextureSamplerSlot(*texture_host, texture_id).index;
+            has_active_equirect_texture = true;
         }
     }
 
@@ -416,8 +392,8 @@ void SkyEnvironmentPass::Record(const FrameRecordContext& record_context_,
     }
 
     if (SupportsEquirectEnvironmentMode(state_.mode) &&
-        active_equirect_descriptor_set != VK_NULL_HANDLE &&
-        descriptor_host != nullptr &&
+        has_active_equirect_texture &&
+        bindless_resources != nullptr &&
         view_.camera != nullptr &&
         view_.camera_transform != nullptr) {
         begin_rendering([&](const ResolvedColorRenderPass& color_pass) {
@@ -441,17 +417,22 @@ void SkyEnvironmentPass::Record(const FrameRecordContext& record_context_,
             vkCmdBindPipeline(record_context_.command_buffer,
                               VK_PIPELINE_BIND_POINT_GRAPHICS,
                               pipeline_host->GetGraphicsPipeline(pipeline_id));
+            const std::array<VkDescriptorSet, 2U> descriptor_sets{
+                bindless_resources->SampledImageSet(),
+                bindless_resources->SamplerSet()
+            };
             vkCmdBindDescriptorSets(record_context_.command_buffer,
                                     VK_PIPELINE_BIND_POINT_GRAPHICS,
                                     pipeline_host->GetPipelineLayout(equirect_pipeline_layout_id),
                                     0U,
-                                    1U,
-                                    &active_equirect_descriptor_set,
+                                    static_cast<std::uint32_t>(descriptor_sets.size()),
+                                    descriptor_sets.data(),
                                     0U,
                                     nullptr);
             ++stats.descriptor_set_bind_count;
 
-            const EquirectPushBlock push_block = BuildEquirectPushBlock(view_, state_);
+            const EquirectPushBlock push_block =
+                BuildEquirectPushBlock(view_, state_, active_equirect_texture_slot, active_equirect_sampler_slot);
             vkCmdPushConstants(record_context_.command_buffer,
                                pipeline_host->GetPipelineLayout(equirect_pipeline_layout_id),
                                VK_SHADER_STAGE_FRAGMENT_BIT,
@@ -468,8 +449,8 @@ void SkyEnvironmentPass::Record(const FrameRecordContext& record_context_,
     }
 
     if (SupportsCubemapEnvironmentMode(state_.mode) &&
-        active_ibl_descriptor_set != VK_NULL_HANDLE &&
-        descriptor_host != nullptr &&
+        has_active_environment_texture &&
+        bindless_resources != nullptr &&
         ibl_host != nullptr &&
         view_.camera != nullptr &&
         view_.camera_transform != nullptr) {
@@ -494,17 +475,25 @@ void SkyEnvironmentPass::Record(const FrameRecordContext& record_context_,
             vkCmdBindPipeline(record_context_.command_buffer,
                               VK_PIPELINE_BIND_POINT_GRAPHICS,
                               pipeline_host->GetGraphicsPipeline(pipeline_id));
+            const std::array<VkDescriptorSet, 2U> descriptor_sets{
+                bindless_resources->SampledImageSet(),
+                bindless_resources->SamplerSet()
+            };
             vkCmdBindDescriptorSets(record_context_.command_buffer,
                                     VK_PIPELINE_BIND_POINT_GRAPHICS,
                                     pipeline_host->GetPipelineLayout(environment_image_pipeline_layout_id),
                                     0U,
-                                    1U,
-                                    &active_ibl_descriptor_set,
+                                    static_cast<std::uint32_t>(descriptor_sets.size()),
+                                    descriptor_sets.data(),
                                     0U,
                                     nullptr);
             ++stats.descriptor_set_bind_count;
 
-            const EnvironmentImagePushBlock push_block = BuildEnvironmentImagePushBlock(view_);
+            const EnvironmentImagePushBlock push_block = BuildEnvironmentImagePushBlock(
+                view_,
+                ibl_host->ActiveParams(),
+                active_environment_texture_slot,
+                active_environment_sampler_slot);
             vkCmdPushConstants(record_context_.command_buffer,
                                pipeline_host->GetPipelineLayout(environment_image_pipeline_layout_id),
                                VK_SHADER_STAGE_FRAGMENT_BIT,
@@ -642,24 +631,10 @@ void SkyEnvironmentPass::EnsureImageEnvironmentPipelineObjects(VulkanContext& co
                                                                VkFormat color_format_,
                                                                bool depth_tested_,
                                                                VkFormat depth_format_) {
-    if (ibl_host == nullptr) {
+    (void)descriptor_host_;
+    if (bindless_resources == nullptr || !bindless_resources->IsInitialized()) {
         throw std::runtime_error(
-            "SkyEnvironmentPass::EnsureImageEnvironmentPipelineObjects requires IBL host");
-    }
-
-    environment_image_descriptor_layout_id = ibl_host->DescriptorLayoutId();
-    if (!environment_image_descriptor_layout_id.IsValid()) {
-        throw std::runtime_error(
-            "SkyEnvironmentPass::EnsureImageEnvironmentPipelineObjects requires a valid IBL descriptor layout");
-    }
-
-    if (environment_image_pipeline_layout_id.IsValid() &&
-        environment_image_pipeline_layout_descriptor_layout_id.value !=
-            environment_image_descriptor_layout_id.value) {
-        environment_image_pipeline_layout_id = {};
-        environment_image_pipeline_id = {};
-        environment_image_pipeline_layout_descriptor_layout_id = {};
-        environment_image_pipeline_color_format = VK_FORMAT_UNDEFINED;
+            "SkyEnvironmentPass::EnsureImageEnvironmentPipelineObjects requires BindlessResourceSystem");
     }
 
     if (!shader_vertex_id.IsValid()) {
@@ -684,8 +659,14 @@ void SkyEnvironmentPass::EnsureImageEnvironmentPipelineObjects(VulkanContext& co
 
     if (!environment_image_pipeline_layout_id.IsValid()) {
         PipelineLayoutDesc layout_desc{};
-        layout_desc.set_layouts.push_back(
-            descriptor_host_.GetLayout(environment_image_descriptor_layout_id));
+        const VkDescriptorSetLayout sampled_image_layout = bindless_resources->SampledImageLayout();
+        const VkDescriptorSetLayout sampler_layout = bindless_resources->SamplerLayout();
+        if (sampled_image_layout == VK_NULL_HANDLE || sampler_layout == VK_NULL_HANDLE) {
+            throw std::runtime_error(
+                "SkyEnvironmentPass::EnsureImageEnvironmentPipelineObjects requires valid bindless layouts");
+        }
+        layout_desc.set_layouts.push_back(sampled_image_layout);
+        layout_desc.set_layouts.push_back(sampler_layout);
         layout_desc.push_constant_ranges.push_back({
             .stage_flags = VK_SHADER_STAGE_FRAGMENT_BIT,
             .offset = 0U,
@@ -693,7 +674,6 @@ void SkyEnvironmentPass::EnsureImageEnvironmentPipelineObjects(VulkanContext& co
         });
         environment_image_pipeline_layout_id =
             pipeline_host_.RegisterPipelineLayout(context_, layout_desc);
-        environment_image_pipeline_layout_descriptor_layout_id = environment_image_descriptor_layout_id;
     }
 
     if (depth_tested_) {
@@ -766,16 +746,10 @@ void SkyEnvironmentPass::EnsureEquirectPipelineObjects(VulkanContext& context_,
                                                        VkFormat color_format_,
                                                        bool depth_tested_,
                                                        VkFormat depth_format_) {
-    if (!equirect_descriptor_layout_id.IsValid()) {
-        DescriptorSetLayoutDesc layout_desc{};
-        layout_desc.bindings.push_back({
-            .binding = 0U,
-            .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-            .descriptorCount = 1U,
-            .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
-            .pImmutableSamplers = nullptr
-        });
-        equirect_descriptor_layout_id = descriptor_host_.RegisterLayout(context_, layout_desc);
+    (void)descriptor_host_;
+    if (bindless_resources == nullptr || !bindless_resources->IsInitialized()) {
+        throw std::runtime_error(
+            "SkyEnvironmentPass::EnsureEquirectPipelineObjects requires BindlessResourceSystem");
     }
 
     if (!shader_vertex_id.IsValid()) {
@@ -799,7 +773,14 @@ void SkyEnvironmentPass::EnsureEquirectPipelineObjects(VulkanContext& context_,
 
     if (!equirect_pipeline_layout_id.IsValid()) {
         PipelineLayoutDesc layout_desc{};
-        layout_desc.set_layouts.push_back(descriptor_host_.GetLayout(equirect_descriptor_layout_id));
+        const VkDescriptorSetLayout sampled_image_layout = bindless_resources->SampledImageLayout();
+        const VkDescriptorSetLayout sampler_layout = bindless_resources->SamplerLayout();
+        if (sampled_image_layout == VK_NULL_HANDLE || sampler_layout == VK_NULL_HANDLE) {
+            throw std::runtime_error(
+                "SkyEnvironmentPass::EnsureEquirectPipelineObjects requires valid bindless layouts");
+        }
+        layout_desc.set_layouts.push_back(sampled_image_layout);
+        layout_desc.set_layouts.push_back(sampler_layout);
         layout_desc.push_constant_ranges.push_back({
             .stage_flags = VK_SHADER_STAGE_FRAGMENT_BIT,
             .offset = 0U,
@@ -970,12 +951,29 @@ void SkyEnvironmentPass::EnsureAtmospherePipelineObjects(VulkanContext& context_
 }
 
 SkyEnvironmentPass::EnvironmentImagePushBlock SkyEnvironmentPass::BuildEnvironmentImagePushBlock(
-    const RenderView3D& view_) noexcept {
+    const RenderView3D& view_,
+    const IblGpuParams& ibl_params_,
+    std::uint32_t texture_slot_,
+    std::uint32_t sampler_slot_) noexcept {
     EnvironmentImagePushBlock push_constants{};
     if (view_.camera == nullptr || view_.camera_transform == nullptr) {
         push_constants.camera_right_scale_x = ecs::Float4{.x = 1.0F, .y = 0.0F, .z = 0.0F, .w = 1.0F};
         push_constants.camera_up_scale_y = ecs::Float4{.x = 0.0F, .y = 1.0F, .z = 0.0F, .w = 1.0F};
         push_constants.camera_forward_reserved = ecs::Float4{.x = 0.0F, .y = 0.0F, .z = -1.0F, .w = 0.0F};
+        push_constants.tint_intensity = ecs::Float4{
+            .x = ibl_params_.tint_intensity[0U],
+            .y = ibl_params_.tint_intensity[1U],
+            .z = ibl_params_.tint_intensity[2U],
+            .w = ibl_params_.tint_intensity[3U],
+        };
+        push_constants.rotation_sin_cos_reserved = ecs::Float4{
+            .x = ibl_params_.rotation_max_lod_flags[0U],
+            .y = ibl_params_.rotation_max_lod_flags[1U],
+            .z = 0.0F,
+            .w = 0.0F,
+        };
+        push_constants.texture_slot = texture_slot_;
+        push_constants.sampler_slot = sampler_slot_;
         return push_constants;
     }
 
@@ -1017,13 +1015,30 @@ SkyEnvironmentPass::EnvironmentImagePushBlock SkyEnvironmentPass::BuildEnvironme
         .z = camera_forward.z,
         .w = 0.0F,
     };
+    push_constants.tint_intensity = ecs::Float4{
+        .x = ibl_params_.tint_intensity[0U],
+        .y = ibl_params_.tint_intensity[1U],
+        .z = ibl_params_.tint_intensity[2U],
+        .w = ibl_params_.tint_intensity[3U],
+    };
+    push_constants.rotation_sin_cos_reserved = ecs::Float4{
+        .x = ibl_params_.rotation_max_lod_flags[0U],
+        .y = ibl_params_.rotation_max_lod_flags[1U],
+        .z = 0.0F,
+        .w = 0.0F,
+    };
+    push_constants.texture_slot = texture_slot_;
+    push_constants.sampler_slot = sampler_slot_;
     return push_constants;
 }
 
 SkyEnvironmentPass::EquirectPushBlock SkyEnvironmentPass::BuildEquirectPushBlock(
     const RenderView3D& view_,
-    const scene::SkyEnvironmentRenderState& state_) noexcept {
-    const EnvironmentImagePushBlock camera_push_block = BuildEnvironmentImagePushBlock(view_);
+    const scene::SkyEnvironmentRenderState& state_,
+    std::uint32_t texture_slot_,
+    std::uint32_t sampler_slot_) noexcept {
+    const EnvironmentImagePushBlock camera_push_block =
+        BuildEnvironmentImagePushBlock(view_, IblGpuParams{}, 0U, 0U);
 
     EquirectPushBlock push_block{};
     push_block.camera_right_scale_x = camera_push_block.camera_right_scale_x;
@@ -1041,13 +1056,16 @@ SkyEnvironmentPass::EquirectPushBlock SkyEnvironmentPass::BuildEquirectPushBlock
         .z = state_.sky_intensity,
         .w = 0.0F,
     };
+    push_block.texture_slot = texture_slot_;
+    push_block.sampler_slot = sampler_slot_;
     return push_block;
 }
 
 SkyEnvironmentPass::AtmospherePushBlock SkyEnvironmentPass::BuildAtmospherePushBlock(
     const RenderView3D& view_,
     const scene::SkyEnvironmentRenderState& state_) noexcept {
-    const EnvironmentImagePushBlock camera_push_block = BuildEnvironmentImagePushBlock(view_);
+    const EnvironmentImagePushBlock camera_push_block =
+        BuildEnvironmentImagePushBlock(view_, IblGpuParams{}, 0U, 0U);
 
     const float clamped_elevation = std::clamp(state_.sun_elevation, -1.5706963F, 1.5706963F);
     const float clamped_azimuth = state_.sun_azimuth;

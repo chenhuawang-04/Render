@@ -2,6 +2,7 @@
 
 #include "vr/asset/texture_host.hpp"
 #include "vr/render/descriptor_host.hpp"
+#include "vr/render/render_target_host.hpp"
 #include "vr/resource/gpu_memory_host.hpp"
 #include "vr/resource/sampler_host.hpp"
 #include "vr/surface/surface_image_host.hpp"
@@ -369,6 +370,17 @@ void BindlessResourceSystem::ConfigureSurfaceImageHost(
         return;
     }
     surface_image_host_.ConfigureBindless({
+        .descriptor_host = descriptor_host_,
+        .image_table = sampled_image_table_,
+    });
+}
+
+void BindlessResourceSystem::ConfigureRenderTargetHost(render::RenderTargetHost& render_target_host_) const noexcept {
+    if (!initialized_) {
+        render_target_host_.ConfigureBindless({});
+        return;
+    }
+    render_target_host_.ConfigureBindless({
         .descriptor_host = descriptor_host_,
         .image_table = sampled_image_table_,
     });

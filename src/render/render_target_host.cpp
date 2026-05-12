@@ -1,5 +1,6 @@
 #include "vr/render/render_target_host.hpp"
 
+#include "vr/render/descriptor_host.hpp"
 #include "vr/resource/gpu_memory_host.hpp"
 
 #include <array>
@@ -54,6 +55,7 @@ void RenderTargetHost::Initialize(VulkanContext& context_,
     generations.clear();
     free_indices.clear();
     retired_targets.Clear();
+    bindless_config = {};
     stats = {};
 
     if (create_info_cache.reserve_target_count > 0U) {
@@ -92,6 +94,7 @@ void RenderTargetHost::Shutdown(VulkanContext& context_) {
     generations.clear();
     free_indices.clear();
     gpu_memory_host = nullptr;
+    bindless_config = {};
     create_info_cache = {};
     stats = {};
     initialized = false;
@@ -105,6 +108,11 @@ void RenderTargetHost::BeginFrame(VulkanContext& context_,
 
     CollectRetiredTargets(context_, completed_submit_value_);
     RefreshStats();
+}
+
+void RenderTargetHost::ConfigureBindless(
+    const RenderTargetHostBindlessConfig& bindless_config_) noexcept {
+    bindless_config = bindless_config_;
 }
 
 RenderTargetHandle RenderTargetHost::CreatePersistentTarget(VulkanContext& context_,
@@ -407,6 +415,49 @@ const RenderTargetHost::TargetRecord* RenderTargetHost::Resolve(RenderTargetHand
 
 RenderTargetHost::TargetRecord* RenderTargetHost::Resolve(RenderTargetHandle handle_) noexcept {
     return const_cast<TargetRecord*>(std::as_const(*this).Resolve(handle_));
+}
+
+BindlessSlot RenderTargetHost::ResolveBindlessImageSlot(RenderTargetHandle handle_) const noexcept {
+    const TargetRecord* record = Resolve(handle_);
+    if (record == nullptr) {
+        return {};
+    }
+    return record->bindless_image_slot;
+}
+
+BindlessSlot RenderTargetHost::EnsureBindlessImageSlot(RenderTargetHandle handle_) {
+    TargetRecord* record = Resolve(handle_);
+    if (record == nullptr) {
+        throw std::out_of_range("RenderTargetHost::EnsureBindlessImageSlot invalid render target handle");
+    }
+    if (!bindless_config.Enabled()) {
+        return {};
+    }
+    if (!SupportsBindlessSampling(*record)) {
+        return {};
+    }
+
+    const VkImageLayout sampled_layout = DescribeState(RenderTargetStateKind::shader_read, record->aspect).layout;
+    const VkImageView image_view = ResolveDefaultImageView(*record);
+    if (image_view == VK_NULL_HANDLE) {
+        return {};
+    }
+
+    if (!record->bindless_image_slot.IsValid()) {
+        record->bindless_image_slot =
+            bindless_config.descriptor_host->AllocateBindlessSlot(bindless_config.image_table);
+        record->bindless_resource_revision_written = 0U;
+    }
+
+    if (record->bindless_resource_revision_written != record->resource_revision) {
+        bindless_config.descriptor_host->QueueBindlessImageWrite(bindless_config.image_table,
+                                                                 record->bindless_image_slot,
+                                                                 image_view,
+                                                                 sampled_layout);
+        record->bindless_resource_revision_written = record->resource_revision;
+    }
+
+    return record->bindless_image_slot;
 }
 
 RenderTargetResolvedView RenderTargetHost::ResolveView(RenderTargetHandle handle_) const {
@@ -799,6 +850,16 @@ std::uint32_t RenderTargetHost::AllocateSlot() noexcept {
 
 void RenderTargetHost::RetireRecord(TargetRecord& record_,
                                     std::uint64_t retire_value_) {
+    if (bindless_config.Enabled() && record_.bindless_image_slot.IsValid()) {
+        bindless_config.descriptor_host->QueueBindlessPlaceholderWrite(bindless_config.image_table,
+                                                                       record_.bindless_image_slot);
+        bindless_config.descriptor_host->FreeBindlessSlotDeferred(bindless_config.image_table,
+                                                                  record_.bindless_image_slot,
+                                                                  retire_value_);
+        record_.bindless_image_slot = {};
+        record_.bindless_resource_revision_written = 0U;
+    }
+
     RetiredTargetPayload payload{};
     if (record_.ownership == RenderTargetOwnership::owned &&
         record_.owned_resource.image != VK_NULL_HANDLE) {
@@ -861,6 +922,17 @@ void RenderTargetHost::RefreshStats() noexcept {
         }
     }
     stats.retired_target_count = retired_targets.PendingCount();
+}
+
+bool RenderTargetHost::SupportsBindlessSampling(const TargetRecord& record_) const noexcept {
+    return (record_.usage & VK_IMAGE_USAGE_SAMPLED_BIT) != 0U &&
+           (record_.aspect & VK_IMAGE_ASPECT_COLOR_BIT) != 0U;
+}
+
+VkImageView RenderTargetHost::ResolveDefaultImageView(const TargetRecord& record_) const noexcept {
+    return (record_.ownership == RenderTargetOwnership::owned)
+        ? record_.owned_resource.default_view
+        : record_.imported_view;
 }
 
 VkRenderingAttachmentInfo RenderTargetHost::BuildOneRenderingAttachment(

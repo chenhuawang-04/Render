@@ -292,6 +292,16 @@ private:
                                 const SceneRecorder2DPrepareView& prepare_view_) {
         RendererT& renderer_ref = *static_cast<RendererT*>(renderer_);
         if constexpr (requires(RendererT& candidate_,
+                               const RenderTargetCompositeRendererPrepareView& renderer_prepare_view_) {
+                          candidate_.PrepareFrame(renderer_prepare_view_);
+                      }) {
+            renderer_ref.PrepareFrame(MakeRenderTargetCompositeRendererPrepareView(prepare_view_));
+        } else if constexpr (requires(RendererT& candidate_,
+                                      const RenderTargetBloomRendererPrepareView& renderer_prepare_view_) {
+                                 candidate_.PrepareFrame(renderer_prepare_view_);
+                             }) {
+            renderer_ref.PrepareFrame(MakeRenderTargetBloomRendererPrepareView(prepare_view_));
+        } else if constexpr (requires(RendererT& candidate_,
                                const TextRenderer2DPrepareView& renderer_prepare_view_) {
                           candidate_.PrepareFrame(renderer_prepare_view_);
                       }) {

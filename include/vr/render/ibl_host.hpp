@@ -2,6 +2,7 @@
 
 #include "Center/Memory/Container/Vector/McVector.hpp"
 #include "vr/asset/texture_host.hpp"
+#include "vr/render/bindless_types.hpp"
 #include "vr/render/descriptor_host.hpp"
 #include "vr/render/runtime_prepare_views.hpp"
 #include "vr/resource/buffer_host.hpp"
@@ -96,11 +97,17 @@ public:
 
     [[nodiscard]] const IblEnvironmentAssetDesc* FindEnvironment(IblEnvironmentId environment_id_) const noexcept;
     [[nodiscard]] VkDescriptorSet ActiveDescriptorSet(std::uint32_t frame_index_) const;
+    [[nodiscard]] VkDescriptorSet ActiveParamsDescriptorSet(std::uint32_t frame_index_) const;
     [[nodiscard]] DescriptorSetLayoutId DescriptorLayoutId() const noexcept;
+    [[nodiscard]] DescriptorSetLayoutId ParamsDescriptorLayoutId() const noexcept;
     [[nodiscard]] const IblGpuParams& ActiveParams() const noexcept;
     [[nodiscard]] asset::TextureId BrdfLut() const noexcept;
     [[nodiscard]] asset::TextureId ActiveSpecularTexture() const noexcept;
     [[nodiscard]] asset::TextureId ActiveSkyboxTexture() const noexcept;
+    [[nodiscard]] std::uint32_t ActiveSpecularTextureSlot() const noexcept;
+    [[nodiscard]] std::uint32_t ActiveBrdfLutTextureSlot() const noexcept;
+    [[nodiscard]] std::uint32_t ActiveSkyboxTextureSlot() const noexcept;
+    [[nodiscard]] std::uint32_t ActiveSamplerSlot() const noexcept;
     [[nodiscard]] const IblHostStats& Stats() const noexcept;
     [[nodiscard]] bool IsInitialized() const noexcept;
 
@@ -111,7 +118,8 @@ private:
 
     struct FrameResources final {
         resource::BufferResource gpu_params_buffer{};
-        VkDescriptorSet descriptor_set = VK_NULL_HANDLE;
+        VkDescriptorSet legacy_descriptor_set = VK_NULL_HANDLE;
+        VkDescriptorSet params_descriptor_set = VK_NULL_HANDLE;
         IblEnvironmentId prepared_environment_id{};
         asset::TextureId prepared_brdf_lut{};
         asset::TextureId prepared_specular_texture{};
@@ -140,11 +148,11 @@ private:
                               const EnvironmentRecord* record_,
                               IblEnvironmentId prepared_environment_id_,
                               asset::TextureId brdf_lut_texture_id_);
-    void UpdateDescriptorSetForFrame(VulkanContext& context_,
-                                     std::uint32_t frame_index_,
-                                     const asset::TextureHost::TextureRecord& specular_record_,
-                                     const asset::TextureHost::TextureRecord& brdf_record_,
-                                     const asset::TextureHost::TextureRecord& skybox_record_);
+    void UpdateDescriptorSetsForFrame(VulkanContext& context_,
+                                      std::uint32_t frame_index_,
+                                      const asset::TextureHost::TextureRecord& specular_record_,
+                                      const asset::TextureHost::TextureRecord& brdf_record_,
+                                      const asset::TextureHost::TextureRecord& skybox_record_);
 
 private:
     asset::TextureHost* texture_host = nullptr;
@@ -157,12 +165,17 @@ private:
     IblMcVector<DescriptorImageWrite> descriptor_image_write_scratch{};
     IblMcVector<DescriptorTexelBufferWrite> descriptor_texel_write_scratch{};
     DescriptorSetLayoutId descriptor_layout_id{};
+    DescriptorSetLayoutId params_descriptor_layout_id{};
     resource::SamplerId sampler_id{};
     asset::TextureId default_specular_cube_texture_id{};
     asset::TextureId default_brdf_lut_texture_id{};
     asset::TextureId active_brdf_lut_texture_id{};
     asset::TextureId active_specular_texture_id{};
     asset::TextureId active_skybox_texture_id{};
+    std::uint32_t active_specular_texture_slot = 0U;
+    std::uint32_t active_brdf_lut_texture_slot = 0U;
+    std::uint32_t active_skybox_texture_slot = 0U;
+    std::uint32_t active_sampler_slot = 0U;
     IblGpuParams active_params{};
     IblHostStats stats{};
     std::uint32_t next_environment_id = 1U;

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Center/Memory/Container/Vector/McVector.hpp"
+#include "vr/render/bindless_types.hpp"
 #include "vr/render/render_target_desc.hpp"
 #include "vr/render/render_pass_preset.hpp"
 #include "vr/render/retire_bus.hpp"
@@ -16,6 +17,8 @@ class GpuMemoryHost;
 }
 
 namespace vr::render {
+
+class DescriptorHost;
 
 template<typename T>
 using RenderTargetMcVector = Center::Memory::mc_vector<T, Center::Memory::Tags::Container>;
@@ -56,6 +59,15 @@ struct RenderTargetHostStats final {
     std::uint32_t imported_target_count = 0U;
     std::uint32_t retired_target_count = 0U;
     std::uint32_t resource_revision = 0U;
+};
+
+struct RenderTargetHostBindlessConfig final {
+    DescriptorHost* descriptor_host = nullptr;
+    BindlessTableId image_table{};
+
+    [[nodiscard]] bool Enabled() const noexcept {
+        return descriptor_host != nullptr && image_table.IsValid();
+    }
 };
 
 struct RenderTargetStateInfo final {
@@ -156,6 +168,8 @@ public:
         VkImageAspectFlags aspect = 0U;
         RenderTargetStateKind state = RenderTargetStateKind::undefined;
         std::uint32_t resource_revision = 0U;
+        BindlessSlot bindless_image_slot{};
+        std::uint32_t bindless_resource_revision_written = 0U;
         bool active = false;
     };
 
@@ -176,6 +190,8 @@ public:
 
     void BeginFrame(VulkanContext& context_,
                     std::uint64_t completed_submit_value_);
+
+    void ConfigureBindless(const RenderTargetHostBindlessConfig& bindless_config_) noexcept;
 
     [[nodiscard]] RenderTargetHandle CreatePersistentTarget(VulkanContext& context_,
                                                             const RenderTargetDesc& desc_,
@@ -206,6 +222,8 @@ public:
     [[nodiscard]] const TargetRecord* Resolve(RenderTargetHandle handle_) const noexcept;
     [[nodiscard]] TargetRecord* Resolve(RenderTargetHandle handle_) noexcept;
     [[nodiscard]] RenderTargetResolvedView ResolveView(RenderTargetHandle handle_) const;
+    [[nodiscard]] BindlessSlot ResolveBindlessImageSlot(RenderTargetHandle handle_) const noexcept;
+    [[nodiscard]] BindlessSlot EnsureBindlessImageSlot(RenderTargetHandle handle_);
     [[nodiscard]] VkImageView GetDefaultView(RenderTargetHandle handle_) const;
     [[nodiscard]] VkImageSubresourceRange DefaultSubresourceRange(RenderTargetHandle handle_) const;
     [[nodiscard]] RenderTargetPipelineSignature BuildPipelineSignature(
@@ -250,6 +268,8 @@ private:
                                RetiredTargetPayload& payload_) noexcept;
     void ResetRecord(TargetRecord& record_) noexcept;
     void RefreshStats() noexcept;
+    [[nodiscard]] bool SupportsBindlessSampling(const TargetRecord& record_) const noexcept;
+    [[nodiscard]] VkImageView ResolveDefaultImageView(const TargetRecord& record_) const noexcept;
     [[nodiscard]] VkRenderingAttachmentInfo BuildOneRenderingAttachment(
         const AttachmentRef& attachment_,
         RenderTargetStateKind fallback_state_) const;
@@ -272,6 +292,7 @@ private:
 
 private:
     resource::GpuMemoryHost* gpu_memory_host = nullptr;
+    RenderTargetHostBindlessConfig bindless_config{};
     RenderTargetHostCreateInfo create_info_cache{};
     RenderTargetMcVector<TargetRecord> targets{};
     RenderTargetMcVector<std::uint32_t> generations{};

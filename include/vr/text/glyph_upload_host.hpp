@@ -2,6 +2,7 @@
 
 #include "Center/Memory/Container/Vector/McVector.hpp"
 #include "vr/render/retire_bus.hpp"
+#include "vr/render/bindless_types.hpp"
 #include "vr/render/upload_host.hpp"
 #include "vr/resource/image_host.hpp"
 #include "vr/resource/sampler_host.hpp"
@@ -9,6 +10,10 @@
 #include "vr/vulkan_context.hpp"
 
 #include <cstdint>
+
+namespace vr::render {
+class DescriptorHost;
+}
 
 namespace vr::text {
 
@@ -25,6 +30,16 @@ struct GlyphUploadHostCreateInfo {
     bool use_linear_sampler = true;
     bool clamp_to_edge = true;
     std::uint32_t reserve_page_count = 8U;
+};
+
+struct GlyphUploadHostBindlessConfig final {
+    render::DescriptorHost* descriptor_host = nullptr;
+    render::BindlessTableId image_table{};
+    render::BindlessSlot sampler_slot{};
+
+    [[nodiscard]] bool Enabled() const noexcept {
+        return descriptor_host != nullptr && image_table.IsValid() && sampler_slot.IsValid();
+    }
 };
 
 struct GlyphUploadHostStats {
@@ -54,6 +69,8 @@ public:
 
     void Shutdown(VulkanContext& context_);
 
+    void ConfigureBindless(const GlyphUploadHostBindlessConfig& bindless_config_) noexcept;
+
     void UploadDirtyPages(VulkanContext& context_,
                           render::UploadHost& upload_host_,
                           std::uint32_t frame_index_,
@@ -64,8 +81,10 @@ public:
     [[nodiscard]] VkImageView PageImageView(std::uint32_t page_index_) const;
     [[nodiscard]] VkImage PageImage(std::uint32_t page_index_) const;
     [[nodiscard]] VkImageLayout PageShaderLayout(std::uint32_t page_index_) const;
+    [[nodiscard]] render::BindlessSlot ResolveBindlessImageSlot(std::uint32_t page_index_) const noexcept;
     [[nodiscard]] VkSampler Sampler() const;
     [[nodiscard]] resource::SamplerId SamplerId() const noexcept;
+    [[nodiscard]] const GlyphUploadHostBindlessConfig& BindlessConfig() const noexcept;
     [[nodiscard]] std::uint32_t PageCount() const noexcept;
 
     [[nodiscard]] bool IsInitialized() const noexcept;
@@ -76,6 +95,8 @@ private:
         resource::ImageResource image{};
         VkImageLayout current_layout = VK_IMAGE_LAYOUT_UNDEFINED;
         std::uint32_t generation = 0U;
+        render::BindlessSlot image_slot{};
+        std::uint32_t bindless_image_revision_written = 0U;
     };
 
     [[nodiscard]] bool ShouldUseGeneralLayout(const VulkanContext& context_) const noexcept;
@@ -98,6 +119,7 @@ private:
     resource::SamplerHost* sampler_host = nullptr;
 
     GlyphUploadHostCreateInfo create_info_cache{};
+    GlyphUploadHostBindlessConfig bindless_config{};
     GlyphUploadMcVector<PageResource> pages{};
     render::RetireBus<resource::ImageResource> retired_pages{};
     GlyphUploadMcVector<std::uint8_t> rect_upload_scratch{};

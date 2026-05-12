@@ -149,9 +149,9 @@ private:
         ecs::Matrix4x4 view_projection;
         ecs::Float4 camera_position;
         std::uint32_t params;
-        std::uint32_t reserved0;
-        std::uint32_t reserved1;
-        std::uint32_t reserved2;
+        std::uint32_t ibl_specular_texture_slot;
+        std::uint32_t ibl_brdf_lut_texture_slot;
+        std::uint32_t ibl_sampler_slot;
     };
 
     enum class PipelineMode : std::uint8_t {
@@ -282,7 +282,10 @@ private:
     SurfaceRenderer3DMcVector<resource::ImageResource> depth_images{};
     SurfaceRenderer3DMcVector<std::uint8_t> depth_image_initialized{};
     SurfaceRenderer3DMcVector<RetiredDepthImage> retired_depth_images{};
-    VkDescriptorSet active_ibl_descriptor_set = VK_NULL_HANDLE;
+    VkDescriptorSet active_ibl_params_descriptor_set = VK_NULL_HANDLE;
+    std::uint32_t active_ibl_specular_texture_slot = 0U;
+    std::uint32_t active_ibl_brdf_lut_texture_slot = 0U;
+    std::uint32_t active_ibl_sampler_slot = 0U;
     SurfaceRenderer3DMcVector<std::uint8_t> image_initialized{};
 
     std::uint32_t active_frame_index = 0U;

@@ -4,6 +4,7 @@
 #include "vr/ecs/component/bounds_component.hpp"
 #include "vr/ecs/system/culling_system.hpp"
 #include "vr/ecs/system/text_render_3d_system.hpp"
+#include "vr/render/bindless_resource_system.hpp"
 #include "vr/render/descriptor_host.hpp"
 #include "vr/render/pipeline_host.hpp"
 #include "vr/render/render_target_pass.hpp"
@@ -122,13 +123,14 @@ public:
 private:
     struct PushConstants final {
         ecs::Matrix4x4 view_projection;
-        float sdf_smooth;
-        float bitmap_gamma;
-        float bitmap_edge_sharpness;
-        float reserved0;
+        ecs::Float4 shading_params{};
+        std::uint32_t texture_slot;
+        std::uint32_t sampler_slot;
+        std::uint32_t reserved0;
+        std::uint32_t reserved1;
     };
 
-    static_assert(sizeof(PushConstants) == 80U);
+    static_assert(sizeof(PushConstants) == 96U);
 
     enum class DepthPipelineMode : std::uint8_t {
         no_depth = 0U,
@@ -144,11 +146,6 @@ private:
         VkDeviceSize vertex_buffer_capacity_bytes = 0U;
         std::uint32_t instance_count = 0U;
         std::uint64_t uploaded_revision = 0U;
-        TextRenderer3DMcVector<VkDescriptorSet> page_sets{};
-        TextRenderer3DMcVector<std::uint32_t> page_set_epochs{};
-        std::uint32_t page_set_epoch = 1U;
-        TextRenderer3DMcVector<std::uint32_t> page_touch_epochs{};
-        std::uint32_t page_touch_epoch = 1U;
     };
 
     struct RetiredDepthImage final {
@@ -182,7 +179,6 @@ private:
                                     const render::TextRenderer3DPrepareView& prepare_view_,
                                     std::uint32_t frame_index_,
                                     VkDeviceSize required_bytes_);
-    void PreparePageDescriptorSetsForFrame(std::uint32_t frame_index_);
 
     void EnsurePipelineObjects(VulkanContext& context_,
                                render::DescriptorHost& descriptor_host_,
@@ -202,11 +198,6 @@ private:
     void EnsureDepthResources(VulkanContext& context_,
                               std::uint32_t image_count_,
                               VkExtent2D extent_);
-
-    [[nodiscard]] VkDescriptorSet EnsurePageDescriptorSet(VulkanContext& context_,
-                                                          render::DescriptorHost& descriptor_host_,
-                                                          std::uint32_t frame_index_,
-                                                          std::uint32_t page_index_);
 
     void RecordImageTransitionToColorAttachment(const render::FrameRecordContext& record_context_,
                                                 bool has_previous_content_) const;
@@ -235,7 +226,6 @@ private:
     TextRenderer3DMcVector<PerFrameState> frame_states{};
     TextRenderer3DMcVector<std::uint8_t> image_initialized{};
 
-    render::DescriptorSetLayoutId descriptor_layout_id{};
     render::PipelineLayoutId pipeline_layout_id{};
     render::ShaderModuleId shader_vertex_id{};
     render::ShaderModuleId shader_fragment_id{};
@@ -249,14 +239,11 @@ private:
     TextRenderer3DMcVector<std::uint8_t> depth_image_initialized{};
     TextRenderer3DMcVector<RetiredDepthImage> retired_depth_images{};
 
-    render::DescriptorMcVector<render::DescriptorImageWrite> descriptor_image_write_scratch{};
-    render::DescriptorMcVector<render::DescriptorBufferWrite> descriptor_buffer_write_scratch{};
-    render::DescriptorMcVector<render::DescriptorTexelBufferWrite> descriptor_texel_write_scratch{};
-
     VulkanContext* context = nullptr;
     render::UploadHost* upload_host = nullptr;
     render::DescriptorHost* descriptor_host = nullptr;
     render::PipelineHost* pipeline_host = nullptr;
+    render::BindlessResourceSystem* bindless_resources = nullptr;
     resource::GpuMemoryHost* gpu_memory_host = nullptr;
     FreeTypeHost* freetype_host = nullptr;
     GlyphAtlasHost* glyph_atlas_host = nullptr;

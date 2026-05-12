@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Center/Memory/Container/Vector/McVector.hpp"
+#include "vr/render/bindless_resource_system.hpp"
 #include "vr/render/descriptor_host.hpp"
 #include "vr/render/pipeline_host.hpp"
 #include "vr/render/runtime_prepare_views.hpp"
@@ -16,9 +17,6 @@ class VulkanContext;
 
 namespace vr::render {
 
-template<typename T>
-using RenderTargetCompositeMcVector = Center::Memory::mc_vector<T, Center::Memory::Tags::Container>;
-
 struct RenderTargetCompositeRendererCreateInfo final {
     bool clear_swapchain = true;
     VkClearColorValue clear_color = {{0.02F, 0.02F, 0.03F, 1.0F}};
@@ -33,7 +31,6 @@ struct RenderTargetCompositeRendererStats final {
     std::uint32_t descriptor_set_update_count = 0U;
     std::uint32_t draw_call_count = 0U;
     std::uint32_t skipped_draw_count = 0U;
-    bool reused_descriptor_set = false;
 };
 
 class RenderTargetCompositeRenderer final {
@@ -61,27 +58,16 @@ private:
         float exposure = 1.0F;
         float inv_gamma = 1.0F;
         std::uint32_t flags = 0U;
+        std::uint32_t texture_slot = 0U;
+        std::uint32_t sampler_slot = 0U;
         std::uint32_t reserved0 = 0U;
     };
-
-    struct DescriptorCacheEntry final {
-        VkDescriptorSet descriptor_set = VK_NULL_HANDLE;
-        RenderTargetDescriptorKey descriptor_key{};
-        std::uint32_t resource_revision = 0U;
-        bool valid = false;
-    };
-
-    static_assert(sizeof(PushConstants) == 16U);
+    static_assert(sizeof(PushConstants) == 24U);
 
     void EnsurePipelineObjects(VulkanContext& context_,
                                DescriptorHost& descriptor_host_,
                                PipelineHost& pipeline_host_,
                                VkFormat color_format_);
-    [[nodiscard]] VkDescriptorSet AcquireSourceDescriptorSet(std::uint32_t frame_index_,
-                                                             RenderTargetHandle source_target_,
-                                                             RenderTargetStateKind expected_source_state_);
-    [[nodiscard]] static std::uint64_t HashDescriptorKey(const RenderTargetDescriptorKey& descriptor_key_,
-                                                         std::uint32_t resource_revision_) noexcept;
 
 private:
     RenderTargetCompositeRendererCreateInfo create_info_cache{};
@@ -92,16 +78,14 @@ private:
     PipelineHost* pipeline_host = nullptr;
     RenderTargetHost* render_target_host = nullptr;
     resource::SamplerHost* sampler_host = nullptr;
+    BindlessResourceSystem* bindless_resources = nullptr;
 
-    DescriptorSetLayoutId descriptor_layout_id{};
     PipelineLayoutId pipeline_layout_id{};
     ShaderModuleId shader_vertex_id{};
     ShaderModuleId shader_fragment_id{};
     GraphicsPipelineId pipeline_id{};
     VkFormat pipeline_color_format = VK_FORMAT_UNDEFINED;
-    resource::SamplerId source_sampler_id{};
 
-    RenderTargetCompositeMcVector<DescriptorCacheEntry> frame_descriptor_cache{};
     RenderTargetHandle source_target{};
     RenderTargetStateKind source_expected_state = RenderTargetStateKind::shader_read;
     RenderTargetColorOutputConfig output_target_config{};

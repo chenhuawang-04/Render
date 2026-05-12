@@ -1,5 +1,6 @@
 #include "vr/text/glyph_upload_host.hpp"
 
+#include "vr/render/descriptor_host.hpp"
 #include "vr/resource/gpu_memory_host.hpp"
 
 #include <algorithm>
@@ -35,6 +36,7 @@ void GlyphUploadHost::Initialize(VulkanContext& context_,
     create_info_cache = create_info_;
     gpu_memory_host = &gpu_memory_host_;
     sampler_host = &sampler_host_;
+    bindless_config = {};
 
     if (create_info_cache.reserve_page_count > 0U) {
         pages.reserve(create_info_cache.reserve_page_count);
@@ -72,12 +74,17 @@ void GlyphUploadHost::Shutdown(VulkanContext& context_) {
 
     gpu_memory_host = nullptr;
     sampler_host = nullptr;
+    bindless_config = {};
     sampler_id = {};
     create_info_cache = {};
     stats = {};
     last_submitted_value_seen = 0U;
     completed_submit_value_seen = 0U;
     initialized = false;
+}
+
+void GlyphUploadHost::ConfigureBindless(const GlyphUploadHostBindlessConfig& bindless_config_) noexcept {
+    bindless_config = bindless_config_;
 }
 
 void GlyphUploadHost::UploadDirtyPages(VulkanContext& context_,
@@ -245,6 +252,13 @@ VkImageLayout GlyphUploadHost::PageShaderLayout(std::uint32_t page_index_) const
     return current_layout;
 }
 
+render::BindlessSlot GlyphUploadHost::ResolveBindlessImageSlot(std::uint32_t page_index_) const noexcept {
+    if (!initialized || page_index_ >= pages.size()) {
+        return {};
+    }
+    return pages[page_index_].image_slot;
+}
+
 VkSampler GlyphUploadHost::Sampler() const {
     if (!initialized || sampler_host == nullptr || !sampler_id.IsValid()) {
         throw std::runtime_error("GlyphUploadHost::Sampler requested before Initialize");
@@ -254,6 +268,10 @@ VkSampler GlyphUploadHost::Sampler() const {
 
 resource::SamplerId GlyphUploadHost::SamplerId() const noexcept {
     return sampler_id;
+}
+
+const GlyphUploadHostBindlessConfig& GlyphUploadHost::BindlessConfig() const noexcept {
+    return bindless_config;
 }
 
 std::uint32_t GlyphUploadHost::PageCount() const noexcept {
@@ -324,6 +342,15 @@ void GlyphUploadHost::EnsurePageResources(VulkanContext& context_,
                                                               *gpu_memory_host);
             resource.current_layout = image_create_info.initial_layout;
             resource.generation = page_view.generation;
+            if (bindless_config.Enabled()) {
+                resource.image_slot =
+                    bindless_config.descriptor_host->AllocateBindlessSlot(bindless_config.image_table);
+                bindless_config.descriptor_host->QueueBindlessImageWrite(bindless_config.image_table,
+                                                                         resource.image_slot,
+                                                                         resource.image.default_view,
+                                                                         create_info_cache.shader_read_layout);
+                resource.bindless_image_revision_written = 1U;
+            }
             return resource;
         };
 
@@ -350,6 +377,15 @@ void GlyphUploadHost::EnsurePageResources(VulkanContext& context_,
 
 void GlyphUploadHost::RetirePageResource(PageResource& page_resource_,
                                          std::uint64_t retire_value_) {
+    if (bindless_config.Enabled() && page_resource_.image_slot.IsValid()) {
+        bindless_config.descriptor_host->QueueBindlessPlaceholderWrite(bindless_config.image_table,
+                                                                       page_resource_.image_slot);
+        bindless_config.descriptor_host->FreeBindlessSlotDeferred(bindless_config.image_table,
+                                                                  page_resource_.image_slot,
+                                                                  retire_value_);
+        page_resource_.image_slot = {};
+        page_resource_.bindless_image_revision_written = 0U;
+    }
     if (page_resource_.image.image == VK_NULL_HANDLE) {
         page_resource_.current_layout = VK_IMAGE_LAYOUT_UNDEFINED;
         page_resource_.generation = 0U;
@@ -394,6 +430,8 @@ void GlyphUploadHost::DestroyPageResources(VulkanContext& context_) noexcept {
         resource::ImageHost::DestroyImage(context_, page.image);
         page.current_layout = VK_IMAGE_LAYOUT_UNDEFINED;
         page.generation = 0U;
+        page.image_slot = {};
+        page.bindless_image_revision_written = 0U;
     }
 }
 

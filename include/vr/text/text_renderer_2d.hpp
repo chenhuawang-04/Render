@@ -2,6 +2,7 @@
 
 #include "Center/Memory/Container/Vector/McVector.hpp"
 #include "vr/ecs/system/text_runtime_system.hpp"
+#include "vr/render/bindless_resource_system.hpp"
 #include "vr/render/descriptor_host.hpp"
 #include "vr/render/pipeline_host.hpp"
 #include "vr/render/render_target_pass.hpp"
@@ -105,21 +106,18 @@ private:
         float sdf_smooth;
         float bitmap_gamma;
         float bitmap_edge_sharpness;
+        std::uint32_t texture_slot;
+        std::uint32_t sampler_slot;
     };
 
     static_assert(ecs::PurePodComponent<GpuTextInstance>);
-    static_assert(sizeof(PushConstants) == 24U);
+    static_assert(sizeof(PushConstants) == 32U);
 
     struct PerFrameState final {
         resource::BufferResource vertex_buffer{};
         VkDeviceSize vertex_buffer_capacity_bytes = 0U;
         std::uint32_t instance_count = 0U;
         std::uint64_t uploaded_revision = 0U;
-        TextRenderer2DMcVector<VkDescriptorSet> page_sets{};
-        TextRenderer2DMcVector<std::uint32_t> page_set_epochs{};
-        std::uint32_t page_set_epoch = 1U;
-        TextRenderer2DMcVector<std::uint32_t> page_touch_epochs{};
-        std::uint32_t page_touch_epoch = 1U;
     };
 
     [[nodiscard]] static std::uint32_t PackRgba8(const ecs::Rgba8& color_) noexcept;
@@ -136,17 +134,11 @@ private:
                                     const render::TextRenderer2DPrepareView& prepare_view_,
                                     std::uint32_t frame_index_,
                                     VkDeviceSize required_bytes_);
-    void PreparePageDescriptorSetsForFrame(std::uint32_t frame_index_);
 
     void EnsurePipelineObjects(VulkanContext& context_,
                                render::DescriptorHost& descriptor_host_,
                                render::PipelineHost& pipeline_host_,
                                VkFormat color_format_);
-
-    [[nodiscard]] VkDescriptorSet EnsurePageDescriptorSet(VulkanContext& context_,
-                                                          render::DescriptorHost& descriptor_host_,
-                                                          std::uint32_t frame_index_,
-                                                          std::uint32_t page_index_);
 
 private:
     TextRenderer2DCreateInfo create_info_cache{};
@@ -161,21 +153,17 @@ private:
     TextRenderer2DMcVector<std::uint8_t> image_initialized{};
     render::RenderTargetColorOutputConfig output_target_config{};
 
-    render::DescriptorSetLayoutId descriptor_layout_id{};
     render::PipelineLayoutId pipeline_layout_id{};
     render::ShaderModuleId shader_vertex_id{};
     render::ShaderModuleId shader_fragment_id{};
     render::GraphicsPipelineId graphics_pipeline_id{};
     VkFormat pipeline_color_format = VK_FORMAT_UNDEFINED;
 
-    render::DescriptorMcVector<render::DescriptorImageWrite> descriptor_image_write_scratch{};
-    render::DescriptorMcVector<render::DescriptorBufferWrite> descriptor_buffer_write_scratch{};
-    render::DescriptorMcVector<render::DescriptorTexelBufferWrite> descriptor_texel_write_scratch{};
-
     VulkanContext* context = nullptr;
     render::UploadHost* upload_host = nullptr;
     render::DescriptorHost* descriptor_host = nullptr;
     render::PipelineHost* pipeline_host = nullptr;
+    render::BindlessResourceSystem* bindless_resources = nullptr;
     resource::GpuMemoryHost* gpu_memory_host = nullptr;
     FreeTypeHost* freetype_host = nullptr;
     GlyphAtlasHost* glyph_atlas_host = nullptr;

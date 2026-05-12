@@ -962,7 +962,7 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_bloom_post_stack_smoke,
         VR_CHECK(max_prefilter_draw_calls > 0U);
         VR_CHECK(max_blur_draw_calls > 0U);
         VR_CHECK(max_combine_draw_calls > 0U);
-        VR_CHECK(max_bloom_descriptor_updates > 0U);
+        VR_CHECK(max_bloom_descriptor_updates == 0U);
         VR_CHECK(max_visible_light_count > 0U);
         VR_CHECK(max_shadow_view_count > 0U);
         VR_CHECK(max_linked_light_count > 0U);

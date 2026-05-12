@@ -1,6 +1,7 @@
 #pragma once
 
 #include "vr/render/descriptor_host.hpp"
+#include "vr/render/ibl_host.hpp"
 #include "vr/render/pipeline_host.hpp"
 #include "vr/render/render_target_pass.hpp"
 #include "vr/render/render_view.hpp"
@@ -64,9 +65,15 @@ private:
         ecs::Float4 camera_right_scale_x{};
         ecs::Float4 camera_up_scale_y{};
         ecs::Float4 camera_forward_reserved{};
+        ecs::Float4 tint_intensity{};
+        ecs::Float4 rotation_sin_cos_reserved{};
+        std::uint32_t texture_slot = 0U;
+        std::uint32_t sampler_slot = 0U;
+        std::uint32_t reserved0 = 0U;
+        std::uint32_t reserved1 = 0U;
     };
 
-    static_assert(sizeof(EnvironmentImagePushBlock) == 48U);
+    static_assert(sizeof(EnvironmentImagePushBlock) == 96U);
 
     struct EquirectPushBlock final {
         ecs::Float4 camera_right_scale_x{};
@@ -74,9 +81,13 @@ private:
         ecs::Float4 camera_forward_reserved{};
         ecs::Float4 tint_exposure{};
         ecs::Float4 rotation_sin_cos_intensity{};
+        std::uint32_t texture_slot = 0U;
+        std::uint32_t sampler_slot = 0U;
+        std::uint32_t reserved0 = 0U;
+        std::uint32_t reserved1 = 0U;
     };
 
-    static_assert(sizeof(EquirectPushBlock) == 80U);
+    static_assert(sizeof(EquirectPushBlock) == 96U);
 
     struct AtmospherePushBlock final {
         ecs::Float4 camera_right_scale_x{};
@@ -114,10 +125,15 @@ private:
                                          bool depth_tested_ = false,
                                          VkFormat depth_format_ = VK_FORMAT_UNDEFINED);
     [[nodiscard]] static EnvironmentImagePushBlock BuildEnvironmentImagePushBlock(
-        const RenderView3D& view_) noexcept;
+        const RenderView3D& view_,
+        const IblGpuParams& ibl_params_,
+        std::uint32_t texture_slot_,
+        std::uint32_t sampler_slot_) noexcept;
     [[nodiscard]] static EquirectPushBlock BuildEquirectPushBlock(
         const RenderView3D& view_,
-        const scene::SkyEnvironmentRenderState& state_) noexcept;
+        const scene::SkyEnvironmentRenderState& state_,
+        std::uint32_t texture_slot_,
+        std::uint32_t sampler_slot_) noexcept;
     [[nodiscard]] static AtmospherePushBlock BuildAtmospherePushBlock(
         const RenderView3D& view_,
         const scene::SkyEnvironmentRenderState& state_) noexcept;
@@ -128,12 +144,17 @@ private:
 
     VulkanContext* context = nullptr;
     asset::TextureHost* texture_host = nullptr;
+    BindlessResourceSystem* bindless_resources = nullptr;
     DescriptorHost* descriptor_host = nullptr;
     PipelineHost* pipeline_host = nullptr;
     IblHost* ibl_host = nullptr;
     resource::SamplerHost* sampler_host = nullptr;
-    VkDescriptorSet active_ibl_descriptor_set = VK_NULL_HANDLE;
-    VkDescriptorSet active_equirect_descriptor_set = VK_NULL_HANDLE;
+    std::uint32_t active_environment_texture_slot = 0U;
+    std::uint32_t active_environment_sampler_slot = 0U;
+    std::uint32_t active_equirect_texture_slot = 0U;
+    std::uint32_t active_equirect_sampler_slot = 0U;
+    bool has_active_environment_texture = false;
+    bool has_active_equirect_texture = false;
 
     PipelineLayoutId gradient_pipeline_layout_id{};
     ShaderModuleId shader_vertex_id{};
@@ -145,8 +166,6 @@ private:
     VkFormat gradient_depth_tested_pipeline_color_format = VK_FORMAT_UNDEFINED;
     VkFormat gradient_depth_tested_pipeline_depth_format = VK_FORMAT_UNDEFINED;
 
-    DescriptorSetLayoutId environment_image_descriptor_layout_id{};
-    DescriptorSetLayoutId environment_image_pipeline_layout_descriptor_layout_id{};
     PipelineLayoutId environment_image_pipeline_layout_id{};
     ShaderModuleId environment_image_shader_fragment_id{};
     GraphicsPipelineId environment_image_pipeline_id{};
@@ -155,7 +174,6 @@ private:
     VkFormat environment_image_depth_tested_pipeline_color_format = VK_FORMAT_UNDEFINED;
     VkFormat environment_image_depth_tested_pipeline_depth_format = VK_FORMAT_UNDEFINED;
 
-    DescriptorSetLayoutId equirect_descriptor_layout_id{};
     PipelineLayoutId equirect_pipeline_layout_id{};
     ShaderModuleId equirect_shader_fragment_id{};
     GraphicsPipelineId equirect_pipeline_id{};
@@ -163,10 +181,6 @@ private:
     GraphicsPipelineId equirect_depth_tested_pipeline_id{};
     VkFormat equirect_depth_tested_pipeline_color_format = VK_FORMAT_UNDEFINED;
     VkFormat equirect_depth_tested_pipeline_depth_format = VK_FORMAT_UNDEFINED;
-    resource::SamplerId equirect_sampler_id{};
-    DescriptorMcVector<DescriptorImageWrite> descriptor_image_write_scratch{};
-    DescriptorMcVector<DescriptorBufferWrite> descriptor_buffer_write_scratch{};
-    DescriptorMcVector<DescriptorTexelBufferWrite> descriptor_texel_write_scratch{};
 
     PipelineLayoutId atmosphere_pipeline_layout_id{};
     ShaderModuleId atmosphere_shader_fragment_id{};

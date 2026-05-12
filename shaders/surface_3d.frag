@@ -20,9 +20,9 @@ layout(push_constant) uniform Surface3DPushConstants {
     mat4 view_projection;
     vec4 camera_position;
     uint params;
-    uint reserved0;
-    uint reserved1;
-    uint reserved2;
+    uint ibl_specular_texture_slot;
+    uint ibl_brdf_lut_texture_slot;
+    uint ibl_sampler_slot;
 } pc;
 
 layout(set = 2, binding = 0, std140) uniform IblParamsBuffer {
@@ -30,10 +30,6 @@ layout(set = 2, binding = 0, std140) uniform IblParamsBuffer {
     vec4 ibl_tint_intensity;
     vec4 ibl_rotation_max_lod_flags;
 } ibl_params;
-
-layout(set = 2, binding = 1) uniform samplerCube ibl_specular_cube;
-layout(set = 2, binding = 2) uniform sampler2D ibl_brdf_lut;
-layout(set = 2, binding = 3) uniform samplerCube ibl_skybox_cube;
 
 layout(location = 0) out vec4 out_color;
 
@@ -94,11 +90,15 @@ vec3 evaluate_surface_ibl(vec3 base_albedo_,
 
     vec3 reflection_dir = rotate_environment_direction(reflect(-view_dir_, normalize(normal_world_)));
     float max_specular_lod = max(ibl_params.ibl_rotation_max_lod_flags.z, 0.0);
-    vec3 prefiltered_specular = textureLod(ibl_specular_cube,
-                                           reflection_dir,
-                                           roughness * max_specular_lod).rgb;
+    vec3 prefiltered_specular =
+        SampleTextureCubeLod(pc.ibl_specular_texture_slot,
+                             pc.ibl_sampler_slot,
+                             reflection_dir,
+                             roughness * max_specular_lod).rgb;
     float n_dot_v = max(dot(normalize(normal_world_), normalize(view_dir_)), 0.0);
-    vec2 brdf = texture(ibl_brdf_lut, vec2(n_dot_v, roughness)).rg;
+    vec2 brdf = SampleTexture2D(pc.ibl_brdf_lut_texture_slot,
+                                pc.ibl_sampler_slot,
+                                vec2(n_dot_v, roughness)).rg;
     vec3 fresnel = f0 + (vec3(1.0) - f0) * pow(1.0 - n_dot_v, 5.0);
     vec3 specular_ibl = prefiltered_specular * (fresnel * brdf.x + brdf.y);
 

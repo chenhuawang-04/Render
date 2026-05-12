@@ -19,6 +19,10 @@ namespace vr::surface {
 class SurfaceImageHost;
 }
 
+namespace vr::render {
+class RenderTargetHost;
+}
+
 namespace vr::resource {
 class GpuMemoryHost;
 class SamplerHost;
@@ -74,6 +78,7 @@ public:
 
     void ConfigureTextureHost(asset::TextureHost& texture_host_) const noexcept;
     void ConfigureSurfaceImageHost(surface::SurfaceImageHost& surface_image_host_) const noexcept;
+    void ConfigureRenderTargetHost(render::RenderTargetHost& render_target_host_) const noexcept;
 
     [[nodiscard]] BindlessSlot ResolveTextureImageSlot(const asset::TextureHost& texture_host_,
                                                        asset::TextureId texture_id_) const noexcept;

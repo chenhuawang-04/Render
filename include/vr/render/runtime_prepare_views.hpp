@@ -68,6 +68,7 @@ struct FrameComposerPrepareView final {
     PipelineHost& pipeline;
     resource::SamplerHost& sampler;
     RenderTargetHost& render_target;
+    BindlessResourceSystem* bindless = nullptr;
     RenderTargetPool* render_target_pool = nullptr;
     FrameStaticContext frame{};
     FrameGpuProgressContext progress{};
@@ -127,6 +128,7 @@ struct IblHostPrepareView final {
     resource::GpuMemoryHost& gpu_memory;
     UploadHost& upload;
     DescriptorHost& descriptor;
+    BindlessResourceSystem* bindless = nullptr;
     FrameStaticContext frame{};
     FrameGpuProgressContext progress{};
 };
@@ -154,6 +156,7 @@ struct TextRenderer2DPrepareView final {
     UploadHost& upload;
     DescriptorHost& descriptor;
     PipelineHost& pipeline;
+    BindlessResourceSystem* bindless = nullptr;
     text::FreeTypeHost& freetype;
     text::GlyphAtlasHost& glyph_atlas;
     text::GlyphUploadHost& glyph_upload;
@@ -167,6 +170,7 @@ struct TextRenderer3DPrepareView final {
     UploadHost& upload;
     DescriptorHost& descriptor;
     PipelineHost& pipeline;
+    BindlessResourceSystem* bindless = nullptr;
     text::FreeTypeHost& freetype;
     text::GlyphAtlasHost& glyph_atlas;
     text::GlyphUploadHost& glyph_upload;
@@ -216,6 +220,7 @@ struct SkyEnvironmentPassPrepareView final {
     VulkanContext& device;
     resource::GpuMemoryHost* gpu_memory = nullptr;
     asset::TextureHost* texture = nullptr;
+    BindlessResourceSystem* bindless = nullptr;
     UploadHost* upload = nullptr;
     DescriptorHost* descriptor = nullptr;
     IblHost* ibl = nullptr;
@@ -234,6 +239,7 @@ struct RenderTargetCompositeRendererPrepareView final {
     PipelineHost& pipeline;
     RenderTargetHost& render_target;
     resource::SamplerHost& sampler;
+    BindlessResourceSystem* bindless = nullptr;
     FrameStaticContext frame{};
     FrameGpuProgressContext progress{};
 };
@@ -253,6 +259,7 @@ struct RenderTargetBloomRendererPrepareView final {
     RenderTargetHost& render_target;
     RenderTargetPool& render_target_pool;
     resource::SamplerHost& sampler;
+    BindlessResourceSystem* bindless = nullptr;
     FrameStaticContext frame{};
     FrameGpuProgressContext progress{};
 };
@@ -264,6 +271,7 @@ struct SceneBloomPostStackPrepareView final {
     RenderTargetHost& render_target;
     RenderTargetPool* render_target_pool = nullptr;
     resource::SamplerHost& sampler;
+    BindlessResourceSystem* bindless = nullptr;
     FrameStaticContext frame{};
     FrameGpuProgressContext progress{};
 };
@@ -276,6 +284,7 @@ struct GeometryRenderer3DPrepareView final {
     resource::GpuMemoryHost& gpu_memory;
     IblHost& ibl;
     resource::SamplerHost& sampler;
+    BindlessResourceSystem* bindless = nullptr;
     RenderTargetHost* render_target = nullptr;
     std::uint32_t ibl_environment_id = 0U;
     std::uint32_t ibl_brdf_lut_texture_id = 0U;
@@ -375,6 +384,93 @@ template<typename T>
         .pipeline = prepare_view_.pipeline,
         .render_target = prepare_view_.render_target,
         .sampler = prepare_view_.sampler,
+        .bindless = prepare_view_.bindless,
+        .frame = prepare_view_.frame,
+        .progress = prepare_view_.progress,
+    };
+}
+
+[[nodiscard]] inline RenderTargetCompositeRendererPrepareView MakeRenderTargetCompositeRendererPrepareView(
+    const SceneRecorder2DPrepareView& prepare_view_) {
+    return {
+        .device = prepare_view_.device,
+        .descriptor = detail::RequirePrepareService(prepare_view_.descriptor,
+                                                    "descriptor",
+                                                    "RenderTargetCompositeRendererPrepareView"),
+        .pipeline = detail::RequirePrepareService(prepare_view_.pipeline,
+                                                  "pipeline",
+                                                  "RenderTargetCompositeRendererPrepareView"),
+        .render_target = prepare_view_.render_target,
+        .sampler = detail::RequirePrepareService(prepare_view_.sampler,
+                                                 "sampler",
+                                                 "RenderTargetCompositeRendererPrepareView"),
+        .bindless = prepare_view_.bindless,
+        .frame = prepare_view_.frame,
+        .progress = prepare_view_.progress,
+    };
+}
+
+[[nodiscard]] inline RenderTargetCompositeRendererPrepareView MakeRenderTargetCompositeRendererPrepareView(
+    const SceneRecorder3DPrepareView& prepare_view_) {
+    return {
+        .device = prepare_view_.device,
+        .descriptor = detail::RequirePrepareService(prepare_view_.descriptor,
+                                                    "descriptor",
+                                                    "RenderTargetCompositeRendererPrepareView"),
+        .pipeline = detail::RequirePrepareService(prepare_view_.pipeline,
+                                                  "pipeline",
+                                                  "RenderTargetCompositeRendererPrepareView"),
+        .render_target = prepare_view_.render_target,
+        .sampler = detail::RequirePrepareService(prepare_view_.sampler,
+                                                 "sampler",
+                                                 "RenderTargetCompositeRendererPrepareView"),
+        .bindless = prepare_view_.bindless,
+        .frame = prepare_view_.frame,
+        .progress = prepare_view_.progress,
+    };
+}
+
+[[nodiscard]] inline RenderTargetBloomRendererPrepareView MakeRenderTargetBloomRendererPrepareView(
+    const SceneRecorder2DPrepareView& prepare_view_) {
+    return {
+        .device = prepare_view_.device,
+        .descriptor = detail::RequirePrepareService(prepare_view_.descriptor,
+                                                    "descriptor",
+                                                    "RenderTargetBloomRendererPrepareView"),
+        .pipeline = detail::RequirePrepareService(prepare_view_.pipeline,
+                                                  "pipeline",
+                                                  "RenderTargetBloomRendererPrepareView"),
+        .render_target = prepare_view_.render_target,
+        .render_target_pool = detail::RequirePrepareService(prepare_view_.render_target_pool,
+                                                            "render_target_pool",
+                                                            "RenderTargetBloomRendererPrepareView"),
+        .sampler = detail::RequirePrepareService(prepare_view_.sampler,
+                                                 "sampler",
+                                                 "RenderTargetBloomRendererPrepareView"),
+        .bindless = prepare_view_.bindless,
+        .frame = prepare_view_.frame,
+        .progress = prepare_view_.progress,
+    };
+}
+
+[[nodiscard]] inline RenderTargetBloomRendererPrepareView MakeRenderTargetBloomRendererPrepareView(
+    const SceneRecorder3DPrepareView& prepare_view_) {
+    return {
+        .device = prepare_view_.device,
+        .descriptor = detail::RequirePrepareService(prepare_view_.descriptor,
+                                                    "descriptor",
+                                                    "RenderTargetBloomRendererPrepareView"),
+        .pipeline = detail::RequirePrepareService(prepare_view_.pipeline,
+                                                  "pipeline",
+                                                  "RenderTargetBloomRendererPrepareView"),
+        .render_target = prepare_view_.render_target,
+        .render_target_pool = detail::RequirePrepareService(prepare_view_.render_target_pool,
+                                                            "render_target_pool",
+                                                            "RenderTargetBloomRendererPrepareView"),
+        .sampler = detail::RequirePrepareService(prepare_view_.sampler,
+                                                 "sampler",
+                                                 "RenderTargetBloomRendererPrepareView"),
+        .bindless = prepare_view_.bindless,
         .frame = prepare_view_.frame,
         .progress = prepare_view_.progress,
     };
@@ -420,6 +516,7 @@ template<typename T>
         .device = prepare_view_.device,
         .gpu_memory = prepare_view_.gpu_memory,
         .texture = prepare_view_.texture,
+        .bindless = prepare_view_.bindless,
         .upload = prepare_view_.upload,
         .descriptor = prepare_view_.descriptor,
         .ibl = prepare_view_.ibl,
@@ -448,6 +545,7 @@ template<typename T>
         .descriptor = detail::RequirePrepareService(prepare_view_.descriptor,
                                                     "descriptor",
                                                     "IblHostPrepareView"),
+        .bindless = prepare_view_.bindless,
         .frame = prepare_view_.frame,
         .progress = prepare_view_.progress,
     };
@@ -519,6 +617,96 @@ template<typename T>
     };
 }
 
+[[nodiscard]] inline GeometryRenderer2DPrepareView MakeGeometryRenderer2DPrepareView(
+    const SceneRecorder3DPrepareView& prepare_view_) {
+    return {
+        .device = prepare_view_.device,
+        .upload = detail::RequirePrepareService(prepare_view_.upload, "upload", "GeometryRenderer2DPrepareView"),
+        .pipeline = detail::RequirePrepareService(prepare_view_.pipeline, "pipeline", "GeometryRenderer2DPrepareView"),
+        .frame = prepare_view_.frame,
+        .progress = prepare_view_.progress,
+    };
+}
+
+[[nodiscard]] inline SurfaceRenderer2DPrepareView MakeSurfaceRenderer2DPrepareView(
+    const SceneRecorder3DPrepareView& prepare_view_) {
+    return {
+        .device = prepare_view_.device,
+        .gpu_memory = detail::RequirePrepareService(prepare_view_.gpu_memory,
+                                                    "gpu_memory",
+                                                    "SurfaceRenderer2DPrepareView"),
+        .upload = detail::RequirePrepareService(prepare_view_.upload, "upload", "SurfaceRenderer2DPrepareView"),
+        .descriptor = detail::RequirePrepareService(prepare_view_.descriptor,
+                                                    "descriptor",
+                                                    "SurfaceRenderer2DPrepareView"),
+        .pipeline = detail::RequirePrepareService(prepare_view_.pipeline,
+                                                  "pipeline",
+                                                  "SurfaceRenderer2DPrepareView"),
+        .sampler = detail::RequirePrepareService(prepare_view_.sampler, "sampler", "SurfaceRenderer2DPrepareView"),
+        .bindless = prepare_view_.bindless,
+        .frame = prepare_view_.frame,
+        .progress = prepare_view_.progress,
+    };
+}
+
+[[nodiscard]] inline TextRenderer2DPrepareView MakeTextRenderer2DPrepareView(
+    const SceneRecorder3DPrepareView& prepare_view_) {
+    return {
+        .device = prepare_view_.device,
+        .gpu_memory = detail::RequirePrepareService(prepare_view_.gpu_memory,
+                                                    "gpu_memory",
+                                                    "TextRenderer2DPrepareView"),
+        .upload = detail::RequirePrepareService(prepare_view_.upload, "upload", "TextRenderer2DPrepareView"),
+        .descriptor = detail::RequirePrepareService(prepare_view_.descriptor,
+                                                    "descriptor",
+                                                    "TextRenderer2DPrepareView"),
+        .pipeline = detail::RequirePrepareService(prepare_view_.pipeline,
+                                                  "pipeline",
+                                                  "TextRenderer2DPrepareView"),
+        .bindless = prepare_view_.bindless,
+        .freetype = detail::RequirePrepareService(prepare_view_.freetype,
+                                                  "freetype",
+                                                  "TextRenderer2DPrepareView"),
+        .glyph_atlas = detail::RequirePrepareService(prepare_view_.glyph_atlas,
+                                                     "glyph_atlas",
+                                                     "TextRenderer2DPrepareView"),
+        .glyph_upload = detail::RequirePrepareService(prepare_view_.glyph_upload,
+                                                      "glyph_upload",
+                                                      "TextRenderer2DPrepareView"),
+        .frame = prepare_view_.frame,
+        .progress = prepare_view_.progress,
+    };
+}
+
+[[nodiscard]] inline ParticleRenderer2DPrepareView MakeParticleRenderer2DPrepareView(
+    const SceneRecorder3DPrepareView& prepare_view_) {
+    return {
+        .device = prepare_view_.device,
+        .gpu_memory = detail::RequirePrepareService(prepare_view_.gpu_memory,
+                                                    "gpu_memory",
+                                                    "ParticleRenderer2DPrepareView"),
+        .upload = detail::RequirePrepareService(prepare_view_.upload,
+                                                "upload",
+                                                "ParticleRenderer2DPrepareView"),
+        .descriptor = detail::RequirePrepareService(prepare_view_.descriptor,
+                                                    "descriptor",
+                                                    "ParticleRenderer2DPrepareView"),
+        .pipeline = detail::RequirePrepareService(prepare_view_.pipeline,
+                                                  "pipeline",
+                                                  "ParticleRenderer2DPrepareView"),
+        .sampler = detail::RequirePrepareService(prepare_view_.sampler,
+                                                 "sampler",
+                                                 "ParticleRenderer2DPrepareView"),
+        .texture = prepare_view_.texture,
+        .bindless = prepare_view_.bindless,
+        .particle_upload = prepare_view_.particle_upload,
+        .particle_simulation = prepare_view_.particle_simulation,
+        .render_target = &prepare_view_.render_target,
+        .frame = prepare_view_.frame,
+        .progress = prepare_view_.progress,
+    };
+}
+
 [[nodiscard]] inline SurfaceRenderer2DPrepareView MakeSurfaceRenderer2DPrepareView(
     const SceneRecorder2DPrepareView& prepare_view_) {
     return {
@@ -554,6 +742,7 @@ template<typename T>
         .pipeline = detail::RequirePrepareService(prepare_view_.pipeline,
                                                   "pipeline",
                                                   "TextRenderer2DPrepareView"),
+        .bindless = prepare_view_.bindless,
         .freetype = detail::RequirePrepareService(prepare_view_.freetype,
                                                   "freetype",
                                                   "TextRenderer2DPrepareView"),
@@ -612,6 +801,7 @@ template<typename T>
         .sampler = detail::RequirePrepareService(prepare_view_.sampler,
                                                  "sampler",
                                                  "SceneBloomPostStackPrepareView"),
+        .bindless = prepare_view_.bindless,
         .frame = prepare_view_.frame,
         .progress = prepare_view_.progress,
     };
@@ -649,6 +839,7 @@ template<typename T>
         .pipeline = detail::RequirePrepareService(prepare_view_.pipeline,
                                                   "pipeline",
                                                   "TextRenderer3DPrepareView"),
+        .bindless = prepare_view_.bindless,
         .freetype = detail::RequirePrepareService(prepare_view_.freetype,
                                                   "freetype",
                                                   "TextRenderer3DPrepareView"),
@@ -674,6 +865,7 @@ template<typename T>
                                                             "render_target_pool",
                                                             "RenderTargetBloomRendererPrepareView"),
         .sampler = prepare_view_.sampler,
+        .bindless = prepare_view_.bindless,
         .frame = prepare_view_.frame,
         .progress = prepare_view_.progress,
     };
@@ -686,6 +878,7 @@ template<typename T>
         .gpu_memory = prepare_view_.gpu_memory,
         .upload = prepare_view_.upload,
         .descriptor = prepare_view_.descriptor,
+        .bindless = prepare_view_.bindless,
         .frame = prepare_view_.frame,
         .progress = prepare_view_.progress,
     };
@@ -698,6 +891,7 @@ template<typename T>
         .gpu_memory = prepare_view_.gpu_memory,
         .upload = prepare_view_.upload,
         .descriptor = prepare_view_.descriptor,
+        .bindless = prepare_view_.bindless,
         .frame = prepare_view_.frame,
         .progress = prepare_view_.progress,
     };
@@ -716,6 +910,7 @@ template<typename T>
         .descriptor = detail::RequirePrepareService(prepare_view_.descriptor,
                                                     "descriptor",
                                                     "IblHostPrepareView"),
+        .bindless = prepare_view_.bindless,
         .frame = prepare_view_.frame,
         .progress = prepare_view_.progress,
     };
@@ -743,6 +938,7 @@ template<typename T>
         .sampler = detail::RequirePrepareService(prepare_view_.sampler,
                                                  "sampler",
                                                  "GeometryRenderer3DPrepareView"),
+        .bindless = prepare_view_.bindless,
         .render_target = &prepare_view_.render_target,
         .ibl_environment_id = prepare_view_.ibl_environment_id,
         .ibl_brdf_lut_texture_id = prepare_view_.ibl_brdf_lut_texture_id,

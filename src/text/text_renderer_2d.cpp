@@ -107,10 +107,6 @@ void TextRenderer2D::Initialize(const TextRenderer2DCreateInfo& create_info_) {
         gpu_instances.reserve(create_info_cache.reserve_glyph_count);
     }
 
-    descriptor_image_write_scratch.reserve(1U);
-    descriptor_buffer_write_scratch.reserve(0U);
-    descriptor_texel_write_scratch.reserve(0U);
-
     cached_build_stats = {};
     cached_components_ptr = nullptr;
     cached_component_count = 0U;
@@ -130,11 +126,6 @@ void TextRenderer2D::Shutdown(VulkanContext& context_) {
         frame_state.vertex_buffer_capacity_bytes = 0U;
         frame_state.instance_count = 0U;
         frame_state.uploaded_revision = 0U;
-        frame_state.page_sets.clear();
-        frame_state.page_set_epochs.clear();
-        frame_state.page_set_epoch = 1U;
-        frame_state.page_touch_epochs.clear();
-        frame_state.page_touch_epoch = 1U;
     }
     frame_states.clear();
 
@@ -154,16 +145,11 @@ void TextRenderer2D::Shutdown(VulkanContext& context_) {
     runtime_scratch.face_variants.clear();
     runtime_scratch.glyph_resolve_cache.clear();
 
-    descriptor_layout_id = {};
     pipeline_layout_id = {};
     shader_vertex_id = {};
     shader_fragment_id = {};
     graphics_pipeline_id = {};
     pipeline_color_format = VK_FORMAT_UNDEFINED;
-
-    descriptor_image_write_scratch.clear();
-    descriptor_buffer_write_scratch.clear();
-    descriptor_texel_write_scratch.clear();
 
     components = nullptr;
     component_count = 0U;
@@ -172,6 +158,7 @@ void TextRenderer2D::Shutdown(VulkanContext& context_) {
     upload_host = nullptr;
     descriptor_host = nullptr;
     pipeline_host = nullptr;
+    bindless_resources = nullptr;
     gpu_memory_host = nullptr;
     freetype_host = nullptr;
     glyph_atlas_host = nullptr;
@@ -214,6 +201,7 @@ void TextRenderer2D::PrepareFrame(const render::TextRenderer2DPrepareView& prepa
     upload_host = &prepare_view_.upload;
     descriptor_host = &prepare_view_.descriptor;
     pipeline_host = &prepare_view_.pipeline;
+    bindless_resources = prepare_view_.bindless;
     gpu_memory_host = &prepare_view_.gpu_memory;
     freetype_host = &prepare_view_.freetype;
     glyph_atlas_host = &prepare_view_.glyph_atlas;
@@ -317,7 +305,8 @@ void TextRenderer2D::Record(const render::FrameRecordContext& record_context_) {
     if (!initialized) {
         throw std::runtime_error("TextRenderer2D::Record called before Initialize");
     }
-    if (context == nullptr || descriptor_host == nullptr || pipeline_host == nullptr || glyph_upload_host == nullptr) {
+    if (context == nullptr || descriptor_host == nullptr || pipeline_host == nullptr ||
+        glyph_upload_host == nullptr || bindless_resources == nullptr) {
         throw std::runtime_error("TextRenderer2D::Record called before PrepareFrame");
     }
     if (record_context_.command_buffer == VK_NULL_HANDLE ||
@@ -387,15 +376,26 @@ void TextRenderer2D::Record(const render::FrameRecordContext& record_context_) {
 
     const std::uint32_t frame_index = record_context_.frame_index;
     if (frame_index < frame_states.size()) {
-        PreparePageDescriptorSetsForFrame(frame_index);
-
         const PerFrameState& frame_state = frame_states[frame_index];
         if (frame_state.instance_count > 0U && frame_state.vertex_buffer.buffer != VK_NULL_HANDLE) {
+            const VkDescriptorSet bindless_sets[] = {
+                bindless_resources->SampledImageSet(),
+                bindless_resources->SamplerSet()
+            };
+            vkCmdBindDescriptorSets(record_context_.command_buffer,
+                                    VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                    pipeline_layout,
+                                    0U,
+                                    2U,
+                                    bindless_sets,
+                                    0U,
+                                    nullptr);
+            stats.descriptor_set_bind_count += 2U;
+
             const VkBuffer vertex_buffer = frame_state.vertex_buffer.buffer;
             const VkDeviceSize vertex_offset = 0U;
             vkCmdBindVertexBuffers(record_context_.command_buffer, 0U, 1U, &vertex_buffer, &vertex_offset);
 
-            VkDescriptorSet bound_set = VK_NULL_HANDLE;
             for (const auto& batch : runtime_scratch.draw_batches) {
                 if (batch.glyph_count == 0U) {
                     continue;
@@ -405,31 +405,23 @@ void TextRenderer2D::Record(const render::FrameRecordContext& record_context_) {
                     continue;
                 }
 
-                if (batch.atlas_page_id >= frame_state.page_sets.size() ||
-                    batch.atlas_page_id >= frame_state.page_set_epochs.size() ||
-                    frame_state.page_set_epochs[batch.atlas_page_id] != frame_state.page_set_epoch) {
+                const render::BindlessSlot texture_slot =
+                    glyph_upload_host->ResolveBindlessImageSlot(batch.atlas_page_id);
+                const render::BindlessSlot sampler_slot =
+                    glyph_upload_host->BindlessConfig().sampler_slot;
+                if (!texture_slot.IsValid() || !sampler_slot.IsValid()) {
                     ++stats.skipped_draw_batch_count;
                     continue;
                 }
 
-                const VkDescriptorSet descriptor_set = frame_state.page_sets[batch.atlas_page_id];
-                if (descriptor_set == VK_NULL_HANDLE) {
-                    ++stats.skipped_draw_batch_count;
-                    continue;
-                }
-
-                if (descriptor_set != bound_set) {
-                    vkCmdBindDescriptorSets(record_context_.command_buffer,
-                                            VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                            pipeline_layout,
-                                            0U,
-                                            1U,
-                                            &descriptor_set,
-                                            0U,
-                                            nullptr);
-                    bound_set = descriptor_set;
-                    ++stats.descriptor_set_bind_count;
-                }
+                push_constants.texture_slot = texture_slot.index;
+                push_constants.sampler_slot = sampler_slot.index;
+                vkCmdPushConstants(record_context_.command_buffer,
+                                   pipeline_layout,
+                                   VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                                   0U,
+                                   sizeof(PushConstants),
+                                   &push_constants);
 
                 vkCmdDraw(record_context_.command_buffer,
                           4U,
@@ -456,14 +448,6 @@ void TextRenderer2D::OnSwapchainRecreated(std::uint32_t image_count_,
 
     swapchain_extent = extent_;
     swapchain_format = format_;
-
-    for (auto& frame_state : frame_states) {
-        frame_state.page_sets.clear();
-        frame_state.page_set_epochs.clear();
-        frame_state.page_set_epoch = 1U;
-        frame_state.page_touch_epochs.clear();
-        frame_state.page_touch_epoch = 1U;
-    }
 }
 
 bool TextRenderer2D::IsInitialized() const noexcept {
@@ -476,54 +460,13 @@ const TextRenderer2DStats& TextRenderer2D::Stats() const noexcept {
 
 void TextRenderer2D::ResetPerFrameDrawState(std::uint32_t frame_index_,
                                             std::uint32_t atlas_page_count_) {
+    (void)atlas_page_count_;
     if (frame_index_ >= frame_states.size()) {
         frame_states.resize(frame_index_ + 1U);
     }
 
     PerFrameState& frame_state = frame_states[frame_index_];
     frame_state.instance_count = 0U;
-
-    if (frame_state.page_set_epoch == std::numeric_limits<std::uint32_t>::max()) {
-        for (auto& page_epoch : frame_state.page_set_epochs) {
-            page_epoch = 0U;
-        }
-        frame_state.page_set_epoch = 1U;
-    } else {
-        ++frame_state.page_set_epoch;
-        if (frame_state.page_set_epoch == 0U) {
-            frame_state.page_set_epoch = 1U;
-        }
-    }
-
-    if (frame_state.page_touch_epoch == std::numeric_limits<std::uint32_t>::max()) {
-        for (auto& page_epoch : frame_state.page_touch_epochs) {
-            page_epoch = 0U;
-        }
-        frame_state.page_touch_epoch = 1U;
-    } else {
-        ++frame_state.page_touch_epoch;
-        if (frame_state.page_touch_epoch == 0U) {
-            frame_state.page_touch_epoch = 1U;
-        }
-    }
-
-    const std::size_t previous_set_size = frame_state.page_sets.size();
-    frame_state.page_sets.resize(atlas_page_count_);
-    for (std::size_t i = previous_set_size; i < frame_state.page_sets.size(); ++i) {
-        frame_state.page_sets[i] = VK_NULL_HANDLE;
-    }
-
-    const std::size_t previous_epoch_size = frame_state.page_set_epochs.size();
-    frame_state.page_set_epochs.resize(atlas_page_count_);
-    for (std::size_t i = previous_epoch_size; i < frame_state.page_set_epochs.size(); ++i) {
-        frame_state.page_set_epochs[i] = 0U;
-    }
-
-    const std::size_t previous_touch_size = frame_state.page_touch_epochs.size();
-    frame_state.page_touch_epochs.resize(atlas_page_count_);
-    for (std::size_t i = previous_touch_size; i < frame_state.page_touch_epochs.size(); ++i) {
-        frame_state.page_touch_epochs[i] = 0U;
-    }
 }
 
 void TextRenderer2D::BuildGpuInstancesFromScratch() {
@@ -613,74 +556,12 @@ void TextRenderer2D::EnsureGpuResourcesForFrame(VulkanContext& context_,
     frame_state.uploaded_revision = 0U;
 }
 
-void TextRenderer2D::PreparePageDescriptorSetsForFrame(std::uint32_t frame_index_) {
-    if (context == nullptr || descriptor_host == nullptr || glyph_upload_host == nullptr) {
-        throw std::runtime_error(
-            "TextRenderer2D::PreparePageDescriptorSetsForFrame requires prepared runtime hosts");
-    }
-    if (!descriptor_layout_id.IsValid()) {
-        return;
-    }
-    if (frame_index_ >= frame_states.size()) {
-        return;
-    }
-    if (runtime_scratch.draw_batches.empty()) {
-        return;
-    }
-
-    PerFrameState& frame_state = frame_states[frame_index_];
-    const std::uint32_t atlas_page_count = glyph_upload_host->PageCount();
-
-    if (frame_state.page_sets.size() < atlas_page_count) {
-        const std::size_t previous_set_size = frame_state.page_sets.size();
-        frame_state.page_sets.resize(atlas_page_count);
-        for (std::size_t i = previous_set_size; i < frame_state.page_sets.size(); ++i) {
-            frame_state.page_sets[i] = VK_NULL_HANDLE;
-        }
-    }
-    if (frame_state.page_set_epochs.size() < atlas_page_count) {
-        const std::size_t previous_epoch_size = frame_state.page_set_epochs.size();
-        frame_state.page_set_epochs.resize(atlas_page_count);
-        for (std::size_t i = previous_epoch_size; i < frame_state.page_set_epochs.size(); ++i) {
-            frame_state.page_set_epochs[i] = 0U;
-        }
-    }
-    if (frame_state.page_touch_epochs.size() < atlas_page_count) {
-        const std::size_t previous_touch_size = frame_state.page_touch_epochs.size();
-        frame_state.page_touch_epochs.resize(atlas_page_count);
-        for (std::size_t i = previous_touch_size; i < frame_state.page_touch_epochs.size(); ++i) {
-            frame_state.page_touch_epochs[i] = 0U;
-        }
-    }
-
-    for (const auto& batch : runtime_scratch.draw_batches) {
-        if (batch.glyph_count == 0U) {
-            continue;
-        }
-        if (batch.atlas_page_id >= atlas_page_count) {
-            continue;
-        }
-        if (frame_state.page_touch_epochs[batch.atlas_page_id] == frame_state.page_touch_epoch) {
-            continue;
-        }
-        frame_state.page_touch_epochs[batch.atlas_page_id] = frame_state.page_touch_epoch;
-        (void)EnsurePageDescriptorSet(*context,
-                                      *descriptor_host,
-                                      frame_index_,
-                                      batch.atlas_page_id);
-    }
-}
-
 void TextRenderer2D::EnsurePipelineObjects(VulkanContext& context_,
                                            render::DescriptorHost& descriptor_host_,
                                            render::PipelineHost& pipeline_host_,
                                            VkFormat color_format_) {
+    (void)descriptor_host_;
     RequireTextRuntimeFeatures(context_, "TextRenderer2D::EnsurePipelineObjects");
-
-    if (descriptor_layout_id.IsValid() &&
-        descriptor_host_.CachedLayoutCount() < descriptor_layout_id.value) {
-        descriptor_layout_id = {};
-    }
 
     const render::PipelineHostStats& pipeline_stats = pipeline_host_.Stats();
     if (shader_vertex_id.IsValid() && pipeline_stats.shader_module_count < shader_vertex_id.value) {
@@ -710,21 +591,15 @@ void TextRenderer2D::EnsurePipelineObjects(VulkanContext& context_,
         shader_fragment_id = pipeline_host_.RegisterShaderModule(context_, shader_create_info);
     }
 
-    if (!descriptor_layout_id.IsValid()) {
-        render::DescriptorSetLayoutDesc layout_desc{};
-        VkDescriptorSetLayoutBinding binding{};
-        binding.binding = 0U;
-        binding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        binding.descriptorCount = 1U;
-        binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-        binding.pImmutableSamplers = nullptr;
-        layout_desc.bindings.push_back(binding);
-        descriptor_layout_id = descriptor_host_.RegisterLayout(context_, layout_desc);
-    }
-
     if (!pipeline_layout_id.IsValid()) {
+        if (bindless_resources == nullptr ||
+            bindless_resources->SampledImageLayout() == VK_NULL_HANDLE ||
+            bindless_resources->SamplerLayout() == VK_NULL_HANDLE) {
+            throw std::runtime_error("TextRenderer2D::EnsurePipelineObjects requires bindless resource layouts");
+        }
         render::PipelineLayoutDesc pipeline_layout_desc{};
-        pipeline_layout_desc.set_layouts.push_back(descriptor_host_.GetLayout(descriptor_layout_id));
+        pipeline_layout_desc.set_layouts.push_back(bindless_resources->SampledImageLayout());
+        pipeline_layout_desc.set_layouts.push_back(bindless_resources->SamplerLayout());
         pipeline_layout_desc.push_constant_ranges.push_back({
             .stage_flags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
             .offset = 0U,
@@ -814,65 +689,6 @@ void TextRenderer2D::EnsurePipelineObjects(VulkanContext& context_,
 
     graphics_pipeline_id = pipeline_host_.RegisterGraphicsPipeline(context_, pipeline_desc);
     pipeline_color_format = color_format_;
-}
-
-VkDescriptorSet TextRenderer2D::EnsurePageDescriptorSet(VulkanContext& context_,
-                                                        render::DescriptorHost& descriptor_host_,
-                                                        std::uint32_t frame_index_,
-                                                        std::uint32_t page_index_) {
-    if (frame_index_ >= frame_states.size()) {
-        throw std::out_of_range("TextRenderer2D::EnsurePageDescriptorSet frame index out of range");
-    }
-    if (glyph_upload_host == nullptr) {
-        throw std::runtime_error("TextRenderer2D::EnsurePageDescriptorSet missing GlyphUploadHost");
-    }
-    if (page_index_ >= glyph_upload_host->PageCount()) {
-        throw std::out_of_range("TextRenderer2D::EnsurePageDescriptorSet page index out of range");
-    }
-
-    PerFrameState& frame_state = frame_states[frame_index_];
-    if (page_index_ >= frame_state.page_sets.size()) {
-        const std::size_t previous_size = frame_state.page_sets.size();
-        frame_state.page_sets.resize(page_index_ + 1U);
-        for (std::size_t i = previous_size; i < frame_state.page_sets.size(); ++i) {
-            frame_state.page_sets[i] = VK_NULL_HANDLE;
-        }
-    }
-    if (page_index_ >= frame_state.page_set_epochs.size()) {
-        const std::size_t previous_size = frame_state.page_set_epochs.size();
-        frame_state.page_set_epochs.resize(page_index_ + 1U);
-        for (std::size_t i = previous_size; i < frame_state.page_set_epochs.size(); ++i) {
-            frame_state.page_set_epochs[i] = 0U;
-        }
-    }
-
-    if (frame_state.page_set_epochs[page_index_] == frame_state.page_set_epoch &&
-        frame_state.page_sets[page_index_] != VK_NULL_HANDLE) {
-        return frame_state.page_sets[page_index_];
-    }
-
-    const VkDescriptorSet descriptor_set =
-        descriptor_host_.AllocateSet(context_, frame_index_, descriptor_layout_id);
-
-    descriptor_image_write_scratch.clear();
-    descriptor_image_write_scratch.push_back({
-        .binding = 0U,
-        .array_element = 0U,
-        .descriptor_type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-        .sampler = glyph_upload_host->Sampler(),
-        .image_view = glyph_upload_host->PageImageView(page_index_),
-        .image_layout = glyph_upload_host->PageShaderLayout(page_index_)
-    });
-    descriptor_host_.UpdateSet(context_,
-                               descriptor_set,
-                               descriptor_buffer_write_scratch,
-                               descriptor_image_write_scratch,
-                               descriptor_texel_write_scratch);
-
-    frame_state.page_sets[page_index_] = descriptor_set;
-    frame_state.page_set_epochs[page_index_] = frame_state.page_set_epoch;
-    ++stats.descriptor_set_update_count;
-    return descriptor_set;
 }
 
 } // namespace vr::text

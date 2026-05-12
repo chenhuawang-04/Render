@@ -302,6 +302,21 @@ private:
                                 const SceneRecorder3DPrepareView& prepare_view_) {
         RendererT& renderer_ref = *static_cast<RendererT*>(renderer_);
         if constexpr (requires(RendererT& candidate_,
+                               const RenderTargetCompositeRendererPrepareView& renderer_prepare_view_) {
+                          candidate_.PrepareFrame(renderer_prepare_view_);
+                      }) {
+            renderer_ref.PrepareFrame(MakeRenderTargetCompositeRendererPrepareView(prepare_view_));
+        } else if constexpr (requires(RendererT& candidate_,
+                                      const RenderTargetBloomRendererPrepareView& renderer_prepare_view_) {
+                                 candidate_.PrepareFrame(renderer_prepare_view_);
+                             }) {
+            renderer_ref.PrepareFrame(MakeRenderTargetBloomRendererPrepareView(prepare_view_));
+        } else if constexpr (requires(RendererT& candidate_,
+                               const TextRenderer2DPrepareView& renderer_prepare_view_) {
+                          candidate_.PrepareFrame(renderer_prepare_view_);
+                      }) {
+            renderer_ref.PrepareFrame(MakeTextRenderer2DPrepareView(prepare_view_));
+        } else if constexpr (requires(RendererT& candidate_,
                                const TextRenderer3DPrepareView& renderer_prepare_view_) {
                           candidate_.PrepareFrame(renderer_prepare_view_);
                       }) {
@@ -317,15 +332,30 @@ private:
                              }) {
             renderer_ref.PrepareFrame(MakeParticleRenderer3DPrepareView(prepare_view_));
         } else if constexpr (requires(RendererT& candidate_,
+                                      const ParticleRenderer2DPrepareView& renderer_prepare_view_) {
+                                 candidate_.PrepareFrame(renderer_prepare_view_);
+                             }) {
+            renderer_ref.PrepareFrame(MakeParticleRenderer2DPrepareView(prepare_view_));
+        } else if constexpr (requires(RendererT& candidate_,
                                       const ShadowRenderer3DPrepareView& renderer_prepare_view_) {
                                  candidate_.PrepareFrame(renderer_prepare_view_);
                              }) {
             renderer_ref.PrepareFrame(MakeShadowRenderer3DPrepareView(prepare_view_));
         } else if constexpr (requires(RendererT& candidate_,
+                                      const GeometryRenderer2DPrepareView& renderer_prepare_view_) {
+                                 candidate_.PrepareFrame(renderer_prepare_view_);
+                             }) {
+            renderer_ref.PrepareFrame(MakeGeometryRenderer2DPrepareView(prepare_view_));
+        } else if constexpr (requires(RendererT& candidate_,
                                       const GeometryRenderer3DPrepareView& renderer_prepare_view_) {
                                  candidate_.PrepareFrame(renderer_prepare_view_);
                              }) {
             renderer_ref.PrepareFrame(MakeGeometryRenderer3DPrepareView(prepare_view_));
+        } else if constexpr (requires(RendererT& candidate_,
+                                      const SurfaceRenderer2DPrepareView& renderer_prepare_view_) {
+                                 candidate_.PrepareFrame(renderer_prepare_view_);
+                             }) {
+            renderer_ref.PrepareFrame(MakeSurfaceRenderer2DPrepareView(prepare_view_));
         } else if constexpr (requires(RendererT& candidate_,
                                       const SurfaceRenderer3DPrepareView& renderer_prepare_view_) {
                                  candidate_.PrepareFrame(renderer_prepare_view_);

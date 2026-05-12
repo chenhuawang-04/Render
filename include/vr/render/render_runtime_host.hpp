@@ -249,6 +249,9 @@ public:
                                                    sampler_host,
                                                    create_info_cache.bindless);
                 bindless_resource_system.ConfigureTextureHost(texture_host);
+                if (render_target_initialized) {
+                    bindless_resource_system.ConfigureRenderTargetHost(render_target_host);
+                }
                 bindless_resources_initialized = true;
             }
 
@@ -332,6 +335,9 @@ public:
                                               gpu_memory_host,
                                               create_info_cache.render_target);
                 render_target_initialized = true;
+                if (bindless_resources_initialized) {
+                    bindless_resource_system.ConfigureRenderTargetHost(render_target_host);
+                }
             }
 
             if (create_info_cache.modules.enable_render_target_pool) {
@@ -383,6 +389,14 @@ public:
                                              gpu_memory_host,
                                              sampler_host,
                                              create_info_cache.glyph_upload);
+                if (bindless_resources_initialized) {
+                    glyph_upload_host.ConfigureBindless({
+                        .descriptor_host = &descriptor_host,
+                        .image_table = bindless_resource_system.SampledImageTable(),
+                        .sampler_slot = bindless_resource_system.ResolveRegisteredSamplerSlot(
+                            glyph_upload_host.SamplerId()),
+                    });
+                }
                 glyph_upload_initialized = true;
             }
 
@@ -455,6 +469,12 @@ public:
             if (bindless_resources_initialized) {
                 if (texture_initialized) {
                     texture_host.ConfigureBindless({});
+                }
+                if (render_target_initialized) {
+                    render_target_host.ConfigureBindless({});
+                }
+                if (glyph_upload_initialized) {
+                    glyph_upload_host.ConfigureBindless({});
                 }
                 bindless_resource_system.Shutdown(platform_host.Context());
                 bindless_resources_initialized = false;
@@ -567,6 +587,12 @@ public:
         if (bindless_resources_initialized) {
             if (texture_initialized) {
                 texture_host.ConfigureBindless({});
+            }
+            if (render_target_initialized) {
+                render_target_host.ConfigureBindless({});
+            }
+            if (glyph_upload_initialized) {
+                glyph_upload_host.ConfigureBindless({});
             }
             bindless_resource_system.Shutdown(platform_host.Context());
             bindless_resources_initialized = false;
@@ -1603,6 +1629,7 @@ private:
                 .pipeline = pipeline_host,
                 .sampler = sampler_host,
                 .render_target = render_target_host,
+                .bindless = bindless_resources_initialized ? &bindless_resource_system : nullptr,
                 .render_target_pool = render_target_pool_initialized ? &render_target_pool : nullptr,
                 .frame = frame,
                 .progress = progress,
@@ -1629,6 +1656,7 @@ private:
                 .render_target = render_target_host,
                 .render_target_pool = render_target_pool_initialized ? &render_target_pool : nullptr,
                 .sampler = sampler_host,
+                .bindless = bindless_resources_initialized ? &bindless_resource_system : nullptr,
                 .frame = frame,
                 .progress = progress,
             });
@@ -1643,6 +1671,7 @@ private:
                 .render_target = render_target_host,
                 .render_target_pool = render_target_pool,
                 .sampler = sampler_host,
+                .bindless = bindless_resources_initialized ? &bindless_resource_system : nullptr,
                 .frame = frame,
                 .progress = progress,
             });
@@ -1656,6 +1685,7 @@ private:
                 .pipeline = pipeline_host,
                 .render_target = render_target_host,
                 .sampler = sampler_host,
+                .bindless = bindless_resources_initialized ? &bindless_resource_system : nullptr,
                 .frame = frame,
                 .progress = progress,
             });
@@ -1669,6 +1699,7 @@ private:
                 .upload = upload_host,
                 .descriptor = descriptor_host,
                 .pipeline = pipeline_host,
+                .bindless = bindless_resources_initialized ? &bindless_resource_system : nullptr,
                 .freetype = freetype_host,
                 .glyph_atlas = glyph_atlas_host,
                 .glyph_upload = glyph_upload_host,
@@ -1685,6 +1716,7 @@ private:
                 .upload = upload_host,
                 .descriptor = descriptor_host,
                 .pipeline = pipeline_host,
+                .bindless = bindless_resources_initialized ? &bindless_resource_system : nullptr,
                 .freetype = freetype_host,
                 .glyph_atlas = glyph_atlas_host,
                 .glyph_upload = glyph_upload_host,

@@ -609,7 +609,7 @@ VR_TEST_CASE(RuntimeIntegration_text_renderer_3d_bloom_post_stack_smoke,
         VR_CHECK(max_prefilter_draw_calls > 0U);
         VR_CHECK(max_blur_draw_calls > 0U);
         VR_CHECK(max_combine_draw_calls > 0U);
-        VR_CHECK(max_bloom_descriptor_updates > 0U);
+        VR_CHECK(max_bloom_descriptor_updates == 0U);
         VR_CHECK(observed_bounds_culling);
         VR_CHECK(max_culling_input_count == static_cast<std::uint32_t>(text_components.size()));
         VR_CHECK(max_culling_visible_count > 0U);

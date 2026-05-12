@@ -11,10 +11,11 @@ layout(location = 7) in uint in_params;
 
 layout(push_constant) uniform Text3DPushConstants {
     mat4 view_projection;
-    float sdf_smooth;
-    float bitmap_gamma;
-    float bitmap_edge_sharpness;
-    float reserved0;
+    vec4 shading_params;
+    uint texture_slot;
+    uint sampler_slot;
+    uint reserved0;
+    uint reserved1;
 } pc;
 
 layout(location = 0) out vec2 out_uv;

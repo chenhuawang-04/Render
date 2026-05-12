@@ -160,7 +160,10 @@ void SurfaceRenderer3D::Initialize(const SurfaceRenderer3DCreateInfo& create_inf
     depth_images.clear();
     depth_image_initialized.clear();
     retired_depth_images.clear();
-    active_ibl_descriptor_set = VK_NULL_HANDLE;
+    active_ibl_params_descriptor_set = VK_NULL_HANDLE;
+    active_ibl_specular_texture_slot = 0U;
+    active_ibl_brdf_lut_texture_slot = 0U;
+    active_ibl_sampler_slot = 0U;
     output_target_config = {};
     depth_output_target_config = {};
     image_initialized.clear();
@@ -253,7 +256,10 @@ void SurfaceRenderer3D::Shutdown(VulkanContext& context_) {
     plan_scratch.instance_indices.clear();
     plan_scratch.ranges.clear();
     plan_scratch.dense_marks.clear();
-    active_ibl_descriptor_set = VK_NULL_HANDLE;
+    active_ibl_params_descriptor_set = VK_NULL_HANDLE;
+    active_ibl_specular_texture_slot = 0U;
+    active_ibl_brdf_lut_texture_slot = 0U;
+    active_ibl_sampler_slot = 0U;
     output_target_config = {};
     depth_output_target_config = {};
     image_initialized.clear();
@@ -388,9 +394,12 @@ void SurfaceRenderer3D::PrepareFrame(const render::SurfaceRenderer3DPrepareView&
     } else {
         ibl_host->PrepareFrame(render::MakeIblHostPrepareView(prepare_view_));
     }
-    active_ibl_descriptor_set = ibl_host->ActiveDescriptorSet(active_frame_index);
-    if (active_ibl_descriptor_set == VK_NULL_HANDLE) {
-        throw std::runtime_error("SurfaceRenderer3D::PrepareFrame failed to resolve IBL descriptor set");
+    active_ibl_params_descriptor_set = ibl_host->ActiveParamsDescriptorSet(active_frame_index);
+    active_ibl_specular_texture_slot = ibl_host->ActiveSpecularTextureSlot();
+    active_ibl_brdf_lut_texture_slot = ibl_host->ActiveBrdfLutTextureSlot();
+    active_ibl_sampler_slot = ibl_host->ActiveSamplerSlot();
+    if (active_ibl_params_descriptor_set == VK_NULL_HANDLE) {
+        throw std::runtime_error("SurfaceRenderer3D::PrepareFrame failed to resolve IBL params descriptor set");
     }
 
     stats = {};
@@ -732,20 +741,20 @@ void SurfaceRenderer3D::RecordInternal(const render::FrameRecordContext& record_
             push_constants.camera_position = ecs::Float4{.x = 0.0F, .y = 0.0F, .z = 0.0F, .w = 1.0F};
         }
         push_constants.params = 0U;
-        push_constants.reserved0 = 0U;
-        push_constants.reserved1 = 0U;
-        push_constants.reserved2 = 0U;
+        push_constants.ibl_specular_texture_slot = active_ibl_specular_texture_slot;
+        push_constants.ibl_brdf_lut_texture_slot = active_ibl_brdf_lut_texture_slot;
+        push_constants.ibl_sampler_slot = active_ibl_sampler_slot;
 
         const std::array<VkDescriptorSet, 3U> descriptor_sets{
             bindless_resources->SampledImageSet(),
             bindless_resources->SamplerSet(),
-            active_ibl_descriptor_set
+            active_ibl_params_descriptor_set
         };
         if (descriptor_sets[0U] == VK_NULL_HANDLE || descriptor_sets[1U] == VK_NULL_HANDLE) {
             throw std::runtime_error("SurfaceRenderer3D::Record requires valid bindless descriptor sets");
         }
         if (descriptor_sets[2U] == VK_NULL_HANDLE) {
-            throw std::runtime_error("SurfaceRenderer3D::Record requires valid IBL descriptor set");
+            throw std::runtime_error("SurfaceRenderer3D::Record requires valid IBL params descriptor set");
         }
 
         render::GraphicsPipelineId bound_pipeline{};
@@ -909,17 +918,18 @@ void SurfaceRenderer3D::EnsurePipelineObjects(VulkanContext& context_,
         shader_fragment_id = pipeline_host_.RegisterShaderModule(context_, shader_info);
     }
     if (!pipeline_layout_id.IsValid()) {
-        if (ibl_host == nullptr || !ibl_host->DescriptorLayoutId().IsValid()) {
-            throw std::runtime_error("SurfaceRenderer3D requires initialized IBL descriptor layout");
+        if (ibl_host == nullptr || !ibl_host->ParamsDescriptorLayoutId().IsValid()) {
+            throw std::runtime_error("SurfaceRenderer3D requires initialized IBL params descriptor layout");
         }
         const VkDescriptorSetLayout sampled_image_layout = bindless_resources_.SampledImageLayout();
         const VkDescriptorSetLayout sampler_layout = bindless_resources_.SamplerLayout();
-        const VkDescriptorSetLayout ibl_layout = descriptor_host->GetLayout(ibl_host->DescriptorLayoutId());
+        const VkDescriptorSetLayout ibl_layout =
+            descriptor_host->GetLayout(ibl_host->ParamsDescriptorLayoutId());
         if (sampled_image_layout == VK_NULL_HANDLE ||
             sampler_layout == VK_NULL_HANDLE ||
             ibl_layout == VK_NULL_HANDLE) {
             throw std::runtime_error(
-                "SurfaceRenderer3D::EnsurePipelineObjects requires valid bindless / IBL layouts");
+                "SurfaceRenderer3D::EnsurePipelineObjects requires valid bindless / IBL params layouts");
         }
         render::PipelineLayoutDesc layout_desc{};
         layout_desc.set_layouts.push_back(sampled_image_layout);

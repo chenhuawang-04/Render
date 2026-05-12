@@ -13,6 +13,7 @@ namespace vr::text {
 inline void ApplyTextRuntimeFeatureContract(vr::VulkanDeviceCreateInfo& device_info_) noexcept {
     device_info_.required_vulkan13_features.dynamicRendering = VK_TRUE;
     device_info_.required_vulkan13_features.synchronization2 = VK_TRUE;
+    vr::EnableRecommendedBindlessOptionalFeatures(device_info_);
 }
 
 template<typename CreateInfoT>
@@ -64,6 +65,9 @@ inline void RequireTextRuntimeFeatures(const vr::VulkanContext& context_,
     }
     if (enabled_vulkan13_features.synchronization2 != VK_TRUE) {
         append_missing("synchronization2");
+    }
+    if (!context_.DescriptorIndexingCapsInfo().enabled) {
+        append_missing("descriptorIndexing(bindless)");
     }
 
     if (!missing_any) {

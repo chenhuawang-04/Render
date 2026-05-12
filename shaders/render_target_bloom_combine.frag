@@ -1,13 +1,15 @@
-#version 460
-
-layout(set = 0, binding = 0) uniform sampler2D scene_sampler;
-layout(set = 0, binding = 1) uniform sampler2D bloom_sampler;
+﻿#version 460
+#extension GL_GOOGLE_include_directive : require
+#include "vr/render/bindless.glsl"
 
 layout(push_constant) uniform BloomCombinePushConstants {
     float exposure;
     float inv_gamma;
     float bloom_intensity;
     uint flags;
+    uint scene_texture_slot;
+    uint bloom_texture_slot;
+    uint sampler_slot;
 } pc;
 
 layout(location = 0) in vec2 in_uv;
@@ -18,9 +20,9 @@ vec3 reinhard_tonemap(vec3 value) {
 }
 
 void main() {
-    vec4 scene_sample = texture(scene_sampler, in_uv);
+    vec4 scene_sample = SampleTexture2D(pc.scene_texture_slot, pc.sampler_slot, in_uv);
     vec3 scene_color = scene_sample.rgb;
-    vec3 bloom_color = texture(bloom_sampler, in_uv).rgb;
+    vec3 bloom_color = SampleTexture2D(pc.bloom_texture_slot, pc.sampler_slot, in_uv).rgb;
 
     const bool scene_is_srgb = (pc.flags & 0x4u) != 0u;
     if (scene_is_srgb) {

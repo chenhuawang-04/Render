@@ -1,9 +1,9 @@
 #version 460
+#extension GL_GOOGLE_include_directive : require
+#include "vr/render/bindless.glsl"
 
 layout(location = 0) in vec2 in_uv;
 layout(location = 0) out vec4 out_color;
-
-layout(set = 0, binding = 0) uniform sampler2D sky_equirect_texture;
 
 layout(push_constant) uniform EquirectPushConstants {
     vec4 camera_right_scale_x;
@@ -11,6 +11,10 @@ layout(push_constant) uniform EquirectPushConstants {
     vec4 camera_forward_reserved;
     vec4 tint_exposure;
     vec4 rotation_sin_cos_intensity;
+    uint texture_slot;
+    uint sampler_slot;
+    uint reserved0;
+    uint reserved1;
 } pc;
 
 const float k_pi = 3.14159265358979323846;
@@ -44,6 +48,6 @@ void main() {
     vec2 uv = direction_to_equirect_uv(ray_direction);
     float intensity = max(pc.rotation_sin_cos_intensity.z * pc.tint_exposure.w, 0.0);
     vec3 tint = pc.tint_exposure.rgb;
-    vec3 sky_color = texture(sky_equirect_texture, uv).rgb * tint * intensity;
+    vec3 sky_color = SampleTexture2D(pc.texture_slot, pc.sampler_slot, uv).rgb * tint * intensity;
     out_color = vec4(sky_color, 1.0);
 }
