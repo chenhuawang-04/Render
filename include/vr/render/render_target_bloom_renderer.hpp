@@ -139,6 +139,10 @@ private:
     RenderTargetColorOutputConfig output_target_config{};
     RenderTargetHandle bloom_target_a{};
     RenderTargetHandle bloom_target_b{};
+    BindlessSlot scene_texture_slot{};
+    BindlessSlot bloom_texture_slot_a{};
+    BindlessSlot bloom_texture_slot_b{};
+    BindlessSlot sampler_slot{};
     VkFormat active_intermediate_format = VK_FORMAT_UNDEFINED;
     bool frame_ready = false;
     bool initialized = false;

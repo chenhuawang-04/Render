@@ -86,6 +86,10 @@ void RenderTargetBloomRenderer::Initialize(const RenderTargetBloomRendererCreate
     output_target_config = {};
     bloom_target_a = {};
     bloom_target_b = {};
+    scene_texture_slot = {};
+    bloom_texture_slot_a = {};
+    bloom_texture_slot_b = {};
+    sampler_slot = {};
     active_intermediate_format = VK_FORMAT_UNDEFINED;
     frame_ready = false;
     initialized = true;
@@ -121,6 +125,10 @@ void RenderTargetBloomRenderer::Shutdown(VulkanContext& context_) {
     output_target_config = {};
     bloom_target_a = {};
     bloom_target_b = {};
+    scene_texture_slot = {};
+    bloom_texture_slot_a = {};
+    bloom_texture_slot_b = {};
+    sampler_slot = {};
     active_intermediate_format = VK_FORMAT_UNDEFINED;
     frame_ready = false;
     initialized = false;
@@ -162,6 +170,10 @@ void RenderTargetBloomRenderer::PrepareFrame(const RenderTargetBloomRendererPrep
     stats = {};
     bloom_target_a = {};
     bloom_target_b = {};
+    scene_texture_slot = {};
+    bloom_texture_slot_a = {};
+    bloom_texture_slot_b = {};
+    sampler_slot = {};
     active_intermediate_format = VK_FORMAT_UNDEFINED;
     frame_ready = false;
 
@@ -198,8 +210,21 @@ void RenderTargetBloomRenderer::PrepareFrame(const RenderTargetBloomRendererPrep
         static_cast<std::uint32_t>(bloom_a_result.reused) +
         static_cast<std::uint32_t>(bloom_b_result.reused);
 
+    if (bindless_resources == nullptr || !bindless_resources->IsInitialized()) {
+        return;
+    }
+
+    scene_texture_slot = render_target_host->EnsureBindlessImageSlot(scene_source_target);
+    bloom_texture_slot_a = render_target_host->EnsureBindlessImageSlot(bloom_target_a);
+    bloom_texture_slot_b = render_target_host->EnsureBindlessImageSlot(bloom_target_b);
+    sampler_slot = bindless_resources->DefaultSamplerSlot();
+
     frame_ready = IsValidRenderTargetHandle(bloom_target_a) &&
-                  IsValidRenderTargetHandle(bloom_target_b);
+                  IsValidRenderTargetHandle(bloom_target_b) &&
+                  scene_texture_slot.IsValid() &&
+                  bloom_texture_slot_a.IsValid() &&
+                  bloom_texture_slot_b.IsValid() &&
+                  sampler_slot.IsValid();
 }
 
 void RenderTargetBloomRenderer::Record(const FrameRecordContext& record_context_) {
@@ -237,12 +262,6 @@ void RenderTargetBloomRenderer::Record(const FrameRecordContext& record_context_
         record_fallback_output_pass();
         return;
     }
-    if (bindless_resources == nullptr || !bindless_resources->IsInitialized()) {
-        ++stats.skipped_draw_count;
-        record_fallback_output_pass();
-        return;
-    }
-
     if (IsValidRenderTargetHandle(output_target_config.color_target) &&
         ((output_target_config.color_target.index == scene_source_target.index &&
           output_target_config.color_target.generation == scene_source_target.generation) ||
@@ -262,19 +281,6 @@ void RenderTargetBloomRenderer::Record(const FrameRecordContext& record_context_
                           *pipeline_host,
                           bloom_view_a.format,
                           final_target.format);
-
-    const BindlessSlot scene_texture_slot = render_target_host->EnsureBindlessImageSlot(scene_source_target);
-    const BindlessSlot bloom_texture_slot_a = render_target_host->EnsureBindlessImageSlot(bloom_target_a);
-    const BindlessSlot bloom_texture_slot_b = render_target_host->EnsureBindlessImageSlot(bloom_target_b);
-    const BindlessSlot sampler_slot = bindless_resources->DefaultSamplerSlot();
-    if (!scene_texture_slot.IsValid() ||
-        !bloom_texture_slot_a.IsValid() ||
-        !bloom_texture_slot_b.IsValid() ||
-        !sampler_slot.IsValid()) {
-        ++stats.skipped_draw_count;
-        record_fallback_output_pass();
-        return;
-    }
 
     const VkDescriptorSet bindless_sets[] = {
         bindless_resources->SampledImageSet(),

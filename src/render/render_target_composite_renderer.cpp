@@ -38,6 +38,8 @@ void RenderTargetCompositeRenderer::Initialize(
     source_target = {};
     source_expected_state = RenderTargetStateKind::shader_read;
     output_target_config = {};
+    source_texture_slot = {};
+    sampler_slot = {};
     swapchain_extent = {};
     swapchain_format = VK_FORMAT_UNDEFINED;
     initialized = true;
@@ -64,6 +66,8 @@ void RenderTargetCompositeRenderer::Shutdown(VulkanContext& context_) {
     source_target = {};
     source_expected_state = RenderTargetStateKind::shader_read;
     output_target_config = {};
+    source_texture_slot = {};
+    sampler_slot = {};
     swapchain_extent = {};
     swapchain_format = VK_FORMAT_UNDEFINED;
     initialized = false;
@@ -102,7 +106,19 @@ void RenderTargetCompositeRenderer::PrepareFrame(
     render_target_host = &prepare_view_.render_target;
     sampler_host = &prepare_view_.sampler;
     bindless_resources = prepare_view_.bindless;
+    source_texture_slot = {};
+    sampler_slot = {};
     stats = {};
+
+    if (!IsValidRenderTargetHandle(source_target) || !render_target_host->IsValid(source_target)) {
+        return;
+    }
+    if (bindless_resources == nullptr || !bindless_resources->IsInitialized()) {
+        return;
+    }
+
+    source_texture_slot = render_target_host->EnsureBindlessImageSlot(source_target);
+    sampler_slot = bindless_resources->DefaultSamplerSlot();
 }
 
 void RenderTargetCompositeRenderer::Record(const FrameRecordContext& record_context_) {
@@ -116,10 +132,6 @@ void RenderTargetCompositeRenderer::Record(const FrameRecordContext& record_cont
         throw std::runtime_error("RenderTargetCompositeRenderer::Record called before PrepareFrame");
     }
     if (!IsValidRenderTargetHandle(source_target) || !render_target_host->IsValid(source_target)) {
-        ++stats.skipped_draw_count;
-        return;
-    }
-    if (bindless_resources == nullptr || !bindless_resources->IsInitialized()) {
         ++stats.skipped_draw_count;
         return;
     }
@@ -140,9 +152,7 @@ void RenderTargetCompositeRenderer::Record(const FrameRecordContext& record_cont
                                                                     false);
     EnsurePipelineObjects(*context, *descriptor_host, *pipeline_host, color_pass.target.format);
 
-    const BindlessSlot texture_slot = render_target_host->EnsureBindlessImageSlot(source_target);
-    const BindlessSlot sampler_slot = bindless_resources->DefaultSamplerSlot();
-    if (!texture_slot.IsValid() || !sampler_slot.IsValid()) {
+    if (!source_texture_slot.IsValid() || !sampler_slot.IsValid()) {
         ++stats.skipped_draw_count;
         return;
     }
@@ -188,7 +198,7 @@ void RenderTargetCompositeRenderer::Record(const FrameRecordContext& record_cont
     push_constants.flags |= create_info_cache.enable_reinhard_tonemap ? 0x1U : 0U;
     push_constants.flags |= create_info_cache.apply_manual_gamma ? 0x2U : 0U;
     push_constants.flags |= (source_view.color_encoding == RenderTargetColorEncoding::srgb) ? 0x4U : 0U;
-    push_constants.texture_slot = texture_slot.index;
+    push_constants.texture_slot = source_texture_slot.index;
     push_constants.sampler_slot = sampler_slot.index;
     vkCmdPushConstants(record_context_.command_buffer,
                        pipeline_host->GetPipelineLayout(pipeline_layout_id),

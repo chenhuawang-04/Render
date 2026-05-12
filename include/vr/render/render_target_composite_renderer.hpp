@@ -89,6 +89,8 @@ private:
     RenderTargetHandle source_target{};
     RenderTargetStateKind source_expected_state = RenderTargetStateKind::shader_read;
     RenderTargetColorOutputConfig output_target_config{};
+    BindlessSlot source_texture_slot{};
+    BindlessSlot sampler_slot{};
 
     VkExtent2D swapchain_extent{};
     VkFormat swapchain_format = VK_FORMAT_UNDEFINED;

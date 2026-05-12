@@ -127,13 +127,13 @@ public:
             throw;
         }
 
-        image_owner_fence.resize(swapchain_image_count_);
-        for (auto& owner_fence : image_owner_fence) {
-            owner_fence = VK_NULL_HANDLE;
-        }
+        ResetSwapchainImageOwners(swapchain_image_count_);
 
+        for (auto& submission_pending : frame_submission_pending) {
+            submission_pending = false;
+        }
         for (auto& reuse_waited : frame_reuse_waited) {
-            reuse_waited = false;
+            reuse_waited = true;
         }
         next_graphics_value = 1U;
         graphics_submitted_value = 0U;
@@ -144,37 +144,44 @@ public:
 
     void Shutdown(VulkanContext& context_) {
         if (!initialized) {
-            image_owner_fence.clear();
+            image_owner_slot.clear();
             current_frame = 0U;
             return;
         }
 
         const VkDevice device_ = context_.Device();
         if (device_ != VK_NULL_HANDLE) {
-            FrameMcVector<VkFence> fences_to_wait;
-            fences_to_wait.reserve(frames_in_flight_v);
-            for (const auto& slot : slots) {
-                if (slot.reuse_fence != VK_NULL_HANDLE) {
-                    fences_to_wait.push_back(slot.reuse_fence);
+            for (uint32_t frame_index = 0U; frame_index < frames_in_flight_v; ++frame_index) {
+                if (!frame_submission_pending[frame_index]) {
+                    continue;
                 }
-            }
-            if (!fences_to_wait.empty()) {
-                CheckVk("vkWaitForFences(all in_flight)",
-                        vkWaitForFences(device_,
-                                        static_cast<uint32_t>(fences_to_wait.size()),
-                                        fences_to_wait.data(),
-                                        VK_TRUE,
-                                        std::numeric_limits<uint64_t>::max()));
+                FrameSlot& slot = slots[frame_index];
+                if (slot.reuse_fence == VK_NULL_HANDLE) {
+                    frame_submission_pending[frame_index] = false;
+                    frame_reuse_waited[frame_index] = true;
+                    continue;
+                }
+                const VkResult wait_result = vkWaitForFences(device_,
+                                                             1U,
+                                                             &slot.reuse_fence,
+                                                             VK_TRUE,
+                                                             std::numeric_limits<uint64_t>::max());
+                if (wait_result == VK_SUCCESS) {
+                    graphics_completed_value = std::max(graphics_completed_value, slot.graphics_value);
+                }
+                frame_submission_pending[frame_index] = false;
+                frame_reuse_waited[frame_index] = true;
+                slot.graphics_value = 0U;
+                slot.transfer_value = 0U;
+                slot.compute_value = 0U;
             }
 
             if (context_.GraphicsQueue() != VK_NULL_HANDLE) {
-                CheckVk("vkQueueWaitIdle(graphics)",
-                        vkQueueWaitIdle(context_.GraphicsQueue()));
+                (void)vkQueueWaitIdle(context_.GraphicsQueue());
             }
             if (context_.PresentQueue() != VK_NULL_HANDLE &&
                 context_.PresentQueue() != context_.GraphicsQueue()) {
-                CheckVk("vkQueueWaitIdle(present)",
-                        vkQueueWaitIdle(context_.PresentQueue()));
+                (void)vkQueueWaitIdle(context_.PresentQueue());
             }
 
             for (auto& slot : slots) {
@@ -199,14 +206,17 @@ public:
             }
         }
 
-        image_owner_fence.clear();
+        image_owner_slot.clear();
         for (auto& slot : slots) {
             slot.graphics_value = 0U;
             slot.transfer_value = 0U;
             slot.compute_value = 0U;
         }
+        for (auto& submission_pending : frame_submission_pending) {
+            submission_pending = false;
+        }
         for (auto& reuse_waited : frame_reuse_waited) {
-            reuse_waited = false;
+            reuse_waited = true;
         }
         graphics_completed_value = graphics_submitted_value;
         current_frame = 0U;
@@ -214,10 +224,7 @@ public:
     }
 
     void OnSwapchainRecreated(uint32_t swapchain_image_count_) {
-        image_owner_fence.resize(swapchain_image_count_);
-        for (auto& owner_fence : image_owner_fence) {
-            owner_fence = VK_NULL_HANDLE;
-        }
+        ResetSwapchainImageOwners(swapchain_image_count_);
     }
 
     void PrepareCurrentFrame(VulkanContext& context_) {
@@ -246,10 +253,9 @@ public:
         WaitCurrentFrameFenceIfNeeded(context_);
 
         FrameSlot& slot = slots[current_frame];
-        frame_reuse_waited[current_frame] = false;
 
         const uint32_t swapchain_image_count = swapchain_.ImageCount();
-        if (image_owner_fence.size() != swapchain_image_count) {
+        if (image_owner_slot.size() != swapchain_image_count) {
             OnSwapchainRecreated(swapchain_image_count);
         }
 
@@ -271,20 +277,16 @@ public:
         }
 
         const uint32_t image_index = acquire_result.image_index;
-        if (image_index >= image_owner_fence.size()) {
-            throw std::runtime_error("Acquire image_index out of image_owner_fence range");
+        if (image_index >= image_owner_slot.size()) {
+            throw std::runtime_error("Acquire image_index out of image_owner_slot range");
         }
 
-        VkFence owner_fence = image_owner_fence[image_index];
-        if (owner_fence != VK_NULL_HANDLE && owner_fence != slot.reuse_fence) {
-            CheckVk("vkWaitForFences(image owner)",
-                    vkWaitForFences(context_.Device(),
-                                    1U,
-                                    &owner_fence,
-                                    VK_TRUE,
-                                    std::numeric_limits<uint64_t>::max()));
+        const uint32_t owner_slot_index = image_owner_slot[image_index];
+        if (owner_slot_index != invalid_frame_slot_v &&
+            owner_slot_index != current_frame) {
+            WaitFrameFenceIfNeeded(context_, owner_slot_index, "vkWaitForFences(image owner)");
         }
-        image_owner_fence[image_index] = slot.reuse_fence;
+        image_owner_slot[image_index] = current_frame;
 
         result.code = FrameBeginCode::Ready;
         result.token.frame_id = frame_id_;
@@ -383,68 +385,80 @@ public:
             ++wait_count;
         }
 
-        if (context_.EnabledVulkan13Features().synchronization2 == VK_TRUE) {
-            std::array<VkSemaphoreSubmitInfo, kMaxWaitSemaphores> wait_infos{};
-            for (uint32_t i = 0U; i < wait_count; ++i) {
-                wait_infos[i].sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
-                wait_infos[i].semaphore = wait_semaphores[i];
-                wait_infos[i].value = 0U;
-                wait_infos[i].stageMask = wait_stage_masks2[i];
-                wait_infos[i].deviceIndex = 0U;
+        try {
+            if (context_.EnabledVulkan13Features().synchronization2 == VK_TRUE) {
+                std::array<VkSemaphoreSubmitInfo, kMaxWaitSemaphores> wait_infos{};
+                for (uint32_t i = 0U; i < wait_count; ++i) {
+                    wait_infos[i].sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
+                    wait_infos[i].semaphore = wait_semaphores[i];
+                    wait_infos[i].value = 0U;
+                    wait_infos[i].stageMask = wait_stage_masks2[i];
+                    wait_infos[i].deviceIndex = 0U;
+                }
+
+                VkCommandBufferSubmitInfo command_buffer_info{};
+                command_buffer_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO;
+                command_buffer_info.commandBuffer = command_buffer_;
+                command_buffer_info.deviceMask = 0U;
+
+                VkSemaphoreSubmitInfo signal_info{};
+                signal_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
+                signal_info.semaphore = token_.present_binary;
+                signal_info.value = 0U;
+                signal_info.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+                signal_info.deviceIndex = 0U;
+
+                VkSubmitInfo2 submit_info2{};
+                submit_info2.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2;
+                submit_info2.flags = 0U;
+                submit_info2.waitSemaphoreInfoCount = wait_count;
+                submit_info2.pWaitSemaphoreInfos = wait_infos.data();
+                submit_info2.commandBufferInfoCount = 1U;
+                submit_info2.pCommandBufferInfos = &command_buffer_info;
+                submit_info2.signalSemaphoreInfoCount = 1U;
+                submit_info2.pSignalSemaphoreInfos = &signal_info;
+
+                const VkResult submit_result = vkQueueSubmit2(context_.GraphicsQueue(),
+                                                              1U,
+                                                              &submit_info2,
+                                                              token_.reuse_fence);
+                CheckVk("vkQueueSubmit2(graphics)", submit_result);
+                frame_submission_pending[token_.frame_index] = true;
+                frame_reuse_waited[token_.frame_index] = false;
+                slots[token_.frame_index].graphics_value = token_.graphics_signal_value;
+                graphics_submitted_value = std::max(graphics_submitted_value, token_.graphics_signal_value);
+                return submit_result;
             }
 
-            VkCommandBufferSubmitInfo command_buffer_info{};
-            command_buffer_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO;
-            command_buffer_info.commandBuffer = command_buffer_;
-            command_buffer_info.deviceMask = 0U;
+            VkSubmitInfo submit_info{};
+            submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+            submit_info.waitSemaphoreCount = wait_count;
+            submit_info.pWaitSemaphores = wait_semaphores.data();
+            submit_info.pWaitDstStageMask = wait_stage_masks.data();
+            submit_info.commandBufferCount = 1U;
+            submit_info.pCommandBuffers = &command_buffer_;
+            submit_info.signalSemaphoreCount = 1U;
+            submit_info.pSignalSemaphores = &token_.present_binary;
 
-            VkSemaphoreSubmitInfo signal_info{};
-            signal_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
-            signal_info.semaphore = token_.present_binary;
-            signal_info.value = 0U;
-            signal_info.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-            signal_info.deviceIndex = 0U;
-
-            VkSubmitInfo2 submit_info2{};
-            submit_info2.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2;
-            submit_info2.flags = 0U;
-            submit_info2.waitSemaphoreInfoCount = wait_count;
-            submit_info2.pWaitSemaphoreInfos = wait_infos.data();
-            submit_info2.commandBufferInfoCount = 1U;
-            submit_info2.pCommandBufferInfos = &command_buffer_info;
-            submit_info2.signalSemaphoreInfoCount = 1U;
-            submit_info2.pSignalSemaphoreInfos = &signal_info;
-
-            const VkResult submit_result = vkQueueSubmit2(context_.GraphicsQueue(),
-                                                          1U,
-                                                          &submit_info2,
-                                                          token_.reuse_fence);
-            CheckVk("vkQueueSubmit2(graphics)", submit_result);
+            const VkResult submit_result = vkQueueSubmit(context_.GraphicsQueue(),
+                                                         1U,
+                                                         &submit_info,
+                                                         token_.reuse_fence);
+            CheckVk("vkQueueSubmit(graphics)", submit_result);
+            frame_submission_pending[token_.frame_index] = true;
             frame_reuse_waited[token_.frame_index] = false;
             slots[token_.frame_index].graphics_value = token_.graphics_signal_value;
             graphics_submitted_value = std::max(graphics_submitted_value, token_.graphics_signal_value);
             return submit_result;
+        } catch (...) {
+            frame_submission_pending[token_.frame_index] = false;
+            frame_reuse_waited[token_.frame_index] = true;
+            ClearImageOwnersForFrameSlot(token_.frame_index);
+            slots[token_.frame_index].graphics_value = 0U;
+            slots[token_.frame_index].transfer_value = 0U;
+            slots[token_.frame_index].compute_value = 0U;
+            throw;
         }
-
-        VkSubmitInfo submit_info{};
-        submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-        submit_info.waitSemaphoreCount = wait_count;
-        submit_info.pWaitSemaphores = wait_semaphores.data();
-        submit_info.pWaitDstStageMask = wait_stage_masks.data();
-        submit_info.commandBufferCount = 1U;
-        submit_info.pCommandBuffers = &command_buffer_;
-        submit_info.signalSemaphoreCount = 1U;
-        submit_info.pSignalSemaphores = &token_.present_binary;
-
-        const VkResult submit_result = vkQueueSubmit(context_.GraphicsQueue(),
-                                                     1U,
-                                                     &submit_info,
-                                                     token_.reuse_fence);
-        CheckVk("vkQueueSubmit(graphics)", submit_result);
-        frame_reuse_waited[token_.frame_index] = false;
-        slots[token_.frame_index].graphics_value = token_.graphics_signal_value;
-        graphics_submitted_value = std::max(graphics_submitted_value, token_.graphics_signal_value);
-        return submit_result;
     }
 
     template<SwapchainBridge SwapchainHostT>
@@ -531,28 +545,59 @@ private:
     }
 
     void WaitCurrentFrameFenceIfNeeded(VulkanContext& context_) {
-        if (current_frame >= frames_in_flight_v) {
-            throw std::runtime_error("FrameSyncHost::WaitCurrentFrameFenceIfNeeded current_frame out of range");
+        WaitFrameFenceIfNeeded(context_, current_frame, "vkWaitForFences(current frame)");
+    }
+
+    void WaitFrameFenceIfNeeded(VulkanContext& context_,
+                                const uint32_t frame_index_,
+                                const char* stage_) {
+        if (frame_index_ >= frames_in_flight_v) {
+            throw std::runtime_error("FrameSyncHost::WaitFrameFenceIfNeeded frame_index out of range");
         }
-        if (frame_reuse_waited[current_frame]) {
+        if (frame_reuse_waited[frame_index_]) {
+            return;
+        }
+        if (!frame_submission_pending[frame_index_]) {
+            frame_reuse_waited[frame_index_] = true;
             return;
         }
 
         const VkDevice device = context_.Device();
-        FrameSlot& slot = slots[current_frame];
-        CheckVk("vkWaitForFences(current frame)",
+        FrameSlot& slot = slots[frame_index_];
+        CheckVk(stage_,
                 vkWaitForFences(device,
                                 1U,
                                 &slot.reuse_fence,
                                 VK_TRUE,
                                 std::numeric_limits<uint64_t>::max()));
         graphics_completed_value = std::max(graphics_completed_value, slot.graphics_value);
-        frame_reuse_waited[current_frame] = true;
+        frame_submission_pending[frame_index_] = false;
+        frame_reuse_waited[frame_index_] = true;
+        slot.graphics_value = 0U;
+        slot.transfer_value = 0U;
+        slot.compute_value = 0U;
+    }
+
+    void ResetSwapchainImageOwners(const uint32_t swapchain_image_count_) {
+        image_owner_slot.resize(swapchain_image_count_);
+        for (auto& owner_slot : image_owner_slot) {
+            owner_slot = invalid_frame_slot_v;
+        }
+    }
+
+    void ClearImageOwnersForFrameSlot(const uint32_t frame_index_) noexcept {
+        for (auto& owner_slot : image_owner_slot) {
+            if (owner_slot == frame_index_) {
+                owner_slot = invalid_frame_slot_v;
+            }
+        }
     }
 
 private:
+    static constexpr uint32_t invalid_frame_slot_v = std::numeric_limits<uint32_t>::max();
     std::array<FrameSlot, frames_in_flight_v> slots{};
-    FrameMcVector<VkFence> image_owner_fence{};
+    FrameMcVector<uint32_t> image_owner_slot{};
+    std::array<bool, frames_in_flight_v> frame_submission_pending{};
     std::array<bool, frames_in_flight_v> frame_reuse_waited{};
     uint64_t next_graphics_value = 1U;
     uint64_t graphics_submitted_value = 0U;

@@ -633,6 +633,7 @@ private:
     const RenderView3D* active_view = nullptr;
     const RenderView3D* scene_view = nullptr;
     const RenderView3D* overlay_view = nullptr;
+    bool sky_environment_pass_ready = false;
     scene::SkyEnvironmentGpuHandle resolved_environment_gpu{};
     std::uint64_t active_view_signature = 0U;
     render::LightShadowLinkCoordinator3D light_shadow_link_coordinator{};

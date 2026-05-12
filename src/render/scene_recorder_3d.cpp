@@ -7,6 +7,38 @@
 
 namespace vr::render {
 
+namespace {
+
+[[nodiscard]] bool CanPrepareSkyEnvironmentPass(const SceneRecorder3DPrepareView& prepare_view_,
+                                                const scene::SkyEnvironmentRenderState& state_) noexcept {
+    if (prepare_view_.pipeline == nullptr) {
+        return false;
+    }
+
+    switch (state_.mode) {
+    case scene::SkyEnvironmentMode::solid_color:
+    case scene::SkyEnvironmentMode::gradient:
+    case scene::SkyEnvironmentMode::procedural_atmosphere:
+        return true;
+    case scene::SkyEnvironmentMode::cubemap:
+        return prepare_view_.gpu_memory != nullptr &&
+               prepare_view_.texture != nullptr &&
+               prepare_view_.bindless != nullptr &&
+               prepare_view_.upload != nullptr &&
+               prepare_view_.descriptor != nullptr &&
+               prepare_view_.ibl != nullptr;
+    case scene::SkyEnvironmentMode::equirectangular_hdr:
+        return prepare_view_.texture != nullptr &&
+               prepare_view_.bindless != nullptr;
+    case scene::SkyEnvironmentMode::none:
+    default:
+        break;
+    }
+    return false;
+}
+
+} // namespace
+
 void SceneRecorder3D::Initialize(const SceneRecorder3DCreateInfo& create_info_) noexcept {
     create_info_cache = create_info_;
     sky_environment_pass.Initialize();
@@ -29,6 +61,7 @@ void SceneRecorder3D::Initialize(const SceneRecorder3DCreateInfo& create_info_) 
     active_view = nullptr;
     scene_view = nullptr;
     overlay_view = nullptr;
+    sky_environment_pass_ready = false;
     resolved_environment_gpu = {};
     active_view_signature = 0U;
     light_shadow_link_coordinator.Reset();
@@ -58,6 +91,7 @@ void SceneRecorder3D::Shutdown(VulkanContext& context_) noexcept {
     active_view = nullptr;
     scene_view = nullptr;
     overlay_view = nullptr;
+    sky_environment_pass_ready = false;
     resolved_environment_gpu = {};
     active_view_signature = 0U;
     light_shadow_link_coordinator.Reset();
@@ -112,10 +146,12 @@ void SceneRecorder3D::ClearAnimationFrameBinding() noexcept {
 
 void SceneRecorder3D::SetFramePacket(const RenderScenePacket3D* frame_packet_) noexcept {
     if (frame_packet == frame_packet_) {
+        sky_environment_pass_ready = false;
         RefreshFramePacketBinding();
         return;
     }
     frame_packet = frame_packet_;
+    sky_environment_pass_ready = false;
     ++stats.frame_packet_bind_count;
     RefreshFramePacketBinding();
 }
@@ -161,6 +197,7 @@ void SceneRecorder3D::PrepareFrame(const SceneRecorder3DPrepareView& prepare_vie
     const bool record_sky_after_opaque = ShouldRecordSkyEnvironmentAfterOpaque();
     resolved_environment_gpu = frame_packet != nullptr ? frame_packet->extra.environment_gpu
                                                        : scene::SkyEnvironmentGpuHandle{};
+    sky_environment_pass_ready = false;
     std::uint32_t ibl_environment_id =
         frame_packet != nullptr ? frame_packet->extra.ibl_environment_id : 0U;
     std::uint32_t ibl_brdf_lut_texture_id = 0U;
@@ -224,10 +261,13 @@ void SceneRecorder3D::PrepareFrame(const SceneRecorder3DPrepareView& prepare_vie
     resolved_prepare_view.ibl_brdf_lut_texture_id = ibl_brdf_lut_texture_id;
 
     ConfigureSkyEnvironmentPassForTargets();
-    if (HasSkyEnvironmentPassForSubmission()) {
+    if (HasSkyEnvironmentPassForSubmission() &&
+        frame_packet != nullptr &&
+        CanPrepareSkyEnvironmentPass(resolved_prepare_view, frame_packet->extra.environment)) {
         sky_environment_pass.PrepareFrame(MakeSkyEnvironmentPassPrepareView(resolved_prepare_view),
                                           frame_packet->extra.environment,
                                           resolved_environment_gpu);
+        sky_environment_pass_ready = true;
         ++stats.environment_prepare_count;
     }
 
@@ -392,6 +432,11 @@ void SceneRecorder3D::Record(const FrameRecordContext& record_context_) {
     const bool has_sky_environment_pass = HasSkyEnvironmentPassForSubmission();
     const bool record_sky_before_opaque = ShouldRecordSkyEnvironmentBeforeOpaque();
     const bool record_sky_after_opaque = ShouldRecordSkyEnvironmentAfterOpaque();
+
+    if (has_sky_environment_pass && !sky_environment_pass_ready) {
+        throw std::runtime_error(
+            "SceneRecorder3D::Record requires SkyEnvironmentPass to be prepared for the active submission");
+    }
 
     for (const PreSceneRendererEntry& entry : pre_scene_renderer_entries) {
         if (!IsLayerVisibleForSubmission(entry.submission_layer_mask)) {
