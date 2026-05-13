@@ -14,7 +14,7 @@ namespace vr::ecs::spatial_math {
 }
 
 [[nodiscard]] inline Matrix4x4 IdentityMatrix4x4() noexcept {
-    return MMath::D3D::mat4Identity();
+    return MMath::mat4Identity();
 }
 
 [[nodiscard]] inline Affine2x3 ComposeAffine2x3Trs(float position_x_,
@@ -34,13 +34,10 @@ namespace vr::ecs::spatial_math {
 
 [[nodiscard]] inline bool InvertAffine2x3(const Affine2x3& in_,
                                           Affine2x3& out_) noexcept {
-    const float determinant = in_.m00 * in_.m11 - in_.m01 * in_.m10;
-    if (std::abs(determinant) <= 1e-12F) {
+    if (!MMath::mat3TryInverseAffine(in_, &out_, 1e-6F)) {
         out_ = MMath::mat3Identity();
         return false;
     }
-
-    out_ = MMath::mat3InverseAffine(in_);
     return true;
 }
 
@@ -175,40 +172,18 @@ namespace vr::ecs::spatial_math {
     return out;
 }
 
-[[nodiscard]] inline CoreMatrix4x4 ToCoreMatrix4x4(const Matrix4x4& value_) noexcept {
-    CoreMatrix4x4 out{};
-    for (int i = 0; i < 16; ++i) {
-        out.m[i] = value_.m[i];
-    }
-    return out;
-}
-
-[[nodiscard]] inline Matrix4x4 ToD3dMatrix4x4(const CoreMatrix4x4& value_) noexcept {
-    Matrix4x4 out{};
-    for (int i = 0; i < 16; ++i) {
-        out.m[i] = value_.m[i];
-    }
-    return out;
-}
-
 [[nodiscard]] inline Matrix4x4 MultiplyMatrix4x4(const Matrix4x4& left_,
                                                   const Matrix4x4& right_) noexcept {
-    return MMath::D3D::mat4Mul(left_, right_);
+    return MMath::mat4Multiply(left_, right_);
 }
 
 [[nodiscard]] inline bool InvertAffineMatrix4x4(const Matrix4x4& in_,
                                                 Matrix4x4& out_) noexcept {
-    const CoreMatrix4x4 core_in = ToCoreMatrix4x4(in_);
-    const CoreMatrix4x4 core_out = MMath::mat4Inverse(core_in);
-
-    // Singular matrices in fast_math::mat4Inverse fall back to identity.
-    // We still provide a best-effort singular hint by checking determinant proxy.
-    const float det_proxy = in_.m[0] * (in_.m[5] * in_.m[10] - in_.m[6] * in_.m[9]) -
-                            in_.m[4] * (in_.m[1] * in_.m[10] - in_.m[2] * in_.m[9]) +
-                            in_.m[8] * (in_.m[1] * in_.m[6] - in_.m[2] * in_.m[5]);
-
-    out_ = ToD3dMatrix4x4(core_out);
-    return std::abs(det_proxy) > 1e-10F;
+    if (!MMath::mat4TryInverse(in_, &out_, 1e-6F)) {
+        out_ = MMath::mat4Identity();
+        return false;
+    }
+    return true;
 }
 
 [[nodiscard]] inline Matrix4x4 BuildOrthographicProjection(float left_,
@@ -232,12 +207,12 @@ namespace vr::ecs::spatial_math {
     const float near_plane = std::max(0.0F, near_plane_);
     const float far_plane = std::max(near_plane + 1e-3F, far_plane_);
 
-    return MMath::D3D::mat4OrthoD3D_RH(left,
-                                       right,
-                                       bottom,
-                                       top,
-                                       near_plane,
-                                       far_plane);
+    return MMath::mat4OrthoRH(left,
+                              right,
+                              bottom,
+                              top,
+                              near_plane,
+                              far_plane);
 }
 
 [[nodiscard]] inline Matrix4x4 BuildPerspectiveProjection(float vertical_fov_radians_,
@@ -251,16 +226,16 @@ namespace vr::ecs::spatial_math {
     const float far_plane = std::max(near_plane + 1e-3F, far_plane_);
 
     if (reverse_z_) {
-        return MMath::D3D::mat4PerspectiveD3D_RH(fov,
-                                                 aspect,
-                                                 far_plane,
-                                                 near_plane);
+        return MMath::mat4PerspectiveRH(fov,
+                                        aspect,
+                                        far_plane,
+                                        near_plane);
     }
 
-    return MMath::D3D::mat4PerspectiveD3D_RH(fov,
-                                             aspect,
-                                             near_plane,
-                                             far_plane);
+    return MMath::mat4PerspectiveRH(fov,
+                                    aspect,
+                                    near_plane,
+                                    far_plane);
 }
 
 [[nodiscard]] inline float Dot3(const Float3& lhs_, const Float3& rhs_) noexcept {

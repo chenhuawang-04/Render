@@ -6,7 +6,6 @@
 
 #include "fast_math/mat3.h"
 #include "fast_math/mat4.h"
-#include "fast_math/mat4_d3d.h"
 #include "fast_math/types.h"
 
 #include <type_traits>
@@ -19,9 +18,7 @@ using Float4 = MMath::Vec4;
 using Quaternion = MMath::Quat;
 
 using Affine2x3 = MMath::Mat3;
-using Matrix4x4 = MMath::D3D::Mat4;
-
-using CoreMatrix4x4 = MMath::Mat4;
+using Matrix4x4 = MMath::Mat4;
 
 static_assert(std::is_standard_layout_v<Float2> && std::is_trivial_v<Float2>);
 static_assert(std::is_standard_layout_v<Float3> && std::is_trivial_v<Float3>);
@@ -29,6 +26,5 @@ static_assert(std::is_standard_layout_v<Float4> && std::is_trivial_v<Float4>);
 static_assert(std::is_standard_layout_v<Quaternion> && std::is_trivial_v<Quaternion>);
 static_assert(std::is_standard_layout_v<Affine2x3> && std::is_trivial_v<Affine2x3>);
 static_assert(std::is_standard_layout_v<Matrix4x4> && std::is_trivial_v<Matrix4x4>);
-static_assert(std::is_standard_layout_v<CoreMatrix4x4> && std::is_trivial_v<CoreMatrix4x4>);
 
 } // namespace vr::ecs
