@@ -1,11 +1,9 @@
 #version 460
-#extension GL_EXT_nonuniform_qualifier : require
+#extension GL_GOOGLE_include_directive : require
+#include "vr/render/bindless.glsl"
 
 layout(location = 0) in vec2 in_uv;
 layout(location = 0) out vec4 out_color;
-
-layout(set = 0, binding = 0) uniform textureCube g_TexturesCube[];
-layout(set = 1, binding = 0) uniform sampler g_Samplers[];
 
 layout(push_constant) uniform EnvironmentImagePushConstants {
     vec4 camera_right_scale_x;
@@ -26,15 +24,6 @@ vec3 rotate_environment_direction(vec3 direction_) {
         cos_y * direction_.x + sin_y * direction_.z,
         direction_.y,
         -sin_y * direction_.x + cos_y * direction_.z);
-}
-
-vec4 SampleTextureCube(uint texture_slot, uint sampler_slot, vec3 direction_) {
-    return texture(
-        samplerCube(
-            g_TexturesCube[nonuniformEXT(texture_slot)],
-            g_Samplers[nonuniformEXT(sampler_slot)]
-        ),
-        direction_);
 }
 
 void main() {

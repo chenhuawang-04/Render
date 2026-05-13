@@ -218,6 +218,8 @@ VR_TEST_CASE(RuntimeIntegration_particle_renderer_3d_transparent_stage_smoke,
         std::uint32_t max_transparent_draw_calls = 0U;
         std::uint32_t max_uploaded_instances = 0U;
         std::uint32_t max_indirect_draw_calls = 0U;
+        std::uint32_t max_descriptor_binds = 0U;
+        std::uint32_t max_descriptor_updates = 0U;
         bool observed_depth_interaction = false;
         bool observed_bounds_culling = false;
 
@@ -239,6 +241,10 @@ VR_TEST_CASE(RuntimeIntegration_particle_renderer_3d_transparent_stage_smoke,
                                               renderer_stats.uploaded_instance_count);
             max_indirect_draw_calls = std::max(max_indirect_draw_calls,
                                                renderer_stats.indirect_draw_count);
+            max_descriptor_binds = std::max(max_descriptor_binds,
+                                            renderer_stats.descriptor_set_bind_count);
+            max_descriptor_updates = std::max(max_descriptor_updates,
+                                              renderer_stats.descriptor_set_update_count);
             observed_depth_interaction = observed_depth_interaction ||
                                          renderer_stats.depth_interaction_enabled;
             observed_bounds_culling = observed_bounds_culling ||
@@ -249,6 +255,9 @@ VR_TEST_CASE(RuntimeIntegration_particle_renderer_3d_transparent_stage_smoke,
         VR_REQUIRE(max_uploaded_instances > 0U);
         VR_REQUIRE(max_draw_calls > 0U);
         VR_REQUIRE(max_transparent_draw_calls > 0U);
+        VR_REQUIRE(max_descriptor_binds > 0U);
+        VR_CHECK(max_descriptor_binds <= max_draw_calls);
+        VR_CHECK(max_descriptor_updates == 0U);
         VR_REQUIRE(observed_depth_interaction);
         VR_REQUIRE(observed_bounds_culling);
         const auto& particle_simulation_service =
@@ -385,6 +394,9 @@ VR_TEST_CASE(RuntimeIntegration_particle_renderer_3d_gpu_persistent_seed_once,
         std::uint32_t submitted_frames = 0U;
         std::uint32_t max_indirect_draw_calls = 0U;
         std::uint32_t max_uploaded_instances = 0U;
+        std::uint32_t max_draw_calls = 0U;
+        std::uint32_t max_descriptor_binds = 0U;
+        std::uint32_t max_descriptor_updates = 0U;
 
         constexpr std::uint32_t max_ticks = 10U;
         for (std::uint32_t tick_index = 0U;
@@ -400,11 +412,21 @@ VR_TEST_CASE(RuntimeIntegration_particle_renderer_3d_gpu_persistent_seed_once,
                                                renderer_stats.indirect_draw_count);
             max_uploaded_instances = std::max(max_uploaded_instances,
                                               renderer_stats.uploaded_instance_count);
+            max_draw_calls = std::max(max_draw_calls,
+                                      renderer_stats.draw_call_count);
+            max_descriptor_binds = std::max(max_descriptor_binds,
+                                            renderer_stats.descriptor_set_bind_count);
+            max_descriptor_updates = std::max(max_descriptor_updates,
+                                              renderer_stats.descriptor_set_update_count);
         }
 
         VR_REQUIRE(submitted_frames > 0U);
         VR_REQUIRE(max_indirect_draw_calls > 0U);
         VR_REQUIRE(max_uploaded_instances > 0U);
+        VR_REQUIRE(max_draw_calls > 0U);
+        VR_REQUIRE(max_descriptor_binds > 0U);
+        VR_CHECK(max_descriptor_binds <= max_draw_calls);
+        VR_CHECK(max_descriptor_updates == 0U);
         const auto& particle_simulation_service_gpu =
             runtime.Services().Get<vr::runtime::services::ParticleSimulationService>();
         VR_REQUIRE(particle_simulation_service_gpu.Stats().prepared_frame_count > 0U);

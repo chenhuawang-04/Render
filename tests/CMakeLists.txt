@@ -70,6 +70,7 @@ add_executable(${VR_TEST_TARGET}
     cases/runtime_geometry_material_host_tests.cpp
     cases/runtime_texture_host_integration_tests.cpp
     cases/bindless_resource_integration_tests.cpp
+    cases/bindless_shader_contract_tests.cpp
     cases/runtime_geometry_image_host_integration_tests.cpp
     cases/surface_upload_host_policy_tests.cpp
     cases/runtime_surface_upload_host_integration_tests.cpp
@@ -87,6 +88,15 @@ target_link_libraries(${VR_TEST_TARGET}
     PRIVATE
         vr_test_support
         vulkan_platform_sdl
+)
+
+file(TO_CMAKE_PATH "${PROJECT_SOURCE_DIR}" VR_TEST_SOURCE_DIR_CMAKE_PATH)
+file(TO_CMAKE_PATH "${CMAKE_BINARY_DIR}/generated" VR_TEST_GENERATED_DIR_CMAKE_PATH)
+
+target_compile_definitions(${VR_TEST_TARGET}
+    PRIVATE
+        VR_TEST_SOURCE_DIR="${VR_TEST_SOURCE_DIR_CMAKE_PATH}"
+        VR_TEST_GENERATED_DIR="${VR_TEST_GENERATED_DIR_CMAKE_PATH}"
 )
 
 add_test(
