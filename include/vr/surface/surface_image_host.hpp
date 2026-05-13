@@ -55,9 +55,16 @@ struct SurfaceImageHostStats final {
 struct SurfaceImageHostBindlessConfig final {
     render::DescriptorHost* descriptor_host = nullptr;
     render::BindlessTableId image_table{};
+    std::uint64_t bindless_revision = 0U;
 
     [[nodiscard]] bool Enabled() const noexcept {
         return descriptor_host != nullptr && image_table.IsValid();
+    }
+
+    [[nodiscard]] bool SameBinding(const SurfaceImageHostBindlessConfig& rhs_) const noexcept {
+        return descriptor_host == rhs_.descriptor_host &&
+               image_table.value == rhs_.image_table.value &&
+               bindless_revision == rhs_.bindless_revision;
     }
 };
 
@@ -101,7 +108,7 @@ public:
     void BeginFrame(VulkanContext& context_,
                     std::uint64_t completed_submit_value_);
 
-    void ConfigureBindless(const SurfaceImageHostBindlessConfig& bindless_config_) noexcept;
+    void ConfigureBindless(const SurfaceImageHostBindlessConfig& bindless_config_);
 
     void UploadImage(VulkanContext& context_,
                      render::UploadHost& upload_host_,
@@ -128,6 +135,9 @@ private:
     void CollectRetiredImages(VulkanContext& context_,
                               std::uint64_t completed_submit_value_);
     void DestroyRetiredImages(VulkanContext& context_) noexcept;
+    void InvalidateBindlessRecords(const SurfaceImageHostBindlessConfig& bindless_config_);
+    void SyncBindlessRecords();
+    [[nodiscard]] std::uint64_t ComputeBindlessRetireValue() const noexcept;
 
     [[nodiscard]] static resource::ImageResource CreateImageResource(
         VulkanContext& context_,
@@ -153,6 +163,8 @@ private:
     SurfaceImageMcVector<ImageRecord> images{};
     render::RetireBus<resource::ImageResource> retired_images{};
     SurfaceImageHostStats stats{};
+    std::uint64_t last_submitted_value_seen = 0U;
+    std::uint64_t completed_submit_value_seen = 0U;
     bool initialized = false;
 };
 

@@ -88,9 +88,18 @@ struct TextureHostBindlessConfig final {
     render::DescriptorHost* descriptor_host = nullptr;
     render::BindlessTableId image_table{};
     render::BindlessSlot default_sampler_slot{};
+    std::uint64_t bindless_revision = 0U;
 
     [[nodiscard]] bool Enabled() const noexcept {
         return descriptor_host != nullptr && image_table.IsValid();
+    }
+
+    [[nodiscard]] bool SameBinding(const TextureHostBindlessConfig& rhs_) const noexcept {
+        return descriptor_host == rhs_.descriptor_host &&
+               image_table.value == rhs_.image_table.value &&
+               default_sampler_slot.index == rhs_.default_sampler_slot.index &&
+               default_sampler_slot.generation == rhs_.default_sampler_slot.generation &&
+               bindless_revision == rhs_.bindless_revision;
     }
 };
 
@@ -114,9 +123,7 @@ public:
     struct TextureRecord final {
         struct TextureBindlessState final {
             render::BindlessSlot image_slot{};
-            render::BindlessSlot default_sampler_slot{};
             std::uint32_t image_revision_written = 0U;
-            std::uint32_t sampler_revision_written = 0U;
             std::uint64_t retire_value = 0U;
         };
 
@@ -158,7 +165,7 @@ public:
     void BeginFrame(VulkanContext& context_,
                     std::uint64_t completed_submit_value_);
 
-    void ConfigureBindless(const TextureHostBindlessConfig& bindless_config_) noexcept;
+    void ConfigureBindless(const TextureHostBindlessConfig& bindless_config_);
 
     void UploadTexture(VulkanContext& context_,
                        render::UploadHost& upload_host_,
@@ -195,6 +202,9 @@ private:
     void CollectRetiredTextures(VulkanContext& context_,
                                 std::uint64_t completed_submit_value_);
     void DestroyRetiredTextures(VulkanContext& context_) noexcept;
+    void InvalidateBindlessRecords(const TextureHostBindlessConfig& bindless_config_);
+    void SyncBindlessRecords();
+    [[nodiscard]] std::uint64_t ComputeBindlessRetireValue() const noexcept;
     [[nodiscard]] static resource::ImageResource CreateImageResource(VulkanContext& context_,
                                                                      resource::GpuMemoryHost& gpu_memory_host_,
                                                                      const TextureHostCreateInfo& create_info_,
@@ -221,6 +231,8 @@ private:
     TextureMcVector<TextureRecord> textures{};
     render::RetireBus<resource::ImageResource> retired_textures{};
     TextureHostStats stats{};
+    std::uint64_t last_submitted_value_seen = 0U;
+    std::uint64_t completed_submit_value_seen = 0U;
     bool initialized = false;
 };
 

@@ -49,9 +49,16 @@ struct ShadowAtlasHostStats final {
 struct ShadowAtlasHostBindlessConfig final {
     render::DescriptorHost* descriptor_host = nullptr;
     render::BindlessTableId image_table{};
+    std::uint64_t bindless_revision = 0U;
 
     [[nodiscard]] bool Enabled() const noexcept {
         return descriptor_host != nullptr && image_table.IsValid();
+    }
+
+    [[nodiscard]] bool SameBinding(const ShadowAtlasHostBindlessConfig& rhs_) const noexcept {
+        return descriptor_host == rhs_.descriptor_host &&
+               image_table.value == rhs_.image_table.value &&
+               bindless_revision == rhs_.bindless_revision;
     }
 };
 
@@ -95,7 +102,7 @@ public:
     void BeginFrame(VulkanContext& context_,
                     std::uint64_t completed_submit_value_);
 
-    void ConfigureBindless(const ShadowAtlasHostBindlessConfig& bindless_config_) noexcept;
+    void ConfigureBindless(const ShadowAtlasHostBindlessConfig& bindless_config_);
 
     void EnsureAtlases(VulkanContext& context_,
                        std::uint64_t last_submitted_value_,
@@ -128,9 +135,11 @@ private:
     void CollectRetiredAtlases(VulkanContext& context_,
                                std::uint64_t completed_submit_value_);
     void DestroyRetiredAtlases(VulkanContext& context_) noexcept;
+    void InvalidateBindlessRecords(const ShadowAtlasHostBindlessConfig& bindless_config_);
+    [[nodiscard]] std::uint64_t ComputeBindlessRetireValue() const noexcept;
     [[nodiscard]] AtlasRecord CreateAtlasRecord(VulkanContext& context_,
                                                 const ShadowAtlasRequest& request_) const;
-    void SyncBindlessRecords() noexcept;
+    void SyncBindlessRecords();
 
 private:
     resource::GpuMemoryHost* gpu_memory_host = nullptr;
@@ -139,6 +148,8 @@ private:
     ShadowAtlasMcVector<AtlasRecord> atlases{};
     render::RetireBus<RetiredAtlasPayload> retired_atlases{};
     ShadowAtlasHostStats stats{};
+    std::uint64_t last_submitted_value_seen = 0U;
+    std::uint64_t completed_submit_value_seen = 0U;
     bool initialized = false;
 };
 

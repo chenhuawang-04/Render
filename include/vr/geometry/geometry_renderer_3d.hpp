@@ -478,6 +478,7 @@ private:
 
     std::uint64_t last_submitted_value_seen = 0U;
     std::uint64_t completed_submit_value_seen = 0U;
+    std::uint64_t bindless_revision_seen = 0U;
     std::uint32_t material_host_revision_seen = 0U;
     std::uint32_t image_host_revision_seen = 0U;
     render::LightFrameCoordinator<ecs::Dim3>* light_frame_coordinator = nullptr;

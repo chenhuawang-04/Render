@@ -55,9 +55,16 @@ struct GeometryImageHostStats {
 struct GeometryImageHostBindlessConfig final {
     render::DescriptorHost* descriptor_host = nullptr;
     render::BindlessTableId image_table{};
+    std::uint64_t bindless_revision = 0U;
 
     [[nodiscard]] bool Enabled() const noexcept {
         return descriptor_host != nullptr && image_table.IsValid();
+    }
+
+    [[nodiscard]] bool SameBinding(const GeometryImageHostBindlessConfig& rhs_) const noexcept {
+        return descriptor_host == rhs_.descriptor_host &&
+               image_table.value == rhs_.image_table.value &&
+               bindless_revision == rhs_.bindless_revision;
     }
 };
 
@@ -101,7 +108,7 @@ public:
     void BeginFrame(VulkanContext& context_,
                     std::uint64_t completed_submit_value_);
 
-    void ConfigureBindless(const GeometryImageHostBindlessConfig& bindless_config_) noexcept;
+    void ConfigureBindless(const GeometryImageHostBindlessConfig& bindless_config_);
 
     void UploadImage(VulkanContext& context_,
                      render::UploadHost& upload_host_,
@@ -128,6 +135,8 @@ private:
     void CollectRetiredImages(VulkanContext& context_,
                               std::uint64_t completed_submit_value_);
     void DestroyRetiredImages(VulkanContext& context_) noexcept;
+    void InvalidateBindlessRecords(const GeometryImageHostBindlessConfig& bindless_config_);
+    [[nodiscard]] std::uint64_t ComputeBindlessRetireValue() const noexcept;
     [[nodiscard]] static resource::ImageResource CreateImageResource(VulkanContext& context_,
                                                                      resource::GpuMemoryHost& gpu_memory_host_,
                                                                      const GeometryImageHostCreateInfo& create_info_,
@@ -142,7 +151,7 @@ private:
                                    VkAccessFlags2 src_access_mask_,
                                    VkPipelineStageFlags2 dst_stage_mask_,
                                    VkAccessFlags2 dst_access_mask_);
-    void SyncBindlessRecords() noexcept;
+    void SyncBindlessRecords();
 
 private:
     resource::GpuMemoryHost* gpu_memory_host = nullptr;
@@ -151,6 +160,8 @@ private:
     GeometryImageMcVector<ImageRecord> images{};
     render::RetireBus<resource::ImageResource> retired_images{};
     GeometryImageHostStats stats{};
+    std::uint64_t last_submitted_value_seen = 0U;
+    std::uint64_t completed_submit_value_seen = 0U;
     bool initialized = false;
 };
 

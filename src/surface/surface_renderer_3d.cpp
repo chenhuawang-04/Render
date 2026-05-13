@@ -373,6 +373,13 @@ void SurfaceRenderer3D::PrepareFrame(const render::SurfaceRenderer3DPrepareView&
         throw std::runtime_error(
             "SurfaceRenderer3D::PrepareFrame requires initialized BindlessResourceSystem");
     }
+    const std::uint64_t bindless_revision_now = bindless_resources->Revision();
+    if (surface_image_host != nullptr &&
+        surface_image_host->IsInitialized() &&
+        (!surface_image_host->BindlessConfig().Enabled() ||
+         surface_image_host->BindlessConfig().bindless_revision != bindless_revision_now)) {
+        bindless_resources->ConfigureSurfaceImageHost(*surface_image_host);
+    }
     active_frame_index = prepare_view_.frame.frame_index;
     last_submitted_value_seen = std::max(last_submitted_value_seen, prepare_view_.progress.last_submitted_value);
     completed_submit_value_seen = std::max(completed_submit_value_seen,

@@ -248,11 +248,11 @@ public:
                                                    descriptor_host,
                                                    sampler_host,
                                                    create_info_cache.bindless);
+                bindless_resources_initialized = true;
                 bindless_resource_system.ConfigureTextureHost(texture_host);
                 if (render_target_initialized) {
                     bindless_resource_system.ConfigureRenderTargetHost(render_target_host);
                 }
-                bindless_resources_initialized = true;
             }
 
             if (create_info_cache.modules.enable_ibl_host) {
@@ -389,15 +389,10 @@ public:
                                              gpu_memory_host,
                                              sampler_host,
                                              create_info_cache.glyph_upload);
-                if (bindless_resources_initialized) {
-                    glyph_upload_host.ConfigureBindless({
-                        .descriptor_host = &descriptor_host,
-                        .image_table = bindless_resource_system.SampledImageTable(),
-                        .sampler_slot = bindless_resource_system.ResolveRegisteredSamplerSlot(
-                            glyph_upload_host.SamplerId()),
-                    });
-                }
                 glyph_upload_initialized = true;
+                if (bindless_resources_initialized) {
+                    bindless_resource_system.ConfigureGlyphUploadHost(glyph_upload_host);
+                }
             }
 
             if (create_info_cache.modules.enable_particle_upload_host) {
@@ -467,15 +462,6 @@ public:
                 ibl_bake_initialized = false;
             }
             if (bindless_resources_initialized) {
-                if (texture_initialized) {
-                    texture_host.ConfigureBindless({});
-                }
-                if (render_target_initialized) {
-                    render_target_host.ConfigureBindless({});
-                }
-                if (glyph_upload_initialized) {
-                    glyph_upload_host.ConfigureBindless({});
-                }
                 bindless_resource_system.Shutdown(platform_host.Context());
                 bindless_resources_initialized = false;
             }
@@ -585,15 +571,6 @@ public:
         }
 
         if (bindless_resources_initialized) {
-            if (texture_initialized) {
-                texture_host.ConfigureBindless({});
-            }
-            if (render_target_initialized) {
-                render_target_host.ConfigureBindless({});
-            }
-            if (glyph_upload_initialized) {
-                glyph_upload_host.ConfigureBindless({});
-            }
             bindless_resource_system.Shutdown(platform_host.Context());
             bindless_resources_initialized = false;
         }

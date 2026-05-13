@@ -184,6 +184,8 @@ void TextureHost::Initialize(VulkanContext& context_,
     textures.clear();
     retired_textures.Clear();
     stats = {};
+    last_submitted_value_seen = 0U;
+    completed_submit_value_seen = 0U;
 
     if (create_info_cache.reserve_texture_count > 0U) {
         textures.reserve(create_info_cache.reserve_texture_count);
@@ -215,6 +217,8 @@ void TextureHost::Shutdown(VulkanContext& context_) {
     bindless_config = {};
     create_info_cache = {};
     stats = {};
+    last_submitted_value_seen = 0U;
+    completed_submit_value_seen = 0U;
     initialized = false;
 }
 
@@ -224,13 +228,25 @@ void TextureHost::BeginFrame(VulkanContext& context_,
         throw std::runtime_error("TextureHost::BeginFrame called before Initialize");
     }
 
+    completed_submit_value_seen = std::max(completed_submit_value_seen, completed_submit_value_);
     CollectRetiredTextures(context_, completed_submit_value_);
+    SyncBindlessRecords();
     stats.texture_count = static_cast<std::uint32_t>(textures.size());
     stats.retired_texture_count = retired_textures.PendingCount();
 }
 
-void TextureHost::ConfigureBindless(const TextureHostBindlessConfig& bindless_config_) noexcept {
+void TextureHost::ConfigureBindless(const TextureHostBindlessConfig& bindless_config_) {
+    if (bindless_config.SameBinding(bindless_config_)) {
+        return;
+    }
+    InvalidateBindlessRecords(bindless_config);
     bindless_config = bindless_config_;
+    SyncBindlessRecords();
+    if (initialized) {
+        ++stats.revision;
+        stats.texture_count = static_cast<std::uint32_t>(textures.size());
+        stats.retired_texture_count = retired_textures.PendingCount();
+    }
 }
 
 void TextureHost::UploadTexture(VulkanContext& context_,
@@ -260,6 +276,8 @@ void TextureHost::UploadTexture(VulkanContext& context_,
         throw std::runtime_error("TextureHost::UploadTexture requires Vulkan 1.3 synchronization2");
     }
 
+    last_submitted_value_seen = std::max(last_submitted_value_seen, last_submitted_value_);
+    completed_submit_value_seen = std::max(completed_submit_value_seen, completed_submit_value_);
     CollectRetiredTextures(context_, completed_submit_value_);
     const std::size_t lower_bound_index = LowerBoundTextureIndex(upload_info_.create.texture_id);
 
@@ -411,21 +429,7 @@ void TextureHost::UploadTexture(VulkanContext& context_,
     record.current_layout = record.shader_read_layout;
     CaptureCpuBaseLevelSnapshot(record, upload_info_);
     ++record.revision;
-    if (bindless_config.Enabled()) {
-        if (!record.bindless.image_slot.IsValid()) {
-            record.bindless.image_slot =
-                bindless_config.descriptor_host->AllocateBindlessSlot(bindless_config.image_table);
-        }
-        if (bindless_config.default_sampler_slot.IsValid()) {
-            record.bindless.default_sampler_slot = bindless_config.default_sampler_slot;
-        }
-        bindless_config.descriptor_host->QueueBindlessImageWrite(
-            bindless_config.image_table,
-            record.bindless.image_slot,
-            record.resource.default_view,
-            record.shader_read_layout);
-        record.bindless.image_revision_written = record.revision;
-    }
+    SyncBindlessRecords();
     stats.uploaded_bytes += uploaded_bytes;
     stats.texture_count = static_cast<std::uint32_t>(textures.size());
     stats.retired_texture_count = retired_textures.PendingCount();
@@ -443,6 +447,8 @@ bool TextureHost::RemoveTexture(VulkanContext& context_,
         return false;
     }
 
+    last_submitted_value_seen = std::max(last_submitted_value_seen, last_submitted_value_);
+    completed_submit_value_seen = std::max(completed_submit_value_seen, completed_submit_value_);
     CollectRetiredTextures(context_, completed_submit_value_);
     const std::size_t lower_bound_index = LowerBoundTextureIndex(texture_id_);
     if (lower_bound_index >= textures.size() ||
@@ -493,10 +499,7 @@ render::BindlessSlot TextureHost::ResolveBindlessImageSlot(TextureId texture_id_
 }
 
 render::BindlessSlot TextureHost::ResolveBindlessSamplerSlot(TextureId texture_id_) const noexcept {
-    const TextureRecord* record = FindTexture(texture_id_);
-    if (record != nullptr && record->bindless.default_sampler_slot.IsValid()) {
-        return record->bindless.default_sampler_slot;
-    }
+    (void)texture_id_;
     return bindless_config.default_sampler_slot;
 }
 
@@ -584,6 +587,7 @@ void TextureHost::RetireTexture(TextureRecord& record_,
     record_.resource = {};
     record_.current_layout = VK_IMAGE_LAYOUT_UNDEFINED;
     record_.revision = 0U;
+    record_.bindless.image_revision_written = 0U;
 }
 
 void TextureHost::CollectRetiredTextures(VulkanContext& context_,
@@ -598,6 +602,56 @@ void TextureHost::DestroyRetiredTextures(VulkanContext& context_) noexcept {
     (void)retired_textures.Flush([&](resource::ImageResource& resource_) {
         resource::ImageHost::DestroyImage(context_, resource_);
     });
+}
+
+void TextureHost::InvalidateBindlessRecords(const TextureHostBindlessConfig& bindless_config_) {
+    const std::uint64_t retire_value = ComputeBindlessRetireValue();
+    for (TextureRecord& record : textures) {
+        if (bindless_config_.Enabled() && record.bindless.image_slot.IsValid()) {
+            bindless_config_.descriptor_host->QueueBindlessPlaceholderWrite(
+                bindless_config_.image_table,
+                record.bindless.image_slot);
+            bindless_config_.descriptor_host->FreeBindlessSlotDeferred(
+                bindless_config_.image_table,
+                record.bindless.image_slot,
+                retire_value);
+            record.bindless.retire_value = retire_value;
+        }
+        record.bindless = {};
+    }
+}
+
+void TextureHost::SyncBindlessRecords() {
+    if (!bindless_config.Enabled()) {
+        return;
+    }
+
+    for (TextureRecord& record : textures) {
+        if (record.resource.default_view == VK_NULL_HANDLE ||
+            record.current_layout == VK_IMAGE_LAYOUT_UNDEFINED) {
+            continue;
+        }
+
+        if (!record.bindless.image_slot.IsValid()) {
+            record.bindless.image_slot =
+                bindless_config.descriptor_host->AllocateBindlessSlot(bindless_config.image_table);
+            record.bindless.image_revision_written = 0U;
+        }
+
+        if (record.bindless.image_revision_written == record.revision) {
+            continue;
+        }
+
+        bindless_config.descriptor_host->QueueBindlessImageWrite(bindless_config.image_table,
+                                                                 record.bindless.image_slot,
+                                                                 record.resource.default_view,
+                                                                 record.shader_read_layout);
+        record.bindless.image_revision_written = record.revision;
+    }
+}
+
+std::uint64_t TextureHost::ComputeBindlessRetireValue() const noexcept {
+    return std::max(last_submitted_value_seen, completed_submit_value_seen);
 }
 
 resource::ImageResource TextureHost::CreateImageResource(VulkanContext& context_,

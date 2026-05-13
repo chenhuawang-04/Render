@@ -83,8 +83,13 @@ void GlyphUploadHost::Shutdown(VulkanContext& context_) {
     initialized = false;
 }
 
-void GlyphUploadHost::ConfigureBindless(const GlyphUploadHostBindlessConfig& bindless_config_) noexcept {
+void GlyphUploadHost::ConfigureBindless(const GlyphUploadHostBindlessConfig& bindless_config_) {
+    if (bindless_config.SameBinding(bindless_config_)) {
+        return;
+    }
+    InvalidateBindlessPageResources(bindless_config);
     bindless_config = bindless_config_;
+    SyncBindlessPageResources();
 }
 
 void GlyphUploadHost::UploadDirtyPages(VulkanContext& context_,
@@ -342,15 +347,6 @@ void GlyphUploadHost::EnsurePageResources(VulkanContext& context_,
                                                               *gpu_memory_host);
             resource.current_layout = image_create_info.initial_layout;
             resource.generation = page_view.generation;
-            if (bindless_config.Enabled()) {
-                resource.image_slot =
-                    bindless_config.descriptor_host->AllocateBindlessSlot(bindless_config.image_table);
-                bindless_config.descriptor_host->QueueBindlessImageWrite(bindless_config.image_table,
-                                                                         resource.image_slot,
-                                                                         resource.image.default_view,
-                                                                         create_info_cache.shader_read_layout);
-                resource.bindless_image_revision_written = 1U;
-            }
             return resource;
         };
 
@@ -372,6 +368,7 @@ void GlyphUploadHost::EnsurePageResources(VulkanContext& context_,
         }
     }
 
+    SyncBindlessPageResources();
     stats.page_count = static_cast<std::uint32_t>(pages.size());
 }
 
@@ -395,6 +392,53 @@ void GlyphUploadHost::RetirePageResource(PageResource& page_resource_,
     page_resource_.image = {};
     page_resource_.current_layout = VK_IMAGE_LAYOUT_UNDEFINED;
     page_resource_.generation = 0U;
+}
+
+void GlyphUploadHost::InvalidateBindlessPageResources(const GlyphUploadHostBindlessConfig& bindless_config_) {
+    const std::uint64_t retire_value = std::max(last_submitted_value_seen, completed_submit_value_seen);
+    for (PageResource& page : pages) {
+        if (bindless_config_.Enabled() && page.image_slot.IsValid()) {
+            bindless_config_.descriptor_host->QueueBindlessPlaceholderWrite(bindless_config_.image_table,
+                                                                            page.image_slot);
+            bindless_config_.descriptor_host->FreeBindlessSlotDeferred(bindless_config_.image_table,
+                                                                       page.image_slot,
+                                                                       retire_value);
+        }
+        page.image_slot = {};
+        page.bindless_image_revision_written = 0U;
+    }
+}
+
+void GlyphUploadHost::SyncBindlessPageResources() {
+    if (!bindless_config.Enabled()) {
+        return;
+    }
+
+    for (PageResource& page : pages) {
+        if (page.image.default_view == VK_NULL_HANDLE) {
+            continue;
+        }
+
+        if (!page.image_slot.IsValid()) {
+            page.image_slot =
+                bindless_config.descriptor_host->AllocateBindlessSlot(bindless_config.image_table);
+            page.bindless_image_revision_written = 0U;
+        }
+
+        if (page.bindless_image_revision_written == page.generation) {
+            continue;
+        }
+
+        const VkImageLayout shader_read_layout =
+            page.current_layout == VK_IMAGE_LAYOUT_UNDEFINED
+                ? create_info_cache.shader_read_layout
+                : page.current_layout;
+        bindless_config.descriptor_host->QueueBindlessImageWrite(bindless_config.image_table,
+                                                                 page.image_slot,
+                                                                 page.image.default_view,
+                                                                 shader_read_layout);
+        page.bindless_image_revision_written = page.generation;
+    }
 }
 
 void GlyphUploadHost::CollectRetiredPageResources(VulkanContext& context_,

@@ -27,6 +27,10 @@ namespace vr::shadow {
 class ShadowAtlasHost;
 }
 
+namespace vr::text {
+class GlyphUploadHost;
+}
+
 namespace vr::render {
 class RenderTargetHost;
 }
@@ -58,6 +62,7 @@ struct BindlessResourceSystemCreateInfo final {
 
 struct BindlessResourceSystemStats final {
     bool initialized = false;
+    std::uint64_t revision = 0U;
     BindlessTableId sampled_image_table{};
     BindlessTableId sampler_table{};
     BindlessSlot placeholder_image_slot{};
@@ -85,17 +90,18 @@ public:
 
     void Shutdown(VulkanContext& context_) noexcept;
 
-    void ConfigureTextureHost(asset::TextureHost& texture_host_) const noexcept;
-    void ConfigureSurfaceImageHost(surface::SurfaceImageHost& surface_image_host_) const noexcept;
-    void ConfigureGeometryImageHost(geometry::GeometryImageHost& geometry_image_host_) const noexcept;
-    void ConfigureShadowAtlasHost(shadow::ShadowAtlasHost& shadow_atlas_host_) const noexcept;
-    void ConfigureRenderTargetHost(render::RenderTargetHost& render_target_host_) const noexcept;
+    void ConfigureTextureHost(asset::TextureHost& texture_host_) const;
+    void ConfigureSurfaceImageHost(surface::SurfaceImageHost& surface_image_host_) const;
+    void ConfigureGeometryImageHost(geometry::GeometryImageHost& geometry_image_host_) const;
+    void ConfigureShadowAtlasHost(shadow::ShadowAtlasHost& shadow_atlas_host_) const;
+    void ConfigureRenderTargetHost(render::RenderTargetHost& render_target_host_) const;
+    void ConfigureGlyphUploadHost(text::GlyphUploadHost& glyph_upload_host_) const;
 
     [[nodiscard]] BindlessSlot ResolveTextureImageSlot(const asset::TextureHost& texture_host_,
                                                        asset::TextureId texture_id_) const noexcept;
     [[nodiscard]] BindlessSlot ResolveTextureSamplerSlot(const asset::TextureHost& texture_host_,
                                                          asset::TextureId texture_id_) const noexcept;
-    [[nodiscard]] BindlessSlot ResolveRegisteredSamplerSlot(resource::SamplerId sampler_id_) const noexcept;
+    [[nodiscard]] BindlessSlot ResolveRegisteredSamplerSlot(resource::SamplerId sampler_id_) const;
 
     [[nodiscard]] VkDescriptorSet SampledImageSet() const noexcept;
     [[nodiscard]] VkDescriptorSet SamplerSet() const noexcept;
@@ -112,6 +118,7 @@ public:
     [[nodiscard]] const resource::ImageResource& PlaceholderImage() const noexcept;
     [[nodiscard]] const BindlessResourceSystemStats& Stats() const noexcept;
     [[nodiscard]] bool IsInitialized() const noexcept;
+    [[nodiscard]] std::uint64_t Revision() const noexcept;
 
 private:
     void RefreshStats(DescriptorHost* descriptor_host_) const noexcept;
@@ -129,6 +136,7 @@ private:
     BindlessSlot placeholder_image_array_slot_{};
     BindlessSlot default_sampler_slot_{.index = 0U, .generation = 1U};
     VkSampler default_sampler_ = VK_NULL_HANDLE;
+    std::uint64_t revision_ = 0U;
     mutable std::vector<BindlessSlot> registered_sampler_slots_{};
     mutable BindlessResourceSystemStats stats_{};
     bool initialized_ = false;

@@ -231,6 +231,7 @@ void GeometryRenderer3D::Initialize(const GeometryRenderer3DCreateInfo& create_i
     depth_output_target_config = {};
     active_frame_index = 0U;
     instance_range = {};
+    bindless_revision_seen = 0U;
 
     depth_images.clear();
     depth_image_initialized.clear();
@@ -369,6 +370,7 @@ void GeometryRenderer3D::Shutdown(VulkanContext& context_) {
     swapchain_extent = {};
     swapchain_format = VK_FORMAT_UNDEFINED;
     instance_range = {};
+    bindless_revision_seen = 0U;
 
     runtime_scratch.instances.clear();
     runtime_scratch.draw_batches.clear();
@@ -549,14 +551,17 @@ void GeometryRenderer3D::PrepareFrame(const render::GeometryRenderer3DPrepareVie
     if (bindless_resources == nullptr || !bindless_resources->IsInitialized()) {
         throw std::runtime_error("GeometryRenderer3D::PrepareFrame requires initialized BindlessResourceSystem");
     }
+    const std::uint64_t bindless_revision_now = bindless_resources->Revision();
     if (geometry_image_host != nullptr &&
         geometry_image_host->IsInitialized() &&
-        !geometry_image_host->BindlessConfig().Enabled()) {
+        (!geometry_image_host->BindlessConfig().Enabled() ||
+         geometry_image_host->BindlessConfig().bindless_revision != bindless_revision_now)) {
         bindless_resources->ConfigureGeometryImageHost(*geometry_image_host);
     }
     if (shadow_atlas_host != nullptr &&
         shadow_atlas_host->IsInitialized() &&
-        !shadow_atlas_host->BindlessConfig().Enabled()) {
+        (!shadow_atlas_host->BindlessConfig().Enabled() ||
+         shadow_atlas_host->BindlessConfig().bindless_revision != bindless_revision_now)) {
         bindless_resources->ConfigureShadowAtlasHost(*shadow_atlas_host);
     }
 
@@ -593,10 +598,12 @@ void GeometryRenderer3D::PrepareFrame(const render::GeometryRenderer3DPrepareVie
         image_revision_now = geometry_image_host->Stats().revision;
     }
     if (material_revision_now != material_host_revision_seen ||
-        image_revision_now != image_host_revision_seen) {
+        image_revision_now != image_host_revision_seen ||
+        bindless_revision_now != bindless_revision_seen) {
         resolved_materials.clear();
         material_host_revision_seen = material_revision_now;
         image_host_revision_seen = image_revision_now;
+        bindless_revision_seen = bindless_revision_now;
     }
 
     stats = {};
@@ -2247,12 +2254,8 @@ bool GeometryRenderer3D::ResolveMaterialBinding(std::uint32_t material_id_,
     if (material_desc != nullptr) {
         image_id = material_desc->image_id;
         if (material_desc->sampler_id.IsValid()) {
-            try {
-                out_material_push_constants_.sampler_slot =
-                    bindless_resources->ResolveRegisteredSamplerSlot(material_desc->sampler_id).index;
-            } catch (...) {
-                out_material_push_constants_.sampler_slot = bindless_resources->DefaultSamplerSlot().index;
-            }
+            out_material_push_constants_.sampler_slot =
+                bindless_resources->ResolveRegisteredSamplerSlot(material_desc->sampler_id).index;
         }
         if (image_id != 0U &&
             geometry_image_host != nullptr &&

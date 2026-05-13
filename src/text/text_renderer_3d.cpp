@@ -365,6 +365,13 @@ void TextRenderer3D::PrepareFrame(const render::TextRenderer3DPrepareView& prepa
     freetype_host = &prepare_view_.freetype;
     glyph_atlas_host = &prepare_view_.glyph_atlas;
     glyph_upload_host = &prepare_view_.glyph_upload;
+    const std::uint64_t bindless_revision_now = bindless_resources->Revision();
+    if (glyph_upload_host != nullptr &&
+        glyph_upload_host->IsInitialized() &&
+        (!glyph_upload_host->BindlessConfig().Enabled() ||
+         glyph_upload_host->BindlessConfig().bindless_revision != bindless_revision_now)) {
+        bindless_resources->ConfigureGlyphUploadHost(*glyph_upload_host);
+    }
     active_frame_index = prepare_view_.frame.frame_index;
     last_submitted_value_seen = std::max(last_submitted_value_seen,
                                          prepare_view_.progress.last_submitted_value);

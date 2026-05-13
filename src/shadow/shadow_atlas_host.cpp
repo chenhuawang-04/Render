@@ -26,6 +26,8 @@ void ShadowAtlasHost::Initialize(VulkanContext& context_,
     }
 
     stats = {};
+    last_submitted_value_seen = 0U;
+    completed_submit_value_seen = 0U;
     initialized = true;
 }
 
@@ -49,6 +51,8 @@ void ShadowAtlasHost::Shutdown(VulkanContext& context_) {
     bindless_config = {};
     create_info_cache = {};
     stats = {};
+    last_submitted_value_seen = 0U;
+    completed_submit_value_seen = 0U;
     initialized = false;
 }
 
@@ -57,13 +61,22 @@ void ShadowAtlasHost::BeginFrame(VulkanContext& context_,
     if (!initialized) {
         return;
     }
+    completed_submit_value_seen = std::max(completed_submit_value_seen, completed_submit_value_);
     CollectRetiredAtlases(context_, completed_submit_value_);
     SyncBindlessRecords();
 }
 
-void ShadowAtlasHost::ConfigureBindless(const ShadowAtlasHostBindlessConfig& bindless_config_) noexcept {
+void ShadowAtlasHost::ConfigureBindless(const ShadowAtlasHostBindlessConfig& bindless_config_) {
+    if (bindless_config.SameBinding(bindless_config_)) {
+        return;
+    }
+    InvalidateBindlessRecords(bindless_config);
     bindless_config = bindless_config_;
     SyncBindlessRecords();
+    if (initialized) {
+        ++stats.revision;
+        stats.atlas_count = static_cast<std::uint32_t>(atlases.size());
+    }
 }
 
 void ShadowAtlasHost::EnsureAtlases(VulkanContext& context_,
@@ -74,6 +87,8 @@ void ShadowAtlasHost::EnsureAtlases(VulkanContext& context_,
     if (!initialized || gpu_memory_host == nullptr) {
         return;
     }
+    last_submitted_value_seen = std::max(last_submitted_value_seen, last_submitted_value_);
+    completed_submit_value_seen = std::max(completed_submit_value_seen, completed_submit_value_);
     CollectRetiredAtlases(context_, completed_submit_value_);
 
     if (requests_ == nullptr || request_count_ == 0U) {
@@ -261,6 +276,25 @@ void ShadowAtlasHost::CollectRetiredAtlases(VulkanContext& context_,
     stats.destroyed_atlas_count += destroyed_count;
 }
 
+void ShadowAtlasHost::InvalidateBindlessRecords(const ShadowAtlasHostBindlessConfig& bindless_config_) {
+    const std::uint64_t retire_value = ComputeBindlessRetireValue();
+    for (AtlasRecord& record : atlases) {
+        if (bindless_config_.Enabled() && record.bindless.image_slot.IsValid()) {
+            bindless_config_.descriptor_host->QueueBindlessPlaceholderWrite(bindless_config_.image_table,
+                                                                            record.bindless.image_slot);
+            bindless_config_.descriptor_host->FreeBindlessSlotDeferred(bindless_config_.image_table,
+                                                                       record.bindless.image_slot,
+                                                                       retire_value);
+            record.bindless.retire_value = retire_value;
+        }
+        record.bindless = {};
+    }
+}
+
+std::uint64_t ShadowAtlasHost::ComputeBindlessRetireValue() const noexcept {
+    return std::max(last_submitted_value_seen, completed_submit_value_seen);
+}
+
 void ShadowAtlasHost::DestroyRetiredAtlases(VulkanContext& context_) noexcept {
     const std::uint32_t destroyed_count = retired_atlases.Flush([&](RetiredAtlasPayload& retired_) {
         DestroyAtlasViews(context_, retired_.layer_views);
@@ -352,7 +386,7 @@ ShadowAtlasHost::AtlasRecord ShadowAtlasHost::CreateAtlasRecord(
     return record;
 }
 
-void ShadowAtlasHost::SyncBindlessRecords() noexcept {
+void ShadowAtlasHost::SyncBindlessRecords() {
     if (!bindless_config.Enabled()) {
         return;
     }

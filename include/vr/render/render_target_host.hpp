@@ -64,9 +64,16 @@ struct RenderTargetHostStats final {
 struct RenderTargetHostBindlessConfig final {
     DescriptorHost* descriptor_host = nullptr;
     BindlessTableId image_table{};
+    std::uint64_t bindless_revision = 0U;
 
     [[nodiscard]] bool Enabled() const noexcept {
         return descriptor_host != nullptr && image_table.IsValid();
+    }
+
+    [[nodiscard]] bool SameBinding(const RenderTargetHostBindlessConfig& rhs_) const noexcept {
+        return descriptor_host == rhs_.descriptor_host &&
+               image_table.value == rhs_.image_table.value &&
+               bindless_revision == rhs_.bindless_revision;
     }
 };
 
@@ -191,7 +198,7 @@ public:
     void BeginFrame(VulkanContext& context_,
                     std::uint64_t completed_submit_value_);
 
-    void ConfigureBindless(const RenderTargetHostBindlessConfig& bindless_config_) noexcept;
+    void ConfigureBindless(const RenderTargetHostBindlessConfig& bindless_config_);
 
     [[nodiscard]] RenderTargetHandle CreatePersistentTarget(VulkanContext& context_,
                                                             const RenderTargetDesc& desc_,
@@ -261,12 +268,14 @@ private:
     [[nodiscard]] std::uint32_t AllocateSlot() noexcept;
     void RetireRecord(TargetRecord& record_,
                       std::uint64_t retire_value_);
+    void InvalidateBindlessRecords(const RenderTargetHostBindlessConfig& bindless_config_);
     void CollectRetiredTargets(VulkanContext& context_,
                                std::uint64_t completed_submit_value_);
     void DestroyRetiredTargets(VulkanContext& context_) noexcept;
     void DestroyRetiredPayload(VulkanContext& context_,
                                RetiredTargetPayload& payload_) noexcept;
     void ResetRecord(TargetRecord& record_) noexcept;
+    [[nodiscard]] std::uint64_t ComputeBindlessRetireValue() const noexcept;
     void RefreshStats() noexcept;
     [[nodiscard]] bool SupportsBindlessSampling(const TargetRecord& record_) const noexcept;
     [[nodiscard]] VkImageView ResolveDefaultImageView(const TargetRecord& record_) const noexcept;
@@ -299,6 +308,8 @@ private:
     RenderTargetMcVector<std::uint32_t> free_indices{};
     RetireBus<RetiredTargetPayload> retired_targets{};
     RenderTargetHostStats stats{};
+    std::uint64_t last_submitted_value_seen = 0U;
+    std::uint64_t completed_submit_value_seen = 0U;
     bool initialized = false;
 };
 

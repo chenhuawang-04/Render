@@ -25,6 +25,8 @@ void GeometryImageHost::Initialize(VulkanContext& context_,
     images.clear();
     retired_images.Clear();
     stats = {};
+    last_submitted_value_seen = 0U;
+    completed_submit_value_seen = 0U;
 
     if (create_info_cache.reserve_image_count > 0U) {
         images.reserve(create_info_cache.reserve_image_count);
@@ -56,6 +58,8 @@ void GeometryImageHost::Shutdown(VulkanContext& context_) {
     bindless_config = {};
     create_info_cache = {};
     stats = {};
+    last_submitted_value_seen = 0U;
+    completed_submit_value_seen = 0U;
     initialized = false;
 }
 
@@ -65,15 +69,25 @@ void GeometryImageHost::BeginFrame(VulkanContext& context_,
         throw std::runtime_error("GeometryImageHost::BeginFrame called before Initialize");
     }
 
+    completed_submit_value_seen = std::max(completed_submit_value_seen, completed_submit_value_);
     CollectRetiredImages(context_, completed_submit_value_);
     SyncBindlessRecords();
     stats.image_count = static_cast<std::uint32_t>(images.size());
     stats.retired_image_count = retired_images.PendingCount();
 }
 
-void GeometryImageHost::ConfigureBindless(const GeometryImageHostBindlessConfig& bindless_config_) noexcept {
+void GeometryImageHost::ConfigureBindless(const GeometryImageHostBindlessConfig& bindless_config_) {
+    if (bindless_config.SameBinding(bindless_config_)) {
+        return;
+    }
+    InvalidateBindlessRecords(bindless_config);
     bindless_config = bindless_config_;
     SyncBindlessRecords();
+    if (initialized) {
+        ++stats.revision;
+        stats.image_count = static_cast<std::uint32_t>(images.size());
+        stats.retired_image_count = retired_images.PendingCount();
+    }
 }
 
 void GeometryImageHost::UploadImage(VulkanContext& context_,
@@ -101,6 +115,8 @@ void GeometryImageHost::UploadImage(VulkanContext& context_,
         throw std::runtime_error("GeometryImageHost::UploadImage requires Vulkan 1.3 synchronization2");
     }
 
+    last_submitted_value_seen = std::max(last_submitted_value_seen, last_submitted_value_);
+    completed_submit_value_seen = std::max(completed_submit_value_seen, completed_submit_value_);
     CollectRetiredImages(context_, completed_submit_value_);
     const std::size_t lower_bound_index = LowerBoundImageIndex(upload_info_.image_id);
 
@@ -228,6 +244,8 @@ bool GeometryImageHost::RemoveImage(VulkanContext& context_,
         return false;
     }
 
+    last_submitted_value_seen = std::max(last_submitted_value_seen, last_submitted_value_);
+    completed_submit_value_seen = std::max(completed_submit_value_seen, completed_submit_value_);
     CollectRetiredImages(context_, completed_submit_value_);
     const std::size_t lower_bound_index = LowerBoundImageIndex(image_id_);
     if (lower_bound_index >= images.size() ||
@@ -339,7 +357,28 @@ void GeometryImageHost::DestroyRetiredImages(VulkanContext& context_) noexcept {
     });
 }
 
-void GeometryImageHost::SyncBindlessRecords() noexcept {
+void GeometryImageHost::InvalidateBindlessRecords(const GeometryImageHostBindlessConfig& bindless_config_) {
+    const std::uint64_t retire_value = ComputeBindlessRetireValue();
+    for (ImageRecord& record : images) {
+        if (bindless_config_.Enabled() && record.bindless.image_slot.IsValid()) {
+            bindless_config_.descriptor_host->QueueBindlessPlaceholderWrite(
+                bindless_config_.image_table,
+                record.bindless.image_slot);
+            bindless_config_.descriptor_host->FreeBindlessSlotDeferred(
+                bindless_config_.image_table,
+                record.bindless.image_slot,
+                retire_value);
+            record.bindless.retire_value = retire_value;
+        }
+        record.bindless = {};
+    }
+}
+
+std::uint64_t GeometryImageHost::ComputeBindlessRetireValue() const noexcept {
+    return std::max(last_submitted_value_seen, completed_submit_value_seen);
+}
+
+void GeometryImageHost::SyncBindlessRecords() {
     if (!bindless_config.Enabled()) {
         return;
     }

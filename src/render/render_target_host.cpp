@@ -3,6 +3,7 @@
 #include "vr/render/descriptor_host.hpp"
 #include "vr/resource/gpu_memory_host.hpp"
 
+#include <algorithm>
 #include <array>
 #include <limits>
 #include <stdexcept>
@@ -57,6 +58,8 @@ void RenderTargetHost::Initialize(VulkanContext& context_,
     retired_targets.Clear();
     bindless_config = {};
     stats = {};
+    last_submitted_value_seen = 0U;
+    completed_submit_value_seen = 0U;
 
     if (create_info_cache.reserve_target_count > 0U) {
         targets.reserve(create_info_cache.reserve_target_count);
@@ -97,6 +100,8 @@ void RenderTargetHost::Shutdown(VulkanContext& context_) {
     bindless_config = {};
     create_info_cache = {};
     stats = {};
+    last_submitted_value_seen = 0U;
+    completed_submit_value_seen = 0U;
     initialized = false;
 }
 
@@ -106,12 +111,17 @@ void RenderTargetHost::BeginFrame(VulkanContext& context_,
         throw std::runtime_error("RenderTargetHost::BeginFrame called before Initialize");
     }
 
+    completed_submit_value_seen = std::max(completed_submit_value_seen, completed_submit_value_);
     CollectRetiredTargets(context_, completed_submit_value_);
     RefreshStats();
 }
 
 void RenderTargetHost::ConfigureBindless(
-    const RenderTargetHostBindlessConfig& bindless_config_) noexcept {
+    const RenderTargetHostBindlessConfig& bindless_config_) {
+    if (bindless_config.SameBinding(bindless_config_)) {
+        return;
+    }
+    InvalidateBindlessRecords(bindless_config);
     bindless_config = bindless_config_;
 }
 
@@ -200,6 +210,8 @@ EnsureRenderTargetResult RenderTargetHost::EnsurePersistentTarget(
             "RenderTargetHost::EnsurePersistentTarget requires persistent/history desc");
     }
     ValidateOwnedDesc(normalized_desc);
+    last_submitted_value_seen = std::max(last_submitted_value_seen, last_submitted_value_);
+    completed_submit_value_seen = std::max(completed_submit_value_seen, completed_submit_value_);
     CollectRetiredTargets(context_, completed_submit_value_);
 
     EnsureRenderTargetResult result{};
@@ -375,6 +387,8 @@ bool RenderTargetHost::DestroyTarget(VulkanContext& context_,
         throw std::runtime_error("RenderTargetHost::DestroyTarget called before Initialize");
     }
 
+    last_submitted_value_seen = std::max(last_submitted_value_seen, last_submitted_value_);
+    completed_submit_value_seen = std::max(completed_submit_value_seen, completed_submit_value_);
     CollectRetiredTargets(context_, completed_submit_value_);
     TargetRecord* record = Resolve(handle_);
     if (record == nullptr) {
@@ -875,6 +889,24 @@ void RenderTargetHost::RetireRecord(TargetRecord& record_,
     }
 }
 
+void RenderTargetHost::InvalidateBindlessRecords(const RenderTargetHostBindlessConfig& bindless_config_) {
+    const std::uint64_t retire_value = ComputeBindlessRetireValue();
+    for (TargetRecord& record : targets) {
+        if (!record.active) {
+            continue;
+        }
+        if (bindless_config_.Enabled() && record.bindless_image_slot.IsValid()) {
+            bindless_config_.descriptor_host->QueueBindlessPlaceholderWrite(bindless_config_.image_table,
+                                                                            record.bindless_image_slot);
+            bindless_config_.descriptor_host->FreeBindlessSlotDeferred(bindless_config_.image_table,
+                                                                       record.bindless_image_slot,
+                                                                       retire_value);
+        }
+        record.bindless_image_slot = {};
+        record.bindless_resource_revision_written = 0U;
+    }
+}
+
 void RenderTargetHost::CollectRetiredTargets(VulkanContext& context_,
                                              std::uint64_t completed_submit_value_) {
     if (retired_targets.Empty()) {
@@ -904,6 +936,10 @@ void RenderTargetHost::DestroyRetiredPayload(VulkanContext& context_,
 
 void RenderTargetHost::ResetRecord(TargetRecord& record_) noexcept {
     record_ = {};
+}
+
+std::uint64_t RenderTargetHost::ComputeBindlessRetireValue() const noexcept {
+    return std::max(last_submitted_value_seen, completed_submit_value_seen);
 }
 
 void RenderTargetHost::RefreshStats() noexcept {

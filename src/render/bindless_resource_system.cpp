@@ -8,9 +8,11 @@
 #include "vr/resource/sampler_host.hpp"
 #include "vr/shadow/shadow_atlas_host.hpp"
 #include "vr/surface/surface_image_host.hpp"
+#include "vr/text/glyph_upload_host.hpp"
 #include "vr/vulkan_context.hpp"
 
 #include <algorithm>
+#include <limits>
 #include <stdexcept>
 
 namespace vr::render {
@@ -21,6 +23,12 @@ struct ResolvedBindlessTableConfig final {
     std::uint32_t capacity = 1U;
     bool enable_update_after_bind = false;
 };
+
+[[nodiscard]] std::uint64_t NextBindlessRevision(std::uint64_t current_) noexcept {
+    return current_ == (std::numeric_limits<std::uint64_t>::max)()
+        ? 1ULL
+        : (current_ + 1ULL);
+}
 
 [[nodiscard]] bool SupportsUpdateAfterBind(const DescriptorIndexingCaps& caps_,
                                            VkDescriptorType descriptor_type_) noexcept {
@@ -349,6 +357,7 @@ void BindlessResourceSystem::Initialize(VulkanContext& context_,
         default_sampler_slot_ = BindlessSlot{.index = 0U, .generation = 1U};
         registered_sampler_slots_.clear();
         registered_sampler_slots_.resize(sampler_host_.Stats().sampler_count);
+        revision_ = NextBindlessRevision(revision_);
 
         initialized_ = true;
         RefreshStats(&descriptor_host);
@@ -383,7 +392,7 @@ void BindlessResourceSystem::Shutdown(VulkanContext& context_) noexcept {
     initialized_ = false;
 }
 
-void BindlessResourceSystem::ConfigureTextureHost(asset::TextureHost& texture_host_) const noexcept {
+void BindlessResourceSystem::ConfigureTextureHost(asset::TextureHost& texture_host_) const {
     if (!initialized_) {
         texture_host_.ConfigureBindless({});
         return;
@@ -392,11 +401,12 @@ void BindlessResourceSystem::ConfigureTextureHost(asset::TextureHost& texture_ho
         .descriptor_host = descriptor_host_,
         .image_table = sampled_image_table_,
         .default_sampler_slot = default_sampler_slot_,
+        .bindless_revision = revision_,
     });
 }
 
 void BindlessResourceSystem::ConfigureSurfaceImageHost(
-    surface::SurfaceImageHost& surface_image_host_) const noexcept {
+    surface::SurfaceImageHost& surface_image_host_) const {
     if (!initialized_) {
         surface_image_host_.ConfigureBindless({});
         return;
@@ -404,11 +414,12 @@ void BindlessResourceSystem::ConfigureSurfaceImageHost(
     surface_image_host_.ConfigureBindless({
         .descriptor_host = descriptor_host_,
         .image_table = sampled_image_table_,
+        .bindless_revision = revision_,
     });
 }
 
 void BindlessResourceSystem::ConfigureGeometryImageHost(
-    geometry::GeometryImageHost& geometry_image_host_) const noexcept {
+    geometry::GeometryImageHost& geometry_image_host_) const {
     if (!initialized_) {
         geometry_image_host_.ConfigureBindless({});
         return;
@@ -416,11 +427,12 @@ void BindlessResourceSystem::ConfigureGeometryImageHost(
     geometry_image_host_.ConfigureBindless({
         .descriptor_host = descriptor_host_,
         .image_table = sampled_image_table_,
+        .bindless_revision = revision_,
     });
 }
 
 void BindlessResourceSystem::ConfigureShadowAtlasHost(
-    shadow::ShadowAtlasHost& shadow_atlas_host_) const noexcept {
+    shadow::ShadowAtlasHost& shadow_atlas_host_) const {
     if (!initialized_) {
         shadow_atlas_host_.ConfigureBindless({});
         return;
@@ -428,10 +440,11 @@ void BindlessResourceSystem::ConfigureShadowAtlasHost(
     shadow_atlas_host_.ConfigureBindless({
         .descriptor_host = descriptor_host_,
         .image_table = sampled_image_table_,
+        .bindless_revision = revision_,
     });
 }
 
-void BindlessResourceSystem::ConfigureRenderTargetHost(render::RenderTargetHost& render_target_host_) const noexcept {
+void BindlessResourceSystem::ConfigureRenderTargetHost(render::RenderTargetHost& render_target_host_) const {
     if (!initialized_) {
         render_target_host_.ConfigureBindless({});
         return;
@@ -439,6 +452,20 @@ void BindlessResourceSystem::ConfigureRenderTargetHost(render::RenderTargetHost&
     render_target_host_.ConfigureBindless({
         .descriptor_host = descriptor_host_,
         .image_table = sampled_image_table_,
+        .bindless_revision = revision_,
+    });
+}
+
+void BindlessResourceSystem::ConfigureGlyphUploadHost(text::GlyphUploadHost& glyph_upload_host_) const {
+    if (!initialized_) {
+        glyph_upload_host_.ConfigureBindless({});
+        return;
+    }
+    glyph_upload_host_.ConfigureBindless({
+        .descriptor_host = descriptor_host_,
+        .image_table = sampled_image_table_,
+        .sampler_slot = ResolveRegisteredSamplerSlot(glyph_upload_host_.SamplerId()),
+        .bindless_revision = revision_,
     });
 }
 
@@ -460,7 +487,7 @@ BindlessSlot BindlessResourceSystem::ResolveTextureSamplerSlot(const asset::Text
     return resolved.IsValid() ? resolved : default_sampler_slot_;
 }
 
-BindlessSlot BindlessResourceSystem::ResolveRegisteredSamplerSlot(resource::SamplerId sampler_id_) const noexcept {
+BindlessSlot BindlessResourceSystem::ResolveRegisteredSamplerSlot(resource::SamplerId sampler_id_) const {
     if (!initialized_ || descriptor_host_ == nullptr || sampler_host_ == nullptr || !sampler_id_.IsValid()) {
         return default_sampler_slot_;
     }
@@ -553,9 +580,14 @@ bool BindlessResourceSystem::IsInitialized() const noexcept {
     return initialized_;
 }
 
+std::uint64_t BindlessResourceSystem::Revision() const noexcept {
+    return revision_;
+}
+
 void BindlessResourceSystem::RefreshStats(DescriptorHost* descriptor_host_) const noexcept {
     stats_ = {};
     stats_.initialized = initialized_;
+    stats_.revision = revision_;
     stats_.sampled_image_table = sampled_image_table_;
     stats_.sampler_table = sampler_table_;
     stats_.placeholder_image_slot = placeholder_image_slot_;

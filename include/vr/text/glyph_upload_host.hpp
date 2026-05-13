@@ -36,9 +36,18 @@ struct GlyphUploadHostBindlessConfig final {
     render::DescriptorHost* descriptor_host = nullptr;
     render::BindlessTableId image_table{};
     render::BindlessSlot sampler_slot{};
+    std::uint64_t bindless_revision = 0U;
 
     [[nodiscard]] bool Enabled() const noexcept {
         return descriptor_host != nullptr && image_table.IsValid() && sampler_slot.IsValid();
+    }
+
+    [[nodiscard]] bool SameBinding(const GlyphUploadHostBindlessConfig& rhs_) const noexcept {
+        return descriptor_host == rhs_.descriptor_host &&
+               image_table.value == rhs_.image_table.value &&
+               sampler_slot.index == rhs_.sampler_slot.index &&
+               sampler_slot.generation == rhs_.sampler_slot.generation &&
+               bindless_revision == rhs_.bindless_revision;
     }
 };
 
@@ -69,7 +78,7 @@ public:
 
     void Shutdown(VulkanContext& context_);
 
-    void ConfigureBindless(const GlyphUploadHostBindlessConfig& bindless_config_) noexcept;
+    void ConfigureBindless(const GlyphUploadHostBindlessConfig& bindless_config_);
 
     void UploadDirtyPages(VulkanContext& context_,
                           render::UploadHost& upload_host_,
@@ -103,6 +112,8 @@ private:
     void EnsurePageResources(VulkanContext& context_, const GlyphAtlasHost& atlas_host_);
     void RetirePageResource(PageResource& page_resource_,
                             std::uint64_t retire_value_);
+    void InvalidateBindlessPageResources(const GlyphUploadHostBindlessConfig& bindless_config_);
+    void SyncBindlessPageResources();
     void CollectRetiredPageResources(VulkanContext& context_,
                                      std::uint64_t completed_submit_value_);
     void DestroyRetiredPageResources(VulkanContext& context_) noexcept;

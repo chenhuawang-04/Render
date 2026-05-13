@@ -25,6 +25,8 @@ void SurfaceImageHost::Initialize(VulkanContext& context_,
     images.clear();
     retired_images.Clear();
     stats = {};
+    last_submitted_value_seen = 0U;
+    completed_submit_value_seen = 0U;
 
     if (create_info_cache.reserve_image_count > 0U) {
         images.reserve(create_info_cache.reserve_image_count);
@@ -56,6 +58,8 @@ void SurfaceImageHost::Shutdown(VulkanContext& context_) {
     bindless_config = {};
     create_info_cache = {};
     stats = {};
+    last_submitted_value_seen = 0U;
+    completed_submit_value_seen = 0U;
     initialized = false;
 }
 
@@ -65,13 +69,25 @@ void SurfaceImageHost::BeginFrame(VulkanContext& context_,
         throw std::runtime_error("SurfaceImageHost::BeginFrame called before Initialize");
     }
 
+    completed_submit_value_seen = std::max(completed_submit_value_seen, completed_submit_value_);
     CollectRetiredImages(context_, completed_submit_value_);
+    SyncBindlessRecords();
     stats.image_count = static_cast<std::uint32_t>(images.size());
     stats.retired_image_count = retired_images.PendingCount();
 }
 
-void SurfaceImageHost::ConfigureBindless(const SurfaceImageHostBindlessConfig& bindless_config_) noexcept {
+void SurfaceImageHost::ConfigureBindless(const SurfaceImageHostBindlessConfig& bindless_config_) {
+    if (bindless_config.SameBinding(bindless_config_)) {
+        return;
+    }
+    InvalidateBindlessRecords(bindless_config);
     bindless_config = bindless_config_;
+    SyncBindlessRecords();
+    if (initialized) {
+        ++stats.revision;
+        stats.image_count = static_cast<std::uint32_t>(images.size());
+        stats.retired_image_count = retired_images.PendingCount();
+    }
 }
 
 void SurfaceImageHost::UploadImage(VulkanContext& context_,
@@ -99,6 +115,8 @@ void SurfaceImageHost::UploadImage(VulkanContext& context_,
         throw std::runtime_error("SurfaceImageHost::UploadImage requires Vulkan 1.3 synchronization2");
     }
 
+    last_submitted_value_seen = std::max(last_submitted_value_seen, last_submitted_value_);
+    completed_submit_value_seen = std::max(completed_submit_value_seen, completed_submit_value_);
     CollectRetiredImages(context_, completed_submit_value_);
     const std::size_t lower_bound_index = LowerBoundImageIndex(upload_info_.image_id);
 
@@ -208,18 +226,7 @@ void SurfaceImageHost::UploadImage(VulkanContext& context_,
 
     record.current_layout = record.shader_read_layout;
     ++record.revision;
-    if (bindless_config.Enabled()) {
-        if (!record.bindless.image_slot.IsValid()) {
-            record.bindless.image_slot =
-                bindless_config.descriptor_host->AllocateBindlessSlot(bindless_config.image_table);
-        }
-        bindless_config.descriptor_host->QueueBindlessImageWrite(
-            bindless_config.image_table,
-            record.bindless.image_slot,
-            record.resource.default_view,
-            record.shader_read_layout);
-        record.bindless.revision_written = record.revision;
-    }
+    SyncBindlessRecords();
     stats.uploaded_bytes += upload_size_bytes;
     stats.image_count = static_cast<std::uint32_t>(images.size());
     stats.retired_image_count = retired_images.PendingCount();
@@ -237,6 +244,8 @@ bool SurfaceImageHost::RemoveImage(VulkanContext& context_,
         return false;
     }
 
+    last_submitted_value_seen = std::max(last_submitted_value_seen, last_submitted_value_);
+    completed_submit_value_seen = std::max(completed_submit_value_seen, completed_submit_value_);
     CollectRetiredImages(context_, completed_submit_value_);
     const std::size_t lower_bound_index = LowerBoundImageIndex(image_id_);
     if (lower_bound_index >= images.size() ||
@@ -324,6 +333,7 @@ void SurfaceImageHost::RetireImage(ImageRecord& record_,
 
     record_.resource = {};
     record_.current_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+    record_.bindless.revision_written = 0U;
 }
 
 void SurfaceImageHost::CollectRetiredImages(VulkanContext& context_,
@@ -344,6 +354,54 @@ void SurfaceImageHost::DestroyRetiredImages(VulkanContext& context_) noexcept {
     (void)retired_images.Flush([&](resource::ImageResource& resource_) {
         resource::ImageHost::DestroyImage(context_, resource_);
     });
+}
+
+void SurfaceImageHost::InvalidateBindlessRecords(const SurfaceImageHostBindlessConfig& bindless_config_) {
+    const std::uint64_t retire_value = ComputeBindlessRetireValue();
+    for (ImageRecord& record : images) {
+        if (bindless_config_.Enabled() && record.bindless.image_slot.IsValid()) {
+            bindless_config_.descriptor_host->QueueBindlessPlaceholderWrite(bindless_config_.image_table,
+                                                                            record.bindless.image_slot);
+            bindless_config_.descriptor_host->FreeBindlessSlotDeferred(bindless_config_.image_table,
+                                                                       record.bindless.image_slot,
+                                                                       retire_value);
+            record.bindless.retire_value = retire_value;
+        }
+        record.bindless = {};
+    }
+}
+
+void SurfaceImageHost::SyncBindlessRecords() {
+    if (!bindless_config.Enabled()) {
+        return;
+    }
+
+    for (ImageRecord& record : images) {
+        if (record.resource.default_view == VK_NULL_HANDLE ||
+            record.current_layout == VK_IMAGE_LAYOUT_UNDEFINED) {
+            continue;
+        }
+
+        if (!record.bindless.image_slot.IsValid()) {
+            record.bindless.image_slot =
+                bindless_config.descriptor_host->AllocateBindlessSlot(bindless_config.image_table);
+            record.bindless.revision_written = 0U;
+        }
+
+        if (record.bindless.revision_written == record.revision) {
+            continue;
+        }
+
+        bindless_config.descriptor_host->QueueBindlessImageWrite(bindless_config.image_table,
+                                                                 record.bindless.image_slot,
+                                                                 record.resource.default_view,
+                                                                 record.shader_read_layout);
+        record.bindless.revision_written = record.revision;
+    }
+}
+
+std::uint64_t SurfaceImageHost::ComputeBindlessRetireValue() const noexcept {
+    return std::max(last_submitted_value_seen, completed_submit_value_seen);
 }
 
 resource::ImageResource SurfaceImageHost::CreateImageResource(

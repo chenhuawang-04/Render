@@ -340,14 +340,17 @@ void SurfaceRenderer2D::PrepareFrame(const render::SurfaceRenderer2DPrepareView&
     if (bindless_resources == nullptr || !bindless_resources->IsInitialized()) {
         throw std::runtime_error("SurfaceRenderer2D::PrepareFrame requires initialized BindlessResourceSystem");
     }
+    const std::uint64_t bindless_revision_now = bindless_resources->Revision();
     if (surface_image_host != nullptr &&
         surface_image_host->IsInitialized() &&
-        !surface_image_host->BindlessConfig().Enabled()) {
+        (!surface_image_host->BindlessConfig().Enabled() ||
+         surface_image_host->BindlessConfig().bindless_revision != bindless_revision_now)) {
         bindless_resources->ConfigureSurfaceImageHost(*surface_image_host);
     }
     if (shadow_atlas_host != nullptr &&
         shadow_atlas_host->IsInitialized() &&
-        !shadow_atlas_host->BindlessConfig().Enabled()) {
+        (!shadow_atlas_host->BindlessConfig().Enabled() ||
+         shadow_atlas_host->BindlessConfig().bindless_revision != bindless_revision_now)) {
         bindless_resources->ConfigureShadowAtlasHost(*shadow_atlas_host);
     }
 
