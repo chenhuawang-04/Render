@@ -273,15 +273,21 @@ VR_TEST_CASE(RuntimeConfig_default_state_before_initialize_is_safe, "unit;core;r
 VR_TEST_CASE(RuntimeConfig_text_runtime_feature_contract_enables_dynamic_rendering_and_sync2,
              "unit;core;runtime;text") {
     Runtime::CreateInfo create_info{};
+    VR_CHECK(create_info.bindless.update_after_bind_policy ==
+             vr::render::BindlessUpdateAfterBindPolicy::disabled);
     vr::text::ApplyTextRuntimeFeatureContract(create_info);
 
     VR_CHECK(create_info.platform.device.required_vulkan13_features.dynamicRendering == VK_TRUE);
     VR_CHECK(create_info.platform.device.required_vulkan13_features.synchronization2 == VK_TRUE);
+    VR_CHECK(create_info.bindless.update_after_bind_policy ==
+             vr::render::BindlessUpdateAfterBindPolicy::disabled);
 
     const auto default_text_create_info =
         vr::text::MakeDefaultTextRuntimeCreateInfo<Runtime::CreateInfo>();
     VR_CHECK(default_text_create_info.platform.device.required_vulkan13_features.dynamicRendering == VK_TRUE);
     VR_CHECK(default_text_create_info.platform.device.required_vulkan13_features.synchronization2 == VK_TRUE);
+    VR_CHECK(default_text_create_info.bindless.update_after_bind_policy ==
+             vr::render::BindlessUpdateAfterBindPolicy::disabled);
     VR_CHECK(default_text_create_info.platform.device.feature_chain_policy ==
              vr::VulkanFeatureChainPolicy::minimal_required);
 }

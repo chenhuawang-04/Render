@@ -96,6 +96,79 @@ public:
 private:
     struct DefaultPhaseDriver;
 
+    [[nodiscard]] static bool RequiresBindlessEngineContract(
+        const RuntimeModulesCreateInfo& modules_) noexcept {
+        return modules_.enable_descriptor_host &&
+               modules_.enable_sampler_host &&
+               (modules_.enable_texture_host ||
+                modules_.enable_render_target_host ||
+                modules_.enable_frame_composer_host ||
+                modules_.enable_ibl_host ||
+                modules_.enable_sky_environment_gpu_host ||
+                modules_.enable_glyph_upload_host);
+    }
+
+    static void RequireBindlessEngineContract(const VulkanContext& context_,
+                                              const RuntimeModulesCreateInfo& modules_,
+                                              const BindlessResourceSystemCreateInfo& bindless_) {
+        if (!RequiresBindlessEngineContract(modules_)) {
+            return;
+        }
+
+        const auto& caps = context_.DescriptorIndexingCapsInfo();
+        std::ostringstream missing_stream{};
+        bool missing_any = false;
+        auto append_missing = [&](const char* name_) {
+            if (missing_any) {
+                missing_stream << ", ";
+            }
+            missing_stream << name_;
+            missing_any = true;
+        };
+
+        if (!caps.sampled_image_array_dynamic_indexing) {
+            append_missing("shaderSampledImageArrayDynamicIndexing");
+        }
+        if (!caps.runtime_descriptor_array) {
+            append_missing("runtimeDescriptorArray");
+        }
+        if (!caps.descriptor_binding_partially_bound) {
+            append_missing("descriptorBindingPartiallyBound");
+        }
+        if (!caps.descriptor_binding_variable_descriptor_count) {
+            append_missing("descriptorBindingVariableDescriptorCount");
+        }
+        if (!caps.sampled_image_array_non_uniform_indexing) {
+            append_missing("shaderSampledImageArrayNonUniformIndexing");
+        }
+        if (!caps.sampler_array_non_uniform_indexing) {
+            append_missing("samplerArrayNonUniformIndexing");
+        }
+        if (bindless_.update_after_bind_policy != BindlessUpdateAfterBindPolicy::disabled) {
+            if (!caps.sampled_image_update_after_bind) {
+                append_missing("descriptorBindingSampledImageUpdateAfterBind");
+            }
+            if (!caps.sampler_update_after_bind) {
+                append_missing("samplerUpdateAfterBindSupport");
+            }
+            if (!caps.update_unused_while_pending) {
+                append_missing("descriptorBindingUpdateUnusedWhilePending");
+            }
+        }
+
+        if (!missing_any && caps.enabled) {
+            return;
+        }
+        if (!missing_any) {
+            append_missing("descriptorIndexingCaps(enabled=false)");
+        }
+
+        std::ostringstream oss{};
+        oss << "RenderRuntimeHost requires bindless descriptor indexing: "
+            << missing_stream.str();
+        throw std::runtime_error(oss.str());
+    }
+
 public:
 
     struct PipelineWarmupCreateInfo {
@@ -202,6 +275,9 @@ public:
         try {
             platform_host.Initialize(create_info_cache.platform);
             platform_initialized = true;
+            RequireBindlessEngineContract(platform_host.Context(),
+                                          create_info_cache.modules,
+                                          create_info_cache.bindless);
 
             gpu_memory_host.Initialize(platform_host.Context(), create_info_cache.gpu_memory);
             gpu_memory_initialized = true;
@@ -239,9 +315,8 @@ public:
                 descriptor_initialized = true;
             }
 
-            if (texture_initialized &&
+            if (descriptor_initialized &&
                 sampler_initialized &&
-                descriptor_initialized &&
                 platform_host.Context().DescriptorIndexingCapsInfo().enabled) {
                 bindless_resource_system.Initialize(platform_host.Context(),
                                                    gpu_memory_host,
@@ -249,7 +324,9 @@ public:
                                                    sampler_host,
                                                    create_info_cache.bindless);
                 bindless_resources_initialized = true;
-                bindless_resource_system.ConfigureTextureHost(texture_host);
+                if (texture_initialized) {
+                    bindless_resource_system.ConfigureTextureHost(texture_host);
+                }
                 if (render_target_initialized) {
                     bindless_resource_system.ConfigureRenderTargetHost(render_target_host);
                 }

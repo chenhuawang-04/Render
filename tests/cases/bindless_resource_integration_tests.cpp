@@ -1,8 +1,11 @@
 #include "support/test_framework.hpp"
 
 #include "vr/asset/texture_host.hpp"
+#include "vr/geometry/geometry_image_host.hpp"
 #include "vr/render/bindless_resource_system.hpp"
 #include "vr/render/descriptor_host.hpp"
+#include "vr/render/render_target_format_utils.hpp"
+#include "vr/render/render_target_host.hpp"
 #include "vr/render/upload_host.hpp"
 #include "vr/resource/gpu_memory_host.hpp"
 #include "vr/resource/sampler_host.hpp"
@@ -67,6 +70,8 @@ struct HeadlessBindlessFixture final {
     vr::resource::SamplerHost sampler{};
     vr::asset::TextureHost texture{};
     vr::surface::SurfaceImageHost surface_image{};
+    vr::geometry::GeometryImageHost geometry_image{};
+    vr::render::RenderTargetHost render_target{};
     bool initialized = false;
 
     void Initialize() {
@@ -94,6 +99,8 @@ struct HeadlessBindlessFixture final {
 
         texture.Initialize(context, gpu_memory, {});
         surface_image.Initialize(context, gpu_memory, {});
+        geometry_image.Initialize(context, gpu_memory, {});
+        render_target.Initialize(context, gpu_memory, {});
         initialized = true;
     }
 
@@ -102,6 +109,12 @@ struct HeadlessBindlessFixture final {
             return;
         }
 
+        if (render_target.IsInitialized()) {
+            render_target.Shutdown(context);
+        }
+        if (geometry_image.IsInitialized()) {
+            geometry_image.Shutdown(context);
+        }
         if (surface_image.IsInitialized()) {
             surface_image.Shutdown(context);
         }
@@ -212,6 +225,62 @@ void UploadSurfaceImage2D(HeadlessBindlessFixture& fixture_,
     }
     fixture_.surface_image.BeginFrame(fixture_.context,
                                       fixture_.upload.CompletedSubmitValue());
+}
+
+void UploadGeometryImage2D(HeadlessBindlessFixture& fixture_,
+                           std::uint32_t image_id_,
+                           std::uint32_t width_,
+                           std::uint32_t height_,
+                           const std::uint8_t* pixels_,
+                           bool force_recreate_ = false) {
+    vr::geometry::GeometryImageUploadInfo upload_info{};
+    upload_info.image_id = image_id_;
+    upload_info.pixels = pixels_;
+    upload_info.width = width_;
+    upload_info.height = height_;
+    upload_info.format = VK_FORMAT_R8G8B8A8_UNORM;
+    upload_info.bytes_per_pixel = 4U;
+    upload_info.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    upload_info.shader_read_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    upload_info.aspect_mask = VK_IMAGE_ASPECT_COLOR_BIT;
+    upload_info.force_recreate = force_recreate_;
+
+    const std::uint64_t last_submitted = fixture_.upload.LastSubmittedValue();
+    const std::uint64_t completed = fixture_.upload.CompletedSubmitValue();
+    fixture_.upload.BeginFrame(fixture_.context, 0U);
+    fixture_.geometry_image.UploadImage(fixture_.context,
+                                        fixture_.upload,
+                                        0U,
+                                        last_submitted,
+                                        completed,
+                                        upload_info);
+    const auto end_result =
+        fixture_.upload.EndFrameAndSubmit(fixture_.context, 0U);
+    if (end_result.submitted) {
+        fixture_.upload.WaitFrame(fixture_.context, 0U);
+    }
+    fixture_.geometry_image.BeginFrame(fixture_.context,
+                                       fixture_.upload.CompletedSubmitValue());
+}
+
+[[nodiscard]] vr::render::RenderTargetDesc MakePersistentSampledColorTargetDesc(
+    std::uint32_t width_,
+    std::uint32_t height_,
+    const char* debug_name_) {
+    vr::render::RenderTargetDesc desc{};
+    desc.debug_name = debug_name_;
+    desc.dimension = vr::render::RenderTargetDimension::image_2d;
+    desc.lifetime = vr::render::RenderTargetLifetime::persistent;
+    desc.scale_mode = vr::render::RenderTargetScaleMode::absolute;
+    desc.width = width_;
+    desc.height = height_;
+    desc.depth = 1U;
+    desc.format = VK_FORMAT_R8G8B8A8_UNORM;
+    desc.samples = VK_SAMPLE_COUNT_1_BIT;
+    desc.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    desc.aspect = VK_IMAGE_ASPECT_COLOR_BIT;
+    desc.color_encoding = vr::render::RenderTargetColorEncoding::linear;
+    return desc;
 }
 
 [[nodiscard]] vr::render::BindlessTableId CreateSampledImageTableFromPlaceholder(
@@ -587,6 +656,202 @@ VR_TEST_CASE(BindlessIntegration_surface_image_host_slot_is_stable_across_recrea
         VR_CHECK(slot_c.index != slot_a.index);
 
         fixture.descriptor.FlushBindlessWrites(fixture.context, 7U);
+    } catch (const std::exception& exception_) {
+        fixture.Shutdown();
+        if (IsEnvironmentSkipError(exception_.what())) {
+            VR_SKIP(exception_.what());
+        }
+        throw;
+    }
+}
+
+VR_TEST_CASE(BindlessIntegration_geometry_image_host_slot_is_stable_across_recreate_and_not_reused_early,
+             "integration;gpu;bindless;geometry") {
+    HeadlessBindlessFixture fixture{};
+
+    try {
+        fixture.Initialize();
+        if (!fixture.context.DescriptorIndexingCapsInfo().enabled) {
+            VR_SKIP("Bindless descriptor indexing is not enabled on the active Vulkan device.");
+        }
+
+        constexpr std::array<std::uint8_t, 4U> placeholder_rgba{
+            255U, 255U, 255U, 255U
+        };
+        constexpr std::array<std::uint8_t, 16U> image_rgba_a{
+            255U, 64U,  64U,  255U,
+            64U,  255U, 64U,  255U,
+            64U,  64U,  255U, 255U,
+            255U, 255U, 255U, 255U
+        };
+        constexpr std::array<std::uint8_t, 64U> image_rgba_b{
+            16U,  16U,  16U,  255U, 255U, 0U,   64U,  255U,
+            0U,   255U, 64U,  255U, 0U,   64U,  255U, 255U,
+            255U, 255U, 64U,  255U, 255U, 64U,  255U, 255U,
+            64U,  255U, 255U, 255U, 200U, 200U, 200U, 255U,
+            255U, 0U,   128U, 255U, 0U,   255U, 128U, 255U,
+            128U, 0U,   255U, 255U, 255U, 128U, 0U,   255U,
+            128U, 255U, 0U,   255U, 0U,   128U, 255U, 255U,
+            32U,  32U,  32U,  255U, 255U, 255U, 255U, 255U
+        };
+
+        UploadTexture2D(fixture,
+                        vr::asset::TextureId{9004U},
+                        1U,
+                        1U,
+                        placeholder_rgba.data(),
+                        static_cast<std::uint32_t>(placeholder_rgba.size()));
+
+        const auto table =
+            CreateSampledImageTableFromPlaceholder(fixture, vr::asset::TextureId{9004U});
+        if (fixture.descriptor.GetBindlessCapacity(table) < 3U) {
+            VR_SKIP("Bindless sampled-image table capacity is too small for geometry image host test.");
+        }
+        fixture.geometry_image.ConfigureBindless({
+            .descriptor_host = &fixture.descriptor,
+            .image_table = table,
+        });
+
+        UploadGeometryImage2D(fixture,
+                              21U,
+                              2U,
+                              2U,
+                              image_rgba_a.data());
+        fixture.descriptor.FlushBindlessWrites(fixture.context,
+                                               fixture.upload.CompletedSubmitValue());
+        const vr::render::BindlessSlot slot_a =
+            fixture.geometry_image.ResolveBindlessImageSlot(21U);
+        VR_REQUIRE(slot_a.IsValid());
+
+        UploadGeometryImage2D(fixture,
+                              21U,
+                              4U,
+                              4U,
+                              image_rgba_b.data(),
+                              true);
+        fixture.descriptor.FlushBindlessWrites(fixture.context,
+                                               fixture.upload.CompletedSubmitValue());
+        const vr::render::BindlessSlot slot_b =
+            fixture.geometry_image.ResolveBindlessImageSlot(21U);
+        VR_REQUIRE(slot_b.IsValid());
+        VR_CHECK(slot_b.index == slot_a.index);
+        VR_CHECK(slot_b.generation == slot_a.generation);
+
+        VR_REQUIRE(fixture.geometry_image.RemoveImage(fixture.context,
+                                                      21U,
+                                                      9U,
+                                                      8U));
+        fixture.descriptor.FlushBindlessWrites(fixture.context, 8U);
+        VR_CHECK(!fixture.descriptor.IsBindlessSlotAlive(table, slot_a));
+
+        UploadGeometryImage2D(fixture,
+                              22U,
+                              2U,
+                              2U,
+                              image_rgba_a.data());
+        fixture.descriptor.FlushBindlessWrites(fixture.context, 8U);
+        const vr::render::BindlessSlot slot_c =
+            fixture.geometry_image.ResolveBindlessImageSlot(22U);
+        VR_REQUIRE(slot_c.IsValid());
+        VR_CHECK(slot_c.index != slot_a.index);
+
+        fixture.descriptor.FlushBindlessWrites(fixture.context, 9U);
+    } catch (const std::exception& exception_) {
+        fixture.Shutdown();
+        if (IsEnvironmentSkipError(exception_.what())) {
+            VR_SKIP(exception_.what());
+        }
+        throw;
+    }
+}
+
+VR_TEST_CASE(BindlessIntegration_render_target_host_slot_tracks_recreate_and_deferred_free,
+             "integration;gpu;bindless;render_target") {
+    HeadlessBindlessFixture fixture{};
+
+    try {
+        fixture.Initialize();
+        if (!fixture.context.DescriptorIndexingCapsInfo().enabled) {
+            VR_SKIP("Bindless descriptor indexing is not enabled on the active Vulkan device.");
+        }
+        if (!vr::render::IsColorAttachmentSampledFormatSupported(fixture.context,
+                                                                 VK_FORMAT_R8G8B8A8_UNORM)) {
+            VR_SKIP("R8G8B8A8_UNORM sampled color attachments are not supported on the active Vulkan device.");
+        }
+
+        constexpr std::array<std::uint8_t, 4U> placeholder_rgba{
+            255U, 255U, 255U, 255U
+        };
+        UploadTexture2D(fixture,
+                        vr::asset::TextureId{9005U},
+                        1U,
+                        1U,
+                        placeholder_rgba.data(),
+                        static_cast<std::uint32_t>(placeholder_rgba.size()));
+
+        const auto table =
+            CreateSampledImageTableFromPlaceholder(fixture, vr::asset::TextureId{9005U});
+        if (fixture.descriptor.GetBindlessCapacity(table) < 3U) {
+            VR_SKIP("Bindless sampled-image table capacity is too small for render target host test.");
+        }
+        fixture.render_target.ConfigureBindless({
+            .descriptor_host = &fixture.descriptor,
+            .image_table = table,
+        });
+
+        const auto desc_a =
+            MakePersistentSampledColorTargetDesc(32U, 32U, "BindlessIntegrationRenderTargetA");
+        const vr::render::RenderTargetHandle handle_a =
+            fixture.render_target.CreatePersistentTarget(fixture.context, desc_a);
+        const vr::render::BindlessSlot slot_a =
+            fixture.render_target.EnsureBindlessImageSlot(handle_a);
+        fixture.descriptor.FlushBindlessWrites(fixture.context, 0U);
+        VR_REQUIRE(slot_a.IsValid());
+
+        auto desc_b = desc_a;
+        desc_b.width = 64U;
+        desc_b.height = 64U;
+        const auto ensure_result =
+            fixture.render_target.EnsurePersistentTarget(fixture.context,
+                                                         handle_a,
+                                                         desc_b,
+                                                         {},
+                                                         11U,
+                                                         10U);
+        VR_REQUIRE(vr::render::IsValidRenderTargetHandle(ensure_result.handle));
+        VR_CHECK(ensure_result.recreated || ensure_result.revision_changed);
+        const vr::render::BindlessSlot slot_b =
+            fixture.render_target.EnsureBindlessImageSlot(ensure_result.handle);
+        fixture.descriptor.FlushBindlessWrites(fixture.context, 10U);
+        VR_REQUIRE(slot_b.IsValid());
+        VR_CHECK(slot_b.index == slot_a.index);
+        VR_CHECK(slot_b.generation == slot_a.generation);
+
+        VR_REQUIRE(fixture.render_target.DestroyTarget(fixture.context,
+                                                       ensure_result.handle,
+                                                       13U,
+                                                       12U));
+        fixture.descriptor.FlushBindlessWrites(fixture.context, 12U);
+        VR_CHECK(!fixture.descriptor.IsBindlessSlotAlive(table, slot_a));
+
+        const vr::render::RenderTargetHandle handle_b =
+            fixture.render_target.CreatePersistentTarget(fixture.context, desc_a);
+        const vr::render::BindlessSlot slot_c =
+            fixture.render_target.EnsureBindlessImageSlot(handle_b);
+        fixture.descriptor.FlushBindlessWrites(fixture.context, 12U);
+        VR_REQUIRE(slot_c.IsValid());
+        VR_CHECK(slot_c.index != slot_a.index);
+
+        fixture.descriptor.FlushBindlessWrites(fixture.context, 13U);
+
+        const vr::render::RenderTargetHandle handle_c =
+            fixture.render_target.CreatePersistentTarget(fixture.context, desc_a);
+        const vr::render::BindlessSlot slot_d =
+            fixture.render_target.EnsureBindlessImageSlot(handle_c);
+        fixture.descriptor.FlushBindlessWrites(fixture.context, 13U);
+        VR_REQUIRE(slot_d.IsValid());
+        VR_CHECK(slot_d.index == slot_a.index);
+        VR_CHECK(slot_d.generation != slot_a.generation);
     } catch (const std::exception& exception_) {
         fixture.Shutdown();
         if (IsEnvironmentSkipError(exception_.what())) {

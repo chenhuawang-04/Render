@@ -57,7 +57,7 @@ struct BindlessResourceSystemCreateInfo final {
     VkShaderStageFlags sampled_image_stage_flags = VK_SHADER_STAGE_FRAGMENT_BIT;
     VkShaderStageFlags sampler_stage_flags = VK_SHADER_STAGE_FRAGMENT_BIT;
     BindlessUpdateAfterBindPolicy update_after_bind_policy =
-        BindlessUpdateAfterBindPolicy::auto_if_supported;
+        BindlessUpdateAfterBindPolicy::disabled;
 };
 
 struct BindlessResourceSystemStats final {
