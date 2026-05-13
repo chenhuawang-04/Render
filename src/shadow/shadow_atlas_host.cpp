@@ -143,8 +143,6 @@ void ShadowAtlasHost::EnsureAtlases(VulkanContext& context_,
             continue;
         }
 
-        RetireAtlas(*existing, last_submitted_value_);
-
         AtlasRecord replacement = CreateAtlasRecord(context_,
                                                     ShadowAtlasRequest{
                                                         .namespace_id = request.namespace_id,
@@ -153,10 +151,14 @@ void ShadowAtlasHost::EnsureAtlases(VulkanContext& context_,
                                                         .layer_count = layer_count,
                                                     });
         if (replacement.resource.image == VK_NULL_HANDLE) {
-            *existing = {};
             continue;
         }
-        *existing = replacement;
+
+        const AtlasRecord::AtlasBindlessState preserved_bindless = existing->bindless;
+        RetireAtlas(*existing, last_submitted_value_, true);
+        replacement.bindless = preserved_bindless;
+        replacement.bindless.revision_written = 0U;
+        *existing = std::move(replacement);
         ++stats.resized_atlas_count;
         ++stats.revision;
     }
@@ -235,13 +237,16 @@ void ShadowAtlasHost::DestroyAtlasRecord(VulkanContext& context_,
 }
 
 void ShadowAtlasHost::RetireAtlas(AtlasRecord& record_,
-                                  std::uint64_t retire_value_) {
+                                  std::uint64_t retire_value_,
+                                  bool preserve_bindless_slot_) {
     if (record_.resource.image == VK_NULL_HANDLE) {
         record_ = {};
         return;
     }
 
-    if (bindless_config.Enabled() && record_.bindless.image_slot.IsValid()) {
+    if (bindless_config.Enabled() &&
+        record_.bindless.image_slot.IsValid() &&
+        !preserve_bindless_slot_) {
         bindless_config.descriptor_host->QueueBindlessPlaceholderWrite(bindless_config.image_table,
                                                                        record_.bindless.image_slot);
         bindless_config.descriptor_host->FreeBindlessSlotDeferred(bindless_config.image_table,
@@ -249,6 +254,9 @@ void ShadowAtlasHost::RetireAtlas(AtlasRecord& record_,
                                                                   retire_value_);
         record_.bindless.retire_value = retire_value_;
     }
+
+    AtlasRecord::AtlasBindlessState preserved_bindless = record_.bindless;
+    preserved_bindless.revision_written = 0U;
 
     RetiredAtlasPayload retired{};
     retired.resource = record_.resource;
@@ -259,6 +267,9 @@ void ShadowAtlasHost::RetireAtlas(AtlasRecord& record_,
     ++stats.revision;
 
     record_ = {};
+    if (preserve_bindless_slot_) {
+        record_.bindless = preserved_bindless;
+    }
 }
 
 void ShadowAtlasHost::CollectRetiredAtlases(VulkanContext& context_,

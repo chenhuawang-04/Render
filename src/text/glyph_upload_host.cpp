@@ -363,8 +363,16 @@ void GlyphUploadHost::EnsurePageResources(VulkanContext& context_,
             existing.generation != page_view.generation;
 
         if (dimension_mismatch || generation_changed) {
-            RetirePageResource(existing, ComputeRetireValue());
-            existing = create_page_resource();
+            PageResource replacement = create_page_resource();
+            if (replacement.image.image == VK_NULL_HANDLE) {
+                continue;
+            }
+
+            const render::BindlessSlot preserved_slot = existing.image_slot;
+            RetirePageResource(existing, ComputeRetireValue(), true);
+            replacement.image_slot = preserved_slot;
+            replacement.bindless_image_revision_written = 0U;
+            existing = std::move(replacement);
         }
     }
 
@@ -373,16 +381,19 @@ void GlyphUploadHost::EnsurePageResources(VulkanContext& context_,
 }
 
 void GlyphUploadHost::RetirePageResource(PageResource& page_resource_,
-                                         std::uint64_t retire_value_) {
-    if (bindless_config.Enabled() && page_resource_.image_slot.IsValid()) {
+                                         std::uint64_t retire_value_,
+                                         bool preserve_bindless_slot_) {
+    if (bindless_config.Enabled() &&
+        page_resource_.image_slot.IsValid() &&
+        !preserve_bindless_slot_) {
         bindless_config.descriptor_host->QueueBindlessPlaceholderWrite(bindless_config.image_table,
                                                                        page_resource_.image_slot);
         bindless_config.descriptor_host->FreeBindlessSlotDeferred(bindless_config.image_table,
                                                                   page_resource_.image_slot,
                                                                   retire_value_);
         page_resource_.image_slot = {};
-        page_resource_.bindless_image_revision_written = 0U;
     }
+    page_resource_.bindless_image_revision_written = 0U;
     if (page_resource_.image.image == VK_NULL_HANDLE) {
         page_resource_.current_layout = VK_IMAGE_LAYOUT_UNDEFINED;
         page_resource_.generation = 0U;

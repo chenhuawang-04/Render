@@ -9,13 +9,18 @@
 #include "vr/render/upload_host.hpp"
 #include "vr/resource/gpu_memory_host.hpp"
 #include "vr/resource/sampler_host.hpp"
+#include "vr/shadow/shadow_atlas_host.hpp"
 #include "vr/surface/surface_image_host.hpp"
+#include "vr/text/freetype_host.hpp"
+#include "vr/text/glyph_atlas_host.hpp"
+#include "vr/text/glyph_upload_host.hpp"
 #include "vr/vulkan_context.hpp"
 
 #include <array>
 #include <cctype>
 #include <cstdint>
 #include <exception>
+#include <filesystem>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -36,6 +41,27 @@ namespace {
     const std::string lowered_text = ToLower(text_);
     const std::string lowered_needle = ToLower(needle_);
     return lowered_text.find(lowered_needle) != std::string::npos;
+}
+
+[[nodiscard]] std::string FindTestFontPath() {
+    namespace fs = std::filesystem;
+
+    constexpr std::array<const char*, 6U> candidate_paths{
+        "C:/Windows/Fonts/segoeui.ttf",
+        "C:/Windows/Fonts/arial.ttf",
+        "C:/Windows/Fonts/consola.ttf",
+        "C:/Windows/Fonts/tahoma.ttf",
+        "C:/Windows/Fonts/calibri.ttf",
+        "C:/Windows/Fonts/msyh.ttc"
+    };
+
+    for (const char* path : candidate_paths) {
+        const fs::path candidate(path);
+        if (fs::exists(candidate) && fs::is_regular_file(candidate)) {
+            return candidate.string();
+        }
+    }
+    return {};
 }
 
 [[nodiscard]] bool IsEnvironmentSkipError(std::string_view message_) {
@@ -71,6 +97,7 @@ struct HeadlessBindlessFixture final {
     vr::asset::TextureHost texture{};
     vr::surface::SurfaceImageHost surface_image{};
     vr::geometry::GeometryImageHost geometry_image{};
+    vr::shadow::ShadowAtlasHost shadow_atlas{};
     vr::render::RenderTargetHost render_target{};
     bool initialized = false;
 
@@ -100,6 +127,7 @@ struct HeadlessBindlessFixture final {
         texture.Initialize(context, gpu_memory, {});
         surface_image.Initialize(context, gpu_memory, {});
         geometry_image.Initialize(context, gpu_memory, {});
+        shadow_atlas.Initialize(context, gpu_memory, {});
         render_target.Initialize(context, gpu_memory, {});
         initialized = true;
     }
@@ -111,6 +139,9 @@ struct HeadlessBindlessFixture final {
 
         if (render_target.IsInitialized()) {
             render_target.Shutdown(context);
+        }
+        if (shadow_atlas.IsInitialized()) {
+            shadow_atlas.Shutdown(context);
         }
         if (geometry_image.IsInitialized()) {
             geometry_image.Shutdown(context);
@@ -261,6 +292,25 @@ void UploadGeometryImage2D(HeadlessBindlessFixture& fixture_,
     }
     fixture_.geometry_image.BeginFrame(fixture_.context,
                                        fixture_.upload.CompletedSubmitValue());
+}
+
+void UploadGlyphAtlasPages(HeadlessBindlessFixture& fixture_,
+                           vr::text::GlyphUploadHost& glyph_upload_host_,
+                           vr::text::GlyphAtlasHost& glyph_atlas_host_) {
+    const std::uint64_t last_submitted = fixture_.upload.LastSubmittedValue();
+    const std::uint64_t completed = fixture_.upload.CompletedSubmitValue();
+    fixture_.upload.BeginFrame(fixture_.context, 0U);
+    glyph_upload_host_.UploadDirtyPages(fixture_.context,
+                                        fixture_.upload,
+                                        0U,
+                                        glyph_atlas_host_,
+                                        last_submitted,
+                                        completed);
+    const auto end_result =
+        fixture_.upload.EndFrameAndSubmit(fixture_.context, 0U);
+    if (end_result.submitted) {
+        fixture_.upload.WaitFrame(fixture_.context, 0U);
+    }
 }
 
 [[nodiscard]] vr::render::RenderTargetDesc MakePersistentSampledColorTargetDesc(
@@ -853,6 +903,280 @@ VR_TEST_CASE(BindlessIntegration_render_target_host_slot_tracks_recreate_and_def
         VR_CHECK(slot_d.index == slot_a.index);
         VR_CHECK(slot_d.generation != slot_a.generation);
     } catch (const std::exception& exception_) {
+        fixture.Shutdown();
+        if (IsEnvironmentSkipError(exception_.what())) {
+            VR_SKIP(exception_.what());
+        }
+        throw;
+    }
+}
+
+VR_TEST_CASE(BindlessIntegration_shadow_atlas_host_slot_is_stable_across_resize,
+             "integration;gpu;bindless;shadow") {
+    HeadlessBindlessFixture fixture{};
+    vr::render::BindlessResourceSystem bindless_resources{};
+
+    try {
+        fixture.Initialize();
+        if (!fixture.context.DescriptorIndexingCapsInfo().enabled) {
+            VR_SKIP("Bindless descriptor indexing is not enabled on the active Vulkan device.");
+        }
+
+        bindless_resources.Initialize(fixture.context,
+                                      fixture.gpu_memory,
+                                      fixture.descriptor,
+                                      fixture.sampler,
+                                      {});
+        bindless_resources.ConfigureShadowAtlasHost(fixture.shadow_atlas);
+
+        vr::shadow::ShadowAtlasRequest request_a{
+            .namespace_id = 101U,
+            .width = 64U,
+            .height = 64U,
+            .layer_count = 2U,
+        };
+        fixture.shadow_atlas.EnsureAtlases(fixture.context, 0U, 0U, &request_a, 1U);
+        fixture.shadow_atlas.BeginFrame(fixture.context, 0U);
+        fixture.descriptor.FlushBindlessWrites(fixture.context, 0U);
+
+        const vr::render::BindlessSlot slot_a =
+            fixture.shadow_atlas.ResolveBindlessAtlasSlot(101U);
+        VR_REQUIRE(slot_a.IsValid());
+
+        vr::shadow::ShadowAtlasRequest request_b{
+            .namespace_id = 101U,
+            .width = 128U,
+            .height = 128U,
+            .layer_count = 4U,
+        };
+        fixture.shadow_atlas.EnsureAtlases(fixture.context, 3U, 2U, &request_b, 1U);
+        fixture.shadow_atlas.BeginFrame(fixture.context, 2U);
+        fixture.descriptor.FlushBindlessWrites(fixture.context, 2U);
+
+        const vr::render::BindlessSlot slot_b =
+            fixture.shadow_atlas.ResolveBindlessAtlasSlot(101U);
+        VR_REQUIRE(slot_b.IsValid());
+        VR_CHECK(slot_b.index == slot_a.index);
+        VR_CHECK(slot_b.generation == slot_a.generation);
+
+        vr::shadow::ShadowAtlasRequest requests_c[2U]{
+            request_b,
+            vr::shadow::ShadowAtlasRequest{
+                .namespace_id = 102U,
+                .width = 32U,
+                .height = 32U,
+                .layer_count = 1U,
+            }
+        };
+        fixture.shadow_atlas.EnsureAtlases(fixture.context, 4U, 3U, requests_c, 2U);
+        fixture.shadow_atlas.BeginFrame(fixture.context, 3U);
+        fixture.descriptor.FlushBindlessWrites(fixture.context, 3U);
+
+        const vr::render::BindlessSlot slot_c =
+            fixture.shadow_atlas.ResolveBindlessAtlasSlot(102U);
+        VR_REQUIRE(slot_c.IsValid());
+        VR_CHECK(slot_c.index != slot_a.index);
+
+        bindless_resources.Shutdown(fixture.context);
+    } catch (const std::exception& exception_) {
+        if (bindless_resources.IsInitialized()) {
+            bindless_resources.Shutdown(fixture.context);
+        }
+        fixture.Shutdown();
+        if (IsEnvironmentSkipError(exception_.what())) {
+            VR_SKIP(exception_.what());
+        }
+        throw;
+    }
+}
+
+VR_TEST_CASE(BindlessIntegration_registered_sampler_slots_are_cached_and_distinct,
+             "integration;gpu;bindless;sampler") {
+    HeadlessBindlessFixture fixture{};
+    vr::render::BindlessResourceSystem bindless_resources{};
+
+    try {
+        fixture.Initialize();
+        if (!fixture.context.DescriptorIndexingCapsInfo().enabled) {
+            VR_SKIP("Bindless descriptor indexing is not enabled on the active Vulkan device.");
+        }
+
+        bindless_resources.Initialize(fixture.context,
+                                      fixture.gpu_memory,
+                                      fixture.descriptor,
+                                      fixture.sampler,
+                                      {});
+
+        const vr::render::BindlessSlot invalid_slot =
+            bindless_resources.ResolveRegisteredSamplerSlot({});
+        VR_CHECK(invalid_slot.index == bindless_resources.DefaultSamplerSlot().index);
+        VR_CHECK(invalid_slot.generation == bindless_resources.DefaultSamplerSlot().generation);
+
+        vr::resource::SamplerDesc linear_repeat{};
+        linear_repeat.mag_filter = VK_FILTER_LINEAR;
+        linear_repeat.min_filter = VK_FILTER_LINEAR;
+        linear_repeat.address_mode_u = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        linear_repeat.address_mode_v = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        linear_repeat.address_mode_w = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+
+        vr::resource::SamplerDesc nearest_clamp{};
+        nearest_clamp.mag_filter = VK_FILTER_NEAREST;
+        nearest_clamp.min_filter = VK_FILTER_NEAREST;
+        nearest_clamp.address_mode_u = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        nearest_clamp.address_mode_v = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        nearest_clamp.address_mode_w = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+
+        const vr::resource::SamplerId sampler_a =
+            fixture.sampler.RegisterSampler(fixture.context, linear_repeat);
+        const vr::resource::SamplerId sampler_b =
+            fixture.sampler.RegisterSampler(fixture.context, nearest_clamp);
+        VR_REQUIRE(sampler_a.IsValid());
+        VR_REQUIRE(sampler_b.IsValid());
+
+        const vr::render::BindlessSlot slot_a_first =
+            bindless_resources.ResolveRegisteredSamplerSlot(sampler_a);
+        fixture.descriptor.FlushBindlessWrites(fixture.context, 0U);
+        const vr::render::BindlessSlot slot_a_second =
+            bindless_resources.ResolveRegisteredSamplerSlot(sampler_a);
+        const vr::render::BindlessSlot slot_b =
+            bindless_resources.ResolveRegisteredSamplerSlot(sampler_b);
+        fixture.descriptor.FlushBindlessWrites(fixture.context, 0U);
+
+        VR_REQUIRE(slot_a_first.IsValid());
+        VR_REQUIRE(slot_a_second.IsValid());
+        VR_REQUIRE(slot_b.IsValid());
+        VR_CHECK(slot_a_first.index == slot_a_second.index);
+        VR_CHECK(slot_a_first.generation == slot_a_second.generation);
+        VR_CHECK(slot_b.index != slot_a_first.index);
+
+        const auto& stats = bindless_resources.Stats();
+        VR_CHECK(stats.sampler.live_count >= 3U);
+
+        bindless_resources.Shutdown(fixture.context);
+    } catch (const std::exception& exception_) {
+        if (bindless_resources.IsInitialized()) {
+            bindless_resources.Shutdown(fixture.context);
+        }
+        fixture.Shutdown();
+        if (IsEnvironmentSkipError(exception_.what())) {
+            VR_SKIP(exception_.what());
+        }
+        throw;
+    }
+}
+
+VR_TEST_CASE(BindlessIntegration_glyph_upload_host_slot_survives_page_recreate_and_growth,
+             "integration;gpu;bindless;glyph") {
+    HeadlessBindlessFixture fixture{};
+    vr::render::BindlessResourceSystem bindless_resources{};
+    vr::text::FreeTypeHost freetype_host{};
+    vr::text::GlyphAtlasHost atlas_host_a{};
+    vr::text::GlyphAtlasHost atlas_host_b{};
+    vr::text::GlyphAtlasHost atlas_host_c{};
+    vr::text::GlyphUploadHost glyph_upload_host{};
+
+    try {
+        fixture.Initialize();
+        if (!fixture.context.DescriptorIndexingCapsInfo().enabled) {
+            VR_SKIP("Bindless descriptor indexing is not enabled on the active Vulkan device.");
+        }
+
+        const std::string font_path = FindTestFontPath();
+        if (font_path.empty()) {
+            VR_SKIP("No usable system font found for GlyphUploadHost bindless test.");
+        }
+
+        bindless_resources.Initialize(fixture.context,
+                                      fixture.gpu_memory,
+                                      fixture.descriptor,
+                                      fixture.sampler,
+                                      {});
+
+        freetype_host.Initialize();
+        vr::text::FontFaceCreateInfo face_create_info{};
+        face_create_info.file_path = font_path;
+        face_create_info.pixel_height = 28U;
+        const vr::text::FontFaceId face_id = freetype_host.RegisterFace(face_create_info);
+        VR_REQUIRE(face_id.IsValid());
+
+        auto map_glyphs = [&](vr::text::GlyphAtlasHost& atlas_host_,
+                              std::uint32_t page_width_,
+                              std::uint32_t page_height_,
+                              std::uint32_t codepoint_end_) {
+            vr::text::GlyphAtlasCreateInfo atlas_create_info{};
+            atlas_create_info.page_width = page_width_;
+            atlas_create_info.page_height = page_height_;
+            atlas_create_info.max_page_count = 32U;
+            atlas_create_info.glyph_padding = 1U;
+            atlas_host_.Initialize(freetype_host, atlas_create_info);
+            atlas_host_.MapFont(7U, face_id);
+
+            vr::text::GlyphAtlasResolveRequest request{};
+            request.font_id = 7U;
+            for (std::uint32_t codepoint = 33U; codepoint < codepoint_end_; ++codepoint) {
+                request.codepoint = codepoint;
+                (void)atlas_host_.ResolveGlyph(request);
+            }
+        };
+
+        glyph_upload_host.Initialize(fixture.context,
+                                     fixture.gpu_memory,
+                                     fixture.sampler,
+                                     {});
+        bindless_resources.ConfigureGlyphUploadHost(glyph_upload_host);
+
+        map_glyphs(atlas_host_a, 64U, 64U, 80U);
+        UploadGlyphAtlasPages(fixture, glyph_upload_host, atlas_host_a);
+        fixture.descriptor.FlushBindlessWrites(fixture.context,
+                                               fixture.upload.CompletedSubmitValue());
+        const vr::render::BindlessSlot slot_a =
+            glyph_upload_host.ResolveBindlessImageSlot(0U);
+        VR_REQUIRE(slot_a.IsValid());
+
+        map_glyphs(atlas_host_b, 96U, 96U, 80U);
+        UploadGlyphAtlasPages(fixture, glyph_upload_host, atlas_host_b);
+        fixture.descriptor.FlushBindlessWrites(fixture.context,
+                                               fixture.upload.CompletedSubmitValue());
+        const vr::render::BindlessSlot slot_b =
+            glyph_upload_host.ResolveBindlessImageSlot(0U);
+        VR_REQUIRE(slot_b.IsValid());
+        VR_CHECK(slot_b.index == slot_a.index);
+        VR_CHECK(slot_b.generation == slot_a.generation);
+
+        map_glyphs(atlas_host_c, 64U, 64U, 128U);
+        UploadGlyphAtlasPages(fixture, glyph_upload_host, atlas_host_c);
+        fixture.descriptor.FlushBindlessWrites(fixture.context,
+                                               fixture.upload.CompletedSubmitValue());
+        VR_REQUIRE(glyph_upload_host.PageCount() >= 2U);
+        const vr::render::BindlessSlot slot_c =
+            glyph_upload_host.ResolveBindlessImageSlot(0U);
+        const vr::render::BindlessSlot slot_page_1 =
+            glyph_upload_host.ResolveBindlessImageSlot(1U);
+        VR_REQUIRE(slot_c.IsValid());
+        VR_REQUIRE(slot_page_1.IsValid());
+        VR_CHECK(slot_c.index == slot_a.index);
+        VR_CHECK(slot_c.generation == slot_a.generation);
+        VR_CHECK(slot_page_1.index != slot_a.index);
+
+        glyph_upload_host.Shutdown(fixture.context);
+        atlas_host_c.Shutdown();
+        atlas_host_b.Shutdown();
+        atlas_host_a.Shutdown();
+        freetype_host.Shutdown();
+        bindless_resources.Shutdown(fixture.context);
+    } catch (const std::exception& exception_) {
+        if (glyph_upload_host.IsInitialized()) {
+            glyph_upload_host.Shutdown(fixture.context);
+        }
+        atlas_host_c.Shutdown();
+        atlas_host_b.Shutdown();
+        atlas_host_a.Shutdown();
+        if (freetype_host.IsInitialized()) {
+            freetype_host.Shutdown();
+        }
+        if (bindless_resources.IsInitialized()) {
+            bindless_resources.Shutdown(fixture.context);
+        }
         fixture.Shutdown();
         if (IsEnvironmentSkipError(exception_.what())) {
             VR_SKIP(exception_.what());

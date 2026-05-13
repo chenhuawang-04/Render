@@ -131,7 +131,8 @@ private:
     static void DestroyAtlasRecord(VulkanContext& context_,
                                    AtlasRecord& record_) noexcept;
     void RetireAtlas(AtlasRecord& record_,
-                     std::uint64_t retire_value_);
+                     std::uint64_t retire_value_,
+                     bool preserve_bindless_slot_ = false);
     void CollectRetiredAtlases(VulkanContext& context_,
                                std::uint64_t completed_submit_value_);
     void DestroyRetiredAtlases(VulkanContext& context_) noexcept;

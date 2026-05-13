@@ -111,7 +111,8 @@ private:
     [[nodiscard]] bool ShouldUseGeneralLayout(const VulkanContext& context_) const noexcept;
     void EnsurePageResources(VulkanContext& context_, const GlyphAtlasHost& atlas_host_);
     void RetirePageResource(PageResource& page_resource_,
-                            std::uint64_t retire_value_);
+                            std::uint64_t retire_value_,
+                            bool preserve_bindless_slot_ = false);
     void InvalidateBindlessPageResources(const GlyphUploadHostBindlessConfig& bindless_config_);
     void SyncBindlessPageResources();
     void CollectRetiredPageResources(VulkanContext& context_,
