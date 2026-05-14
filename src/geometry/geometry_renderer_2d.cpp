@@ -1,4 +1,4 @@
-#include "vr/geometry/geometry_renderer_2d.hpp"
+﻿#include "vr/geometry/geometry_renderer_2d.hpp"
 
 #include "vr/geometry/generated/geometry_2d_frag_spv.hpp"
 #include "vr/geometry/generated/geometry_2d_vert_spv.hpp"
@@ -508,3 +508,4 @@ render::GraphicsPipelineId GeometryRenderer2D::EnsurePipelineForBlendMode(
 }
 
 } // namespace vr::geometry
+

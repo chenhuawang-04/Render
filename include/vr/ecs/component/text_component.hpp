@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "vr/ecs/concept/dimension.hpp"
 
@@ -51,7 +51,7 @@ struct TextBufferInlineUtf8 final {
 struct TextRuntimeBatchData final {
     std::uint64_t sort_key;
     std::uint32_t font_id;
-    std::uint32_t material_id;
+    std::uint32_t visual_resource_id;
     std::uint32_t atlas_page_id;
     std::uint32_t glyph_begin;
     std::uint32_t glyph_count;
@@ -136,3 +136,4 @@ static_assert(sizeof(TextRuntimeBatchData) <= 64U);
 static_assert(alignof(TextRuntimeBatchData) <= 8U);
 
 } // namespace vr::ecs
+

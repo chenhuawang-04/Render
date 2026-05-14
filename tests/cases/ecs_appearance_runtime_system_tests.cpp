@@ -1,4 +1,4 @@
-#include "support/test_framework.hpp"
+﻿#include "support/test_framework.hpp"
 #include "vr/ecs/system/appearance_runtime_system.hpp"
 
 #include <cstdint>
@@ -153,3 +153,4 @@ VR_TEST_CASE(EcsAppearanceRuntimeSystem_alpha_mode_blend_falls_back_to_alpha_run
 }
 
 } // namespace
+

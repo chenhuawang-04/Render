@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "Center/Memory/Container/Vector/McVector.hpp"
 #include "vr/asset/texture_host.hpp"
@@ -181,3 +181,4 @@ private:
 };
 
 } // namespace vr::render
+

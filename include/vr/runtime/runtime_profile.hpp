@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "vr/runtime/service_dependency.hpp"
 
@@ -32,3 +32,4 @@ inline constexpr bool profile_satisfies_service_dependencies_v =
     ProfileSatisfiesDependencies<ProfileT, typename ServiceT::Dependencies>::value;
 
 } // namespace vr::runtime
+

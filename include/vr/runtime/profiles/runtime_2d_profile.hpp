@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "vr/runtime/runtime_profile.hpp"
 #include "vr/runtime/services/command_service.hpp"
@@ -37,3 +37,4 @@ using Runtime2DProfile = vr::runtime::RuntimeProfile<
     services::ParticleRenderService>;
 
 } // namespace vr::runtime::profiles
+

@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "vr/ecs/system/camera_system.hpp"
 #include "vr/render/scene_submission.hpp"
@@ -118,3 +118,4 @@ void RefreshExtentBoundScreenSceneSubmission(
 }
 
 } // namespace vr::render
+

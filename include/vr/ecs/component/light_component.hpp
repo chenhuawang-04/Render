@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "vr/ecs/component/spatial_types.hpp"
 #include "vr/ecs/component/text_component.hpp"
@@ -180,4 +180,5 @@ static_assert(PurePodLightComponent<Light<Dim2>>);
 static_assert(PurePodLightComponent<Light<Dim3>>);
 
 } // namespace vr::ecs
+
 

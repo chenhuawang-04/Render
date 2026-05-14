@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <cstdint>
 #include <vulkan/vulkan.h>
@@ -73,3 +73,4 @@ struct QueueTimelineSet final {
 }
 
 } // namespace vr::runtime
+

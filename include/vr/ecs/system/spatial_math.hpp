@@ -304,3 +304,4 @@ namespace vr::ecs::spatial_math {
 }
 
 } // namespace vr::ecs::spatial_math
+

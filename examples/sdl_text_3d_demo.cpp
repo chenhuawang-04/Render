@@ -1,4 +1,4 @@
-#include "vr/ecs/system/bounds_system.hpp"
+﻿#include "vr/ecs/system/bounds_system.hpp"
 #include "vr/ecs/system/camera_system.hpp"
 #include "vr/ecs/system/text_system.hpp"
 #include "vr/ecs/system/transform_system.hpp"
@@ -99,7 +99,7 @@ struct DemoFontPaths final {
 
 void InitializeTextComponent(Text3D& component_,
                              std::uint32_t font_id_,
-                             std::uint32_t material_id_,
+                             std::uint32_t appearance_id_,
                              float world_size_,
                              float max_screen_size_px_,
                              vr::ecs::Rgba8 color_,
@@ -113,7 +113,7 @@ void InitializeTextComponent(Text3D& component_,
                              std::uint16_t depth_bin_,
                              std::string_view text_) {
     TextSystem3D::Initialize(component_);
-    TextSystem3D::SetRuntimeRoute(component_, font_id_, material_id_, 0U, 0U);
+    TextSystem3D::SetRuntimeRoute(component_, font_id_, appearance_id_, 0U, 0U);
     TextSystem3D::SetColor(component_, color_);
     TextSystem3D::SetWorldSize(component_, world_size_);
     TextSystem3D::SetMaxScreenSizePx(component_, max_screen_size_px_);
@@ -644,3 +644,4 @@ int main(int argc_,
         return 1;
     }
 }
+

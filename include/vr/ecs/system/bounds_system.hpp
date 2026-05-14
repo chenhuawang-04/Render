@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "vr/ecs/component/bounds_component.hpp"
 #include "vr/ecs/component/transform_component.hpp"
@@ -520,3 +520,4 @@ private:
 };
 
 } // namespace vr::ecs
+

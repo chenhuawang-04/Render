@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "vr/animation/animation_frame_sequence_host.hpp"
 #include "vr/ecs/system/animation_clock_system.hpp"
@@ -82,3 +82,4 @@ public:
 };
 
 } // namespace vr::ecs
+

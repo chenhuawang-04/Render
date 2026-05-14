@@ -1,4 +1,4 @@
-#include "support/test_framework.hpp"
+﻿#include "support/test_framework.hpp"
 #include "vr/animation/animation_morph_host.hpp"
 #include "vr/animation/animation_skeletal_host.hpp"
 
@@ -109,3 +109,4 @@ VR_TEST_CASE(AnimationMorphHost_upsert_find_sample_and_remove,
 }
 
 } // namespace
+

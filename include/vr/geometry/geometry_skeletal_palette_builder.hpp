@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "vr/ecs/component/geometry_component.hpp"
 #include "vr/ecs/system/animation_evaluation_context.hpp"
@@ -139,3 +139,4 @@ private:
 };
 
 } // namespace vr::geometry
+

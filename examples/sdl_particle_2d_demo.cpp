@@ -1,4 +1,4 @@
-#include "vr/ecs/system/particle_emitter_system.hpp"
+﻿#include "vr/ecs/system/particle_emitter_system.hpp"
 #include "vr/ecs/system/particle_system.hpp"
 #include "vr/ecs/system/transform_system.hpp"
 #include "vr/particle/particle_renderer_2d.hpp"
@@ -274,3 +274,4 @@ int main(int argc_,
         return 1;
     }
 }
+

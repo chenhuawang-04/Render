@@ -1,4 +1,4 @@
-#include "support/test_framework.hpp"
+﻿#include "support/test_framework.hpp"
 #include "vr/render/shadow_atlas_binding_coordinator.hpp"
 
 namespace {
@@ -76,4 +76,5 @@ VR_TEST_CASE(RenderShadowAtlasBindingCoordinator_invalid_when_no_sources,
 }
 
 } // namespace
+
 

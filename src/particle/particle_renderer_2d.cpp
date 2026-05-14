@@ -1,4 +1,4 @@
-#include "vr/particle/particle_renderer_2d.hpp"
+﻿#include "vr/particle/particle_renderer_2d.hpp"
 
 #include "vr/asset/texture_host.hpp"
 #include "vr/ecs/system/transparency_render_policy.hpp"
@@ -852,3 +852,4 @@ std::uint32_t ParticleRenderer2D::ResolveSamplerSlot(std::uint32_t texture_id_) 
 }
 
 } // namespace vr::particle
+

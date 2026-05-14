@@ -1,4 +1,4 @@
-#include "support/test_framework.hpp"
+﻿#include "support/test_framework.hpp"
 #include "vr/render/light_shadow_link_stage.hpp"
 
 #include <array>
@@ -105,3 +105,4 @@ VR_TEST_CASE(RenderLightShadowLinkStage_dim3_drops_namespace_mismatch,
 }
 
 } // namespace
+

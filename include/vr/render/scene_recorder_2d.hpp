@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "Center/Memory/Container/Vector/McVector.hpp"
 #include "vr/render/environment/background_pass_2d.hpp"
@@ -542,3 +542,4 @@ private:
 };
 
 } // namespace vr::render
+

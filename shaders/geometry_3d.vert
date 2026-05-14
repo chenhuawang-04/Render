@@ -13,17 +13,13 @@ layout(location = 3) in vec4 in_world_row0;
 layout(location = 4) in vec4 in_world_row1;
 layout(location = 5) in vec4 in_world_row2;
 layout(location = 6) in vec4 in_world_row3;
-layout(location = 7) in vec4 in_material_params;
-layout(location = 8) in vec4 in_albedo;
-layout(location = 9) in uint in_instance_params;
-layout(location = 10) in vec4 in_deform_param0;
-layout(location = 11) in vec4 in_deform_param1;
-layout(location = 16) in vec4 in_morph_weights;
+layout(location = 7) in vec4 in_deform_param0;
+layout(location = 8) in vec4 in_deform_param1;
+layout(location = 9) in vec4 in_morph_weights;
+layout(location = 10) in uint in_component_index;
+layout(location = 11) in uint in_appearance_record_index;
 layout(location = 17) in uvec4 in_joint_indices;
 layout(location = 18) in vec4 in_joint_weights;
-layout(location = 19) in float in_occlusion_strength;
-layout(location = 20) in uint in_appearance_record_index;
-layout(location = 21) in uint in_component_index;
 
 layout(push_constant) uniform Geometry3DPushConstants {
     mat4 view_projection;
@@ -46,15 +42,11 @@ layout(std430, set = 2, binding = 6) readonly buffer SkeletalMatrixBuffer {
 };
 
 layout(location = 0) out vec3 out_normal_world;
-layout(location = 1) out vec4 out_albedo;
-layout(location = 2) out vec4 out_material_params;
-layout(location = 3) flat out uint out_instance_params;
-layout(location = 4) out vec2 out_uv;
-layout(location = 5) out vec3 out_world_position;
-layout(location = 6) out float out_occlusion_strength;
-layout(location = 7) flat out uint out_appearance_record_index;
-layout(location = 8) out vec3 out_tangent_world;
-layout(location = 9) out vec3 out_bitangent_world;
+layout(location = 1) out vec2 out_uv;
+layout(location = 2) out vec3 out_world_position;
+layout(location = 3) flat out uint out_appearance_record_index;
+layout(location = 4) out vec3 out_tangent_world;
+layout(location = 5) out vec3 out_bitangent_world;
 
 vec3 apply_vertex_deform(vec3 local_position, vec3 local_normal) {
     if (all(equal(in_deform_param0, vec4(0.0))) &&
@@ -118,14 +110,10 @@ mat4 fetch_joint_matrix(uint joint_index) {
     uint matrix_count = skeletal_matrix_count();
     if ((component.flags & 1u) == 0u ||
         joint_index >= component.joint_count ||
-        component.matrix_offset >= matrix_count) {
+        component.matrix_offset + joint_index >= matrix_count) {
         return mat4(1.0);
     }
-    uint matrix_index = component.matrix_offset + joint_index;
-    if (matrix_index < component.matrix_offset || matrix_index >= matrix_count) {
-        return mat4(1.0);
-    }
-    return skeletal_matrices[matrix_index];
+    return skeletal_matrices[component.matrix_offset + joint_index];
 }
 
 vec3 apply_skinning_position(vec3 local_position) {
@@ -175,6 +163,7 @@ void main() {
     vec4 skinned_tangent = apply_skinning_tangent(in_tangent);
     vec3 skinned_position = apply_skinning_position(morphed_position);
     vec3 local_position = apply_vertex_deform(skinned_position, skinned_normal);
+
     mat4 world = mat4(in_world_row0, in_world_row1, in_world_row2, in_world_row3);
     vec4 world_position = world * vec4(local_position, 1.0);
     gl_Position = pc.view_projection * world_position;
@@ -185,11 +174,7 @@ void main() {
     vec3 normal_world = world3x3 * skinned_normal;
     float normal_length = length(normal_world);
     out_normal_world = (normal_length > 1e-6) ? (normal_world / normal_length) : vec3(0.0, 0.0, 1.0);
-    out_albedo = in_albedo;
-    out_material_params = in_material_params;
-    out_instance_params = in_instance_params;
     out_uv = in_uv;
-    out_occlusion_strength = in_occlusion_strength;
     out_appearance_record_index = in_appearance_record_index;
 
     vec3 tangent_world = world3x3 * skinned_tangent.xyz;

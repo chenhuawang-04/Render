@@ -1,4 +1,4 @@
-#include "vr/render/frame_command_host.hpp"
+﻿#include "vr/render/frame_command_host.hpp"
 
 #include <algorithm>
 #include <limits>
@@ -254,3 +254,4 @@ void FrameCommandHost::AllocatePrimaryBuffers(VulkanContext& context_,
 }
 
 } // namespace vr::render
+

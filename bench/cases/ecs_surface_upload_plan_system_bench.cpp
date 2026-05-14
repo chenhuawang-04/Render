@@ -1,4 +1,4 @@
-#include "Center/Memory/Container/Vector/McVector.hpp"
+﻿#include "Center/Memory/Container/Vector/McVector.hpp"
 #include "vr/ecs/system/surface_runtime_system.hpp"
 #include "vr/ecs/system/surface_system.hpp"
 #include "vr/ecs/system/surface_upload_plan_system.hpp"
@@ -34,7 +34,7 @@ void InitializeBenchData(SurfacePlanBenchData& data_, std::uint32_t component_co
 
     for (std::uint32_t i = 0U; i < component_count_; ++i) {
         SurfaceSystem3D::Initialize(data_.surfaces[i]);
-        SurfaceSystem3D::SetTextureRoute(data_.surfaces[i], 10000U + i, 17U, 0U, 0U);
+        SurfaceSystem3D::SetSource(data_.surfaces[i], vr::ecs::SurfaceSampledSource3DDesc{.surface_id = 10000U + i, .sampler_id = 17U, .uv_set = 0U, .flags = 0U});
         SurfaceSystem3D::SetRuntimeRoute(data_.surfaces[i], 10000U + i, 7U + (i & 0x7U), i & 0x3U);
         SurfaceSystem3D::SetDepthBin(data_.surfaces[i], static_cast<std::uint16_t>(i & 0x3FU));
 
@@ -143,3 +143,4 @@ VR_BENCHMARK_CASE(EcsSurfaceUploadPlan_dim3_dense_4k, "perf;ecs;surface;surface-
 }
 
 } // namespace
+

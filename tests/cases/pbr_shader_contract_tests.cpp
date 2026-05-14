@@ -62,53 +62,63 @@ VR_TEST_CASE(PbrShaderContract_geometry_3d_fragment_uses_shared_standard_pbr_pat
 
     VR_CHECK(Contains(source, "#include \"vr/render/pbr.glsl\""));
     VR_CHECK(Contains(source, "DecodedGeometryMaterial decode_geometry_material("));
-    VR_CHECK(Contains(source, "DecodedGeometryMaterial decode_fallback_geometry_material("));
     VR_CHECK(Contains(source, "DecodedGeometryMaterial decode_appearance_geometry_material("));
-    VR_CHECK(Contains(source, "layout(set = 2, binding = 7, std430) readonly buffer MaterialRecordBuffer"));
-    VR_CHECK(Contains(source, "layout(location = 7) flat in uint in_appearance_record_index;"));
-    VR_CHECK(Contains(source, "layout(location = 8) in vec3 in_tangent_world;"));
-    VR_CHECK(Contains(source, "layout(location = 9) in vec3 in_bitangent_world;"));
-    VR_CHECK(Contains(source, "MaterialGpuRecord material_record = material_records[in_appearance_record_index];"));
-    VR_CHECK(Contains(source, "return decode_fallback_geometry_material(normal_world_);"));
-    VR_CHECK(Contains(source, "return decode_appearance_geometry_material(normal_world_, material_record);"));
-    VR_CHECK(Contains(source, "DecodedGeometryMaterial material_state = decode_geometry_material(normal_world);"));
-    VR_CHECK(Contains(source, "MaterialSample material = material_state.material;"));
-    VR_CHECK(Contains(source, "float occlusion_strength = clamp(in_occlusion_strength, 0.0, 1.0);"));
-    VR_CHECK(Contains(source, "material_texture_present(presence_mask, k_material_texture_presence_normal)"));
+    VR_CHECK(Contains(source, "layout(set = 2, binding = 7, std430) readonly buffer AppearanceRecordBuffer"));
+    VR_CHECK(Contains(source, "layout(location = 3) flat in uint in_appearance_record_index;"));
+    VR_CHECK(Contains(source, "layout(location = 4) in vec3 in_tangent_world;"));
+    VR_CHECK(Contains(source, "layout(location = 5) in vec3 in_bitangent_world;"));
+    VR_CHECK(Contains(source, "AppearanceGpuRecord appearance_record = appearance_records[in_appearance_record_index];"));
+    VR_CHECK(Contains(source, "return decode_appearance_geometry_material(normal_world_, appearance_record);"));
+    VR_CHECK(Contains(source, "DecodedGeometryMaterial appearance_state = decode_geometry_material(normal_world);"));
+    VR_CHECK(Contains(source, "MaterialSample material = appearance_state.material;"));
+    VR_CHECK(Contains(source, "float occlusion_strength = clamp(appearance_params.w, 0.0, 1.0);"));
+    VR_CHECK(Contains(source, "vec2 appearance_uv = in_uv * pc.appearance_uv_transform.xy + pc.appearance_uv_transform.zw;"));
+    VR_CHECK(Contains(source, "appearance_texture_present(presence_mask, k_appearance_texture_presence_normal)"));
     VR_CHECK(Contains(source, "mat3 tbn = mat3(tangent_world, bitangent_world, normalize(normal_world_));"));
     VR_CHECK(Contains(source, "decoded.material.normal_world = normalize(tbn * tangent_normal);"));
     VR_CHECK(Contains(source, "EvaluatePbrDirect(material_"));
-    VR_CHECK(Contains(source, "decoded.material.occlusion = occlusion_strength;"));
     VR_CHECK(Contains(source, "float occlusion_value = 1.0;"));
     VR_CHECK(Contains(source, "occlusion_value = orm_sample.r;"));
     VR_CHECK(Contains(source, "decoded.material.occlusion = mix(1.0, occlusion_value, occlusion_strength);"));
+    VR_CHECK(Contains(source, "decoded.material.emissive = emissive_sample * emissive_factor.rgb * max(extras.x, 0.0);"));
+    VR_CHECK(Contains(source, "decoded.alpha_cutoff = clamp(extras.y, 0.0, 1.0);"));
     VR_CHECK(Contains(source, "return EvaluatePbrIblFromTerms(material_,"));
-    VR_CHECK(Contains(source, "decoded.unlit = ((in_instance_params >> 7u) & 0x1u) == 0u;"));
+    VR_CHECK(Contains(source, "decoded.unlit = appearance_shading_model(appearance_record) == k_appearance_shading_model_unlit;"));
     VR_CHECK(Contains(source, "vec3 ibl_accum = evaluate_ibl(material, view_dir);"));
     VR_CHECK(Contains(source, "vec3 lit_color = direct_accum + ibl_accum * material.occlusion + material.emissive;"));
 
+    VR_CHECK(!Contains(source, "if (!has_appearance_record()) {"));
+    VR_CHECK(!Contains(source, "bool has_appearance_record()"));
+    VR_CHECK(!Contains(source, "DecodedGeometryMaterial decode_fallback_geometry_material("));
+    VR_CHECK(!Contains(source, "return decode_fallback_geometry_material(normal_world_);"));
+    VR_CHECK(!Contains(source, "in_occlusion_strength"));
+    VR_CHECK(!Contains(source, "in_instance_params"));
     VR_CHECK(!Contains(source, "pow(max(dot(normal_world_, half_vector), 0.0), 16.0)"));
     VR_CHECK(!Contains(source, "float ambient = 0.12;"));
     VR_CHECK(!Contains(source, "base_albedo.rgb * (ambient + lit_accum) + ibl_accum"));
 }
 
-VR_TEST_CASE(PbrShaderContract_geometry_3d_vertex_exports_occlusion_strength_for_pbr_material_sample,
+VR_TEST_CASE(PbrShaderContract_geometry_3d_vertex_exports_appearance_record_and_tangent_basis,
              "unit;shader;pbr;contract") {
     const std::string source =
         ReadUtf8TextFile(SourceRoot() / "shaders" / "geometry_3d.vert");
 
-    VR_CHECK(Contains(source, "layout(location = 19) in float in_occlusion_strength;"));
-    VR_CHECK(Contains(source, "layout(location = 6) out float out_occlusion_strength;"));
-    VR_CHECK(Contains(source, "out_occlusion_strength = in_occlusion_strength;"));
-    VR_CHECK(Contains(source, "layout(location = 20) in uint in_appearance_record_index;"));
-    VR_CHECK(Contains(source, "layout(location = 7) flat out uint out_appearance_record_index;"));
+    VR_CHECK(Contains(source, "layout(location = 7) in vec4 in_deform_param0;"));
+    VR_CHECK(Contains(source, "layout(location = 8) in vec4 in_deform_param1;"));
+    VR_CHECK(Contains(source, "layout(location = 9) in vec4 in_morph_weights;"));
+    VR_CHECK(Contains(source, "layout(location = 10) in uint in_component_index;"));
+    VR_CHECK(Contains(source, "layout(location = 11) in uint in_appearance_record_index;"));
+    VR_CHECK(Contains(source, "layout(location = 3) flat out uint out_appearance_record_index;"));
     VR_CHECK(Contains(source, "out_appearance_record_index = in_appearance_record_index;"));
     VR_CHECK(Contains(source, "layout(location = 22) in vec4 in_tangent;"));
-    VR_CHECK(Contains(source, "layout(location = 8) out vec3 out_tangent_world;"));
-    VR_CHECK(Contains(source, "layout(location = 9) out vec3 out_bitangent_world;"));
+    VR_CHECK(Contains(source, "layout(location = 4) out vec3 out_tangent_world;"));
+    VR_CHECK(Contains(source, "layout(location = 5) out vec3 out_bitangent_world;"));
     VR_CHECK(Contains(source, "vec4 skinned_tangent = apply_skinning_tangent(in_tangent);"));
     VR_CHECK(Contains(source, "out_tangent_world = tangent_world;"));
     VR_CHECK(Contains(source, "out_bitangent_world = (bitangent_length > 1e-6)"));
+
+    VR_CHECK(!Contains(source, "in_occlusion_strength"));
+    VR_CHECK(!Contains(source, "out_occlusion_strength"));
 }
 
 VR_TEST_CASE(PbrShaderContract_geometry_3d_generated_shader_contract_stays_valid,
@@ -132,7 +142,7 @@ VR_TEST_CASE(PbrShaderContract_geometry_3d_generated_shader_contract_stays_valid
     VR_CHECK(Contains(reflect, "\"name\": \"g_Textures2D\""));
     VR_CHECK(Contains(reflect, "\"name\": \"g_TexturesCube\""));
     VR_CHECK(Contains(reflect, "\"name\": \"LightingParamsBuffer\""));
-    VR_CHECK(Contains(reflect, "\"name\": \"MaterialRecordBuffer\""));
+    VR_CHECK(Contains(reflect, "\"name\": \"AppearanceRecordBuffer\""));
     VR_CHECK(Contains(reflect, "\"name\": \"IblParamsBuffer\""));
     VR_CHECK(Contains(reflect, "\"set\": 2"));
     VR_CHECK(Contains(reflect, "\"binding\": 7"));
@@ -140,20 +150,33 @@ VR_TEST_CASE(PbrShaderContract_geometry_3d_generated_shader_contract_stays_valid
     VR_CHECK(Contains(reflect, "\"binding\": 0"));
 }
 
-VR_TEST_CASE(PbrShaderContract_surface_3d_fragment_uses_shared_surface_lite_material_decode,
+VR_TEST_CASE(PbrShaderContract_surface_3d_fragment_uses_shared_surface_appearance_decode,
              "unit;shader;pbr;contract") {
     const std::string source =
         ReadUtf8TextFile(SourceRoot() / "shaders" / "surface_3d.frag");
 
     VR_CHECK(Contains(source, "#include \"vr/render/pbr.glsl\""));
-    VR_CHECK(Contains(source, "MaterialSample decode_surface_material("));
-    VR_CHECK(Contains(source, "MaterialSample material = decode_surface_material(sampled_color, in_normal_world);"));
+    VR_CHECK(Contains(source, "layout(set = 2, binding = 0, std430) readonly buffer AppearanceRecordBuffer"));
+    VR_CHECK(Contains(source, "DecodedSurfaceAppearance decode_surface_material(vec3 normal_world_)"));
+    VR_CHECK(Contains(source, "AppearanceGpuRecord appearance_record = appearance_records[in_appearance_record_index];"));
+    VR_CHECK(Contains(source, "float occlusion_strength = clamp(appearance_params.w, 0.0, 1.0);"));
+    VR_CHECK(Contains(source, "decoded.material.metallic = clamp(appearance_params.x, 0.0, 1.0);"));
+    VR_CHECK(Contains(source, "decoded.material.roughness = clamp(appearance_params.y, 0.04, 1.0);"));
+    VR_CHECK(Contains(source, "decoded.material.occlusion = occlusion_strength;"));
+    VR_CHECK(Contains(source, "appearance_texture_present(presence_mask, k_appearance_texture_presence_normal)"));
+    VR_CHECK(Contains(source, "decoded.material.emissive = emissive_sample * emissive_factor.rgb * max(extras.x, 0.0);"));
+    VR_CHECK(Contains(source, "decoded.alpha_cutoff = clamp(extras.y, 0.0, 1.0);"));
+    VR_CHECK(Contains(source, "DecodedSurfaceAppearance surface_state = decode_surface_material(in_normal_world);"));
+    VR_CHECK(Contains(source, "MaterialSample material = surface_state.material;"));
     VR_CHECK(Contains(source, "return EvaluatePbrIblFromTerms(material_,"));
-    VR_CHECK(Contains(source, "material.roughness = 0.55;"));
-    VR_CHECK(Contains(source, "material.metallic = 0.0;"));
-    VR_CHECK(Contains(source, "vec3 shaded_rgb = material.base_color + ibl_lighting * 0.35 + material.emissive;"));
+    VR_CHECK(Contains(source, "if (surface_state.unlit) {"));
+    VR_CHECK(Contains(source, "vec3 shaded_rgb = ibl_lighting * material.occlusion + material.emissive;"));
 
+    VR_CHECK(!Contains(source, "in_material_params"));
+    VR_CHECK(!Contains(source, "surface_sample"));
     VR_CHECK(!Contains(source, "vec3 fresnel = f0 + (vec3(1.0) - f0) * pow(1.0 - n_dot_v, 5.0);"));
+    VR_CHECK(!Contains(source, "material.roughness = 0.55;"));
 }
 
 } // namespace
+

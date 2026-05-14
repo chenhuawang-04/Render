@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "vr/asset/texture_host.hpp"
 #include "vr/particle/particle_simulation_host.hpp"
@@ -132,3 +132,4 @@ struct RuntimeFrameDiagnosticsV2 final {
 }
 
 } // namespace vr::runtime
+

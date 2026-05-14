@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "vr/ecs/system/animation_evaluation_context.hpp"
 
@@ -219,3 +219,4 @@ private:
 };
 
 } // namespace vr::render
+

@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "vr/ecs/component/text_component.hpp"
 #include "vr/ecs/system/transparency_render_policy.hpp"
@@ -21,20 +21,20 @@ public:
     static constexpr std::uint32_t inline_capacity_bytes = TextBufferInlineUtf8::inline_capacity_bytes;
 
     // 64-bit sort key layout (MSB -> LSB):
-    // [pass:2][material:16][font:12][atlas:10][minor:16][batch_tag:8]
+    // [pass:2][visual_resource:16][font:12][atlas:10][minor:16][batch_tag:8]
     static constexpr std::uint32_t sort_key_batch_bits = 8U;
     static constexpr std::uint32_t sort_key_minor_bits = 16U;
     static constexpr std::uint32_t sort_key_atlas_bits = 10U;
     static constexpr std::uint32_t sort_key_font_bits = 12U;
-    static constexpr std::uint32_t sort_key_material_bits = 16U;
+    static constexpr std::uint32_t sort_key_visual_resource_bits = 16U;
     static constexpr std::uint32_t sort_key_pass_bits = 2U;
 
     static constexpr std::uint32_t sort_key_batch_shift = 0U;
     static constexpr std::uint32_t sort_key_minor_shift = sort_key_batch_shift + sort_key_batch_bits;
     static constexpr std::uint32_t sort_key_atlas_shift = sort_key_minor_shift + sort_key_minor_bits;
     static constexpr std::uint32_t sort_key_font_shift = sort_key_atlas_shift + sort_key_atlas_bits;
-    static constexpr std::uint32_t sort_key_material_shift = sort_key_font_shift + sort_key_font_bits;
-    static constexpr std::uint32_t sort_key_pass_shift = sort_key_material_shift + sort_key_material_bits;
+    static constexpr std::uint32_t sort_key_visual_resource_shift = sort_key_font_shift + sort_key_font_bits;
+    static constexpr std::uint32_t sort_key_pass_shift = sort_key_visual_resource_shift + sort_key_visual_resource_bits;
 
     static constexpr std::uint32_t sort_key_binding_shift = sort_key_atlas_shift;
 
@@ -42,10 +42,10 @@ public:
     static constexpr std::uint64_t sort_key_minor_mask = (std::uint64_t{1U} << sort_key_minor_bits) - 1U;
     static constexpr std::uint64_t sort_key_atlas_mask = (std::uint64_t{1U} << sort_key_atlas_bits) - 1U;
     static constexpr std::uint64_t sort_key_font_mask = (std::uint64_t{1U} << sort_key_font_bits) - 1U;
-    static constexpr std::uint64_t sort_key_material_mask = (std::uint64_t{1U} << sort_key_material_bits) - 1U;
+    static constexpr std::uint64_t sort_key_visual_resource_mask = (std::uint64_t{1U} << sort_key_visual_resource_bits) - 1U;
     static constexpr std::uint64_t sort_key_pass_mask = (std::uint64_t{1U} << sort_key_pass_bits) - 1U;
 
-    static_assert(sort_key_pass_bits + sort_key_material_bits + sort_key_font_bits +
+    static_assert(sort_key_pass_bits + sort_key_visual_resource_bits + sort_key_font_bits +
                       sort_key_atlas_bits + sort_key_minor_bits + sort_key_batch_bits == 64U,
                   "TextSystem sort-key bit layout must be exactly 64 bits");
 
@@ -100,7 +100,7 @@ public:
     static void SetDefaultRuntime(TextType& component_) noexcept {
         component_.runtime.sort_key = 0U;
         component_.runtime.font_id = 0U;
-        component_.runtime.material_id = 0U;
+        component_.runtime.visual_resource_id = 0U;
         component_.runtime.atlas_page_id = 0U;
         component_.runtime.glyph_begin = 0U;
         component_.runtime.glyph_count = 0U;
@@ -128,11 +128,11 @@ public:
 
     static void SetRuntimeRoute(TextType& component_,
                                 std::uint32_t font_id_,
-                                std::uint32_t material_id_,
+                                std::uint32_t visual_resource_id_,
                                 std::uint32_t atlas_page_id_,
                                 std::uint32_t batch_tag_) noexcept {
         component_.runtime.font_id = font_id_;
-        component_.runtime.material_id = material_id_;
+        component_.runtime.visual_resource_id = visual_resource_id_;
         component_.runtime.atlas_page_id = atlas_page_id_;
         component_.runtime.batch_tag = batch_tag_;
         MarkDirty(component_, runtime_dirty_flag);
@@ -145,9 +145,9 @@ public:
         RebuildSortKey(component_);
     }
 
-    static void SetMaterialId(TextType& component_,
-                              std::uint32_t material_id_) noexcept {
-        component_.runtime.material_id = material_id_;
+    static void SetVisualResourceId(TextType& component_,
+                                    std::uint32_t visual_resource_id_) noexcept {
+        component_.runtime.visual_resource_id = visual_resource_id_;
         MarkDirty(component_, runtime_dirty_flag);
         RebuildSortKey(component_);
     }
@@ -193,7 +193,7 @@ public:
     [[nodiscard]] static std::uint64_t ComposeSortKey(const TextType& component_) noexcept {
         const std::uint64_t pass_bits =
             static_cast<std::uint64_t>(SortPassBucket(component_.runtime.pass_hint)) & sort_key_pass_mask;
-        const std::uint64_t material_bits = static_cast<std::uint64_t>(component_.runtime.material_id) & sort_key_material_mask;
+        const std::uint64_t visual_resource_bits = static_cast<std::uint64_t>(component_.runtime.visual_resource_id) & sort_key_visual_resource_mask;
         const std::uint64_t font_bits = static_cast<std::uint64_t>(component_.runtime.font_id) & sort_key_font_mask;
         const std::uint64_t atlas_bits = static_cast<std::uint64_t>(component_.runtime.atlas_page_id) & sort_key_atlas_mask;
         const std::uint64_t batch_bits = static_cast<std::uint64_t>(component_.runtime.batch_tag) & sort_key_batch_mask;
@@ -211,7 +211,7 @@ public:
 
         std::uint64_t key = 0U;
         key |= (pass_bits << sort_key_pass_shift);
-        key |= (material_bits << sort_key_material_shift);
+        key |= (visual_resource_bits << sort_key_visual_resource_shift);
         key |= (font_bits << sort_key_font_shift);
         key |= (atlas_bits << sort_key_atlas_shift);
         key |= (minor_bits << sort_key_minor_shift);
@@ -236,8 +236,8 @@ public:
             static_cast<std::uint32_t>((sort_key_ >> sort_key_pass_shift) & sort_key_pass_mask)));
     }
 
-    [[nodiscard]] static std::uint32_t ExtractMaterialBucket(std::uint64_t sort_key_) noexcept {
-        return static_cast<std::uint32_t>((sort_key_ >> sort_key_material_shift) & sort_key_material_mask);
+    [[nodiscard]] static std::uint32_t ExtractVisualResourceBucket(std::uint64_t sort_key_) noexcept {
+        return static_cast<std::uint32_t>((sort_key_ >> sort_key_visual_resource_shift) & sort_key_visual_resource_mask);
     }
 
     [[nodiscard]] static std::uint32_t ExtractFontBucket(std::uint64_t sort_key_) noexcept {
@@ -517,3 +517,4 @@ private:
 };
 
 } // namespace vr::ecs
+

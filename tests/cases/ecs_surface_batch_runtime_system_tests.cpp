@@ -1,4 +1,4 @@
-#include "support/test_framework.hpp"
+﻿#include "support/test_framework.hpp"
 #include "vr/ecs/system/appearance_runtime_system.hpp"
 #include "vr/ecs/system/appearance_system.hpp"
 #include "vr/ecs/system/surface_batch_system.hpp"
@@ -11,6 +11,25 @@
 
 namespace {
 
+void ApplySurface2DAppearance(vr::ecs::Surface<vr::ecs::Dim2>& surface_,
+                              std::int16_t layer_,
+                              vr::ecs::AppearanceBlendMode blend_mode_ = vr::ecs::AppearanceBlendMode::alpha,
+                              bool premultiplied_alpha_ = false,
+                              vr::ecs::Rgba8 tint_color_ = vr::ecs::Rgba8{255U, 255U, 255U, 255U},
+                              float opacity_ = 1.0F) {
+    vr::ecs::Appearance<vr::ecs::Dim2> appearance{};
+    vr::ecs::AppearanceSystem<vr::ecs::Dim2>::Initialize(appearance);
+    vr::ecs::AppearanceSystem<vr::ecs::Dim2>::SetLayer(appearance, layer_);
+    vr::ecs::AppearanceSystem<vr::ecs::Dim2>::SetBlendMode(appearance, blend_mode_);
+    vr::ecs::AppearanceSystem<vr::ecs::Dim2>::SetPremultipliedAlpha(appearance, premultiplied_alpha_);
+    vr::ecs::AppearanceSystem<vr::ecs::Dim2>::SetFillColor(appearance, tint_color_);
+    vr::ecs::AppearanceSystem<vr::ecs::Dim2>::SetOpacity(appearance, opacity_);
+    (void)vr::ecs::SurfaceSystem<vr::ecs::Dim2>::ApplyAppearanceRuntimeState(surface_, appearance.style);
+}
+
+using Appearance3D = vr::ecs::Appearance<vr::ecs::Dim3>;
+using AppearanceSystem3D = vr::ecs::AppearanceSystem<vr::ecs::Dim3>;
+
 VR_TEST_CASE(EcsSurfaceBatchSystem_dim2_build_sort_and_group, "unit;core;ecs;surface;batch") {
     using Surface2D = vr::ecs::Surface<vr::ecs::Dim2>;
     using SurfaceSystem2D = vr::ecs::SurfaceSystem<vr::ecs::Dim2>;
@@ -21,30 +40,30 @@ VR_TEST_CASE(EcsSurfaceBatchSystem_dim2_build_sort_and_group, "unit;core;ecs;sur
         SurfaceSystem2D::Initialize(component);
     }
 
-    SurfaceSystem2D::SetImageId(components[0U], 100U, 1U);
-    SurfaceSystem2D::SetMaterialId(components[0U], 5U);
+    SurfaceSystem2D::SetSource(components[0U], vr::ecs::SurfaceImageSourceDesc{.surface_id = 100U, .atlas_page_id = 1U});
+    SurfaceSystem2D::SetVisualResourceId(components[0U], 5U);
     SurfaceSystem2D::SetBatchTag(components[0U], 1U);
-    SurfaceSystem2D::SetLayer(components[0U], 0);
+    ApplySurface2DAppearance(components[0U], 0);
 
-    SurfaceSystem2D::SetImageId(components[1U], 99U, 1U);
-    SurfaceSystem2D::SetMaterialId(components[1U], 4U);
+    SurfaceSystem2D::SetSource(components[1U], vr::ecs::SurfaceImageSourceDesc{.surface_id = 99U, .atlas_page_id = 1U});
+    SurfaceSystem2D::SetVisualResourceId(components[1U], 4U);
     SurfaceSystem2D::SetBatchTag(components[1U], 1U);
-    SurfaceSystem2D::SetLayer(components[1U], 0);
+    ApplySurface2DAppearance(components[1U], 0);
 
     // 2: keep missing source to test filtering
 
-    SurfaceSystem2D::SetSpriteId(components[3U], 200U, 2U);
+    SurfaceSystem2D::SetSource(components[3U], vr::ecs::SurfaceSpriteSourceDesc{.surface_id = 200U, .atlas_page_id = 2U});
     SurfaceSystem2D::SetVisible(components[3U], false);
 
-    SurfaceSystem2D::SetSpriteId(components[4U], 200U, 2U);
-    SurfaceSystem2D::SetMaterialId(components[4U], 4U);
+    SurfaceSystem2D::SetSource(components[4U], vr::ecs::SurfaceSpriteSourceDesc{.surface_id = 200U, .atlas_page_id = 2U});
+    SurfaceSystem2D::SetVisualResourceId(components[4U], 4U);
     SurfaceSystem2D::SetBatchTag(components[4U], 0U);
-    SurfaceSystem2D::SetLayer(components[4U], -1);
+    ApplySurface2DAppearance(components[4U], -1);
 
-    SurfaceSystem2D::SetSpriteId(components[5U], 200U, 2U);
-    SurfaceSystem2D::SetMaterialId(components[5U], 4U);
+    SurfaceSystem2D::SetSource(components[5U], vr::ecs::SurfaceSpriteSourceDesc{.surface_id = 200U, .atlas_page_id = 2U});
+    SurfaceSystem2D::SetVisualResourceId(components[5U], 4U);
     SurfaceSystem2D::SetBatchTag(components[5U], 0U);
-    SurfaceSystem2D::SetLayer(components[5U], 2);
+    ApplySurface2DAppearance(components[5U], 2);
 
     vr::ecs::SurfaceBatchScratch<vr::ecs::Dim2> scratch{};
     const auto stats = BatchSystem2D::BuildAndSort(components.data(),
@@ -105,8 +124,8 @@ VR_TEST_CASE(EcsSurfaceBatchSystem_dim3_binding_key_ignores_depth_and_batch, "un
     std::array<Surface3D, 3U> components{};
     for (auto& component : components) {
         SurfaceSystem3D::Initialize(component);
-        SurfaceSystem3D::SetTextureRoute(component, 9U, 5U, 0U, 0U);
-        SurfaceSystem3D::SetMaterialId(component, 33U);
+        SurfaceSystem3D::SetSource(component, vr::ecs::SurfaceSampledSource3DDesc{.surface_id = 9U, .sampler_id = 5U, .uv_set = 0U, .flags = 0U});
+        SurfaceSystem3D::SetVisualResourceId(component, 33U);
     }
 
     SurfaceSystem3D::SetDepthBin(components[0U], 2U);
@@ -155,11 +174,11 @@ VR_TEST_CASE(EcsSurfaceBatchSystem_dim3_candidate_indices_filter_and_oob, "unit;
     std::array<Surface3D, 5U> components{};
     for (auto& component : components) {
         SurfaceSystem3D::Initialize(component);
-        SurfaceSystem3D::SetTextureRoute(component, 10U, 2U, 0U, 0U);
-        SurfaceSystem3D::SetMaterialId(component, 4U);
+        SurfaceSystem3D::SetSource(component, vr::ecs::SurfaceSampledSource3DDesc{.surface_id = 10U, .sampler_id = 2U, .uv_set = 0U, .flags = 0U});
+        SurfaceSystem3D::SetVisualResourceId(component, 4U);
     }
     SurfaceSystem3D::SetVisible(components[1U], false);
-    SurfaceSystem3D::SetTextureId(components[3U], 0U);
+    SurfaceSystem3D::SetSource(components[3U], vr::ecs::SurfaceSampledSource3DDesc{.surface_id = 0U});
 
     const std::array<std::uint32_t, 6U> candidate_indices{
         4U, 1U, 99U, 3U, 0U, 2U
@@ -198,13 +217,13 @@ VR_TEST_CASE(EcsSurfaceRuntimeSystem_dim2_build_and_transform_update, "unit;core
         TransformSystem2D::Initialize(transforms[i]);
     }
 
-    SurfaceSystem2D::SetImageId(components[0U], 41U, 3U);
-    SurfaceSystem2D::SetMaterialId(components[0U], 7U);
+    SurfaceSystem2D::SetSource(components[0U], vr::ecs::SurfaceImageSourceDesc{.surface_id = 41U, .atlas_page_id = 3U});
+    SurfaceSystem2D::SetVisualResourceId(components[0U], 7U);
     SurfaceSystem2D::SetSize(components[0U], vr::ecs::Float2{.x = 120.0F, .y = 64.0F});
     SurfaceSystem2D::SetPivot(components[0U], vr::ecs::Float2{.x = 0.5F, .y = 0.5F});
 
-    SurfaceSystem2D::SetSpriteId(components[1U], 61U, 4U);
-    SurfaceSystem2D::SetMaterialId(components[1U], 7U);
+    SurfaceSystem2D::SetSource(components[1U], vr::ecs::SurfaceSpriteSourceDesc{.surface_id = 61U, .atlas_page_id = 4U});
+    SurfaceSystem2D::SetVisualResourceId(components[1U], 7U);
     SurfaceSystem2D::SetSize(components[1U], vr::ecs::Float2{.x = 90.0F, .y = 48.0F});
     SurfaceSystem2D::SetPivot(components[1U], vr::ecs::Float2{.x = 0.0F, .y = 1.0F});
 
@@ -284,13 +303,17 @@ VR_TEST_CASE(EcsSurfaceRuntimeSystem_dim2_linked_appearance_overrides_effective_
     Transform2D transform{};
     SurfaceSystem2D::Initialize(surface);
     TransformSystem2D::Initialize(transform);
-    SurfaceSystem2D::SetImageId(surface, 41U, 3U);
-    SurfaceSystem2D::SetMaterialId(surface, 7U);
-    SurfaceSystem2D::SetBlendMode(surface, vr::ecs::Surface2DBlendMode::additive);
-    SurfaceSystem2D::SetPremultipliedAlpha(surface, false);
-    surface.runtime.route.appearance_handle = appearance.runtime.gpu_record_handle;
-    surface.runtime.route.appearance_pipeline_bucket =
-        static_cast<std::uint32_t>(appearance.runtime.pipeline_key);
+    SurfaceSystem2D::SetSource(surface, vr::ecs::SurfaceImageSourceDesc{.surface_id = 41U, .atlas_page_id = 3U});
+    SurfaceSystem2D::SetVisualResourceId(surface, 7U);
+    ApplySurface2DAppearance(surface,
+                             0,
+                             vr::ecs::AppearanceBlendMode::additive,
+                             false);
+    (void)SurfaceSystem2D::SetAppearanceRuntimeLink(surface,
+                                                    appearance.runtime.gpu_record_handle,
+                                                    appearance.runtime.sort_key,
+                                                    appearance.runtime.pipeline_key,
+                                                    appearance.runtime.resource_key);
 
     TransformSystem2D::UpdateHierarchy(&transform, 1U);
 
@@ -314,11 +337,13 @@ VR_TEST_CASE(EcsSurfaceRuntimeSystem_dim3_transform_dirty_hint_path, "unit;core;
     using TransformSystem3D = vr::ecs::TransformSystem<vr::ecs::Dim3>;
 
     std::array<Surface3D, 3U> components{};
+    std::array<Appearance3D, 3U> appearances{};
     std::array<Transform3D, 3U> transforms{};
     for (std::uint32_t i = 0U; i < components.size(); ++i) {
         SurfaceSystem3D::Initialize(components[i]);
-        SurfaceSystem3D::SetTextureRoute(components[i], 101U + (i % 2U), 7U, 0U, 0U);
-        SurfaceSystem3D::SetMaterialId(components[i], 22U);
+        SurfaceSystem3D::SetSource(components[i], vr::ecs::SurfaceSampledSource3DDesc{.surface_id = 101U + (i % 2U), .sampler_id = 7U, .uv_set = 0U, .flags = 0U});
+        SurfaceSystem3D::SetVisualResourceId(components[i], 22U);
+        AppearanceSystem3D::Initialize(appearances[i]);
 
         TransformSystem3D::Initialize(transforms[i]);
         TransformSystem3D::SetLocalPosition(transforms[i],
@@ -327,7 +352,8 @@ VR_TEST_CASE(EcsSurfaceRuntimeSystem_dim3_transform_dirty_hint_path, "unit;core;
                                                 .y = 0.0F,
                                                 .z = 2.0F});
     }
-    SurfaceSystem3D::SetDepthWrite(components[1U], true);
+    AppearanceSystem3D::SetDepthWrite(appearances[1U], true);
+    (void)SurfaceSystem3D::ApplyAppearanceRuntimeState(components[1U], appearances[1U].style);
     TransformSystem3D::UpdateHierarchy(transforms.data(),
                                        static_cast<std::uint32_t>(transforms.size()));
 
@@ -385,8 +411,8 @@ VR_TEST_CASE(EcsSurfaceRuntimeSystem_dim3_visibility_signature_drives_cache_key,
     std::array<Transform3D, 4U> transforms{};
     for (std::uint32_t i = 0U; i < components.size(); ++i) {
         SurfaceSystem3D::Initialize(components[i]);
-        SurfaceSystem3D::SetTextureRoute(components[i], 200U + i, 9U, 0U, 0U);
-        SurfaceSystem3D::SetMaterialId(components[i], 3U);
+        SurfaceSystem3D::SetSource(components[i], vr::ecs::SurfaceSampledSource3DDesc{.surface_id = 200U + i, .sampler_id = 9U, .uv_set = 0U, .flags = 0U});
+        SurfaceSystem3D::SetVisualResourceId(components[i], 3U);
         TransformSystem3D::Initialize(transforms[i]);
         TransformSystem3D::SetLocalPosition(transforms[i],
                                             vr::ecs::Float3{
@@ -453,7 +479,52 @@ VR_TEST_CASE(EcsSurfaceRuntimeSystem_dim3_visibility_signature_drives_cache_key,
     VR_CHECK(stats2.visible_set_signature_from_hint);
 }
 
-VR_TEST_CASE(EcsSurfaceRuntimeSystem_dim3_linked_appearance_uses_effective_material_id,
+VR_TEST_CASE(EcsSurfaceRuntimeSystem_dim3_batching_ignores_texture_route_when_render_state_matches,
+             "unit;core;ecs;surface;runtime") {
+    using Surface3D = vr::ecs::Surface<vr::ecs::Dim3>;
+    using SurfaceSystem3D = vr::ecs::SurfaceSystem<vr::ecs::Dim3>;
+    using RuntimeSystem3D = vr::ecs::SurfaceRuntimeSystem<vr::ecs::Dim3>;
+    using Transform3D = vr::ecs::Transform<vr::ecs::Dim3>;
+    using TransformSystem3D = vr::ecs::TransformSystem<vr::ecs::Dim3>;
+
+    std::array<Surface3D, 2U> components{};
+    std::array<Transform3D, 2U> transforms{};
+    for (std::uint32_t i = 0U; i < components.size(); ++i) {
+        SurfaceSystem3D::Initialize(components[i]);
+        SurfaceSystem3D::SetSource(components[i], vr::ecs::SurfaceSampledSource3DDesc{.surface_id = 6101U + i, .sampler_id = 7U + i, .uv_set = 0U, .flags = 0U});
+        SurfaceSystem3D::SetVisualResourceId(components[i], 55U);
+        (void)SurfaceSystem3D::SetAppearanceRuntimeLink(components[i],
+                                                        vr::ecs::AppearanceHandle{.index = 9U, .generation = 1U},
+                                                        101ULL,
+                                                        202ULL,
+                                                        777ULL);
+
+        TransformSystem3D::Initialize(transforms[i]);
+        TransformSystem3D::SetLocalPosition(transforms[i],
+                                            vr::ecs::Float3{
+                                                .x = static_cast<float>(i),
+                                                .y = 0.0F,
+                                                .z = 2.0F
+                                            });
+    }
+    TransformSystem3D::UpdateHierarchy(transforms.data(),
+                                       static_cast<std::uint32_t>(transforms.size()));
+
+    vr::ecs::Surface3DRuntimeScratch scratch{};
+    const auto stats = RuntimeSystem3D::Build(components.data(),
+                                              transforms.data(),
+                                              static_cast<std::uint32_t>(components.size()),
+                                              scratch,
+                                              {});
+
+    VR_REQUIRE(stats.emitted_instance_count == 2U);
+    VR_CHECK(stats.emitted_batch_count == 1U);
+    VR_REQUIRE(scratch.draw_batches.size() == 1U);
+    VR_CHECK(scratch.draw_batches[0U].visual_resource_id == 777U);
+    VR_CHECK(scratch.draw_batches[0U].instance_count == 2U);
+}
+
+VR_TEST_CASE(EcsSurfaceRuntimeSystem_dim3_linked_appearance_uses_effective_visual_resource_id,
              "unit;core;ecs;surface;runtime") {
     using Surface3D = vr::ecs::Surface<vr::ecs::Dim3>;
     using SurfaceSystem3D = vr::ecs::SurfaceSystem<vr::ecs::Dim3>;
@@ -463,10 +534,13 @@ VR_TEST_CASE(EcsSurfaceRuntimeSystem_dim3_linked_appearance_uses_effective_mater
 
     Surface3D surface{};
     SurfaceSystem3D::Initialize(surface);
-    SurfaceSystem3D::SetTextureRoute(surface, 111U, 3U, 0U, 0U);
-    SurfaceSystem3D::SetMaterialId(surface, 19U);
-    surface.runtime.route.appearance_handle = vr::ecs::AppearanceHandle{.index = 2U, .generation = 1U};
-    surface.runtime.route.appearance_resource_bucket = 650U;
+    SurfaceSystem3D::SetSource(surface, vr::ecs::SurfaceSampledSource3DDesc{.surface_id = 111U, .sampler_id = 3U, .uv_set = 0U, .flags = 0U});
+    SurfaceSystem3D::SetVisualResourceId(surface, 19U);
+    (void)SurfaceSystem3D::SetAppearanceRuntimeLink(surface,
+                                                    vr::ecs::AppearanceHandle{.index = 2U, .generation = 1U},
+                                                    0ULL,
+                                                    0ULL,
+                                                    650ULL);
 
     Transform3D transform{};
     TransformSystem3D::Initialize(transform);
@@ -477,8 +551,11 @@ VR_TEST_CASE(EcsSurfaceRuntimeSystem_dim3_linked_appearance_uses_effective_mater
     const auto stats = RuntimeSystem3D::Build(&surface, &transform, 1U, scratch, {});
     VR_REQUIRE(stats.emitted_instance_count == 1U);
     VR_REQUIRE(!scratch.instances.empty());
-    VR_CHECK(surface.runtime.route.material_id == 19U);
-    VR_CHECK(scratch.instances[0U].material_id == 650U);
+    VR_REQUIRE(!scratch.draw_batches.empty());
+    VR_CHECK(surface.runtime.route.visual_resource_id == 19U);
+    VR_CHECK(scratch.instances[0U].visual_resource_id == 650U);
+    VR_CHECK(scratch.draw_batches[0U].visual_resource_id == 650U);
 }
 
 } // namespace
+

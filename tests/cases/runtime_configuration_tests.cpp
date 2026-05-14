@@ -1,4 +1,4 @@
-#include "support/test_framework.hpp"
+﻿#include "support/test_framework.hpp"
 #include "vr/render/render_runtime_host.hpp"
 #include "vr/runtime/runtime.hpp"
 #include "vr/runtime/profiles/minimal_profile.hpp"
@@ -597,3 +597,4 @@ VR_TEST_CASE(RuntimeConfig_resource_creation_requires_initialize, "unit;core;run
 }
 
 } // namespace
+

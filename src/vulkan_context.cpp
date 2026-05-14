@@ -1,4 +1,4 @@
-#include "vr/vulkan_context.hpp"
+﻿#include "vr/vulkan_context.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -1644,3 +1644,4 @@ void VulkanContext::CreateDefaultCommandPools() {
 }
 
 } // namespace vr
+

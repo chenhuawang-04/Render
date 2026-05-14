@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "Center/Memory/Container/Vector/McVector.hpp"
 #include "vr/ecs/system/surface_upload_plan_system.hpp"
@@ -264,3 +264,4 @@ private:
 };
 
 } // namespace vr::surface
+

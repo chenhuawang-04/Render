@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "vr/ecs/concept/dimension.hpp"
 
@@ -22,3 +22,4 @@ static_assert(std::is_standard_layout_v<SceneRoot<ecs::Dim3>>);
 static_assert(std::is_trivial_v<SceneRoot<ecs::Dim3>>);
 
 } // namespace vr::scene
+

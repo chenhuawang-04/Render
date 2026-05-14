@@ -1,4 +1,4 @@
-#include "support/test_framework.hpp"
+﻿#include "support/test_framework.hpp"
 #include "vr/render/light_shadow_link_coordinator.hpp"
 
 #include <array>
@@ -165,3 +165,4 @@ VR_TEST_CASE(RenderLightShadowLinkCoordinator3D_incremental_light_patch_updates_
 }
 
 } // namespace
+

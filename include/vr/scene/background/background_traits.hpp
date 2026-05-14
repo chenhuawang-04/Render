@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "vr/ecs/concept/dimension.hpp"
 #include "vr/scene/background/sprite_background.hpp"
@@ -24,3 +24,4 @@ struct SceneBackgroundTraits<ecs::Dim3, SkyEnvironment> final {
 };
 
 } // namespace vr::scene
+

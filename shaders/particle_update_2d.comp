@@ -18,7 +18,7 @@ struct ParticleGpuStateRecord {
     uint start_color_rgba8;
     uint end_color_rgba8;
     uint texture_id;
-    uint material_id;
+    uint sampler_slot;
     uint component_index;
     uint user_data;
     uint packed_flags;

@@ -1,4 +1,4 @@
-#include "vr/render/environment/background_pass_2d.hpp"
+﻿#include "vr/render/environment/background_pass_2d.hpp"
 
 #include "vr/render/generated/background_2d_frag_spv.hpp"
 #include "vr/render/generated/render_target_composite_vert_spv.hpp"
@@ -215,3 +215,4 @@ void BackgroundPass2D::EnsurePipelineObjects(VulkanContext& context_,
 }
 
 } // namespace vr::render
+

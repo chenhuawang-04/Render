@@ -1,4 +1,4 @@
-#include "support/test_framework.hpp"
+﻿#include "support/test_framework.hpp"
 #include "vr/animation/animation_clip_host.hpp"
 #include "vr/animation/animation_path_host.hpp"
 #include "vr/ecs/system/animation_curve_system.hpp"
@@ -55,22 +55,22 @@ VR_TEST_CASE(AnimationClipHost_upsert_find_sample_and_remove,
         {.time_s = 0.0F, .value = vr::ecs::Float4{.x = 1.0F, .y = 1.0F, .z = 0.0F, .w = 0.0F}, .interpolation_mode = vr::ecs::AnimationInterpolationMode::linear, .reserved0 = 0U, .reserved1 = 0U},
         {.time_s = 1.0F, .value = vr::ecs::Float4{.x = 2.0F, .y = 2.0F, .z = 0.25F, .w = 0.5F}, .interpolation_mode = vr::ecs::AnimationInterpolationMode::linear, .reserved0 = 0U, .reserved1 = 0U},
     }};
-    const std::array<vr::animation::MaterialFloat4ChannelDesc, 1U> uv_channels{{
+    const std::array<vr::animation::VisualFloat4ChannelDesc, 1U> uv_channels{{
         {
-            .semantic = vr::ecs::MaterialTrackSemantic::surface_uv_transform,
+            .semantic = vr::ecs::VisualTrackSemantic::surface_uv_transform,
             .channel_mask = 0xFU,
             .reserved0 = 0U,
             .curve = vr::ecs::AnimationCurveView<vr::ecs::Float4>{.keyframes = uv_keys.data(), .keyframe_count = 2U},
         },
     }};
-    vr::animation::MaterialAnimationClipDesc material_desc{};
-    material_desc.clip_id = 20U;
-    material_desc.duration_s = 1.0F;
-    material_desc.float4_channels = uv_channels.data();
-    material_desc.float4_channel_count = static_cast<std::uint32_t>(uv_channels.size());
-    const vr::ecs::AnimationClipHandle material_handle = host.UpsertMaterialClip(material_desc);
-    VR_REQUIRE(host.FindMaterialClipById(20U) != nullptr);
-    VR_CHECK(host.Stats().material_clip_count == 1U);
+    vr::animation::VisualAnimationClipDesc visual_desc{};
+    visual_desc.clip_id = 20U;
+    visual_desc.duration_s = 1.0F;
+    visual_desc.float4_channels = uv_channels.data();
+    visual_desc.float4_channel_count = static_cast<std::uint32_t>(uv_channels.size());
+    const vr::ecs::AnimationClipHandle visual_handle = host.UpsertVisualClip(visual_desc);
+    VR_REQUIRE(host.FindVisualClipById(20U) != nullptr);
+    VR_CHECK(host.Stats().visual_clip_count == 1U);
 
     const std::array<vr::ecs::AnimationKeyframe<float>, 2U> fov_keys{{
         {.time_s = 0.0F, .value = 1.0F, .interpolation_mode = vr::ecs::AnimationInterpolationMode::linear, .reserved0 = 0U, .reserved1 = 0U},
@@ -95,10 +95,10 @@ VR_TEST_CASE(AnimationClipHost_upsert_find_sample_and_remove,
     VR_CHECK(host.Stats().clip_count == 3U);
 
     VR_REQUIRE(host.RemoveClip(20U));
-    VR_CHECK(host.FindClipByHandle(material_handle) == nullptr);
+    VR_CHECK(host.FindClipByHandle(visual_handle) == nullptr);
     VR_CHECK(host.FindClipById(20U) == nullptr);
     VR_CHECK(host.Stats().clip_count == 2U);
-    VR_CHECK(host.Stats().material_clip_count == 0U);
+    VR_CHECK(host.Stats().visual_clip_count == 0U);
 }
 
 VR_TEST_CASE(AnimationPathHost_upsert_find_view_and_remove,
@@ -156,3 +156,5 @@ VR_TEST_CASE(AnimationPathHost_upsert_find_view_and_remove,
 }
 
 } // namespace
+
+

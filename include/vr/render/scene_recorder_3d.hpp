@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "Center/Memory/Container/Vector/McVector.hpp"
 #include "vr/render/animation_frame_coordinator.hpp"
@@ -642,3 +642,4 @@ private:
 };
 
 } // namespace vr::render
+

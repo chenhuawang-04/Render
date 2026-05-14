@@ -1,4 +1,4 @@
-#include "support/bench_framework.hpp"
+﻿#include "support/bench_framework.hpp"
 #include "vr/render/render_runtime_host.hpp"
 #include "vr/runtime/runtime_diagnostics.hpp"
 #include "vr/runtime/services/frame_composer_service.hpp"
@@ -59,3 +59,4 @@ VR_BENCHMARK_CASE(RuntimeServices_profiled_try_get_particle_services, "core;runt
 }
 
 } // namespace
+

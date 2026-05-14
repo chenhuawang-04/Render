@@ -1,4 +1,4 @@
-#include "vr/geometry/geometry_upload_host.hpp"
+﻿#include "vr/geometry/geometry_upload_host.hpp"
 
 #include "vr/resource/gpu_memory_host.hpp"
 
@@ -334,3 +334,4 @@ const GeometryUploadHost::FrameState& GeometryUploadHost::FrameAt(std::uint32_t 
 }
 
 } // namespace vr::geometry
+

@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "Center/Memory/Container/Vector/McVector.hpp"
 #include "vr/ecs/component/particle_emitter_component.hpp"
@@ -59,7 +59,7 @@ struct ParticleDrawBatch final {
     std::uint64_t sort_key;
     std::uint32_t instance_begin;
     std::uint32_t instance_count;
-    std::uint32_t material_id;
+    std::uint32_t visual_resource_id;
     std::uint32_t texture_id;
     std::uint32_t first_component_index;
     std::uint32_t batch_tag;
@@ -379,9 +379,11 @@ public:
             stats.visible_particle_count += emitted_from_component;
             const std::uint64_t sort_key = ParticleSystem<DimensionT>::SortKey(component);
             const std::uint32_t pipeline_state = EncodePipelineState(component);
+            const std::uint32_t effective_visual_resource_id =
+                ResolveEffectiveVisualResourceId(component.runtime.route);
             if (!scratch_.draw_batches.empty() &&
                 scratch_.draw_batches.back().sort_key == sort_key &&
-                scratch_.draw_batches.back().material_id == component.runtime.route.material_id &&
+                scratch_.draw_batches.back().visual_resource_id == effective_visual_resource_id &&
                 scratch_.draw_batches.back().texture_id == component.runtime.route.texture_id &&
                 scratch_.draw_batches.back().batch_tag == component.runtime.route.batch_tag &&
                 scratch_.draw_batches.back().pipeline_state == pipeline_state &&
@@ -394,7 +396,7 @@ public:
                 batch.sort_key = sort_key;
                 batch.instance_begin = instance_begin;
                 batch.instance_count = emitted_from_component;
-                batch.material_id = component.runtime.route.material_id;
+                batch.visual_resource_id = effective_visual_resource_id;
                 batch.texture_id = component.runtime.route.texture_id;
                 batch.first_component_index = component_index;
                 batch.batch_tag = component.runtime.route.batch_tag;
@@ -1225,3 +1227,4 @@ static_assert(std::is_standard_layout_v<ParticleDrawBatch> &&
               std::is_trivial_v<ParticleDrawBatch>);
 
 } // namespace vr::ecs
+

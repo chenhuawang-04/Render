@@ -1,4 +1,4 @@
-#include "vr/render/bindless_resource_system.hpp"
+﻿#include "vr/render/bindless_resource_system.hpp"
 
 #include "vr/asset/texture_host.hpp"
 #include "vr/geometry/geometry_image_host.hpp"
@@ -604,3 +604,4 @@ void BindlessResourceSystem::RefreshStats(DescriptorHost* descriptor_host_) cons
 }
 
 } // namespace vr::render
+

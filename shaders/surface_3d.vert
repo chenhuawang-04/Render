@@ -5,16 +5,7 @@ layout(location = 1) in vec4 in_world_row1;
 layout(location = 2) in vec4 in_world_row2;
 layout(location = 3) in vec4 in_world_row3;
 layout(location = 4) in vec4 in_uv_transform;
-layout(location = 5) in float in_opacity;
-layout(location = 6) in uint in_tint_rgba8;
-layout(location = 7) in uint in_params;
-layout(location = 8) in uint in_texture_slot;
-layout(location = 9) in uint in_sampler_slot;
-layout(location = 10) in uint in_material_id;
-layout(location = 11) in uint in_component_index;
-layout(location = 12) in uint in_user_data;
-layout(location = 13) in uint in_uv_set;
-layout(location = 14) in uint in_texture_flags;
+layout(location = 5) in uint in_appearance_record_index;
 
 layout(push_constant) uniform Surface3DPushConstants {
     mat4 view_projection;
@@ -26,17 +17,11 @@ layout(push_constant) uniform Surface3DPushConstants {
 } pc;
 
 layout(location = 0) out vec2 out_uv;
-layout(location = 1) out vec4 out_color;
-layout(location = 2) flat out uint out_params;
-layout(location = 3) flat out uint out_texture_slot;
-layout(location = 4) flat out uint out_sampler_slot;
-layout(location = 5) flat out uint out_material_id;
-layout(location = 6) flat out uint out_component_index;
-layout(location = 7) flat out uint out_user_data;
-layout(location = 8) flat out uint out_uv_set;
-layout(location = 9) flat out uint out_texture_flags;
-layout(location = 10) out vec3 out_world_position;
-layout(location = 11) out vec3 out_normal_world;
+layout(location = 1) flat out uint out_appearance_record_index;
+layout(location = 2) out vec3 out_world_position;
+layout(location = 3) out vec3 out_normal_world;
+layout(location = 4) out vec3 out_tangent_world;
+layout(location = 5) out vec3 out_bitangent_world;
 
 vec2 corner01_for_vertex(uint vertex_index) {
     switch (vertex_index) {
@@ -49,15 +34,6 @@ vec2 corner01_for_vertex(uint vertex_index) {
     }
 }
 
-vec4 unpack_rgba8(uint packed) {
-    vec4 color;
-    color.r = float((packed >> 0u) & 0xFFu);
-    color.g = float((packed >> 8u) & 0xFFu);
-    color.b = float((packed >> 16u) & 0xFFu);
-    color.a = float((packed >> 24u) & 0xFFu);
-    return color / 255.0;
-}
-
 void main() {
     vec2 corner01 = corner01_for_vertex(uint(gl_VertexIndex));
     vec2 local = corner01 - vec2(0.5, 0.5);
@@ -66,19 +42,16 @@ void main() {
     mat4 world = mat4(in_world_row0, in_world_row1, in_world_row2, in_world_row3);
     vec4 world_position = world * vec4(local, 0.0, 1.0);
     gl_Position = pc.view_projection * world_position;
-    vec3 normal_world = mat3(world) * vec3(0.0, 0.0, 1.0);
 
-    vec4 tint = unpack_rgba8(in_tint_rgba8);
+    mat3 world3x3 = mat3(world);
+    vec3 normal_world = world3x3 * vec3(0.0, 0.0, 1.0);
+    vec3 tangent_world = world3x3 * vec3(1.0, 0.0, 0.0);
+    vec3 bitangent_world = world3x3 * vec3(0.0, 1.0, 0.0);
+
     out_uv = uv;
-    out_color = vec4(tint.rgb, tint.a * clamp(in_opacity, 0.0, 1.0));
-    out_params = in_params;
-    out_texture_slot = in_texture_slot;
-    out_sampler_slot = in_sampler_slot;
-    out_material_id = in_material_id;
-    out_component_index = in_component_index;
-    out_user_data = in_user_data;
-    out_uv_set = in_uv_set;
-    out_texture_flags = in_texture_flags;
+    out_appearance_record_index = in_appearance_record_index;
     out_world_position = world_position.xyz;
-    out_normal_world = normal_world;
+    out_normal_world = normalize(normal_world);
+    out_tangent_world = normalize(tangent_world);
+    out_bitangent_world = normalize(bitangent_world);
 }

@@ -1,4 +1,4 @@
-#include "support/test_framework.hpp"
+﻿#include "support/test_framework.hpp"
 #include "vr/render/frame_composer_host.hpp"
 #include "vr/render/render_runtime_host.hpp"
 #include "vr/render/runtime_prepare_views.hpp"
@@ -142,3 +142,4 @@ VR_TEST_CASE(RuntimeIntegration_frame_composer_prepare_and_tonemap_smoke,
 }
 
 } // namespace
+

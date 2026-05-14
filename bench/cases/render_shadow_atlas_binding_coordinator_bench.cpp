@@ -1,4 +1,4 @@
-#include "support/bench_framework.hpp"
+﻿#include "support/bench_framework.hpp"
 #include "vr/render/shadow_atlas_binding_coordinator.hpp"
 
 #include <cstdint>
@@ -59,4 +59,5 @@ VR_BENCHMARK_CASE(RenderShadowAtlasBindingCoordinator_fallback_reuse_hot_path,
 }
 
 } // namespace
+
 

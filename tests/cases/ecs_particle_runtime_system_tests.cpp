@@ -1,4 +1,4 @@
-#include "support/test_framework.hpp"
+﻿#include "support/test_framework.hpp"
 #include "vr/ecs/system/particle_emitter_system.hpp"
 #include "vr/ecs/system/particle_runtime_system.hpp"
 #include "vr/ecs/system/transform_system.hpp"
@@ -130,6 +130,56 @@ VR_TEST_CASE(EcsParticleRuntimeSystem_dim3_visible_hint_and_world_space_simulati
     VR_CHECK(scratch.instances[0].component_index == 1U);
 }
 
+VR_TEST_CASE(EcsParticleRuntimeSystem_dim3_linked_appearance_uses_effective_visual_resource_id,
+             "unit;core;ecs;particle;runtime") {
+    Particle3D particle{};
+    ParticleEmitter3D emitter{};
+    Transform3D transform{};
+
+    ParticleSystem3D::Initialize(particle);
+    ParticleEmitterSystem3D::Initialize(particle, emitter);
+    TransformSystem3D::Initialize(transform);
+    TransformSystem3D::UpdateHierarchy(&transform, 1U);
+
+    ParticleSystem3D::SetVisualResourceId(particle, 19U);
+    (void)ParticleSystem3D::SetAppearanceRuntimeLink(particle,
+                                                     vr::ecs::AppearanceHandle{.index = 3U, .generation = 1U},
+                                                     0ULL,
+                                                     0ULL,
+                                                     650ULL);
+    ParticleEmitterSystem3D::SetSpawnRate(particle, emitter, 10.0F);
+    ParticleEmitterSystem3D::SetLifetimeRange(particle, emitter, 1.0F, 1.0F);
+    ParticleEmitterSystem3D::SetSpeedRange(particle, emitter, 0.0F, 0.0F);
+    ParticleEmitterSystem3D::SetSimulationSpace(particle, emitter, vr::ecs::ParticleSimulationSpace::world);
+    ParticleSystem3D::SetFacingMode(particle, vr::ecs::ParticleFacingMode::screen);
+    ParticleEmitterSystem3D::SetPlayback(particle, emitter, true, true, false);
+    ParticleEmitterSystem3D::SetEmissionShape(
+        particle,
+        emitter,
+        vr::ecs::ParticleEmitterShape::point,
+        vr::ecs::Float3{.x = 0.0F, .y = 0.0F, .z = 0.0F},
+        0.0F,
+        vr::ecs::Float3{.x = 0.0F, .y = 1.0F, .z = 0.0F},
+        0.0F,
+        0.0F);
+
+    vr::ecs::Particle3DRuntimeScratch scratch{};
+    ParticleRuntimeSystem3D::Reserve(scratch, 1U, 16U);
+
+    vr::ecs::ParticleRuntimeBuildConfig build_config{};
+    build_config.delta_time_s = 0.1F;
+    build_config.fixed_step_s = 0.1F;
+    build_config.max_simulation_steps = 1U;
+
+    const vr::ecs::ParticleRuntimeBuildStats stats =
+        ParticleRuntimeSystem3D::Build(&particle, &emitter, &transform, 1U, scratch, build_config);
+
+    VR_REQUIRE(stats.emitted_instance_count == 1U);
+    VR_REQUIRE(scratch.draw_batches.size() == 1U);
+    VR_CHECK(particle.runtime.route.visual_resource_id == 19U);
+    VR_CHECK(scratch.draw_batches[0U].visual_resource_id == 650U);
+}
+
 VR_TEST_CASE(EcsParticleRuntimeSystem_dim2_batch_split_on_blend_state, "unit;core;ecs;particle;runtime") {
     Particle2D particles[2]{};
     ParticleEmitter2D emitters[2]{};
@@ -176,3 +226,4 @@ VR_TEST_CASE(EcsParticleRuntimeSystem_dim2_batch_split_on_blend_state, "unit;cor
 }
 
 } // namespace
+

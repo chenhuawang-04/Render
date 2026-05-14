@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "vr/ecs/component/animation_component.hpp"
 #include "vr/ecs/system/spatial_math.hpp"
@@ -184,3 +184,4 @@ static_assert(std::is_standard_layout_v<AnimationCurveView<Float4>> &&
               std::is_trivial_v<AnimationCurveView<Float4>>);
 
 } // namespace vr::ecs
+

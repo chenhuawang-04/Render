@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "vr/ecs/component/particle_emitter_component.hpp"
 
@@ -247,3 +247,4 @@ private:
 };
 
 } // namespace vr::ecs
+

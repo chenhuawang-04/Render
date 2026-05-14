@@ -1,4 +1,4 @@
-#include "vr/render/scene_bloom_post_stack.hpp"
+﻿#include "vr/render/scene_bloom_post_stack.hpp"
 
 #include <stdexcept>
 #include <string>
@@ -60,3 +60,4 @@ void SceneBloomPostStack::EnsureInitialized(const char* operation_) const {
 }
 
 } // namespace vr::render
+

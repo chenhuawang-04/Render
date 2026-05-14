@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "vr/runtime/runtime_service.hpp"
 #include "vr/runtime/service_dependency.hpp"
@@ -30,3 +30,4 @@ private:
 };
 
 } // namespace vr::runtime::services
+

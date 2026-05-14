@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "vr/render/frame_sync_host.hpp"
 #include "vr/runtime/queue_timeline.hpp"
@@ -102,3 +102,4 @@ private:
 };
 
 } // namespace vr::runtime
+

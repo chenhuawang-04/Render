@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "Center/Memory/Container/Vector/McVector.hpp"
 #include "vr/ecs/component/bounds_component.hpp"
@@ -7,11 +7,13 @@
 #include "vr/ecs/component/transform_component.hpp"
 #include "vr/ecs/system/surface_runtime_system.hpp"
 #include "vr/render/appearance_prepare_bridge.hpp"
+#include "vr/render/appearance_gpu_prepare.hpp"
 #include "vr/render/bindless_resource_system.hpp"
 #include "vr/render/descriptor_host.hpp"
 #include "vr/render/pipeline_host.hpp"
 #include "vr/render/render_target_pass.hpp"
 #include "vr/render/scene_render_stage.hpp"
+#include "vr/resource/buffer_host.hpp"
 #include "vr/resource/image_host.hpp"
 #include "vr/surface/surface_image_host.hpp"
 #include "vr/surface/surface_upload_host.hpp"
@@ -21,6 +23,10 @@
 
 namespace vr {
 class VulkanContext;
+}
+
+namespace vr::asset {
+class TextureHost;
 }
 
 namespace vr::render {
@@ -182,6 +188,17 @@ private:
         std::uint64_t retire_value = 0U;
     };
 
+    struct FrameAppearanceResources final {
+        resource::BufferResource appearance_records{};
+        VkDescriptorSet descriptor_set = VK_NULL_HANDLE;
+        std::uint32_t appearance_record_count = 0U;
+        std::uint64_t appearance_content_revision = 0U;
+        std::uint64_t appearance_bindless_revision = 0U;
+        std::uint32_t appearance_texture_host_revision = 0U;
+        std::uint64_t descriptor_payload_signature = 0U;
+        std::uint64_t descriptor_buffer_signature = 0U;
+    };
+
     static_assert(sizeof(PushConstants) == 96U);
 
     [[nodiscard]] static bool IsDepthFormatSupported(VulkanContext& context_, VkFormat format_) noexcept;
@@ -199,6 +216,7 @@ private:
     [[nodiscard]] static std::uint64_t ComposeBindlessUploadRevision(
         const ecs::Surface3DRuntimeBuildStats& runtime_stats_,
         std::uint32_t image_revision_) noexcept;
+    void BuildAppearanceRecordsAndAssignIndices();
 
     void EnsurePipelineObjects(VulkanContext& context_,
                                render::BindlessResourceSystem& bindless_resources_,
@@ -213,10 +231,13 @@ private:
         BlendMode blend_mode_,
         PipelineMode mode_,
         CullMode cull_mode_);
-    void RemapInstancesToBindless(ecs::Surface3DGpuInstance* instances_,
-                                  std::uint32_t instance_count_) noexcept;
-    [[nodiscard]] std::uint32_t ResolveImageSlot(std::uint32_t surface_id_) const noexcept;
-    [[nodiscard]] std::uint32_t ResolveSamplerSlot(std::uint32_t sampler_id_) const noexcept;
+    void EnsureAppearanceDescriptorObjects(VulkanContext& context_,
+                                           render::DescriptorHost& descriptor_host_);
+    void EnsureStorageBufferCapacity(resource::BufferResource& buffer_,
+                                     VkDeviceSize required_bytes_);
+    void DestroyStorageBuffer(resource::BufferResource& buffer_) noexcept;
+    void EnsureAppearanceResourcesForFrame(std::uint64_t bindless_revision_now);
+    void PrepareAppearanceDescriptorSetForFrame(std::uint32_t frame_index_);
 
     void EnsureDepthResources(VulkanContext& context_,
                               std::uint32_t image_count_,
@@ -254,12 +275,14 @@ private:
     render::AppearancePrepareBridge<ecs::Dim3> appearance_prepare_bridge{};
     ecs::AppearanceRuntimeBuildStats appearance_runtime_stats{};
     ecs::AppearanceLinkStats appearance_link_stats{};
+    bool appearance_build_invoked = false;
     ecs::CullingScratch<ecs::Dim3> culling_scratch{};
     ecs::CullingBuildStats culling_stats{};
     Surface3DRuntimeUploadResult last_upload_result{};
 
     SurfaceUploadHost* surface_upload_host = nullptr;
     SurfaceImageHost* surface_image_host = nullptr;
+    asset::TextureHost* texture_host = nullptr;
     VulkanContext* context = nullptr;
     render::UploadHost* upload_host = nullptr;
     render::DescriptorHost* descriptor_host = nullptr;
@@ -268,6 +291,7 @@ private:
     render::IblHost* ibl_host = nullptr;
     resource::GpuMemoryHost* gpu_memory_host = nullptr;
 
+    render::DescriptorSetLayoutId appearance_descriptor_layout_id{};
     render::PipelineLayoutId pipeline_layout_id{};
     render::ShaderModuleId shader_vertex_id{};
     render::ShaderModuleId shader_fragment_id{};
@@ -287,6 +311,11 @@ private:
     std::uint32_t active_ibl_brdf_lut_texture_slot = 0U;
     std::uint32_t active_ibl_sampler_slot = 0U;
     SurfaceRenderer3DMcVector<std::uint8_t> image_initialized{};
+    SurfaceRenderer3DMcVector<FrameAppearanceResources> frame_appearance_resources{};
+    SurfaceRenderer3DMcVector<ecs::AppearanceGpuRecord<ecs::Dim3>> appearance_source_record_scratch{};
+    SurfaceRenderer3DMcVector<ecs::AppearanceGpuRecord<ecs::Dim3>> appearance_record_scratch{};
+    render::DescriptorMcVector<render::DescriptorBufferWrite> descriptor_buffer_write_scratch{};
+    render::DescriptorMcVector<render::DescriptorImageWrite> descriptor_image_write_scratch{};
 
     std::uint32_t active_frame_index = 0U;
     VkExtent2D swapchain_extent{};
@@ -295,6 +324,9 @@ private:
     render::RenderTargetDepthOutputConfig depth_output_target_config{};
     std::uint64_t last_submitted_value_seen = 0U;
     std::uint64_t completed_submit_value_seen = 0U;
+    std::uint64_t appearance_record_bindless_revision_seen = 0U;
+    std::uint32_t appearance_record_texture_host_revision_seen = 0U;
+    std::uint64_t appearance_record_content_revision = 0U;
 
     const std::uint32_t* pending_dirty_component_indices = nullptr;
     std::uint32_t pending_dirty_component_count = 0U;
@@ -302,3 +334,4 @@ private:
 };
 
 } // namespace vr::surface
+

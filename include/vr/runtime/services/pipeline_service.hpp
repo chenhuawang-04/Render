@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "vr/render/pipeline_host.hpp"
 #include "vr/runtime/runtime_service.hpp"
@@ -86,3 +86,4 @@ private:
 };
 
 } // namespace vr::runtime::services
+

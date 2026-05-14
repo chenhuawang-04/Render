@@ -1,4 +1,4 @@
-#include "support/test_framework.hpp"
+﻿#include "support/test_framework.hpp"
 #include "vr/animation/animation_morph_host.hpp"
 #include "vr/animation/animation_skeletal_host.hpp"
 #include "vr/ecs/system/animation_clock_system.hpp"
@@ -127,3 +127,4 @@ VR_TEST_CASE(EcsAnimationMorphEvaluationSystem_samples_clip_into_weight_output,
 }
 
 } // namespace
+

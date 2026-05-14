@@ -1,4 +1,5 @@
-#include "vr/ecs/system/bounds_system.hpp"
+﻿#include "vr/ecs/system/bounds_system.hpp"
+#include "vr/ecs/system/appearance_system.hpp"
 #include "vr/ecs/system/camera_system.hpp"
 #include "vr/ecs/system/light_system.hpp"
 #include "vr/ecs/system/shadow_system.hpp"
@@ -31,6 +32,7 @@ namespace {
 
 using Runtime = vr::render::RenderRuntimeHost<vr::platform::ActiveBackendTag, 2U>;
 
+using Appearance2D = vr::ecs::Appearance<vr::ecs::Dim2>;
 using Surface2D = vr::ecs::Surface<vr::ecs::Dim2>;
 using Transform2D = vr::ecs::Transform<vr::ecs::Dim2>;
 using Bounds2D = vr::ecs::Bounds<vr::ecs::Dim2>;
@@ -38,6 +40,7 @@ using Camera2D = vr::ecs::Camera<vr::ecs::Dim2>;
 using Light2D = vr::ecs::Light<vr::ecs::Dim2>;
 using Shadow2D = vr::ecs::Shadow<vr::ecs::Dim2>;
 
+using AppearanceSystem2D = vr::ecs::AppearanceSystem<vr::ecs::Dim2>;
 using SurfaceSystem2D = vr::ecs::SurfaceSystem<vr::ecs::Dim2>;
 using TransformSystem2D = vr::ecs::TransformSystem<vr::ecs::Dim2>;
 using BoundsSystem2D = vr::ecs::BoundsSystem<vr::ecs::Dim2>;
@@ -407,15 +410,18 @@ void InitializeSurfaceComponent(Surface2D& component_,
                                 float height_,
                                 std::int16_t layer_,
                                 vr::ecs::Rgba8 tint_color_,
-                                vr::ecs::Surface2DBlendMode blend_mode_) {
+                                vr::ecs::AppearanceBlendMode blend_mode_) {
+    Appearance2D appearance{};
+    AppearanceSystem2D::Initialize(appearance);
+    AppearanceSystem2D::SetLayer(appearance, layer_);
+    AppearanceSystem2D::SetFillColor(appearance, tint_color_);
+    AppearanceSystem2D::SetBlendMode(appearance, blend_mode_);
+    AppearanceSystem2D::SetOpacity(appearance, 1.0F);
     SurfaceSystem2D::Initialize(component_);
-    SurfaceSystem2D::SetImageId(component_, image_id_, 0U);
+    SurfaceSystem2D::SetSource(component_, vr::ecs::SurfaceImageSourceDesc{.surface_id = image_id_, .atlas_page_id = 0U});
     SurfaceSystem2D::SetSize(component_, vr::ecs::Float2{.x = width_, .y = height_});
     SurfaceSystem2D::SetPivot(component_, vr::ecs::Float2{.x = 0.5F, .y = 0.5F});
-    SurfaceSystem2D::SetLayer(component_, layer_);
-    SurfaceSystem2D::SetTintColor(component_, tint_color_);
-    SurfaceSystem2D::SetOpacity(component_, 1.0F);
-    SurfaceSystem2D::SetBlendMode(component_, blend_mode_);
+    (void)SurfaceSystem2D::ApplyAppearanceRuntimeState(component_, appearance.style);
     SurfaceSystem2D::SetVisible(component_, true);
 }
 
@@ -527,28 +533,28 @@ int main(int argc_, char** argv_) {
                                    900.0F,
                                    0,
                                    vr::ecs::Rgba8{255U, 255U, 255U, 255U},
-                                   vr::ecs::Surface2DBlendMode::alpha);
+                                   vr::ecs::AppearanceBlendMode::alpha);
         InitializeSurfaceComponent(surface_components[1U],
                                    texture_id_panel,
                                    420.0F,
                                    260.0F,
                                    10,
                                    vr::ecs::Rgba8{255U, 255U, 255U, 255U},
-                                   vr::ecs::Surface2DBlendMode::alpha);
+                                   vr::ecs::AppearanceBlendMode::alpha);
         InitializeSurfaceComponent(surface_components[2U],
                                    texture_id_occluder,
                                    160.0F,
                                    240.0F,
                                    20,
                                    vr::ecs::Rgba8{255U, 250U, 246U, 255U},
-                                   vr::ecs::Surface2DBlendMode::alpha);
+                                   vr::ecs::AppearanceBlendMode::alpha);
         InitializeSurfaceComponent(surface_components[3U],
                                    texture_id_occluder,
                                    220.0F,
                                    120.0F,
                                    22,
                                    vr::ecs::Rgba8{220U, 246U, 255U, 255U},
-                                   vr::ecs::Surface2DBlendMode::alpha);
+                                   vr::ecs::AppearanceBlendMode::alpha);
 
         for (Transform2D& transform : surface_transforms) {
             TransformSystem2D::Initialize(transform);
@@ -952,3 +958,4 @@ int main(int argc_, char** argv_) {
 
     return 0;
 }
+

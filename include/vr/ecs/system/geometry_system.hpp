@@ -1,7 +1,8 @@
-#pragma once
+﻿#pragma once
 
 #include "vr/ecs/component/geometry_component.hpp"
 #include "vr/ecs/system/transparency_render_policy.hpp"
+#include "vr/ecs/system/visual_runtime_route_common.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -23,28 +24,28 @@ public:
     }
 
     // 64-bit sort key layout (MSB -> LSB):
-    // [pass:2][material:16][geometry:16][minor:16][batch:14]
+    // [pass:2][visual_resource:16][geometry:16][minor:16][batch:14]
     static constexpr std::uint32_t sort_key_batch_bits = 14U;
     static constexpr std::uint32_t sort_key_minor_bits = 16U;
     static constexpr std::uint32_t sort_key_geometry_bits = 16U;
-    static constexpr std::uint32_t sort_key_material_bits = 16U;
+    static constexpr std::uint32_t sort_key_visual_resource_bits = 16U;
     static constexpr std::uint32_t sort_key_pass_bits = 2U;
 
     static constexpr std::uint32_t sort_key_batch_shift = 0U;
     static constexpr std::uint32_t sort_key_minor_shift = sort_key_batch_shift + sort_key_batch_bits;
     static constexpr std::uint32_t sort_key_geometry_shift = sort_key_minor_shift + sort_key_minor_bits;
-    static constexpr std::uint32_t sort_key_material_shift = sort_key_geometry_shift + sort_key_geometry_bits;
-    static constexpr std::uint32_t sort_key_pass_shift = sort_key_material_shift + sort_key_material_bits;
+    static constexpr std::uint32_t sort_key_visual_resource_shift = sort_key_geometry_shift + sort_key_geometry_bits;
+    static constexpr std::uint32_t sort_key_pass_shift = sort_key_visual_resource_shift + sort_key_visual_resource_bits;
 
     static constexpr std::uint32_t sort_key_binding_shift = sort_key_minor_shift;
 
     static constexpr std::uint64_t sort_key_batch_mask = (std::uint64_t{1U} << sort_key_batch_bits) - 1U;
     static constexpr std::uint64_t sort_key_minor_mask = (std::uint64_t{1U} << sort_key_minor_bits) - 1U;
     static constexpr std::uint64_t sort_key_geometry_mask = (std::uint64_t{1U} << sort_key_geometry_bits) - 1U;
-    static constexpr std::uint64_t sort_key_material_mask = (std::uint64_t{1U} << sort_key_material_bits) - 1U;
+    static constexpr std::uint64_t sort_key_visual_resource_mask = (std::uint64_t{1U} << sort_key_visual_resource_bits) - 1U;
     static constexpr std::uint64_t sort_key_pass_mask = (std::uint64_t{1U} << sort_key_pass_bits) - 1U;
 
-    static_assert(sort_key_pass_bits + sort_key_material_bits + sort_key_geometry_bits +
+    static_assert(sort_key_pass_bits + sort_key_visual_resource_bits + sort_key_geometry_bits +
                       sort_key_minor_bits + sort_key_batch_bits == 64U,
                   "GeometrySystem sort-key bit layout must be exactly 64 bits");
 
@@ -70,29 +71,17 @@ public:
         if constexpr (std::same_as<DimensionT, Dim2>) {
             component_.style.stroke_width_px = 1.0F;
             component_.style.miter_limit = 4.0F;
-            component_.style.fill_color = Rgba8{255U, 255U, 255U, 255U};
-            component_.style.stroke_color = Rgba8{0U, 0U, 0U, 255U};
-            component_.style.layer = 0;
             component_.style.topology = Geometry2DTopology::fill;
             component_.style.fill_rule = Geometry2DFillRule::non_zero;
             component_.style.line_join = Geometry2DLineJoin::miter;
             component_.style.line_cap = Geometry2DLineCap::butt;
-            component_.style.antialiasing = 1U;
             component_.style.reserved0 = 0U;
             component_.style.reserved1 = 0U;
+            component_.style.reserved2 = 0U;
         } else {
-            component_.style.albedo_color = Rgba8{255U, 255U, 255U, 255U};
-            component_.style.depth_test = 1U;
-            component_.style.depth_write = 1U;
-            component_.style.double_sided = 0U;
             component_.style.topology = Geometry3DTopology::triangles;
-            component_.style.shading_model = Geometry3DShadingModel::lit;
-            component_.style.cast_shadow = 1U;
-            component_.style.receive_shadow = 1U;
             component_.style.reserved0 = 0U;
-            component_.style.metallic = 0.0F;
-            component_.style.roughness = 1.0F;
-            component_.style.normal_scale = 1.0F;
+            component_.style.reserved1 = 0U;
             component_.style.line_width = 1.0F;
         }
 
@@ -102,12 +91,10 @@ public:
     static void SetDefaultRuntime(GeometryType& component_) noexcept {
         component_.runtime.route.sort_key = 0U;
         component_.runtime.route.geometry_id = 0U;
-        component_.runtime.route.material_id = 0U;
+        component_.runtime.route.visual_resource_id = 0U;
         component_.runtime.route.batch_tag = 0U;
         component_.runtime.route.user_data = 0U;
-        component_.runtime.route.appearance_handle = invalid_appearance_handle;
-        component_.runtime.route.appearance_pipeline_bucket = 0U;
-        component_.runtime.route.appearance_resource_bucket = 0U;
+        ClearAppearanceRuntimeRoute(component_.runtime.route);
         component_.runtime.route.depth_bin = 0U;
         component_.runtime.route.visible = 1U;
         component_.runtime.route.pass_hint = std::same_as<DimensionT, Dim2>
@@ -123,13 +110,13 @@ public:
             component_.runtime.tessellation_revision = 0U;
             component_.runtime.path_data_hash = 0U;
             component_.runtime.reserved0 = 0U;
+            StoreAppearanceRuntimeBridge2D(component_.runtime, MakeAppearanceRuntimeBridge2D(nullptr));
             component_.runtime.bounds_min = Float2{.x = 0.0F, .y = 0.0F};
             component_.runtime.bounds_max = Float2{.x = 0.0F, .y = 0.0F};
         } else {
             component_.runtime.mesh_revision = 0U;
             component_.runtime.meshlet_count_hint = 0U;
-            component_.runtime.reserved0 = 0U;
-            component_.runtime.reserved1 = 0U;
+            StoreAppearanceRuntimeBridge3D(component_.runtime, MakeAppearanceRuntimeBridge3D(nullptr));
             component_.runtime.bounds_min = Float3{.x = 0.0F, .y = 0.0F, .z = 0.0F};
             component_.runtime.bounds_max = Float3{.x = 0.0F, .y = 0.0F, .z = 0.0F};
         }
@@ -166,10 +153,10 @@ public:
 
     static void SetRuntimeRoute(GeometryType& component_,
                                 std::uint32_t geometry_id_,
-                                std::uint32_t material_id_,
+                                std::uint32_t visual_resource_id_,
                                 std::uint32_t batch_tag_) noexcept {
         component_.runtime.route.geometry_id = geometry_id_;
-        component_.runtime.route.material_id = material_id_;
+        component_.runtime.route.visual_resource_id = visual_resource_id_;
         component_.runtime.route.batch_tag = batch_tag_;
         MarkDirty(component_, geometry_dirty_runtime_flag);
         RebuildSortKey(component_);
@@ -181,8 +168,9 @@ public:
         RebuildSortKey(component_);
     }
 
-    static void SetMaterialId(GeometryType& component_, std::uint32_t material_id_) noexcept {
-        component_.runtime.route.material_id = material_id_;
+    static void SetVisualResourceId(GeometryType& component_,
+                                    std::uint32_t visual_resource_id_) noexcept {
+        component_.runtime.route.visual_resource_id = visual_resource_id_;
         MarkDirty(component_, geometry_dirty_runtime_flag);
         RebuildSortKey(component_);
     }
@@ -210,15 +198,15 @@ public:
     }
 
     static void ClearAppearanceHandle(GeometryType& component_) noexcept {
-        if (component_.runtime.route.appearance_handle.index == invalid_appearance_handle.index &&
-            component_.runtime.route.appearance_handle.generation == invalid_appearance_handle.generation &&
-            component_.runtime.route.appearance_pipeline_bucket == 0U &&
-            component_.runtime.route.appearance_resource_bucket == 0U) {
+        if (IsAppearanceRuntimeRouteClear(component_.runtime.route)) {
             return;
         }
-        component_.runtime.route.appearance_handle = invalid_appearance_handle;
-        component_.runtime.route.appearance_pipeline_bucket = 0U;
-        component_.runtime.route.appearance_resource_bucket = 0U;
+        ClearAppearanceRuntimeRoute(component_.runtime.route);
+        if constexpr (std::same_as<DimensionT, Dim2>) {
+            StoreAppearanceRuntimeBridge2D(component_.runtime, MakeAppearanceRuntimeBridge2D(nullptr));
+        } else {
+            StoreAppearanceRuntimeBridge3D(component_.runtime, MakeAppearanceRuntimeBridge3D(nullptr));
+        }
         BumpAppearanceHandleMutationSerial();
         MarkDirty(component_, geometry_dirty_runtime_flag);
         RebuildSortKey(component_);
@@ -232,24 +220,161 @@ public:
         (void)appearance_sort_key_;
         const std::uint32_t pipeline_bucket = static_cast<std::uint32_t>(appearance_pipeline_key_);
         const std::uint32_t resource_bucket = static_cast<std::uint32_t>(appearance_resource_key_);
-        const bool changed =
-            component_.runtime.route.appearance_handle.index != appearance_handle_.index ||
-            component_.runtime.route.appearance_handle.generation != appearance_handle_.generation ||
-            component_.runtime.route.appearance_pipeline_bucket != pipeline_bucket ||
-            component_.runtime.route.appearance_resource_bucket != resource_bucket;
+        const bool changed = vr::ecs::HasAppearanceRuntimeRouteChanged(component_.runtime.route,
+                                                                       appearance_handle_,
+                                                                       pipeline_bucket,
+                                                                       resource_bucket);
         if (!changed) {
             return false;
         }
 
         const bool handle_changed =
-            component_.runtime.route.appearance_handle.index != appearance_handle_.index ||
-            component_.runtime.route.appearance_handle.generation != appearance_handle_.generation;
-        component_.runtime.route.appearance_handle = appearance_handle_;
-        component_.runtime.route.appearance_pipeline_bucket = pipeline_bucket;
-        component_.runtime.route.appearance_resource_bucket = resource_bucket;
+            vr::ecs::HasAppearanceHandleChanged(component_.runtime.route, appearance_handle_);
+        vr::ecs::StoreAppearanceRuntimeRoute(component_.runtime.route,
+                                             appearance_handle_,
+                                             pipeline_bucket,
+                                             resource_bucket);
         if (handle_changed) {
             BumpAppearanceHandleMutationSerial();
         }
+        MarkDirty(component_, geometry_dirty_runtime_flag);
+        RebuildSortKey(component_);
+        return true;
+    }
+
+    [[nodiscard]] static bool SetAppearanceRuntimeLink(GeometryType& component_,
+                                                       AppearanceHandle appearance_handle_,
+                                                       std::uint64_t appearance_sort_key_,
+                                                       std::uint64_t appearance_pipeline_key_,
+                                                       std::uint64_t appearance_resource_key_,
+                                                       const AppearanceStyle2D* appearance_style_) noexcept
+    requires std::same_as<DimensionT, Dim2>
+    {
+        (void)appearance_sort_key_;
+        const std::uint32_t pipeline_bucket = static_cast<std::uint32_t>(appearance_pipeline_key_);
+        const std::uint32_t resource_bucket = static_cast<std::uint32_t>(appearance_resource_key_);
+        const bool route_changed = vr::ecs::HasAppearanceRuntimeRouteChanged(component_.runtime.route,
+                                                                             appearance_handle_,
+                                                                             pipeline_bucket,
+                                                                             resource_bucket);
+        const bool appearance_state_changed =
+            WriteAppearanceRuntimeState(component_.runtime, appearance_style_);
+        if (!route_changed && !appearance_state_changed) {
+            return false;
+        }
+
+        const bool handle_changed =
+            vr::ecs::HasAppearanceHandleChanged(component_.runtime.route, appearance_handle_);
+        vr::ecs::StoreAppearanceRuntimeRoute(component_.runtime.route,
+                                             appearance_handle_,
+                                             pipeline_bucket,
+                                             resource_bucket);
+        if (handle_changed) {
+            BumpAppearanceHandleMutationSerial();
+        }
+        MarkDirty(component_, geometry_dirty_runtime_flag);
+        RebuildSortKey(component_);
+        return true;
+    }
+
+    [[nodiscard]] static bool SetAppearanceRuntimeLink(GeometryType& component_,
+                                                       AppearanceHandle appearance_handle_,
+                                                       std::uint64_t appearance_sort_key_,
+                                                       std::uint64_t appearance_pipeline_key_,
+                                                       std::uint64_t appearance_resource_key_,
+                                                       const AppearanceStyle3D* appearance_style_) noexcept
+    requires std::same_as<DimensionT, Dim3>
+    {
+        (void)appearance_sort_key_;
+        const std::uint32_t pipeline_bucket = static_cast<std::uint32_t>(appearance_pipeline_key_);
+        const std::uint32_t resource_bucket = static_cast<std::uint32_t>(appearance_resource_key_);
+        const bool route_changed = vr::ecs::HasAppearanceRuntimeRouteChanged(component_.runtime.route,
+                                                                             appearance_handle_,
+                                                                             pipeline_bucket,
+                                                                             resource_bucket);
+        const bool appearance_state_changed =
+            WriteAppearanceRuntimeState(component_.runtime, appearance_style_);
+        if (!route_changed && !appearance_state_changed) {
+            return false;
+        }
+
+        const bool handle_changed =
+            vr::ecs::HasAppearanceHandleChanged(component_.runtime.route, appearance_handle_);
+        vr::ecs::StoreAppearanceRuntimeRoute(component_.runtime.route,
+                                             appearance_handle_,
+                                             pipeline_bucket,
+                                             resource_bucket);
+        if (handle_changed) {
+            BumpAppearanceHandleMutationSerial();
+        }
+        MarkDirty(component_, geometry_dirty_runtime_flag);
+        RebuildSortKey(component_);
+        return true;
+    }
+
+    [[nodiscard]] static bool ApplyAppearanceRuntimeState(GeometryType& component_,
+                                                          const AppearanceStyle2D& appearance_style_) noexcept
+    requires std::same_as<DimensionT, Dim2>
+    {
+        return ApplyAppearanceRuntimeState(component_, &appearance_style_);
+    }
+
+    [[nodiscard]] static bool ApplyAppearanceRuntimeState(GeometryType& component_,
+                                                          const AppearanceStyle2D* appearance_style_) noexcept
+    requires std::same_as<DimensionT, Dim2>
+    {
+        const bool changed = WriteAppearanceRuntimeState(component_.runtime, appearance_style_);
+        if (!changed) {
+            return false;
+        }
+        MarkDirty(component_, geometry_dirty_runtime_flag);
+        RebuildSortKey(component_);
+        return true;
+    }
+
+    [[nodiscard]] static bool ApplyAppearanceRuntimeState(GeometryType& component_,
+                                                          const AppearanceStyle3D& appearance_style_) noexcept
+    requires std::same_as<DimensionT, Dim3>
+    {
+        return ApplyAppearanceRuntimeState(component_, &appearance_style_);
+    }
+
+    [[nodiscard]] static bool ApplyAppearanceRuntimeState(GeometryType& component_,
+                                                          const AppearanceStyle3D* appearance_style_) noexcept
+    requires std::same_as<DimensionT, Dim3>
+    {
+        const bool changed = WriteAppearanceRuntimeState(component_.runtime, appearance_style_);
+        if (!changed) {
+            return false;
+        }
+        MarkDirty(component_, geometry_dirty_runtime_flag);
+        RebuildSortKey(component_);
+        return true;
+    }
+
+    [[nodiscard]] static bool ApplyAppearanceRuntimeBridgeState(
+        GeometryType& component_,
+        const AppearanceRuntimeBridge2D& appearance_bridge_) noexcept
+    requires std::same_as<DimensionT, Dim2>
+    {
+        if (HasSameAppearanceRuntimeBridge2D(component_.runtime, appearance_bridge_)) {
+            return false;
+        }
+        StoreAppearanceRuntimeBridge2D(component_.runtime, appearance_bridge_);
+        MarkDirty(component_, geometry_dirty_runtime_flag);
+        RebuildSortKey(component_);
+        return true;
+    }
+
+    [[nodiscard]] static bool ApplyAppearanceRuntimeBridgeState(
+        GeometryType& component_,
+        const AppearanceRuntimeBridge3D& appearance_bridge_) noexcept
+    requires std::same_as<DimensionT, Dim3>
+    {
+        if (HasSameAppearanceRuntimeBridge3D(component_.runtime, appearance_bridge_)) {
+            return false;
+        }
+        StoreAppearanceRuntimeBridge3D(component_.runtime, appearance_bridge_);
         MarkDirty(component_, geometry_dirty_runtime_flag);
         RebuildSortKey(component_);
         return true;
@@ -260,14 +385,6 @@ public:
     {
         component_.runtime.route.depth_bin = depth_bin_;
         MarkDirty(component_, geometry_dirty_runtime_flag);
-        RebuildSortKey(component_);
-    }
-
-    static void SetLayer(GeometryType& component_, std::int16_t layer_) noexcept
-    requires std::same_as<DimensionT, Dim2>
-    {
-        component_.style.layer = layer_;
-        MarkDirty(component_, geometry_dirty_style_flag | geometry_dirty_runtime_flag);
         RebuildSortKey(component_);
     }
 
@@ -292,18 +409,25 @@ public:
     }
 
     [[nodiscard]] static std::uint64_t ComposeSortKey(const GeometryType& component_) noexcept {
-        const bool has_linked_appearance =
-            component_.runtime.route.appearance_handle.index != invalid_appearance_handle.index &&
-            component_.runtime.route.appearance_handle.generation != 0U;
-        const GeometryRenderPassHint effective_pass_hint = has_linked_appearance
-            ? ResolveLinkedPassHint(component_.runtime.route.pass_hint,
-                                    component_.runtime.route.appearance_pipeline_bucket)
-            : component_.runtime.route.pass_hint;
+        const bool has_linked_appearance = HasLinkedAppearanceHandle(component_.runtime.route);
+        GeometryRenderPassHint effective_pass_hint = component_.runtime.route.pass_hint;
+        if (has_linked_appearance) {
+            effective_pass_hint = ResolveLinkedPassHint(component_.runtime.route.pass_hint,
+                                                        component_.runtime.route.appearance_pipeline_bucket);
+        } else if constexpr (std::same_as<DimensionT, Dim2>) {
+            effective_pass_hint = ResolveFallbackAppearancePassHint(
+                component_.runtime.route.pass_hint,
+                ReadAppearanceRuntimeBridge2D(component_.runtime));
+        } else {
+            effective_pass_hint = ResolveFallbackAppearancePassHint(
+                component_.runtime.route.pass_hint,
+                ReadAppearanceRuntimeBridge3D(component_.runtime));
+        }
         const std::uint64_t pass_bits = static_cast<std::uint64_t>(SortPassBucket(effective_pass_hint)) &
                                         sort_key_pass_mask;
-        const std::uint64_t material_bits =
-            static_cast<std::uint64_t>(ResolveEffectiveMaterialId(component_.runtime.route)) &
-            sort_key_material_mask;
+        const std::uint64_t visual_resource_bits =
+            static_cast<std::uint64_t>(ResolveEffectiveVisualResourceId(component_.runtime.route)) &
+            sort_key_visual_resource_mask;
         const std::uint64_t geometry_bits =
             static_cast<std::uint64_t>(component_.runtime.route.geometry_id) & sort_key_geometry_mask;
         const std::uint64_t batch_bits =
@@ -311,7 +435,8 @@ public:
 
         std::uint64_t minor_bits = 0U;
         if constexpr (std::same_as<DimensionT, Dim2>) {
-            const std::int32_t shifted_layer = static_cast<std::int32_t>(component_.style.layer) -
+            const std::int32_t shifted_layer = static_cast<std::int32_t>(
+                                                   ReadAppearanceRuntimeBridge2D(component_.runtime).layer) -
                                                static_cast<std::int32_t>(std::numeric_limits<std::int16_t>::min());
             minor_bits = static_cast<std::uint64_t>(static_cast<std::uint32_t>(shifted_layer)) & sort_key_minor_mask;
         } else {
@@ -322,7 +447,7 @@ public:
 
         std::uint64_t key = 0U;
         key |= (pass_bits << sort_key_pass_shift);
-        key |= (material_bits << sort_key_material_shift);
+        key |= (visual_resource_bits << sort_key_visual_resource_shift);
         key |= (geometry_bits << sort_key_geometry_shift);
         key |= (minor_bits << sort_key_minor_shift);
         key |= (batch_bits << sort_key_batch_shift);
@@ -350,8 +475,8 @@ public:
             static_cast<std::uint32_t>((sort_key_ >> sort_key_pass_shift) & sort_key_pass_mask)));
     }
 
-    [[nodiscard]] static std::uint32_t ExtractMaterialBucket(std::uint64_t sort_key_) noexcept {
-        return static_cast<std::uint32_t>((sort_key_ >> sort_key_material_shift) & sort_key_material_mask);
+    [[nodiscard]] static std::uint32_t ExtractVisualResourceBucket(std::uint64_t sort_key_) noexcept {
+        return static_cast<std::uint32_t>((sort_key_ >> sort_key_visual_resource_shift) & sort_key_visual_resource_mask);
     }
 
     [[nodiscard]] static std::uint32_t ExtractGeometryBucket(std::uint64_t sort_key_) noexcept {
@@ -375,6 +500,30 @@ public:
     }
 
 private:
+    [[nodiscard]] static bool WriteAppearanceRuntimeState(GeometryRuntime2D& runtime_,
+                                                          const AppearanceStyle2D* appearance_style_) noexcept
+    requires std::same_as<DimensionT, Dim2>
+    {
+        const AppearanceRuntimeBridge2D bridge = MakeAppearanceRuntimeBridge2D(appearance_style_);
+        if (HasSameAppearanceRuntimeBridge2D(runtime_, bridge)) {
+            return false;
+        }
+        StoreAppearanceRuntimeBridge2D(runtime_, bridge);
+        return true;
+    }
+
+    [[nodiscard]] static bool WriteAppearanceRuntimeState(GeometryRuntime3D& runtime_,
+                                                          const AppearanceStyle3D* appearance_style_) noexcept
+    requires std::same_as<DimensionT, Dim3>
+    {
+        const AppearanceRuntimeBridge3D bridge = MakeAppearanceRuntimeBridge3D(appearance_style_);
+        if (HasSameAppearanceRuntimeBridge3D(runtime_, bridge)) {
+            return false;
+        }
+        StoreAppearanceRuntimeBridge3D(runtime_, bridge);
+        return true;
+    }
+
     static void BumpAppearanceHandleMutationSerial() noexcept {
         (void)appearance_handle_mutation_serial.fetch_add(1U, std::memory_order_relaxed);
     }
@@ -383,3 +532,4 @@ private:
 };
 
 } // namespace vr::ecs
+

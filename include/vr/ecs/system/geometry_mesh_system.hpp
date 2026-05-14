@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "vr/ecs/system/geometry_system.hpp"
 
@@ -105,68 +105,6 @@ public:
                                             geometry_dirty_runtime_flag);
     }
 
-    static void SetShadingModel(Geometry3D& component_,
-                                Geometry3DShadingModel shading_model_) noexcept {
-        component_.style.shading_model = shading_model_;
-        GeometrySystem<Dim3>::MarkDirty(component_,
-                                        geometry_dirty_style_flag |
-                                            geometry_dirty_runtime_flag);
-    }
-
-    static void SetAlbedoColor(Geometry3D& component_, Rgba8 albedo_color_) noexcept {
-        component_.style.albedo_color = albedo_color_;
-        GeometrySystem<Dim3>::MarkDirty(component_,
-                                        geometry_dirty_style_flag |
-                                            geometry_dirty_runtime_flag);
-    }
-
-    static void SetDepthTest(Geometry3D& component_, bool enabled_) noexcept {
-        component_.style.depth_test = enabled_ ? 1U : 0U;
-        GeometrySystem<Dim3>::MarkDirty(component_,
-                                        geometry_dirty_style_flag |
-                                            geometry_dirty_runtime_flag);
-    }
-
-    static void SetDepthWrite(Geometry3D& component_, bool enabled_) noexcept {
-        component_.style.depth_write = enabled_ ? 1U : 0U;
-        GeometrySystem<Dim3>::MarkDirty(component_,
-                                        geometry_dirty_style_flag |
-                                            geometry_dirty_runtime_flag);
-    }
-
-    static void SetDoubleSided(Geometry3D& component_, bool enabled_) noexcept {
-        component_.style.double_sided = enabled_ ? 1U : 0U;
-        GeometrySystem<Dim3>::MarkDirty(component_,
-                                        geometry_dirty_style_flag |
-                                            geometry_dirty_runtime_flag);
-    }
-
-    static void SetCastShadow(Geometry3D& component_, bool enabled_) noexcept {
-        component_.style.cast_shadow = enabled_ ? 1U : 0U;
-        GeometrySystem<Dim3>::MarkDirty(component_,
-                                        geometry_dirty_style_flag |
-                                            geometry_dirty_runtime_flag);
-    }
-
-    static void SetReceiveShadow(Geometry3D& component_, bool enabled_) noexcept {
-        component_.style.receive_shadow = enabled_ ? 1U : 0U;
-        GeometrySystem<Dim3>::MarkDirty(component_,
-                                        geometry_dirty_style_flag |
-                                            geometry_dirty_runtime_flag);
-    }
-
-    static void SetMaterialScalars(Geometry3D& component_,
-                                   float metallic_,
-                                   float roughness_,
-                                   float normal_scale_) noexcept {
-        component_.style.metallic = std::clamp(metallic_, 0.0F, 1.0F);
-        component_.style.roughness = std::clamp(roughness_, 0.0F, 1.0F);
-        component_.style.normal_scale = std::max(0.0F, normal_scale_);
-        GeometrySystem<Dim3>::MarkDirty(component_,
-                                        geometry_dirty_style_flag |
-                                            geometry_dirty_runtime_flag);
-    }
-
     static void SetLineWidth(Geometry3D& component_, float line_width_) noexcept {
         component_.style.line_width = std::max(0.0F, line_width_);
         GeometrySystem<Dim3>::MarkDirty(component_,
@@ -195,3 +133,4 @@ private:
 };
 
 } // namespace vr::ecs
+

@@ -1,4 +1,4 @@
-#include "support/test_framework.hpp"
+﻿#include "support/test_framework.hpp"
 #include "vr/ecs/component/bounds_component.hpp"
 #include "vr/ecs/system/bounds_system.hpp"
 #include "vr/ecs/system/transform_system.hpp"
@@ -132,4 +132,5 @@ VR_TEST_CASE(EcsBoundsSystem_aligned_dirty_indices_path, "unit;core;ecs;bounds;a
 }
 
 } // namespace
+
 

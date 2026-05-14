@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "Center/Memory/Container/Vector/McVector.hpp"
 #include "vr/ecs/component/particle_component.hpp"
@@ -47,7 +47,7 @@ struct ParticleGpuStateRecord final {
     std::uint32_t start_color_rgba8;
     std::uint32_t end_color_rgba8;
     std::uint32_t texture_id;
-    std::uint32_t material_id;
+    std::uint32_t sampler_slot;
     std::uint32_t component_index;
     std::uint32_t user_data;
     std::uint32_t packed_flags;
@@ -455,3 +455,4 @@ static_assert(std::is_standard_layout_v<ParticleSimulationFrameResources>);
 static_assert(std::is_trivially_copyable_v<ParticleSimulationFrameResources>);
 
 } // namespace vr::particle
+

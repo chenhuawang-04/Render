@@ -1,7 +1,8 @@
-#pragma once
+﻿#pragma once
 
 #include "vr/ecs/component/particle_component.hpp"
 #include "vr/ecs/system/transparency_render_policy.hpp"
+#include "vr/ecs/system/visual_runtime_route_common.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -22,27 +23,27 @@ public:
         return appearance_handle_mutation_serial.load(std::memory_order_relaxed);
     }
 
-    // [pass:2][material:16][texture:16][minor:16][batch:14]
+    // [pass:2][visual_resource:16][texture:16][minor:16][batch:14]
     static constexpr std::uint32_t sort_key_batch_bits = 14U;
     static constexpr std::uint32_t sort_key_minor_bits = 16U;
     static constexpr std::uint32_t sort_key_texture_bits = 16U;
-    static constexpr std::uint32_t sort_key_material_bits = 16U;
+    static constexpr std::uint32_t sort_key_visual_resource_bits = 16U;
     static constexpr std::uint32_t sort_key_pass_bits = 2U;
 
     static constexpr std::uint32_t sort_key_batch_shift = 0U;
     static constexpr std::uint32_t sort_key_minor_shift = sort_key_batch_shift + sort_key_batch_bits;
     static constexpr std::uint32_t sort_key_texture_shift = sort_key_minor_shift + sort_key_minor_bits;
-    static constexpr std::uint32_t sort_key_material_shift = sort_key_texture_shift + sort_key_texture_bits;
-    static constexpr std::uint32_t sort_key_pass_shift = sort_key_material_shift + sort_key_material_bits;
+    static constexpr std::uint32_t sort_key_visual_resource_shift = sort_key_texture_shift + sort_key_texture_bits;
+    static constexpr std::uint32_t sort_key_pass_shift = sort_key_visual_resource_shift + sort_key_visual_resource_bits;
     static constexpr std::uint32_t sort_key_binding_shift = sort_key_texture_shift;
 
     static constexpr std::uint64_t sort_key_batch_mask = (std::uint64_t{1U} << sort_key_batch_bits) - 1U;
     static constexpr std::uint64_t sort_key_minor_mask = (std::uint64_t{1U} << sort_key_minor_bits) - 1U;
     static constexpr std::uint64_t sort_key_texture_mask = (std::uint64_t{1U} << sort_key_texture_bits) - 1U;
-    static constexpr std::uint64_t sort_key_material_mask = (std::uint64_t{1U} << sort_key_material_bits) - 1U;
+    static constexpr std::uint64_t sort_key_visual_resource_mask = (std::uint64_t{1U} << sort_key_visual_resource_bits) - 1U;
     static constexpr std::uint64_t sort_key_pass_mask = (std::uint64_t{1U} << sort_key_pass_bits) - 1U;
 
-    static_assert(sort_key_pass_bits + sort_key_material_bits + sort_key_texture_bits +
+    static_assert(sort_key_pass_bits + sort_key_visual_resource_bits + sort_key_texture_bits +
                       sort_key_minor_bits + sort_key_batch_bits == 64U,
                   "ParticleSystem sort-key bit layout must be exactly 64 bits");
 
@@ -93,13 +94,11 @@ public:
 
     static void SetDefaultRuntime(ParticleType& component_) noexcept {
         component_.runtime.route.sort_key = 0U;
-        component_.runtime.route.material_id = 0U;
+        component_.runtime.route.visual_resource_id = 0U;
         component_.runtime.route.texture_id = 0U;
         component_.runtime.route.batch_tag = 0U;
         component_.runtime.route.user_data = 0U;
-        component_.runtime.route.appearance_handle = invalid_appearance_handle;
-        component_.runtime.route.appearance_pipeline_bucket = 0U;
-        component_.runtime.route.appearance_resource_bucket = 0U;
+        ClearAppearanceRuntimeRoute(component_.runtime.route);
         component_.runtime.route.depth_bin = 0U;
         component_.runtime.route.visible = 1U;
         component_.runtime.route.cast_shadow = 0U;
@@ -156,11 +155,12 @@ public:
         RebuildSortKey(component_);
     }
 
-    static void SetMaterialId(ParticleType& component_, std::uint32_t material_id_) noexcept {
-        if (component_.runtime.route.material_id == material_id_) {
+    static void SetVisualResourceId(ParticleType& component_,
+                                    std::uint32_t visual_resource_id_) noexcept {
+        if (component_.runtime.route.visual_resource_id == visual_resource_id_) {
             return;
         }
-        component_.runtime.route.material_id = material_id_;
+        component_.runtime.route.visual_resource_id = visual_resource_id_;
         MarkDirty(component_, particle_dirty_runtime_flag);
         BumpAuthoringRevision(component_);
         RebuildSortKey(component_);
@@ -208,15 +208,10 @@ public:
     }
 
     static void ClearAppearanceHandle(ParticleType& component_) noexcept {
-        if (component_.runtime.route.appearance_handle.index == invalid_appearance_handle.index &&
-            component_.runtime.route.appearance_handle.generation == invalid_appearance_handle.generation &&
-            component_.runtime.route.appearance_pipeline_bucket == 0U &&
-            component_.runtime.route.appearance_resource_bucket == 0U) {
+        if (IsAppearanceRuntimeRouteClear(component_.runtime.route)) {
             return;
         }
-        component_.runtime.route.appearance_handle = invalid_appearance_handle;
-        component_.runtime.route.appearance_pipeline_bucket = 0U;
-        component_.runtime.route.appearance_resource_bucket = 0U;
+        ClearAppearanceRuntimeRoute(component_.runtime.route);
         BumpAppearanceHandleMutationSerial();
         MarkDirty(component_, particle_dirty_runtime_flag);
         BumpAuthoringRevision(component_);
@@ -231,21 +226,20 @@ public:
         (void)appearance_sort_key_;
         const std::uint32_t pipeline_bucket = static_cast<std::uint32_t>(appearance_pipeline_key_);
         const std::uint32_t resource_bucket = static_cast<std::uint32_t>(appearance_resource_key_);
-        const bool changed =
-            component_.runtime.route.appearance_handle.index != appearance_handle_.index ||
-            component_.runtime.route.appearance_handle.generation != appearance_handle_.generation ||
-            component_.runtime.route.appearance_pipeline_bucket != pipeline_bucket ||
-            component_.runtime.route.appearance_resource_bucket != resource_bucket;
+        const bool changed = HasAppearanceRuntimeRouteChanged(component_.runtime.route,
+                                                              appearance_handle_,
+                                                              pipeline_bucket,
+                                                              resource_bucket);
         if (!changed) {
             return false;
         }
 
         const bool handle_changed =
-            component_.runtime.route.appearance_handle.index != appearance_handle_.index ||
-            component_.runtime.route.appearance_handle.generation != appearance_handle_.generation;
-        component_.runtime.route.appearance_handle = appearance_handle_;
-        component_.runtime.route.appearance_pipeline_bucket = pipeline_bucket;
-        component_.runtime.route.appearance_resource_bucket = resource_bucket;
+            HasAppearanceHandleChanged(component_.runtime.route, appearance_handle_);
+        StoreAppearanceRuntimeRoute(component_.runtime.route,
+                                    appearance_handle_,
+                                    pipeline_bucket,
+                                    resource_bucket);
         if (handle_changed) {
             BumpAppearanceHandleMutationSerial();
         }
@@ -450,18 +444,16 @@ public:
     }
 
     [[nodiscard]] static std::uint64_t ComposeSortKey(const ParticleType& component_) noexcept {
-        const bool has_linked_appearance =
-            component_.runtime.route.appearance_handle.index != invalid_appearance_handle.index &&
-            component_.runtime.route.appearance_handle.generation != 0U;
+        const bool has_linked_appearance = HasLinkedAppearanceHandle(component_.runtime.route);
         const ParticleRenderPassHint effective_pass_hint = has_linked_appearance
             ? ResolveLinkedPassHint(component_.runtime.route.pass_hint,
                                     component_.runtime.route.appearance_pipeline_bucket)
             : component_.runtime.route.pass_hint;
         const std::uint64_t pass_bits =
             static_cast<std::uint64_t>(SortPassBucket(effective_pass_hint)) & sort_key_pass_mask;
-        const std::uint64_t material_bits =
-            static_cast<std::uint64_t>(ResolveEffectiveMaterialId(component_.runtime.route)) &
-            sort_key_material_mask;
+        const std::uint64_t visual_resource_bits =
+            static_cast<std::uint64_t>(ResolveEffectiveVisualResourceId(component_.runtime.route)) &
+            sort_key_visual_resource_mask;
         const std::uint64_t texture_bits =
             static_cast<std::uint64_t>(component_.runtime.route.texture_id) & sort_key_texture_mask;
         const std::uint64_t batch_bits =
@@ -481,7 +473,7 @@ public:
 
         std::uint64_t key = 0U;
         key |= (pass_bits << sort_key_pass_shift);
-        key |= (material_bits << sort_key_material_shift);
+        key |= (visual_resource_bits << sort_key_visual_resource_shift);
         key |= (texture_bits << sort_key_texture_shift);
         key |= (minor_bits << sort_key_minor_shift);
         key |= (batch_bits << sort_key_batch_shift);
@@ -509,8 +501,8 @@ public:
             static_cast<std::uint32_t>((sort_key_ >> sort_key_pass_shift) & sort_key_pass_mask)));
     }
 
-    [[nodiscard]] static std::uint32_t ExtractMaterialBucket(std::uint64_t sort_key_) noexcept {
-        return static_cast<std::uint32_t>((sort_key_ >> sort_key_material_shift) & sort_key_material_mask);
+    [[nodiscard]] static std::uint32_t ExtractVisualResourceBucket(std::uint64_t sort_key_) noexcept {
+        return static_cast<std::uint32_t>((sort_key_ >> sort_key_visual_resource_shift) & sort_key_visual_resource_mask);
     }
 
     [[nodiscard]] static std::uint32_t ExtractTextureBucket(std::uint64_t sort_key_) noexcept {
@@ -564,3 +556,4 @@ private:
 };
 
 } // namespace vr::ecs
+

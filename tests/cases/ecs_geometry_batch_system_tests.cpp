@@ -1,4 +1,5 @@
-#include "support/test_framework.hpp"
+﻿#include "support/test_framework.hpp"
+#include "vr/ecs/system/appearance_system.hpp"
 #include "vr/ecs/system/geometry_batch_system.hpp"
 #include "vr/ecs/system/geometry_mesh_system.hpp"
 #include "vr/ecs/system/geometry_path_system.hpp"
@@ -8,6 +9,14 @@
 #include <cstdint>
 
 namespace {
+
+void ApplyGeometry2DAppearanceLayer(vr::ecs::Geometry<vr::ecs::Dim2>& geometry_,
+                                    std::int16_t layer_) {
+    vr::ecs::Appearance<vr::ecs::Dim2> appearance{};
+    vr::ecs::AppearanceSystem<vr::ecs::Dim2>::Initialize(appearance);
+    vr::ecs::AppearanceSystem<vr::ecs::Dim2>::SetLayer(appearance, layer_);
+    (void)vr::ecs::GeometrySystem<vr::ecs::Dim2>::ApplyAppearanceRuntimeState(geometry_, appearance.style);
+}
 
 VR_TEST_CASE(EcsGeometryBatchSystem_dim2_build_sort_and_group, "unit;core;ecs;geometry;batch") {
     using Geometry2D = vr::ecs::Geometry<vr::ecs::Dim2>;
@@ -24,13 +33,13 @@ VR_TEST_CASE(EcsGeometryBatchSystem_dim2_build_sort_and_group, "unit;core;ecs;ge
     VR_REQUIRE(PathSystem::AppendMoveTo(components[0U], 0.0F, 0.0F));
     VR_REQUIRE(PathSystem::AppendLineTo(components[0U], 1.0F, 0.0F));
     GeometrySystem2D::SetRuntimeRoute(components[0U], 7U, 5U, 3U);
-    GeometrySystem2D::SetLayer(components[0U], 2);
+    ApplyGeometry2DAppearanceLayer(components[0U], 2);
 
-    // 1: visible (sorts before 0 by material)
+    // 1: visible (sorts before 0 by visual resource)
     VR_REQUIRE(PathSystem::AppendMoveTo(components[1U], 0.0F, 0.0F));
     VR_REQUIRE(PathSystem::AppendLineTo(components[1U], 0.0F, 1.0F));
     GeometrySystem2D::SetRuntimeRoute(components[1U], 7U, 4U, 1U);
-    GeometrySystem2D::SetLayer(components[1U], 2);
+    ApplyGeometry2DAppearanceLayer(components[1U], 2);
 
     // 2: empty
 
@@ -43,12 +52,12 @@ VR_TEST_CASE(EcsGeometryBatchSystem_dim2_build_sort_and_group, "unit;core;ecs;ge
     VR_REQUIRE(PathSystem::AppendMoveTo(components[4U], 0.0F, 0.0F));
     VR_REQUIRE(PathSystem::AppendLineTo(components[4U], 2.0F, 0.0F));
     GeometrySystem2D::SetRuntimeRoute(components[4U], 3U, 8U, 1U);
-    GeometrySystem2D::SetLayer(components[4U], -1);
+    ApplyGeometry2DAppearanceLayer(components[4U], -1);
 
     VR_REQUIRE(PathSystem::AppendMoveTo(components[5U], 0.0F, 0.0F));
     VR_REQUIRE(PathSystem::AppendLineTo(components[5U], 3.0F, 0.0F));
     GeometrySystem2D::SetRuntimeRoute(components[5U], 3U, 8U, 7U);
-    GeometrySystem2D::SetLayer(components[5U], -1);
+    ApplyGeometry2DAppearanceLayer(components[5U], -1);
 
     vr::ecs::GeometryBatchScratch<vr::ecs::Dim2> scratch{};
     const auto stats = BatchSystem::BuildAndSort(components.data(),
@@ -65,7 +74,7 @@ VR_TEST_CASE(EcsGeometryBatchSystem_dim2_build_sort_and_group, "unit;core;ecs;ge
     const std::uint32_t* indices = BatchSystem::OrderedIndices(scratch);
     VR_REQUIRE(indices != nullptr);
 
-    // Expected key order: material 4 -> material 5 -> material 8(batch1) -> material 8(batch7)
+    // Expected key order: visual resource 4 -> visual resource 5 -> visual resource 8(batch1) -> visual resource 8(batch7)
     VR_CHECK(indices[0U] == 1U);
     VR_CHECK(indices[1U] == 0U);
     VR_CHECK(indices[2U] == 4U);
@@ -96,7 +105,7 @@ VR_TEST_CASE(EcsGeometryBatchSystem_dim3_depth_bin_affects_binding, "unit;core;e
     for (auto& component : components) {
         MeshSystem::Initialize(component);
         MeshSystem::SetMeshRoute(component, 12U, 0U, 0U);
-        GeometrySystem3D::SetMaterialId(component, 8U);
+        GeometrySystem3D::SetVisualResourceId(component, 8U);
     }
 
     GeometrySystem3D::SetDepthBin(components[0U], 0U);
@@ -148,7 +157,7 @@ VR_TEST_CASE(EcsGeometryBatchSystem_dim3_candidate_scan_preserves_candidate_orde
     for (std::uint32_t i = 0U; i < components.size(); ++i) {
         MeshSystem::Initialize(components[i]);
         MeshSystem::SetMeshRoute(components[i], 12U, 0U, 0U);
-        GeometrySystem3D::SetMaterialId(components[i], 10U + i);
+        GeometrySystem3D::SetVisualResourceId(components[i], 10U + i);
     }
     GeometrySystem3D::SetVisible(components[2U], false);
 
@@ -172,7 +181,7 @@ VR_TEST_CASE(EcsGeometryBatchSystem_dim3_candidate_scan_preserves_candidate_orde
     const std::uint32_t* indices = BatchSystem::OrderedIndices(scratch);
     VR_REQUIRE(indices != nullptr);
     VR_CHECK(BatchSystem::OrderedIndexCount(scratch) == 4U);
-    // sorted by sort_key (material id ascending): 0,1,1,4
+    // sorted by sort_key (visual resource id ascending): 0,1,1,4
     VR_CHECK(indices[0U] == 0U);
     VR_CHECK(indices[1U] == 1U);
     VR_CHECK(indices[2U] == 1U);
@@ -180,3 +189,4 @@ VR_TEST_CASE(EcsGeometryBatchSystem_dim3_candidate_scan_preserves_candidate_orde
 }
 
 } // namespace
+

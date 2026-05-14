@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "Center/Memory/Container/Vector/McVector.hpp"
 #include "vr/text/freetype_host.hpp"
@@ -179,3 +179,4 @@ private:
 };
 
 } // namespace vr::text
+

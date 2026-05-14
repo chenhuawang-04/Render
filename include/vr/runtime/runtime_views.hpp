@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "vr/render/runtime_prepare_views.hpp"
 
@@ -49,3 +49,4 @@ using vr::render::TextRenderer2DPrepareView;
 using vr::render::TextRenderer3DPrepareView;
 
 } // namespace vr::runtime
+

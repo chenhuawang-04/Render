@@ -7,12 +7,12 @@
 #include "vr/ecs/system/geometry_runtime_system.hpp"
 #include "vr/ecs/system/light_culling_system.hpp"
 #include "vr/geometry/geometry_image_host.hpp"
-#include "vr/geometry/geometry_material_gpu.hpp"
-#include "vr/geometry/geometry_material_host.hpp"
+#include "vr/geometry/geometry_appearance_host.hpp"
 #include "vr/geometry/geometry_resource_host.hpp"
 #include "vr/geometry/geometry_skeletal_palette_builder.hpp"
 #include "vr/geometry/geometry_upload_host.hpp"
 #include "vr/light/light_shadow_upload_host.hpp"
+#include "vr/render/appearance_gpu_prepare.hpp"
 #include "vr/render/appearance_prepare_bridge.hpp"
 #include "vr/render/descriptor_host.hpp"
 #include "vr/render/light_frame_coordinator.hpp"
@@ -47,6 +47,8 @@ class BindlessResourceSystem;
 
 namespace vr::geometry {
 
+struct GeometryAppearanceResolvedState;
+
 template<typename T>
 using GeometryRenderer3DMcVector = Center::Memory::mc_vector<T, Center::Memory::Tags::Container>;
 
@@ -54,7 +56,7 @@ struct GeometryRenderer3DCreateInfo {
     ecs::Geometry3DRuntimeBuildConfig runtime_build{};
     std::uint32_t reserve_component_count = 4096U;
     std::uint32_t reserve_instance_count = 8192U;
-    std::uint32_t reserve_material_set_count = 512U;
+    std::uint32_t reserve_appearance_set_count = 512U;
     bool enable_depth = true;
     VkFormat preferred_depth_format = VK_FORMAT_D32_SFLOAT;
     bool clear_depth = true;
@@ -106,11 +108,11 @@ struct GeometryRenderer3DStats {
     std::uint32_t uploaded_instance_count = 0U;
     std::uint32_t descriptor_set_bind_count = 0U;
     std::uint32_t descriptor_set_update_count = 0U;
-    std::uint32_t material_push_constant_update_count = 0U;
-    std::uint32_t material_resolve_cache_hit_count = 0U;
-    std::uint32_t material_resolve_cache_miss_count = 0U;
-    std::uint32_t material_set_count = 0U;
-    std::uint32_t material_resolve_cache_entry_count = 0U;
+    std::uint32_t appearance_push_constant_update_count = 0U;
+    std::uint32_t appearance_resolve_cache_hit_count = 0U;
+    std::uint32_t appearance_resolve_cache_miss_count = 0U;
+    std::uint32_t appearance_set_count = 0U;
+    std::uint32_t appearance_resolve_cache_entry_count = 0U;
     std::uint32_t prewarmed_pipeline_count = 0U;
     std::uint32_t prepare_compiled_pipeline_count = 0U;
     std::uint32_t culling_input_count = 0U;
@@ -159,7 +161,7 @@ public:
 
     void SetHosts(GeometryResourceHost* resource_host_,
                   GeometryUploadHost* upload_host_) noexcept;
-    void SetMaterialHosts(GeometryMaterialHost* material_host_,
+    void SetAppearanceHosts(GeometryAppearanceHost* appearance_host_,
                           GeometryImageHost* image_host_) noexcept;
     void SetSceneData(ecs::Geometry<ecs::Dim3>* geometry_components_,
                       ecs::Transform<ecs::Dim3>* transforms_,
@@ -213,31 +215,23 @@ private:
         float directional_light_y;
         float directional_light_z;
         float directional_light_intensity;
-        float camera_position_x;
-        float camera_position_y;
-        float camera_position_z;
-        float padding0;
     };
 
-    struct MaterialPushConstants final {
+    struct AppearancePushConstants final {
         float uv_scale_u;
         float uv_scale_v;
         float uv_bias_u;
         float uv_bias_v;
-        std::uint32_t flags;
-        float alpha_cutoff;
-        std::uint32_t texture_slot;
-        std::uint32_t sampler_slot;
     };
 
     struct PushConstants final {
         FramePushConstants frame{};
-        MaterialPushConstants material{};
+        AppearancePushConstants appearance{};
     };
 
-    static_assert(sizeof(FramePushConstants) == 96U);
-    static_assert(sizeof(MaterialPushConstants) == 32U);
-    static_assert(sizeof(PushConstants) == 128U);
+    static_assert(sizeof(FramePushConstants) == 80U);
+    static_assert(sizeof(AppearancePushConstants) == 16U);
+    static_assert(sizeof(PushConstants) == 96U);
 
     struct alignas(16) LightingParamsGpu final {
         float camera_position_x;
@@ -277,17 +271,17 @@ private:
         light::LightShadowBufferRange cluster_indices{};
         light::LightShadowBufferRange shadow_views{};
         light::LightShadowBufferRange lighting_uniform{};
-        resource::BufferResource material_records{};
+        resource::BufferResource appearance_records{};
         resource::BufferResource skeletal_components{};
         resource::BufferResource skeletal_matrices{};
         VkDescriptorSet descriptor_set = VK_NULL_HANDLE;
         std::uint32_t shadow_namespace_id = 0U;
-        std::uint32_t material_record_count = 0U;
+        std::uint32_t appearance_record_count = 0U;
         std::uint32_t skeletal_component_count = 0U;
         std::uint32_t skeletal_matrix_count = 0U;
-        std::uint64_t material_content_revision = 0U;
-        std::uint64_t material_bindless_revision = 0U;
-        std::uint32_t material_texture_host_revision = 0U;
+        std::uint64_t appearance_content_revision = 0U;
+        std::uint64_t appearance_bindless_revision = 0U;
+        std::uint32_t appearance_texture_host_revision = 0U;
         std::uint64_t upload_signature = 0U;
         std::uint64_t descriptor_payload_signature = 0U;
         std::uint64_t descriptor_buffer_signature = 0U;
@@ -337,12 +331,9 @@ private:
         std::uint64_t retire_value = 0U;
     };
 
-    struct ResolvedMaterialEntry final {
-        std::uint32_t material_id = 0U;
-        std::uint32_t material_revision = 0U;
-        std::uint32_t image_id = 0U;
-        std::uint32_t image_revision = 0U;
-        MaterialPushConstants material_push_constants{};
+    struct ResolvedAppearanceEntry final {
+        std::uint32_t appearance_id = 0U;
+        AppearancePushConstants sampling_push_constants{};
     };
 
     [[nodiscard]] static bool IsDepthFormatSupported(VulkanContext& context_, VkFormat format_) noexcept;
@@ -353,14 +344,10 @@ private:
     [[nodiscard]] static std::size_t TopologyModeIndex(TopologyMode mode_) noexcept;
     [[nodiscard]] static std::size_t CullModeIndex(CullMode mode_) noexcept;
     [[nodiscard]] static std::size_t BlendModeIndex(BlendMode mode_) noexcept;
-    [[nodiscard]] static std::size_t LowerBoundResolvedMaterialIndex(
-        const GeometryRenderer3DMcVector<ResolvedMaterialEntry>& entries_,
-        std::uint32_t material_id_) noexcept;
-    static void ApplyFallbackMaterialFactorsToInstance(
-        ecs::Geometry3DGpuInstance& instance_,
-        const ecs::Geometry<ecs::Dim3>* component_,
-        const GeometryMaterialDesc* material_desc_) noexcept;
-    [[nodiscard]] std::uint64_t ApplyMaterialFactorOverrides();
+    [[nodiscard]] static std::size_t LowerBoundResolvedAppearanceIndex(
+        const GeometryRenderer3DMcVector<ResolvedAppearanceEntry>& entries_,
+        std::uint32_t appearance_id_) noexcept;
+    [[nodiscard]] std::uint64_t ApplyAppearanceStateOverrides();
     [[nodiscard]] static PipelineMode ResolvePipelineMode(const ecs::Geometry3DDrawBatch& batch_,
                                                           bool use_depth_) noexcept;
     [[nodiscard]] static TopologyMode ResolveTopologyMode(VkPrimitiveTopology mesh_topology_,
@@ -396,10 +383,10 @@ private:
     void DestroyStorageBuffer(resource::BufferResource& buffer_) noexcept;
     void PrepareLightingDescriptorSetForFrame(std::uint32_t frame_index_);
     [[nodiscard]] LightingParamsGpu BuildLightingParamsGpu(VkExtent2D extent_) const noexcept;
-    [[nodiscard]] static MaterialPushConstants BuildMaterialPushConstants(
-        const GeometryMaterialDesc* material_desc_) noexcept;
-    [[nodiscard]] bool ResolveMaterialBinding(std::uint32_t material_id_,
-                                              MaterialPushConstants& out_material_push_constants_);
+    [[nodiscard]] static AppearancePushConstants BuildAppearancePushConstants(
+        const GeometryAppearanceDesc* appearance_desc_) noexcept;
+    [[nodiscard]] bool ResolveAppearancePushConstants(std::uint32_t appearance_id_,
+                                                    AppearancePushConstants& out_sampling_push_constants_);
     void EnsureDepthResources(VulkanContext& context_,
                               std::uint32_t image_count_,
                               VkExtent2D extent_);
@@ -450,7 +437,7 @@ private:
 
     GeometryResourceHost* geometry_resource_host = nullptr;
     GeometryUploadHost* geometry_upload_host = nullptr;
-    GeometryMaterialHost* geometry_material_host = nullptr;
+    GeometryAppearanceHost* geometry_appearance_host = nullptr;
     GeometryImageHost* geometry_image_host = nullptr;
     asset::TextureHost* texture_host = nullptr;
 
@@ -480,8 +467,9 @@ private:
     GeometryRenderer3DMcVector<RetiredDepthImage> retired_depth_images{};
     GeometryRenderer3DMcVector<std::uint8_t> image_initialized{};
     GeometryRenderer3DMcVector<FrameLightingResources> frame_lighting_resources{};
-    GeometryRenderer3DMcVector<ResolvedMaterialEntry> resolved_materials{};
-    GeometryRenderer3DMcVector<MaterialGpuRecord> material_record_scratch{};
+    GeometryRenderer3DMcVector<ResolvedAppearanceEntry> resolved_appearances{};
+    GeometryRenderer3DMcVector<ecs::AppearanceGpuRecord<ecs::Dim3>> appearance_source_record_scratch{};
+    GeometryRenderer3DMcVector<ecs::AppearanceGpuRecord<ecs::Dim3>> appearance_record_scratch{};
     GeometryRenderer3DMcVector<GeometrySkeletalComponentGpu> skeletal_component_scratch{};
     GeometryRenderer3DMcVector<GeometrySkeletalMatrixGpu> skeletal_matrix_scratch{};
     render::DescriptorMcVector<render::DescriptorBufferWrite> descriptor_buffer_write_scratch{};
@@ -497,11 +485,10 @@ private:
     std::uint64_t last_submitted_value_seen = 0U;
     std::uint64_t completed_submit_value_seen = 0U;
     std::uint64_t bindless_revision_seen = 0U;
-    std::uint64_t material_record_bindless_revision_seen = 0U;
-    std::uint32_t material_record_texture_host_revision_seen = 0U;
-    std::uint64_t material_record_content_revision = 0U;
-    std::uint32_t material_host_revision_seen = 0U;
-    std::uint32_t image_host_revision_seen = 0U;
+    std::uint64_t appearance_record_bindless_revision_seen = 0U;
+    std::uint32_t appearance_record_texture_host_revision_seen = 0U;
+    std::uint64_t appearance_record_content_revision = 0U;
+    std::uint32_t appearance_host_revision_seen = 0U;
     render::LightFrameCoordinator<ecs::Dim3>* light_frame_coordinator = nullptr;
     render::IblHost* ibl_host = nullptr;
     render::LightShadowLinkCoordinator3D* light_shadow_link_coordinator = nullptr;
@@ -515,3 +502,4 @@ private:
 };
 
 } // namespace vr::geometry
+

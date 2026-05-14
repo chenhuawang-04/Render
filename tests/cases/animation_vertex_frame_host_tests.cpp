@@ -1,4 +1,4 @@
-#include "support/test_framework.hpp"
+﻿#include "support/test_framework.hpp"
 #include "vr/animation/animation_frame_sequence_host.hpp"
 #include "vr/animation/animation_vertex_deform_host.hpp"
 
@@ -86,3 +86,4 @@ VR_TEST_CASE(AnimationFrameSequenceHost_upsert_find_sample_and_remove,
 }
 
 } // namespace
+

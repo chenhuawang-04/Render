@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "vr/ecs/component/spatial_types.hpp"
 #include "vr/ecs/component/text_component.hpp"
@@ -11,7 +11,7 @@
 namespace vr::ecs {
 
 struct PropertyTrack final {};
-struct MaterialTrack final {};
+struct VisualTrack final {};
 struct PathMotion final {};
 struct CameraTrack final {};
 
@@ -80,12 +80,10 @@ enum class PropertyTrackSemantic : std::uint16_t {
     text_outline_color = 33U,
 };
 
-enum class MaterialTrackSemantic : std::uint16_t {
+enum class VisualTrackSemantic : std::uint16_t {
     none = 0U,
     surface_uv_rect = 1U,
     surface_uv_transform = 2U,
-    surface_tint_color = 3U,
-    surface_opacity = 4U,
     appearance_color = 16U,
     appearance_opacity = 17U,
     appearance_emissive_color = 18U,
@@ -192,18 +190,18 @@ struct PropertyTrackSample final {
     std::uint16_t reserved0;
 };
 
-struct MaterialTrackBinding final {
+struct VisualTrackBinding final {
     AnimationTargetRef target;
-    MaterialTrackSemantic semantic;
+    VisualTrackSemantic semantic;
     AnimationValueEncoding value_encoding;
     std::uint16_t channel_mask;
     std::uint16_t reserved0;
     std::uint32_t binding_handle;
 };
 
-struct MaterialTrackSample final {
+struct VisualTrackSample final {
     Float4 value;
-    MaterialTrackSemantic semantic;
+    VisualTrackSemantic semantic;
     AnimationInterpolationMode interpolation_mode;
     std::uint16_t channel_mask;
     std::uint16_t reserved0;
@@ -298,10 +296,10 @@ struct AnimationComponent<DimensionT, PropertyTrack> final {
 };
 
 template<DimensionTag DimensionT>
-struct AnimationComponent<DimensionT, MaterialTrack> final {
+struct AnimationComponent<DimensionT, VisualTrack> final {
     AnimationPlaybackState playback;
-    MaterialTrackBinding binding;
-    MaterialTrackSample sample;
+    VisualTrackBinding binding;
+    VisualTrackSample sample;
     AnimationRuntimeState runtime;
 };
 
@@ -391,8 +389,8 @@ static_assert(PurePodAnimationComponent<AnimationPlaybackState>);
 static_assert(PurePodAnimationComponent<AnimationRuntimeState>);
 static_assert(PurePodAnimationComponent<PropertyTrackBinding>);
 static_assert(PurePodAnimationComponent<PropertyTrackSample>);
-static_assert(PurePodAnimationComponent<MaterialTrackBinding>);
-static_assert(PurePodAnimationComponent<MaterialTrackSample>);
+static_assert(PurePodAnimationComponent<VisualTrackBinding>);
+static_assert(PurePodAnimationComponent<VisualTrackSample>);
 static_assert(PurePodAnimationComponent<PathMotionBinding>);
 static_assert(PurePodAnimationComponent<PathMotionSample<Dim2>>);
 static_assert(PurePodAnimationComponent<PathMotionSample<Dim3>>);
@@ -403,8 +401,8 @@ static_assert(PurePodAnimationComponent<ResourceAnimationBinding>);
 static_assert(PurePodAnimationComponent<ResourceAnimationSample>);
 static_assert(PurePodAnimationComponent<Animation<Dim2, PropertyTrack>>);
 static_assert(PurePodAnimationComponent<Animation<Dim3, PropertyTrack>>);
-static_assert(PurePodAnimationComponent<Animation<Dim2, MaterialTrack>>);
-static_assert(PurePodAnimationComponent<Animation<Dim3, MaterialTrack>>);
+static_assert(PurePodAnimationComponent<Animation<Dim2, VisualTrack>>);
+static_assert(PurePodAnimationComponent<Animation<Dim3, VisualTrack>>);
 static_assert(PurePodAnimationComponent<Animation<Dim2, PathMotion>>);
 static_assert(PurePodAnimationComponent<Animation<Dim3, PathMotion>>);
 static_assert(PurePodAnimationComponent<Animation<Dim2, CameraTrack>>);
@@ -425,3 +423,5 @@ static_assert(PurePodAnimationComponent<Animation<Dim2, ParticleSimulation>>);
 static_assert(PurePodAnimationComponent<Animation<Dim3, ParticleSimulation>>);
 
 } // namespace vr::ecs
+
+

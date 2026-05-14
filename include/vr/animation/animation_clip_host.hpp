@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "Center/Memory/Container/Vector/McVector.hpp"
 #include "vr/ecs/component/animation_component.hpp"
@@ -21,7 +21,7 @@ struct AnimationColorValueTag final {};
 enum class AnimationClipKind : std::uint8_t {
     none = 0U,
     property_track = 1U,
-    material_track = 2U,
+    visual_track = 2U,
     camera_track = 3U,
 };
 
@@ -40,9 +40,9 @@ using PropertyFloat4ChannelDesc = TypedAnimationChannelDesc<ecs::PropertyTrackSe
 using PropertyQuaternionChannelDesc = TypedAnimationChannelDesc<ecs::PropertyTrackSemantic, ecs::Quaternion>;
 using PropertyColorChannelDesc = TypedAnimationChannelDesc<ecs::PropertyTrackSemantic, ecs::Rgba8>;
 
-using MaterialScalarChannelDesc = TypedAnimationChannelDesc<ecs::MaterialTrackSemantic, float>;
-using MaterialFloat4ChannelDesc = TypedAnimationChannelDesc<ecs::MaterialTrackSemantic, ecs::Float4>;
-using MaterialColorChannelDesc = TypedAnimationChannelDesc<ecs::MaterialTrackSemantic, ecs::Rgba8>;
+using VisualScalarChannelDesc = TypedAnimationChannelDesc<ecs::VisualTrackSemantic, float>;
+using VisualFloat4ChannelDesc = TypedAnimationChannelDesc<ecs::VisualTrackSemantic, ecs::Float4>;
+using VisualColorChannelDesc = TypedAnimationChannelDesc<ecs::VisualTrackSemantic, ecs::Rgba8>;
 
 using CameraScalarChannelDesc = TypedAnimationChannelDesc<ecs::CameraTrackSemantic, float>;
 using CameraFloat2ChannelDesc = TypedAnimationChannelDesc<ecs::CameraTrackSemantic, ecs::Float2>;
@@ -66,14 +66,14 @@ struct PropertyAnimationClipDesc final {
     std::uint32_t color_channel_count = 0U;
 };
 
-struct MaterialAnimationClipDesc final {
+struct VisualAnimationClipDesc final {
     std::uint32_t clip_id = 0U;
     float duration_s = 1.0F;
-    const MaterialScalarChannelDesc* scalar_channels = nullptr;
+    const VisualScalarChannelDesc* scalar_channels = nullptr;
     std::uint32_t scalar_channel_count = 0U;
-    const MaterialFloat4ChannelDesc* float4_channels = nullptr;
+    const VisualFloat4ChannelDesc* float4_channels = nullptr;
     std::uint32_t float4_channel_count = 0U;
-    const MaterialColorChannelDesc* color_channels = nullptr;
+    const VisualColorChannelDesc* color_channels = nullptr;
     std::uint32_t color_channel_count = 0U;
 };
 
@@ -99,7 +99,7 @@ struct AnimationClipHostCreateInfo final {
 struct AnimationClipHostStats final {
     std::uint32_t clip_count = 0U;
     std::uint32_t property_clip_count = 0U;
-    std::uint32_t material_clip_count = 0U;
+    std::uint32_t visual_clip_count = 0U;
     std::uint32_t camera_clip_count = 0U;
     std::uint32_t added_clip_count = 0U;
     std::uint32_t updated_clip_count = 0U;
@@ -130,7 +130,7 @@ struct PropertyClipLayout final {
     AnimationChannelRange color{};
 };
 
-struct MaterialClipLayout final {
+struct VisualClipLayout final {
     AnimationChannelRange scalar{};
     AnimationChannelRange float4{};
     AnimationChannelRange color{};
@@ -152,7 +152,7 @@ struct AnimationClipRecord final {
     std::uint16_t reserved1 = 0U;
     std::uint32_t revision = 0U;
     PropertyClipLayout property{};
-    MaterialClipLayout material{};
+    VisualClipLayout visual{};
     CameraClipLayout camera{};
 };
 
@@ -163,9 +163,9 @@ using PropertyFloat4ChannelRecord = AnimationChannelRecord<ecs::PropertyTrackSem
 using PropertyQuaternionChannelRecord = AnimationChannelRecord<ecs::PropertyTrackSemantic, AnimationQuaternionValueTag>;
 using PropertyColorChannelRecord = AnimationChannelRecord<ecs::PropertyTrackSemantic, AnimationColorValueTag>;
 
-using MaterialScalarChannelRecord = AnimationChannelRecord<ecs::MaterialTrackSemantic, AnimationScalarValueTag>;
-using MaterialFloat4ChannelRecord = AnimationChannelRecord<ecs::MaterialTrackSemantic, AnimationFloat4ValueTag>;
-using MaterialColorChannelRecord = AnimationChannelRecord<ecs::MaterialTrackSemantic, AnimationColorValueTag>;
+using VisualScalarChannelRecord = AnimationChannelRecord<ecs::VisualTrackSemantic, AnimationScalarValueTag>;
+using VisualFloat4ChannelRecord = AnimationChannelRecord<ecs::VisualTrackSemantic, AnimationFloat4ValueTag>;
+using VisualColorChannelRecord = AnimationChannelRecord<ecs::VisualTrackSemantic, AnimationColorValueTag>;
 
 using CameraScalarChannelRecord = AnimationChannelRecord<ecs::CameraTrackSemantic, AnimationScalarValueTag>;
 using CameraFloat2ChannelRecord = AnimationChannelRecord<ecs::CameraTrackSemantic, AnimationFloat2ValueTag>;
@@ -186,7 +186,7 @@ public:
     void Shutdown() noexcept;
 
     ecs::AnimationClipHandle UpsertPropertyClip(const PropertyAnimationClipDesc& desc_);
-    ecs::AnimationClipHandle UpsertMaterialClip(const MaterialAnimationClipDesc& desc_);
+    ecs::AnimationClipHandle UpsertVisualClip(const VisualAnimationClipDesc& desc_);
     ecs::AnimationClipHandle UpsertCameraClip(const CameraAnimationClipDesc& desc_);
 
     [[nodiscard]] bool RemoveClip(std::uint32_t clip_id_) noexcept;
@@ -195,8 +195,8 @@ public:
     [[nodiscard]] const AnimationClipRecord* FindClipByHandle(ecs::AnimationClipHandle handle_) const noexcept;
     [[nodiscard]] const AnimationClipRecord* FindPropertyClipById(std::uint32_t clip_id_) const noexcept;
     [[nodiscard]] const AnimationClipRecord* FindPropertyClipByHandle(ecs::AnimationClipHandle handle_) const noexcept;
-    [[nodiscard]] const AnimationClipRecord* FindMaterialClipById(std::uint32_t clip_id_) const noexcept;
-    [[nodiscard]] const AnimationClipRecord* FindMaterialClipByHandle(ecs::AnimationClipHandle handle_) const noexcept;
+    [[nodiscard]] const AnimationClipRecord* FindVisualClipById(std::uint32_t clip_id_) const noexcept;
+    [[nodiscard]] const AnimationClipRecord* FindVisualClipByHandle(ecs::AnimationClipHandle handle_) const noexcept;
     [[nodiscard]] const AnimationClipRecord* FindCameraClipById(std::uint32_t clip_id_) const noexcept;
     [[nodiscard]] const AnimationClipRecord* FindCameraClipByHandle(ecs::AnimationClipHandle handle_) const noexcept;
 
@@ -207,9 +207,9 @@ public:
     [[nodiscard]] const PropertyQuaternionChannelRecord* PropertyQuaternionChannels(const AnimationClipRecord& clip_) const noexcept;
     [[nodiscard]] const PropertyColorChannelRecord* PropertyColorChannels(const AnimationClipRecord& clip_) const noexcept;
 
-    [[nodiscard]] const MaterialScalarChannelRecord* MaterialScalarChannels(const AnimationClipRecord& clip_) const noexcept;
-    [[nodiscard]] const MaterialFloat4ChannelRecord* MaterialFloat4Channels(const AnimationClipRecord& clip_) const noexcept;
-    [[nodiscard]] const MaterialColorChannelRecord* MaterialColorChannels(const AnimationClipRecord& clip_) const noexcept;
+    [[nodiscard]] const VisualScalarChannelRecord* VisualScalarChannels(const AnimationClipRecord& clip_) const noexcept;
+    [[nodiscard]] const VisualFloat4ChannelRecord* VisualFloat4Channels(const AnimationClipRecord& clip_) const noexcept;
+    [[nodiscard]] const VisualColorChannelRecord* VisualColorChannels(const AnimationClipRecord& clip_) const noexcept;
 
     [[nodiscard]] const CameraScalarChannelRecord* CameraScalarChannels(const AnimationClipRecord& clip_) const noexcept;
     [[nodiscard]] const CameraFloat2ChannelRecord* CameraFloat2Channels(const AnimationClipRecord& clip_) const noexcept;
@@ -223,9 +223,9 @@ public:
     [[nodiscard]] ecs::AnimationCurveView<ecs::Quaternion> BuildCurveView(const PropertyQuaternionChannelRecord& channel_) const noexcept;
     [[nodiscard]] ecs::AnimationCurveView<ecs::Rgba8> BuildCurveView(const PropertyColorChannelRecord& channel_) const noexcept;
 
-    [[nodiscard]] ecs::AnimationCurveView<float> BuildCurveView(const MaterialScalarChannelRecord& channel_) const noexcept;
-    [[nodiscard]] ecs::AnimationCurveView<ecs::Float4> BuildCurveView(const MaterialFloat4ChannelRecord& channel_) const noexcept;
-    [[nodiscard]] ecs::AnimationCurveView<ecs::Rgba8> BuildCurveView(const MaterialColorChannelRecord& channel_) const noexcept;
+    [[nodiscard]] ecs::AnimationCurveView<float> BuildCurveView(const VisualScalarChannelRecord& channel_) const noexcept;
+    [[nodiscard]] ecs::AnimationCurveView<ecs::Float4> BuildCurveView(const VisualFloat4ChannelRecord& channel_) const noexcept;
+    [[nodiscard]] ecs::AnimationCurveView<ecs::Rgba8> BuildCurveView(const VisualColorChannelRecord& channel_) const noexcept;
 
     [[nodiscard]] ecs::AnimationCurveView<float> BuildCurveView(const CameraScalarChannelRecord& channel_) const noexcept;
     [[nodiscard]] ecs::AnimationCurveView<ecs::Float2> BuildCurveView(const CameraFloat2ChannelRecord& channel_) const noexcept;
@@ -274,9 +274,9 @@ private:
     AnimationMcVector<PropertyQuaternionChannelRecord> property_quaternion_channels{};
     AnimationMcVector<PropertyColorChannelRecord> property_color_channels{};
 
-    AnimationMcVector<MaterialScalarChannelRecord> material_scalar_channels{};
-    AnimationMcVector<MaterialFloat4ChannelRecord> material_float4_channels{};
-    AnimationMcVector<MaterialColorChannelRecord> material_color_channels{};
+    AnimationMcVector<VisualScalarChannelRecord> visual_scalar_channels{};
+    AnimationMcVector<VisualFloat4ChannelRecord> visual_float4_channels{};
+    AnimationMcVector<VisualColorChannelRecord> visual_color_channels{};
 
     AnimationMcVector<CameraScalarChannelRecord> camera_scalar_channels{};
     AnimationMcVector<CameraFloat2ChannelRecord> camera_float2_channels{};
@@ -294,3 +294,5 @@ private:
 };
 
 } // namespace vr::animation
+
+

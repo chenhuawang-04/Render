@@ -194,3 +194,4 @@ static_assert(PurePodShadowComponent<Shadow<Dim2>>);
 static_assert(PurePodShadowComponent<Shadow<Dim3>>);
 
 } // namespace vr::ecs
+

@@ -1,4 +1,4 @@
-#include "vr/render/frame_composer_host.hpp"
+﻿#include "vr/render/frame_composer_host.hpp"
 
 
 #include <limits>
@@ -247,3 +247,4 @@ void FrameComposerHost::DestroyOwnedTargets(VulkanContext& context_) noexcept {
 }
 
 } // namespace vr::render
+

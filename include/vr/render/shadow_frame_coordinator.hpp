@@ -513,3 +513,4 @@ private:
 };
 
 } // namespace vr::render
+

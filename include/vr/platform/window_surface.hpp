@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "Center/Memory/Container/Vector/McVector.hpp"
 #include <SDL3/SDL.h>
@@ -249,3 +249,4 @@ private:
 using DefaultWindowSurface = WindowSurface<ActiveBackendTag>;
 
 } // namespace vr::platform
+

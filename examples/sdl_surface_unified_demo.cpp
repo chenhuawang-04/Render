@@ -1,4 +1,5 @@
-#include "vr/ecs/system/bounds_system.hpp"
+﻿#include "vr/ecs/system/bounds_system.hpp"
+#include "vr/ecs/system/appearance_system.hpp"
 #include "vr/ecs/system/camera_system.hpp"
 #include "vr/ecs/system/surface_system.hpp"
 #include "vr/ecs/system/transform_system.hpp"
@@ -24,15 +25,19 @@ namespace {
 
 using Runtime = vr::render::RenderRuntimeHost<vr::platform::ActiveBackendTag, 2U>;
 
+using Appearance2D = vr::ecs::Appearance<vr::ecs::Dim2>;
 using Surface2D = vr::ecs::Surface<vr::ecs::Dim2>;
 using Surface3D = vr::ecs::Surface<vr::ecs::Dim3>;
+using Appearance3D = vr::ecs::Appearance<vr::ecs::Dim3>;
 using Transform2D = vr::ecs::Transform<vr::ecs::Dim2>;
 using Transform3D = vr::ecs::Transform<vr::ecs::Dim3>;
 using Bounds3D = vr::ecs::Bounds<vr::ecs::Dim3>;
 using Camera3D = vr::ecs::Camera<vr::ecs::Dim3>;
 
+using AppearanceSystem2D = vr::ecs::AppearanceSystem<vr::ecs::Dim2>;
 using SurfaceSystem2D = vr::ecs::SurfaceSystem<vr::ecs::Dim2>;
 using SurfaceSystem3D = vr::ecs::SurfaceSystem<vr::ecs::Dim3>;
+using AppearanceSystem3D = vr::ecs::AppearanceSystem<vr::ecs::Dim3>;
 using TransformSystem2D = vr::ecs::TransformSystem<vr::ecs::Dim2>;
 using TransformSystem3D = vr::ecs::TransformSystem<vr::ecs::Dim3>;
 using BoundsSystem3D = vr::ecs::BoundsSystem<vr::ecs::Dim3>;
@@ -52,6 +57,14 @@ constexpr float k_pi = 3.14159265358979323846F;
            (static_cast<std::uint32_t>(g_) << 8U) |
            (static_cast<std::uint32_t>(b_) << 16U) |
            (static_cast<std::uint32_t>(a_) << 24U);
+}
+
+[[nodiscard]] constexpr vr::ecs::AppearanceHandle MakeStaticAppearanceHandle(
+    std::uint32_t index_) noexcept {
+    return vr::ecs::AppearanceHandle{
+        .index = index_,
+        .generation = 1U
+    };
 }
 
 void FillCheckerTexture(std::uint32_t* pixels_,
@@ -110,24 +123,39 @@ void FillGradientTexture(std::uint32_t* pixels_,
     }
 }
 
+void ApplySurface2DAppearance(Surface2D& component_,
+                              std::int16_t layer_,
+                              vr::ecs::Rgba8 tint_color_,
+                              vr::ecs::AppearanceBlendMode blend_mode_,
+                              float opacity_ = 1.0F,
+                              bool premultiplied_alpha_ = false) {
+    Appearance2D appearance{};
+    AppearanceSystem2D::Initialize(appearance);
+    AppearanceSystem2D::SetLayer(appearance, layer_);
+    AppearanceSystem2D::SetFillColor(appearance, tint_color_);
+    AppearanceSystem2D::SetBlendMode(appearance, blend_mode_);
+    AppearanceSystem2D::SetOpacity(appearance, opacity_);
+    AppearanceSystem2D::SetPremultipliedAlpha(appearance, premultiplied_alpha_);
+    (void)SurfaceSystem2D::ApplyAppearanceRuntimeState(component_, appearance.style);
+}
+
 void InitializeSurface2DComponent(Surface2D& component_,
                                   std::uint32_t image_id_,
                                   float width_,
                                   float height_,
                                   std::int16_t layer_,
                                   vr::ecs::Rgba8 tint_color_,
-                                  vr::ecs::Surface2DBlendMode blend_mode_) {
+                                  vr::ecs::AppearanceBlendMode blend_mode_) {
     SurfaceSystem2D::Initialize(component_);
-    SurfaceSystem2D::SetImageId(component_, image_id_, 0U);
+    SurfaceSystem2D::SetSource(component_, vr::ecs::SurfaceImageSourceDesc{.surface_id = image_id_, .atlas_page_id = 0U});
     SurfaceSystem2D::SetSize(component_, vr::ecs::Float2{.x = width_, .y = height_});
     SurfaceSystem2D::SetPivot(component_, vr::ecs::Float2{.x = 0.5F, .y = 0.5F});
-    SurfaceSystem2D::SetLayer(component_, layer_);
-    SurfaceSystem2D::SetTintColor(component_, tint_color_);
-    SurfaceSystem2D::SetOpacity(component_, 1.0F);
-    SurfaceSystem2D::SetBlendMode(component_, blend_mode_);
+    ApplySurface2DAppearance(component_, layer_, tint_color_, blend_mode_);
 }
 
 void InitializeSurface3DComponent(Surface3D& component_,
+                                  Appearance3D& appearance_,
+                                  std::uint32_t appearance_index_,
                                   std::uint32_t texture_id_,
                                   std::uint32_t sampler_id_,
                                   std::uint16_t depth_bin_,
@@ -136,14 +164,24 @@ void InitializeSurface3DComponent(Surface3D& component_,
                                   vr::ecs::Rgba8 tint_color_,
                                   float opacity_) {
     SurfaceSystem3D::Initialize(component_);
-    SurfaceSystem3D::SetTextureRoute(component_, texture_id_, sampler_id_, 0U, 0U);
+    SurfaceSystem3D::SetSource(component_, vr::ecs::SurfaceSampledSource3DDesc{.surface_id = texture_id_, .sampler_id = sampler_id_, .uv_set = 0U, .flags = 0U});
     SurfaceSystem3D::SetDepthBin(component_, depth_bin_);
     SurfaceSystem3D::SetRenderPassHint(component_, vr::ecs::SurfaceRenderPassHint::transparent);
-    SurfaceSystem3D::SetDepthTest(component_, true);
-    SurfaceSystem3D::SetDepthWrite(component_, depth_write_);
-    SurfaceSystem3D::SetDoubleSided(component_, double_sided_);
-    SurfaceSystem3D::SetTintColor(component_, tint_color_);
-    SurfaceSystem3D::SetOpacity(component_, opacity_);
+
+    AppearanceSystem3D::Initialize(appearance_);
+    AppearanceSystem3D::SetBaseColor(appearance_, tint_color_);
+    AppearanceSystem3D::SetOpacity(appearance_, opacity_);
+    AppearanceSystem3D::SetDepthTest(appearance_, true);
+    AppearanceSystem3D::SetDepthWrite(appearance_, depth_write_);
+    AppearanceSystem3D::SetDoubleSided(appearance_, double_sided_);
+    AppearanceSystem3D::SetBlendMode(appearance_, vr::ecs::AppearanceBlendMode::alpha);
+    AppearanceSystem3D::SetAlphaMode(appearance_, vr::ecs::AppearanceAlphaMode::blend);
+    (void)SurfaceSystem3D::SetAppearanceRuntimeLink(component_,
+                                                    MakeStaticAppearanceHandle(appearance_index_),
+                                                    0ULL,
+                                                    0ULL,
+                                                    component_.runtime.route.visual_resource_id,
+                                                    &appearance_.style);
 }
 
 [[nodiscard]] std::uint32_t ParseMaxFrames(int argc_,
@@ -310,7 +348,10 @@ int main(int argc_,
         surface_image_host.BeginFrame(runtime.Context(), 0U);
 
         std::array<Surface3D, 2U> surface_3d_components{};
+        std::array<Appearance3D, 2U> surface_3d_appearances{};
         InitializeSurface3DComponent(surface_3d_components[0U],
+                                     surface_3d_appearances[0U],
+                                     0U,
                                      k_texture_id_checker,
                                      sampler_linear_repeat_id.value,
                                      32U,
@@ -319,6 +360,8 @@ int main(int argc_,
                                      vr::ecs::Rgba8{255U, 255U, 255U, 255U},
                                      1.0F);
         InitializeSurface3DComponent(surface_3d_components[1U],
+                                     surface_3d_appearances[1U],
+                                     1U,
                                      k_texture_id_stripes,
                                      sampler_nearest_clamp_id.value,
                                      44U,
@@ -375,21 +418,21 @@ int main(int argc_,
                                      220.0F,
                                      4,
                                      vr::ecs::Rgba8{255U, 255U, 255U, 210U},
-                                     vr::ecs::Surface2DBlendMode::alpha);
+                                     vr::ecs::AppearanceBlendMode::alpha);
         InitializeSurface2DComponent(surface_2d_components[1U],
                                      k_texture_id_checker,
                                      240.0F,
                                      240.0F,
                                      6,
                                      vr::ecs::Rgba8{255U, 238U, 220U, 245U},
-                                     vr::ecs::Surface2DBlendMode::alpha);
+                                     vr::ecs::AppearanceBlendMode::alpha);
         InitializeSurface2DComponent(surface_2d_components[2U],
                                      k_texture_id_stripes,
                                      520.0F,
                                      110.0F,
                                      8,
                                      vr::ecs::Rgba8{180U, 220U, 255U, 200U},
-                                     vr::ecs::Surface2DBlendMode::additive);
+                                     vr::ecs::AppearanceBlendMode::additive);
 
         std::array<Transform2D, 3U> surface_2d_transforms{};
         for (Transform2D& transform : surface_2d_transforms) {
@@ -412,6 +455,8 @@ int main(int argc_,
         renderer_3d.Initialize(renderer_3d_create_info);
         renderer_3d_initialized = true;
         renderer_3d.SetHosts(&surface_upload_host, &surface_image_host);
+        renderer_3d.SetAppearanceData(surface_3d_appearances.data(),
+                                      static_cast<std::uint32_t>(surface_3d_appearances.size()));
         renderer_3d.SetSceneData(surface_3d_components.data(),
                                  surface_3d_transforms.data(),
                                  static_cast<std::uint32_t>(surface_3d_components.size()),
@@ -563,3 +608,4 @@ int main(int argc_,
 
     return 0;
 }
+

@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <cstdint>
 #include <limits>
@@ -95,3 +95,4 @@ static_assert(std::is_standard_layout_v<RenderTargetHandle>);
 static_assert(std::is_standard_layout_v<RenderTargetSubresourceRange>);
 
 } // namespace vr::render
+

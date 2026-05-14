@@ -1,4 +1,4 @@
-#include "vr/render/render_target_host.hpp"
+﻿#include "vr/render/render_target_host.hpp"
 
 #include "vr/render/descriptor_host.hpp"
 #include "vr/resource/gpu_memory_host.hpp"
@@ -1143,3 +1143,4 @@ void RenderTargetHost::ValidateImportedDesc(const ImportedRenderTargetDesc& desc
 }
 
 } // namespace vr::render
+

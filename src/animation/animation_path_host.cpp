@@ -1,4 +1,4 @@
-#include "vr/animation/animation_path_host.hpp"
+﻿#include "vr/animation/animation_path_host.hpp"
 
 #include <algorithm>
 #include <cstddef>
@@ -382,3 +382,4 @@ void AnimationPathHost::UpdateMovedRecordSlot(std::uint32_t record_index_) noexc
 }
 
 } // namespace vr::animation
+

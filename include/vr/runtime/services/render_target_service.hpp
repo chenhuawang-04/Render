@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "vr/render/render_target_host.hpp"
 #include "vr/runtime/runtime_service.hpp"
@@ -34,3 +34,4 @@ public:
 };
 
 } // namespace vr::runtime::services
+

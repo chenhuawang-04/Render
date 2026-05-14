@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "Center/Memory/Adaptor/VulkanBuddyAdaptor.hpp"
 #include "Center/Memory/Provider/VulkanNativeBackend.hpp"
@@ -98,3 +98,4 @@ private:
 };
 
 } // namespace vr::resource
+

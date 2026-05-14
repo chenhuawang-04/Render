@@ -1,4 +1,4 @@
-#include "support/test_framework.hpp"
+﻿#include "support/test_framework.hpp"
 #include "vr/ecs/system/camera_system.hpp"
 #include "vr/ecs/system/light_culling_system.hpp"
 #include "vr/ecs/system/light_runtime_system.hpp"
@@ -137,4 +137,5 @@ VR_TEST_CASE(EcsLightCullingSystem_dim3_single_cluster_stable_order, "unit;core;
 }
 
 } // namespace
+
 

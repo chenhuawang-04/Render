@@ -1,4 +1,4 @@
-#include "Center/Memory/Container/Vector/McVector.hpp"
+﻿#include "Center/Memory/Container/Vector/McVector.hpp"
 #include "support/bench_framework.hpp"
 #include "vr/ecs/system/particle_emitter_system.hpp"
 #include "vr/ecs/system/particle_runtime_system.hpp"
@@ -57,7 +57,7 @@ void InitializeParticleScene(ParticleBenchMcVector<Particle3D>& particles_,
             0.35F,
             0.15F);
         ParticleSystem3D::SetTextureId(particles_[i], 1U + (i % 8U));
-        ParticleSystem3D::SetMaterialId(particles_[i], 1U + (i % 4U));
+        ParticleSystem3D::SetVisualResourceId(particles_[i], 1U + (i % 4U));
         ParticleSystem3D::SetBatchTag(particles_[i], i % 3U);
         ParticleSystem3D::SetDepthBin(particles_[i], static_cast<std::uint16_t>(i % 1024U));
     }
@@ -110,3 +110,4 @@ VR_BENCHMARK_CASE(EcsParticleRuntimeSystem_dim3_simulate_and_build_128_emitters,
 }
 
 } // namespace
+

@@ -28,3 +28,4 @@ static_assert(std::is_standard_layout_v<Affine2x3> && std::is_trivial_v<Affine2x
 static_assert(std::is_standard_layout_v<Matrix4x4> && std::is_trivial_v<Matrix4x4>);
 
 } // namespace vr::ecs
+

@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "vr/ecs/component/light_component.hpp"
 
@@ -399,4 +399,5 @@ private:
 };
 
 } // namespace vr::ecs
+
 

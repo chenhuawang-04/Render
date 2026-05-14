@@ -1,4 +1,4 @@
-#include "vr/render/upload_host.hpp"
+﻿#include "vr/render/upload_host.hpp"
 
 #include "vr/resource/gpu_memory_host.hpp"
 
@@ -923,3 +923,4 @@ void UploadHost::FlushAllocationIfNeeded(VulkanContext& context_,
 }
 
 } // namespace vr::render
+

@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "Center/Memory/Container/Vector/McVector.hpp"
 #include "vr/render/bindless_types.hpp"
@@ -346,3 +346,4 @@ private:
 };
 
 } // namespace vr::render
+

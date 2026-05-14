@@ -1,4 +1,4 @@
-#include "vr/render/render_target_pass.hpp"
+﻿#include "vr/render/render_target_pass.hpp"
 #include "vr/render/swapchain_target_set.hpp"
 
 #include <stdexcept>
@@ -338,3 +338,4 @@ void RecordEndColorDepthPass(const FrameRecordContext& record_context_,
 }
 
 } // namespace vr::render
+

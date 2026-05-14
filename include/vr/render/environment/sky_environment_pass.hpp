@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "vr/render/descriptor_host.hpp"
 #include "vr/render/ibl_host.hpp"
@@ -199,3 +199,4 @@ private:
 };
 
 } // namespace vr::render
+

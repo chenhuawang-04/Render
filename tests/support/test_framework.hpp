@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <cstdint>
 #include <string>
@@ -170,3 +170,4 @@ int RunAllTestsMain(int argc_, char** argv_);
     do {                                                                                    \
         test_context_.Skip(reason_);                                                        \
     } while (false)
+

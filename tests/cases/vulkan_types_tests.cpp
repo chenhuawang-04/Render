@@ -1,4 +1,4 @@
-#include "Center/Memory/Vulkan/Types.hpp"
+﻿#include "Center/Memory/Vulkan/Types.hpp"
 #include "support/test_framework.hpp"
 
 #include <cstddef>
@@ -122,3 +122,4 @@ VR_TEST_CASE(VulkanTypes_should_dedicate_allocation_follows_policy_switches, "un
 }
 
 } // namespace
+

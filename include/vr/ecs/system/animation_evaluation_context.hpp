@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "vr/ecs/component/appearance_component.hpp"
 #include "vr/ecs/component/camera_component.hpp"
@@ -108,3 +108,4 @@ static_assert(std::is_standard_layout_v<FrameSequenceOutputState> &&
               std::is_trivial_v<FrameSequenceOutputState>);
 
 } // namespace vr::ecs
+

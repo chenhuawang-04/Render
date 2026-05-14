@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "vr/ecs/system/light_culling_system.hpp"
 #include "vr/ecs/system/light_runtime_system.hpp"
@@ -117,4 +117,5 @@ public:
 };
 
 } // namespace vr::render
+
 

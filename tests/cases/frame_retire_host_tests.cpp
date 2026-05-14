@@ -1,4 +1,4 @@
-#include "support/test_framework.hpp"
+﻿#include "support/test_framework.hpp"
 #include "vr/render/frame_retire_host.hpp"
 
 #include <cstdint>
@@ -91,3 +91,4 @@ VR_TEST_CASE(FrameRetireHost_collect_with_null_device_preserves_pending_state, "
 }
 
 } // namespace
+

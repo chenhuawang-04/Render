@@ -1,4 +1,4 @@
-#include "support/bench_framework.hpp"
+﻿#include "support/bench_framework.hpp"
 #include "vr/ecs/system/appearance_link_system.hpp"
 #include "vr/ecs/system/appearance_runtime_system.hpp"
 #include "vr/render/appearance_frame_coordinator.hpp"
@@ -199,7 +199,7 @@ VR_BENCHMARK_CASE(EcsAppearancePrepareStage_dim3_dual_renderer_duplicate_build_1
         GeometrySystem3D::SetGeometryId(geometry_components[i], 1U + i);
 
         SurfaceSystem3D::Initialize(surface_components[i]);
-        SurfaceSystem3D::SetTextureId(surface_components[i], 500U + i);
+        SurfaceSystem3D::SetSource(surface_components[i], vr::ecs::SurfaceSampledSource3DDesc{.surface_id = 500U + i});
     }
 
     vr::ecs::AppearanceRuntimeScratch<vr::ecs::Dim3> scratch_geometry{};
@@ -276,7 +276,7 @@ VR_BENCHMARK_CASE(EcsAppearanceFrameCoordinator_dim3_dual_renderer_shared_build_
         GeometrySystem3D::SetGeometryId(geometry_components[i], 1U + i);
 
         SurfaceSystem3D::Initialize(surface_components[i]);
-        SurfaceSystem3D::SetTextureId(surface_components[i], 500U + i);
+        SurfaceSystem3D::SetSource(surface_components[i], vr::ecs::SurfaceSampledSource3DDesc{.surface_id = 500U + i});
     }
 
     Coordinator3D coordinator{};
@@ -469,3 +469,4 @@ VR_BENCHMARK_CASE(EcsAppearanceFrameCoordinator_dim3_dirty_normalize_duplicate_p
 }
 
 } // namespace
+

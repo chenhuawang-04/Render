@@ -1,4 +1,4 @@
-#include "vr/render/ibl_bake_host.hpp"
+﻿#include "vr/render/ibl_bake_host.hpp"
 
 #include <algorithm>
 #include <bit>
@@ -1088,3 +1088,4 @@ void IblBakeHost::RemoveOwnedTextures(VulkanContext& context_) noexcept {
 }
 
 } // namespace vr::render
+

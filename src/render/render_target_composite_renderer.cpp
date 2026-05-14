@@ -312,3 +312,4 @@ void RenderTargetCompositeRenderer::EnsurePipelineObjects(VulkanContext& context
 }
 
 } // namespace vr::render
+

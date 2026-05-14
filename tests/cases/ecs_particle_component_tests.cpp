@@ -1,4 +1,4 @@
-#include "support/test_framework.hpp"
+﻿#include "support/test_framework.hpp"
 #include "vr/ecs/component/particle_component.hpp"
 #include "vr/ecs/component/particle_emitter_component.hpp"
 #include "vr/ecs/system/particle_emitter_system.hpp"
@@ -74,7 +74,7 @@ VR_TEST_CASE(EcsParticleSystem_dim3_sort_key_and_shadow_flags, "unit;core;ecs;pa
     ParticleSystem3D::Initialize(component);
     ParticleSystem3D::ClearDirtyFlags(component, 0xFFFFFFFFU);
 
-    ParticleSystem3D::SetMaterialId(component, 9U);
+    ParticleSystem3D::SetVisualResourceId(component, 9U);
     ParticleSystem3D::SetTextureId(component, 17U);
     ParticleSystem3D::SetBatchTag(component, 3U);
     ParticleSystem3D::SetDepthBin(component, 100U);
@@ -84,8 +84,9 @@ VR_TEST_CASE(EcsParticleSystem_dim3_sort_key_and_shadow_flags, "unit;core;ecs;pa
     VR_CHECK(component.style.receive_shadow == 1U);
     VR_CHECK(component.runtime.route.cast_shadow == 1U);
     VR_CHECK(component.runtime.route.sort_key != 0U);
-    VR_CHECK(ParticleSystem3D::ExtractMaterialBucket(component.runtime.route.sort_key) == 9U);
+    VR_CHECK(ParticleSystem3D::ExtractVisualResourceBucket(component.runtime.route.sort_key) == 9U);
     VR_CHECK(ParticleSystem3D::ExtractTextureBucket(component.runtime.route.sort_key) == 17U);
 }
 
 } // namespace
+

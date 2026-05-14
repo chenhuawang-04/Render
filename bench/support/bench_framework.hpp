@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <cstdint>
 #include <exception>
@@ -201,3 +201,4 @@ int RunAllBenchmarksMain(int argc_, char** argv_);
     do {                                                                                    \
         throw ::vr::bench::SkipBenchmark(reason_);                                          \
     } while (false)
+

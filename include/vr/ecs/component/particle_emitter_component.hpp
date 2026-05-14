@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "vr/ecs/component/particle_component.hpp"
 
@@ -70,3 +70,4 @@ static_assert(PurePodParticleEmitterComponent<ParticleEmitter<Dim2>>);
 static_assert(PurePodParticleEmitterComponent<ParticleEmitter<Dim3>>);
 
 } // namespace vr::ecs
+

@@ -1,4 +1,4 @@
-#include "support/bench_framework.hpp"
+﻿#include "support/bench_framework.hpp"
 #include "vr/ecs/system/text_system.hpp"
 #include "vr/render/render_runtime_host.hpp"
 #include "vr/text/text_renderer_2d.hpp"
@@ -88,11 +88,11 @@ using TextSystem2D = vr::ecs::TextSystem<vr::ecs::Dim2>;
 
 void InitializeTextComponent(Text2D& component_,
                              std::uint32_t font_id_,
-                             std::uint32_t material_id_,
+                             std::uint32_t appearance_id_,
                              std::int16_t layer_,
                              std::string_view text_) {
     TextSystem2D::Initialize(component_);
-    TextSystem2D::SetRuntimeRoute(component_, font_id_, material_id_, 0U, 0U);
+    TextSystem2D::SetRuntimeRoute(component_, font_id_, appearance_id_, 0U, 0U);
     TextSystem2D::SetLayer(component_, layer_);
     TextSystem2D::SetColor(component_, vr::ecs::Rgba8{255U, 255U, 255U, 255U});
     TextSystem2D::SetOutlineEnabled(component_, true);
@@ -206,3 +206,4 @@ VR_BENCHMARK_CASE(Runtime_text_renderer_2d_tick_loop, "integration;gpu;sdl;runti
 }
 
 } // namespace
+

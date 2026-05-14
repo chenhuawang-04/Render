@@ -73,7 +73,7 @@ struct Text3DDrawBatch final {
     std::uint32_t glyph_count;
     std::uint32_t atlas_page_id;
     std::uint32_t font_id;
-    std::uint32_t material_id;
+    std::uint32_t visual_resource_id;
     std::uint32_t first_component_index;
     std::uint32_t depth_flags;
 };
@@ -365,7 +365,7 @@ private:
             if (last.sort_key == source_batch_.sort_key &&
                 last.atlas_page_id == source_batch_.atlas_page_id &&
                 last.font_id == source_batch_.font_id &&
-                last.material_id == source_batch_.material_id &&
+                last.visual_resource_id == source_batch_.visual_resource_id &&
                 last.depth_flags == depth_flags_ &&
                 last.glyph_begin + last.glyph_count == glyph_begin_) {
                 last.glyph_count += glyph_count_;
@@ -379,7 +379,7 @@ private:
         batch.glyph_count = glyph_count_;
         batch.atlas_page_id = source_batch_.atlas_page_id;
         batch.font_id = source_batch_.font_id;
-        batch.material_id = source_batch_.material_id;
+        batch.visual_resource_id = source_batch_.visual_resource_id;
         batch.first_component_index = source_batch_.first_component_index;
         batch.depth_flags = depth_flags_;
         scratch_.draw_batches.push_back(batch);
@@ -452,3 +452,4 @@ private:
 };
 
 } // namespace vr::ecs
+

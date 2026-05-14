@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "vr/particle/particle_renderer_2d.hpp"
 #include "vr/particle/particle_renderer_3d.hpp"
@@ -105,3 +105,4 @@ private:
 };
 
 } // namespace vr::runtime::services
+

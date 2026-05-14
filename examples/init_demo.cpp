@@ -1,4 +1,4 @@
-#include "vr/runtime/crash_tracer_support.hpp"
+﻿#include "vr/runtime/crash_tracer_support.hpp"
 #include "vr/vulkan_context.hpp"
 
 #include <iostream>
@@ -26,3 +26,4 @@ int main(int argc_, char** argv_) {
         return 1;
     }
 }
+

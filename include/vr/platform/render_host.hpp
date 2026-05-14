@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "vr/platform/window_surface.hpp"
 #include "vr/vulkan_context.hpp"
@@ -117,4 +117,5 @@ private:
 using DefaultRenderHost = RenderHost<ActiveBackendTag>;
 
 } // namespace vr::platform
+
 

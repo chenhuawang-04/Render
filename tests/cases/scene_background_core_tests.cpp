@@ -1,4 +1,4 @@
-#include "support/test_framework.hpp"
+﻿#include "support/test_framework.hpp"
 #include "vr/render/render_view.hpp"
 #include "vr/render/runtime_prepare_views.hpp"
 #include "vr/render/render_target_host.hpp"
@@ -664,3 +664,4 @@ VR_TEST_CASE(SceneRecorder3D_prepare_view_propagates_environment_ibl_binding,
     VR_CHECK(surface_prepare_view.ibl_environment_id == 17U);
     VR_CHECK(surface_prepare_view.ibl_brdf_lut_texture_id == 23U);
 }
+

@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "vr/render/frame_retire_host.hpp"
 #include "vr/vulkan_context.hpp"
@@ -78,3 +78,4 @@ private:
 };
 
 } // namespace vr::runtime
+

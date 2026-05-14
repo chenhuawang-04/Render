@@ -1,4 +1,4 @@
-#include "support/bench_framework.hpp"
+﻿#include "support/bench_framework.hpp"
 #include "vr/text/freetype_host.hpp"
 
 #include <array>
@@ -101,4 +101,5 @@ VR_BENCHMARK_CASE(FreeTypeHost_rasterize_ascii_cold_cache_refill, "core;text;fre
 }
 
 } // namespace
+
 

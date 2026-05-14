@@ -1,4 +1,4 @@
-#include "support/test_framework.hpp"
+﻿#include "support/test_framework.hpp"
 
 #include <array>
 #include <filesystem>
@@ -140,3 +140,4 @@ VR_TEST_CASE(BindlessShaderContract_generated_spirv_matches_bindless_descriptor_
 }
 
 } // namespace
+

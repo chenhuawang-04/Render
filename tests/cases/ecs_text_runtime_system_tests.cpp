@@ -1,4 +1,4 @@
-#include "support/test_framework.hpp"
+﻿#include "support/test_framework.hpp"
 #include "vr/ecs/system/text_runtime_system.hpp"
 #include "vr/ecs/system/text_system.hpp"
 #include "vr/text/freetype_host.hpp"
@@ -376,3 +376,4 @@ VR_TEST_CASE(EcsTextRuntimeSystem_dim3_candidate_visibility_hint_limits_build_sc
 }
 
 } // namespace
+

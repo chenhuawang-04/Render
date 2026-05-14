@@ -1,4 +1,4 @@
-#include "support/bench_framework.hpp"
+﻿#include "support/bench_framework.hpp"
 #include "vr/render/frame_retire_host.hpp"
 
 #include <cstdint>
@@ -81,3 +81,4 @@ VR_BENCHMARK_CASE(FrameRetireHost_collect_null_device_fast_reject, "core;render;
 }
 
 } // namespace
+

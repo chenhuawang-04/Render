@@ -1,4 +1,5 @@
-#include "support/test_framework.hpp"
+﻿#include "support/test_framework.hpp"
+#include "vr/ecs/system/appearance_system.hpp"
 #include "vr/ecs/system/geometry_path_system.hpp"
 #include "vr/ecs/system/geometry_system.hpp"
 #include "vr/geometry/geometry_renderer_2d.hpp"
@@ -18,6 +19,8 @@
 namespace {
 
 using Runtime = vr::render::RenderRuntimeHost<vr::platform::ActiveBackendTag, 2U>;
+using Appearance2D = vr::ecs::Appearance<vr::ecs::Dim2>;
+using AppearanceSystem2D = vr::ecs::AppearanceSystem<vr::ecs::Dim2>;
 using Geometry2D = vr::ecs::Geometry<vr::ecs::Dim2>;
 using GeometrySystem2D = vr::ecs::GeometrySystem<vr::ecs::Dim2>;
 
@@ -64,18 +67,31 @@ using GeometrySystem2D = vr::ecs::GeometrySystem<vr::ecs::Dim2>;
     return false;
 }
 
+void ApplyGeometryAppearance(Geometry2D& component_,
+                             vr::ecs::Rgba8 fill_color_,
+                             vr::ecs::Rgba8 stroke_color_,
+                             float opacity_ = 1.0F,
+                             std::int16_t layer_ = 0) {
+    Appearance2D appearance{};
+    AppearanceSystem2D::Initialize(appearance);
+    AppearanceSystem2D::SetFillColor(appearance, fill_color_);
+    AppearanceSystem2D::SetStrokeColor(appearance, stroke_color_);
+    AppearanceSystem2D::SetOpacity(appearance, opacity_);
+    AppearanceSystem2D::SetLayer(appearance, layer_);
+    (void)GeometrySystem2D::ApplyAppearanceRuntimeState(component_, appearance.style);
+}
+
 void InitializePathComponent(Geometry2D& component_,
                              std::uint32_t geometry_id_,
-                             std::uint32_t material_id_,
+                             std::uint32_t appearance_id_,
                              vr::ecs::Rgba8 stroke_color_,
                              float stroke_width_px_,
                              std::array<vr::ecs::Float2, 4U> points_) {
     GeometrySystem2D::Initialize(component_);
-    GeometrySystem2D::SetRuntimeRoute(component_, geometry_id_, material_id_, 0U);
+    GeometrySystem2D::SetRuntimeRoute(component_, geometry_id_, appearance_id_, 0U);
     component_.style.topology = vr::ecs::Geometry2DTopology::stroke;
-    component_.style.stroke_color = stroke_color_;
-    component_.style.fill_color = stroke_color_;
     component_.style.stroke_width_px = stroke_width_px_;
+    ApplyGeometryAppearance(component_, stroke_color_, stroke_color_);
 
     (void)vr::ecs::GeometryPathSystem::AppendMoveTo(component_, points_[0U].x, points_[0U].y);
     (void)vr::ecs::GeometryPathSystem::AppendLineTo(component_, points_[1U].x, points_[1U].y);
@@ -168,13 +184,13 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_2d_end_to_end_smoke, "integrat
              ++tick_index) {
             const std::uint8_t pulse =
                 static_cast<std::uint8_t>(110U + ((tick_index * 21U) % 120U));
-            geometry_components[1U].style.stroke_color = vr::ecs::Rgba8{
+            const vr::ecs::Rgba8 animated_stroke = vr::ecs::Rgba8{
                 static_cast<std::uint8_t>(120U + pulse / 3U),
                 static_cast<std::uint8_t>(180U + pulse / 6U),
                 static_cast<std::uint8_t>(220U + pulse / 8U),
                 220U
             };
-            geometry_components[1U].style.fill_color = geometry_components[1U].style.stroke_color;
+            ApplyGeometryAppearance(geometry_components[1U], animated_stroke, animated_stroke);
 
             const Runtime::RuntimeTickResult tick_result = runtime.Tick(geometry_renderer);
             if (tick_result.render.code == vr::render::TickCode::Submitted ||
@@ -357,3 +373,4 @@ VR_TEST_CASE(RuntimeIntegration_scene_recorder_2d_geometry_scene_packet_smoke,
 }
 
 } // namespace
+

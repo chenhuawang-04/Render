@@ -1,4 +1,4 @@
-#include "Center/Memory/Vulkan/Types.hpp"
+﻿#include "Center/Memory/Vulkan/Types.hpp"
 #include "support/bench_framework.hpp"
 
 #include <cstddef>
@@ -65,3 +65,4 @@ VR_BENCHMARK_CASE(VulkanTypes_should_dedicate_allocation_policy_eval, "core;memo
 }
 
 } // namespace
+

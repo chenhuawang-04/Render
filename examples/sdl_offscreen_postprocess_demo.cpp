@@ -1,4 +1,5 @@
-#include "vr/ecs/system/geometry_path_system.hpp"
+﻿#include "vr/ecs/system/geometry_path_system.hpp"
+#include "vr/ecs/system/appearance_system.hpp"
 #include "vr/ecs/system/geometry_system.hpp"
 #include "vr/ecs/system/surface_system.hpp"
 #include "vr/ecs/system/text_system.hpp"
@@ -30,11 +31,13 @@
 namespace {
 
 using Runtime = vr::render::RenderRuntimeHost<vr::platform::ActiveBackendTag, 2U>;
+using Appearance2D = vr::ecs::Appearance<vr::ecs::Dim2>;
 using Geometry2D = vr::ecs::Geometry<vr::ecs::Dim2>;
 using Surface2D = vr::ecs::Surface<vr::ecs::Dim2>;
 using Text2D = vr::ecs::Text<vr::ecs::Dim2>;
 using Transform2D = vr::ecs::Transform<vr::ecs::Dim2>;
 
+using AppearanceSystem2D = vr::ecs::AppearanceSystem<vr::ecs::Dim2>;
 using GeometrySystem2D = vr::ecs::GeometrySystem<vr::ecs::Dim2>;
 using GeometryPathSystem = vr::ecs::GeometryPathSystem;
 using SurfaceSystem2D = vr::ecs::SurfaceSystem<vr::ecs::Dim2>;
@@ -111,9 +114,23 @@ void FillGradientTexture(std::uint32_t* pixels_,
     return {};
 }
 
+void ApplyGeometry2DAppearance(Geometry2D& component_,
+                               vr::ecs::Rgba8 fill_color_,
+                               vr::ecs::Rgba8 stroke_color_,
+                               float opacity_,
+                               std::int16_t layer_) {
+    Appearance2D appearance{};
+    AppearanceSystem2D::Initialize(appearance);
+    AppearanceSystem2D::SetFillColor(appearance, fill_color_);
+    AppearanceSystem2D::SetStrokeColor(appearance, stroke_color_);
+    AppearanceSystem2D::SetOpacity(appearance, opacity_);
+    AppearanceSystem2D::SetLayer(appearance, layer_);
+    (void)GeometrySystem2D::ApplyAppearanceRuntimeState(component_, appearance.style);
+}
+
 void InitializeRectPath(Geometry2D& component_,
                         std::uint32_t geometry_id_,
-                        std::uint32_t material_id_,
+                        std::uint32_t appearance_id_,
                         std::int16_t layer_,
                         vr::ecs::Rgba8 fill_color_,
                         vr::ecs::Rgba8 stroke_color_,
@@ -123,12 +140,10 @@ void InitializeRectPath(Geometry2D& component_,
                         float max_x_,
                         float max_y_) {
     GeometryPathSystem::Initialize(component_);
-    GeometrySystem2D::SetRuntimeRoute(component_, geometry_id_, material_id_, 0U);
-    GeometrySystem2D::SetLayer(component_, layer_);
+    GeometrySystem2D::SetRuntimeRoute(component_, geometry_id_, appearance_id_, 0U);
     component_.style.topology = vr::ecs::Geometry2DTopology::fill_and_stroke;
-    component_.style.fill_color = fill_color_;
-    component_.style.stroke_color = stroke_color_;
     component_.style.stroke_width_px = stroke_width_;
+    ApplyGeometry2DAppearance(component_, fill_color_, stroke_color_, 1.0F, layer_);
     (void)GeometryPathSystem::AppendMoveTo(component_, min_x_, min_y_);
     (void)GeometryPathSystem::AppendLineTo(component_, max_x_, min_y_);
     (void)GeometryPathSystem::AppendLineTo(component_, max_x_, max_y_);
@@ -138,16 +153,19 @@ void InitializeRectPath(Geometry2D& component_,
 
 void InitializeCurvePath(Geometry2D& component_,
                          std::uint32_t geometry_id_,
-                         std::uint32_t material_id_,
+                         std::uint32_t appearance_id_,
                          std::int16_t layer_) {
     GeometryPathSystem::Initialize(component_);
-    GeometrySystem2D::SetRuntimeRoute(component_, geometry_id_, material_id_, 0U);
-    GeometrySystem2D::SetLayer(component_, layer_);
+    GeometrySystem2D::SetRuntimeRoute(component_, geometry_id_, appearance_id_, 0U);
     component_.style.topology = vr::ecs::Geometry2DTopology::stroke;
-    component_.style.stroke_color = vr::ecs::Rgba8{208U, 230U, 255U, 255U};
     component_.style.stroke_width_px = 5.0F;
     component_.style.line_cap = vr::ecs::Geometry2DLineCap::round;
     component_.style.line_join = vr::ecs::Geometry2DLineJoin::round;
+    ApplyGeometry2DAppearance(component_,
+                              vr::ecs::Rgba8{208U, 230U, 255U, 255U},
+                              vr::ecs::Rgba8{208U, 230U, 255U, 255U},
+                              1.0F,
+                              layer_);
     (void)GeometryPathSystem::AppendMoveTo(component_, 90.0F, 620.0F);
     (void)GeometryPathSystem::AppendCubicTo(component_,
                                             240.0F,
@@ -164,26 +182,29 @@ void InitializeSurface2DComponent(Surface2D& component_,
                                   float height_,
                                   std::int16_t layer_,
                                   vr::ecs::Rgba8 tint_color_,
-                                  vr::ecs::Surface2DBlendMode blend_mode_) {
+                                  vr::ecs::AppearanceBlendMode blend_mode_) {
+    Appearance2D appearance{};
+    AppearanceSystem2D::Initialize(appearance);
+    AppearanceSystem2D::SetLayer(appearance, layer_);
+    AppearanceSystem2D::SetFillColor(appearance, tint_color_);
+    AppearanceSystem2D::SetBlendMode(appearance, blend_mode_);
+    AppearanceSystem2D::SetOpacity(appearance, 1.0F);
     SurfaceSystem2D::Initialize(component_);
-    SurfaceSystem2D::SetImageId(component_, image_id_, 0U);
+    SurfaceSystem2D::SetSource(component_, vr::ecs::SurfaceImageSourceDesc{.surface_id = image_id_, .atlas_page_id = 0U});
     SurfaceSystem2D::SetSize(component_, vr::ecs::Float2{.x = width_, .y = height_});
     SurfaceSystem2D::SetPivot(component_, vr::ecs::Float2{.x = 0.5F, .y = 0.5F});
-    SurfaceSystem2D::SetLayer(component_, layer_);
-    SurfaceSystem2D::SetTintColor(component_, tint_color_);
-    SurfaceSystem2D::SetOpacity(component_, 1.0F);
-    SurfaceSystem2D::SetBlendMode(component_, blend_mode_);
+    (void)SurfaceSystem2D::ApplyAppearanceRuntimeState(component_, appearance.style);
 }
 
 void InitializeTextComponent(Text2D& component_,
                              std::uint32_t font_id_,
-                             std::uint32_t material_id_,
+                             std::uint32_t appearance_id_,
                              std::int16_t layer_,
                              float pixel_size_,
                              vr::ecs::Rgba8 color_,
                              std::string_view text_) {
     TextSystem2D::Initialize(component_);
-    TextSystem2D::SetRuntimeRoute(component_, font_id_, material_id_, 0U, 0U);
+    TextSystem2D::SetRuntimeRoute(component_, font_id_, appearance_id_, 0U, 0U);
     TextSystem2D::SetLayer(component_, layer_);
     TextSystem2D::SetPixelSize(component_, pixel_size_);
     TextSystem2D::SetColor(component_, color_);
@@ -337,14 +358,14 @@ int main(int argc_, char** argv_) {
                                      210.0F,
                                      0,
                                      vr::ecs::Rgba8{255U, 255U, 255U, 255U},
-                                     vr::ecs::Surface2DBlendMode::alpha);
+                                     vr::ecs::AppearanceBlendMode::alpha);
         InitializeSurface2DComponent(surface_components[1U],
                                      k_texture_id_gradient,
                                      360.0F,
                                      200.0F,
                                      1,
                                      vr::ecs::Rgba8{255U, 255U, 255U, 220U},
-                                     vr::ecs::Surface2DBlendMode::alpha);
+                                     vr::ecs::AppearanceBlendMode::alpha);
         TransformSystem2D::SetLocalPosition(surface_transforms[0U], 360.0F, 290.0F);
         TransformSystem2D::SetLocalPosition(surface_transforms[1U], 915.0F, 365.0F);
         TransformSystem2D::UpdateHierarchy(surface_transforms.data(),
@@ -480,3 +501,4 @@ int main(int argc_, char** argv_) {
         return 1;
     }
 }
+

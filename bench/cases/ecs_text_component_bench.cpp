@@ -1,4 +1,4 @@
-#include "support/bench_framework.hpp"
+﻿#include "support/bench_framework.hpp"
 #include "Center/Memory/Container/Vector/McVector.hpp"
 #include "vr/ecs/system/text_batch_system.hpp"
 #include "vr/ecs/system/text_system.hpp"
@@ -169,3 +169,4 @@ VR_BENCHMARK_CASE(EcsTextBatchSystem_dim2_build_and_sort_4k, "core;ecs;text;batc
 }
 
 } // namespace
+

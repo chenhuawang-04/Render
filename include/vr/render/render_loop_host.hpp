@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "vr/render/frame_command_host.hpp"
 #include "vr/render/frame_retire_host.hpp"
@@ -535,3 +535,4 @@ private:
 };
 
 } // namespace vr::render
+

@@ -1,4 +1,4 @@
-#include "vr/shadow/shadow_renderer_2d.hpp"
+﻿#include "vr/shadow/shadow_renderer_2d.hpp"
 
 #include "vr/shadow/generated/shadow_depth_2d_vert_spv.hpp"
 #include "vr/vulkan_context.hpp"
@@ -685,3 +685,4 @@ void ShadowRenderer2D::RecordOneAtlas(const render::FrameRecordContext& record_c
 }
 
 } // namespace vr::shadow
+

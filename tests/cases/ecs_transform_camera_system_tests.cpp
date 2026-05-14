@@ -183,3 +183,4 @@ VR_TEST_CASE(EcsCameraSystem_update_aligned_batch, "unit;core;ecs;camera") {
 }
 
 } // namespace
+

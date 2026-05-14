@@ -1,4 +1,4 @@
-#include "vr/render/ibl_host.hpp"
+﻿#include "vr/render/ibl_host.hpp"
 
 #include "vr/render/bindless_resource_system.hpp"
 #include "vr/resource/gpu_memory_host.hpp"
@@ -706,3 +706,4 @@ void IblHost::UpdateDescriptorSetsForFrame(VulkanContext& context_,
 }
 
 } // namespace vr::render
+

@@ -1,4 +1,4 @@
-#include "vr/resource/gpu_memory_host.hpp"
+﻿#include "vr/resource/gpu_memory_host.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -362,3 +362,4 @@ bool GpuMemoryHost::NormalizeMappedRange(
 }
 
 } // namespace vr::resource
+

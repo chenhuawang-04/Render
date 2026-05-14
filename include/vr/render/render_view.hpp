@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "vr/ecs/component/camera_component.hpp"
 #include "vr/ecs/component/transform_component.hpp"
@@ -267,3 +267,4 @@ static_assert(std::is_standard_layout_v<RenderView2D>);
 static_assert(std::is_standard_layout_v<RenderView3D>);
 
 } // namespace vr::render
+

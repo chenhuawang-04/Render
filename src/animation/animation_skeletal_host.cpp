@@ -1,4 +1,4 @@
-#include "vr/animation/animation_skeletal_host.hpp"
+﻿#include "vr/animation/animation_skeletal_host.hpp"
 
 #include <algorithm>
 #include <cstddef>
@@ -496,3 +496,4 @@ void SkeletalAnimationHost::UpdateMovedRecordSlot(std::uint32_t record_index_) n
 }
 
 } // namespace vr::animation
+

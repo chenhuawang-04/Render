@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "vr/render/render_target_composite_renderer.hpp"
 #include "vr/render/render_target_format_utils.hpp"
@@ -335,3 +335,4 @@ private:
 };
 
 } // namespace vr::render
+

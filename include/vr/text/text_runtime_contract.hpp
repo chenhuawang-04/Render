@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "vr/render/runtime_prepare_views.hpp"
 #include "vr/vulkan_context.hpp"
@@ -97,3 +97,4 @@ inline void ValidateTextRuntimePrepareView(const vr::render::TextRenderer3DPrepa
 }
 
 } // namespace vr::text
+

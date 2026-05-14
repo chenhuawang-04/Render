@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "Center/Memory/Container/Vector/McVector.hpp"
 #include "vr/ecs/component/transform_component.hpp"
@@ -73,7 +73,7 @@ struct Surface2DDrawBatch final {
     std::uint32_t instance_begin;
     std::uint32_t instance_count;
     std::uint32_t surface_id;
-    std::uint32_t material_id;
+    std::uint32_t visual_resource_id;
     std::uint32_t atlas_page_id;
     std::uint32_t first_component_index;
     std::uint32_t params;
@@ -171,27 +171,17 @@ struct Surface3DGpuInstance final {
     float uv_bias_u;
     float uv_bias_v;
 
-    float opacity;
-    std::uint32_t tint_rgba8;
     std::uint32_t params;
-    std::uint32_t texture_slot;
-
-    std::uint32_t sampler_slot;
-    std::uint32_t material_id;
+    std::uint32_t visual_resource_id;
+    std::uint32_t appearance_record_index;
     std::uint32_t component_index;
-    std::uint32_t user_data;
-
-    std::uint32_t uv_set;
-    std::uint32_t texture_flags;
 };
 
 struct Surface3DDrawBatch final {
     std::uint64_t sort_key;
     std::uint32_t instance_begin;
     std::uint32_t instance_count;
-    std::uint32_t texture_id;
-    std::uint32_t sampler_id;
-    std::uint32_t material_id;
+    std::uint32_t visual_resource_id;
     std::uint32_t first_component_index;
     std::uint32_t params;
 };
@@ -497,8 +487,10 @@ public:
             instance.uv_v0 = component.style.uv_v0;
             instance.uv_u1 = component.style.uv_u1;
             instance.uv_v1 = component.style.uv_v1;
-            instance.opacity = component.style.opacity;
-            instance.tint_rgba8 = PackRgba8(component.style.tint_color);
+            const AppearanceRuntimeBridge2D appearance_bridge =
+                ReadAppearanceRuntimeBridge2D(component.runtime);
+            instance.opacity = appearance_bridge.opacity;
+            instance.tint_rgba8 = PackRgba8(appearance_bridge.fill_color);
             instance.params = PackParams(component);
             instance.image_slot = component.runtime.route.surface_id;
             instance.sampler_slot = 0U;
@@ -622,9 +614,9 @@ private:
     }
 
     [[nodiscard]] static std::uint32_t PackParams(const SurfaceType& component_) noexcept {
-        RuntimeBlendPreset blend_preset = ResolveRuntimeBlendPreset(
-            component_.style.blend_mode,
-            component_.style.premultiplied_alpha != 0U);
+        const AppearanceRuntimeBridge2D appearance_bridge =
+            ReadAppearanceRuntimeBridge2D(component_.runtime);
+        RuntimeBlendPreset blend_preset = ResolveRuntimeBlendPreset(appearance_bridge);
         if (component_.runtime.route.appearance_handle.index != invalid_appearance_handle.index &&
             component_.runtime.route.appearance_handle.generation != 0U) {
             blend_preset = ResolveRuntimeBlendPreset(component_.runtime.route.appearance_pipeline_bucket);
@@ -762,11 +754,10 @@ private:
         HashCombine(hash_, component_.runtime.route.sort_key);
         HashCombine(hash_, static_cast<std::uint64_t>(component_.runtime.route.surface_id));
         HashCombine(hash_,
-                    static_cast<std::uint64_t>(ResolveEffectiveMaterialId(component_.runtime.route)));
+                    static_cast<std::uint64_t>(ResolveEffectiveVisualResourceId(component_.runtime.route)));
         HashCombine(hash_, static_cast<std::uint64_t>(component_.runtime.route.user_data));
         HashCombine(hash_, static_cast<std::uint64_t>(component_.runtime.source.source_kind));
-        HashCombine(hash_, static_cast<std::uint64_t>(component_.runtime.source.image_id));
-        HashCombine(hash_, static_cast<std::uint64_t>(component_.runtime.source.sprite_id));
+        HashCombine(hash_, static_cast<std::uint64_t>(component_.runtime.source.surface_id));
         HashCombine(hash_, static_cast<std::uint64_t>(component_.runtime.source.atlas_page_id));
         HashCombine(hash_, static_cast<std::uint64_t>(component_.runtime.source_revision));
         HashCombine(hash_, static_cast<std::uint64_t>(FloatBits(component_.runtime.size.x)));
@@ -777,9 +768,11 @@ private:
         HashCombine(hash_, static_cast<std::uint64_t>(FloatBits(component_.style.uv_v0)));
         HashCombine(hash_, static_cast<std::uint64_t>(FloatBits(component_.style.uv_u1)));
         HashCombine(hash_, static_cast<std::uint64_t>(FloatBits(component_.style.uv_v1)));
-        HashCombine(hash_, static_cast<std::uint64_t>(PackRgba8(component_.style.tint_color)));
-        HashCombine(hash_, static_cast<std::uint64_t>(FloatBits(component_.style.opacity)));
-        HashCombine(hash_, static_cast<std::uint64_t>(component_.style.layer));
+        const AppearanceRuntimeBridge2D appearance_bridge =
+            ReadAppearanceRuntimeBridge2D(component_.runtime);
+        HashCombine(hash_, static_cast<std::uint64_t>(PackRgba8(appearance_bridge.fill_color)));
+        HashCombine(hash_, static_cast<std::uint64_t>(FloatBits(appearance_bridge.opacity)));
+        HashCombine(hash_, static_cast<std::uint64_t>(appearance_bridge.layer));
         HashCombine(hash_, static_cast<std::uint64_t>(component_.style.flip_x));
         HashCombine(hash_, static_cast<std::uint64_t>(component_.style.flip_y));
         HashCombine(hash_, static_cast<std::uint64_t>(PackParams(component_)));
@@ -1035,11 +1028,13 @@ private:
                                    std::uint32_t instance_index_,
                                    ScratchType& scratch_) {
         const std::uint32_t params = PackParams(component_);
+        const std::uint32_t effective_visual_resource_id =
+            ResolveEffectiveVisualResourceId(component_.runtime.route);
         if (!scratch_.draw_batches.empty()) {
             Surface2DDrawBatch& last = scratch_.draw_batches.back();
             if (last.sort_key == sort_key_ &&
                 last.surface_id == component_.runtime.route.surface_id &&
-                last.material_id == ResolveEffectiveMaterialId(component_.runtime.route) &&
+                last.visual_resource_id == effective_visual_resource_id &&
                 last.atlas_page_id == component_.runtime.source.atlas_page_id &&
                 last.params == params &&
                 last.instance_begin + last.instance_count == instance_index_) {
@@ -1053,7 +1048,7 @@ private:
         batch.instance_begin = instance_index_;
         batch.instance_count = 1U;
         batch.surface_id = component_.runtime.route.surface_id;
-        batch.material_id = ResolveEffectiveMaterialId(component_.runtime.route);
+        batch.visual_resource_id = effective_visual_resource_id;
         batch.atlas_page_id = component_.runtime.source.atlas_page_id;
         batch.first_component_index = component_index_;
         batch.params = params;
@@ -1275,23 +1270,16 @@ public:
             const Matrix4x4& world_matrix = (transforms_ != nullptr && item.component_index < component_count_)
                 ? transforms_[item.component_index].runtime.world_matrix
                 : identity;
-
             Surface3DGpuInstance instance{};
             WriteWorldToInstance(instance, world_matrix);
             instance.uv_scale_u = component.style.uv_scale_u;
             instance.uv_scale_v = component.style.uv_scale_v;
             instance.uv_bias_u = component.style.uv_bias_u;
             instance.uv_bias_v = component.style.uv_bias_v;
-            instance.opacity = component.style.opacity;
-            instance.tint_rgba8 = PackRgba8(component.style.tint_color);
             instance.params = PackParams(component);
-            instance.texture_slot = component.runtime.texture.texture_id;
-            instance.sampler_slot = component.runtime.texture.sampler_id;
-            instance.material_id = ResolveEffectiveMaterialId(component.runtime.route);
+            instance.visual_resource_id = ResolveEffectiveVisualResourceId(component.runtime.route);
+            instance.appearance_record_index = invalid_appearance_handle.index;
             instance.component_index = item.component_index;
-            instance.user_data = component.runtime.route.user_data;
-            instance.uv_set = component.runtime.texture.uv_set;
-            instance.texture_flags = component.runtime.texture.flags;
             scratch_.instances[i] = instance;
 
             if (item.component_index < scratch_.cache.component_to_instance_index.size()) {
@@ -1414,17 +1402,24 @@ private:
     }
 
     [[nodiscard]] static std::uint32_t PackParams(const SurfaceType& component_) noexcept {
-        RuntimeBlendPreset blend_preset = RuntimeBlendPreset::opaque;
+        const AppearanceRuntimeBridge3D appearance_bridge =
+            ReadAppearanceRuntimeBridge3D(component_.runtime);
+        RuntimeBlendPreset blend_preset = ResolveRuntimeBlendPreset(appearance_bridge);
         if (component_.runtime.route.appearance_handle.index != invalid_appearance_handle.index &&
             component_.runtime.route.appearance_handle.generation != 0U) {
             blend_preset = ResolveRuntimeBlendPreset(component_.runtime.route.appearance_pipeline_bucket);
         }
         const bool depth_write_enabled =
-            (component_.style.depth_write != 0U) && !IsTransparentBlendPreset(blend_preset);
+            IsAppearanceRuntimeBridge3DDepthWriteEnabled(appearance_bridge) &&
+            !IsTransparentBlendPreset(blend_preset);
         std::uint32_t params = 0U;
-        params |= (component_.style.depth_test != 0U) ? 0x1U : 0U;
+        params |= IsAppearanceRuntimeBridge3DDepthTestEnabled(appearance_bridge)
+            ? 0x1U
+            : 0U;
         params |= depth_write_enabled ? 0x2U : 0U;
-        params |= (component_.style.double_sided != 0U) ? 0x4U : 0U;
+        params |= IsAppearanceRuntimeBridge3DDoubleSided(appearance_bridge)
+            ? 0x4U
+            : 0U;
         params |= (static_cast<std::uint32_t>(component_.style.filter_mode) & 0x3U) << 3U;
         params |= (static_cast<std::uint32_t>(component_.style.address_u) & 0x3U) << 5U;
         params |= (static_cast<std::uint32_t>(component_.style.address_v) & 0x3U) << 7U;
@@ -1531,30 +1526,38 @@ private:
 
     static void HashSurfaceComponent(std::uint64_t& hash_,
                                      const SurfaceType& component_) noexcept {
+        const AppearanceRuntimeBridge3D appearance_bridge =
+            ReadAppearanceRuntimeBridge3D(component_.runtime);
+        const bool has_linked_appearance =
+            HasLinkedAppearanceHandle(component_.runtime.route);
         HashCombine(hash_, static_cast<std::uint64_t>(component_.runtime.route.visible));
         if (component_.runtime.route.visible == 0U) {
             return;
         }
 
         HashCombine(hash_, component_.runtime.route.sort_key);
-        HashCombine(hash_, static_cast<std::uint64_t>(component_.runtime.route.surface_id));
         HashCombine(hash_,
-                    static_cast<std::uint64_t>(ResolveEffectiveMaterialId(component_.runtime.route)));
+                    static_cast<std::uint64_t>(ResolveEffectiveVisualResourceId(component_.runtime.route)));
         HashCombine(hash_, static_cast<std::uint64_t>(component_.runtime.route.user_data));
-        HashCombine(hash_, static_cast<std::uint64_t>(component_.runtime.texture.texture_id));
-        HashCombine(hash_, static_cast<std::uint64_t>(component_.runtime.texture.sampler_id));
-        HashCombine(hash_, static_cast<std::uint64_t>(component_.runtime.texture.uv_set));
-        HashCombine(hash_, static_cast<std::uint64_t>(component_.runtime.texture.flags));
-        HashCombine(hash_, static_cast<std::uint64_t>(component_.runtime.texture_revision));
-        HashCombine(hash_, static_cast<std::uint64_t>(PackRgba8(component_.style.tint_color)));
+        if (!has_linked_appearance) {
+            HashCombine(hash_, static_cast<std::uint64_t>(component_.runtime.route.surface_id));
+            HashCombine(hash_, static_cast<std::uint64_t>(component_.runtime.source.surface_id));
+            HashCombine(hash_, static_cast<std::uint64_t>(component_.runtime.source.sampler_id));
+            HashCombine(hash_, static_cast<std::uint64_t>(component_.runtime.source.uv_set));
+            HashCombine(hash_, static_cast<std::uint64_t>(component_.runtime.source.flags));
+            HashCombine(hash_, static_cast<std::uint64_t>(component_.runtime.source_revision));
+        }
+        HashCombine(hash_, static_cast<std::uint64_t>(PackRgba8(appearance_bridge.base_color)));
         HashCombine(hash_, static_cast<std::uint64_t>(FloatBits(component_.style.uv_scale_u)));
         HashCombine(hash_, static_cast<std::uint64_t>(FloatBits(component_.style.uv_scale_v)));
         HashCombine(hash_, static_cast<std::uint64_t>(FloatBits(component_.style.uv_bias_u)));
         HashCombine(hash_, static_cast<std::uint64_t>(FloatBits(component_.style.uv_bias_v)));
-        HashCombine(hash_, static_cast<std::uint64_t>(FloatBits(component_.style.opacity)));
-        HashCombine(hash_, static_cast<std::uint64_t>(component_.style.depth_test));
-        HashCombine(hash_, static_cast<std::uint64_t>(component_.style.depth_write));
-        HashCombine(hash_, static_cast<std::uint64_t>(component_.style.double_sided));
+        HashCombine(hash_, static_cast<std::uint64_t>(FloatBits(appearance_bridge.opacity)));
+        HashCombine(hash_, static_cast<std::uint64_t>(FloatBits(appearance_bridge.metallic)));
+        HashCombine(hash_, static_cast<std::uint64_t>(FloatBits(appearance_bridge.roughness)));
+        HashCombine(hash_, static_cast<std::uint64_t>(FloatBits(appearance_bridge.normal_scale)));
+        HashCombine(hash_, static_cast<std::uint64_t>(FloatBits(appearance_bridge.occlusion_strength)));
+        HashCombine(hash_, static_cast<std::uint64_t>(appearance_bridge.state_flags));
         HashCombine(hash_, static_cast<std::uint64_t>(component_.style.filter_mode));
         HashCombine(hash_, static_cast<std::uint64_t>(component_.style.address_u));
         HashCombine(hash_, static_cast<std::uint64_t>(component_.style.address_v));
@@ -1821,12 +1824,12 @@ private:
                                    std::uint32_t instance_index_,
                                    ScratchType& scratch_) {
         const std::uint32_t params = PackParams(component_);
+        const std::uint32_t effective_visual_resource_id =
+            ResolveEffectiveVisualResourceId(component_.runtime.route);
         if (!scratch_.draw_batches.empty()) {
             Surface3DDrawBatch& last = scratch_.draw_batches.back();
             if (last.sort_key == sort_key_ &&
-                last.texture_id == component_.runtime.texture.texture_id &&
-                last.sampler_id == component_.runtime.texture.sampler_id &&
-                last.material_id == ResolveEffectiveMaterialId(component_.runtime.route) &&
+                last.visual_resource_id == effective_visual_resource_id &&
                 last.params == params &&
                 last.instance_begin + last.instance_count == instance_index_) {
                 ++last.instance_count;
@@ -1838,9 +1841,7 @@ private:
         batch.sort_key = sort_key_;
         batch.instance_begin = instance_index_;
         batch.instance_count = 1U;
-        batch.texture_id = component_.runtime.texture.texture_id;
-        batch.sampler_id = component_.runtime.texture.sampler_id;
-        batch.material_id = ResolveEffectiveMaterialId(component_.runtime.route);
+        batch.visual_resource_id = effective_visual_resource_id;
         batch.first_component_index = component_index_;
         batch.params = params;
         scratch_.draw_batches.push_back(batch);
@@ -1848,3 +1849,4 @@ private:
 };
 
 } // namespace vr::ecs
+

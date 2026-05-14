@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "vr/render/render_loop_host.hpp"
 #include "vr/runtime/runtime_diagnostics.hpp"
@@ -53,3 +53,4 @@ struct RuntimeTickResult final {
 }
 
 } // namespace vr::runtime
+

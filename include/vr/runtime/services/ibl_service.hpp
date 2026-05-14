@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "vr/render/ibl_host.hpp"
 #include "vr/runtime/runtime_service.hpp"
@@ -28,3 +28,4 @@ public:
 };
 
 } // namespace vr::runtime::services
+

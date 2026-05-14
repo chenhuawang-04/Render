@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "Center/Memory/Container/Vector/McVector.hpp"
 #include "vr/ecs/system/text_system.hpp"
@@ -415,3 +415,4 @@ private:
 };
 
 } // namespace vr::ecs
+

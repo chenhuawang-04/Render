@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "Center/Memory/Container/Vector/McVector.hpp"
 #include "vr/render/retire_bus.hpp"
@@ -144,3 +144,4 @@ private:
 };
 
 } // namespace vr::text
+

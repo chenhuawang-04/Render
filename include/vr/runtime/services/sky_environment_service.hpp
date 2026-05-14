@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "vr/render/environment/sky_environment_gpu_host.hpp"
 #include "vr/runtime/runtime_service.hpp"
@@ -44,3 +44,4 @@ public:
 };
 
 } // namespace vr::runtime::services
+

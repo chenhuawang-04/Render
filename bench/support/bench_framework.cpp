@@ -1,4 +1,4 @@
-#include "support/bench_framework.hpp"
+﻿#include "support/bench_framework.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -1623,3 +1623,4 @@ int RunAllBenchmarksMain(int argc_, char** argv_) {
 }
 
 } // namespace vr::bench
+

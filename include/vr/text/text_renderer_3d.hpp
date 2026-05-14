@@ -278,3 +278,4 @@ private:
 };
 
 } // namespace vr::text
+

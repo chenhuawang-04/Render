@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "vr/render/bindless_types.hpp"
 #include "vr/resource/image_host.hpp"
@@ -143,3 +143,4 @@ private:
 };
 
 } // namespace vr::render
+

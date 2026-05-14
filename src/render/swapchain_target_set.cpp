@@ -1,4 +1,4 @@
-#include "vr/render/swapchain_target_set.hpp"
+﻿#include "vr/render/swapchain_target_set.hpp"
 
 namespace vr::render {
 
@@ -39,3 +39,4 @@ bool SwapchainTargetSet::Empty() const noexcept {
 }
 
 } // namespace vr::render
+

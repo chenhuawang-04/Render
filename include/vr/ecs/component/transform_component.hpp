@@ -94,3 +94,4 @@ static_assert(std::is_standard_layout_v<Transform<Dim3>> &&
               std::is_trivial_v<Transform<Dim3>>);
 
 } // namespace vr::ecs
+

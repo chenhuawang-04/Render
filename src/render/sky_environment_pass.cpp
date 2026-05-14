@@ -1,4 +1,4 @@
-#include "vr/render/environment/sky_environment_pass.hpp"
+﻿#include "vr/render/environment/sky_environment_pass.hpp"
 
 #include "vr/asset/texture_host.hpp"
 #include "vr/render/bindless_resource_system.hpp"
@@ -1116,3 +1116,4 @@ SkyEnvironmentPass::AtmospherePushBlock SkyEnvironmentPass::BuildAtmospherePushB
 }
 
 } // namespace vr::render
+

@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "vr/render/render_target_host.hpp"
 #include "vr/render/swapchain_host.hpp"
@@ -86,3 +86,4 @@ private:
 };
 
 } // namespace vr::render
+

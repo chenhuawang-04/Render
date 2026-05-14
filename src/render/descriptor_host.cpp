@@ -1,4 +1,4 @@
-#include "vr/render/descriptor_host.hpp"
+﻿#include "vr/render/descriptor_host.hpp"
 
 #include <algorithm>
 #include <array>
@@ -1650,3 +1650,4 @@ void DescriptorHost::ValidationRequireSetAlive(VkDescriptorSet set_) {
 #endif
 
 } // namespace vr::render
+

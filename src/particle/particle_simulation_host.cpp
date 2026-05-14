@@ -1,4 +1,4 @@
-#include "vr/particle/particle_simulation_host.hpp"
+﻿#include "vr/particle/particle_simulation_host.hpp"
 
 #include "vr/asset/texture_host.hpp"
 #include "vr/ecs/system/transparency_render_policy.hpp"
@@ -192,7 +192,7 @@ void BuildGpuStateRecords(const ParticleT* particles_,
     };
 
     std::uint64_t current_sort_key = 0U;
-    std::uint32_t current_material_id = 0U;
+    std::uint32_t current_visual_resource_id = 0U;
     std::uint32_t current_texture_id = 0U;
     std::uint32_t current_batch_tag = 0U;
     std::uint32_t current_pipeline_state = 0U;
@@ -248,7 +248,7 @@ void BuildGpuStateRecords(const ParticleT* particles_,
             record.start_color_rgba8 = emitter_state.particles.start_color_rgba8[particle_index];
             record.end_color_rgba8 = emitter_state.particles.end_color_rgba8[particle_index];
             record.texture_id = component.runtime.route.texture_id;
-            record.material_id = ecs::ResolveEffectiveMaterialId(component.runtime.route);
+            record.sampler_slot = 0U;
             record.component_index = component_index;
             record.user_data = component.runtime.route.user_data;
             record.packed_flags = k_particle_gpu_flag_alive;
@@ -431,7 +431,7 @@ template<typename ParticleT, typename EmitterT>
     record.start_color_rgba8 = pack_rgba8(component_.style.start_color);
     record.end_color_rgba8 = pack_rgba8(component_.style.end_color);
     record.texture_id = component_.runtime.route.texture_id;
-    record.material_id = ecs::ResolveEffectiveMaterialId(component_.runtime.route);
+    record.sampler_slot = 0U;
     record.component_index = component_index_;
     record.user_data = component_.runtime.route.user_data;
     record.packed_flags = 0U;
@@ -481,7 +481,7 @@ void BuildGpuStateRecords(const ParticleT* particles_,
     std::uint32_t current_batch_index = 0U;
     std::uint32_t current_batch_instance_end = 0U;
     std::uint64_t current_sort_key = 0U;
-    std::uint32_t current_material_id = 0U;
+    std::uint32_t current_visual_resource_id = 0U;
     std::uint32_t current_texture_id = 0U;
     std::uint32_t current_batch_tag = 0U;
     std::uint32_t current_pipeline_state = 0U;
@@ -505,7 +505,8 @@ void BuildGpuStateRecords(const ParticleT* particles_,
         }
 
         const std::uint64_t sort_key = ComputeParticleSortKey(component);
-        const std::uint32_t material_id = ecs::ResolveEffectiveMaterialId(component.runtime.route);
+        const std::uint32_t visual_resource_id =
+            ecs::ResolveEffectiveVisualResourceId(component.runtime.route);
         const std::uint32_t texture_id = component.runtime.route.texture_id;
         const std::uint32_t batch_tag = component.runtime.route.batch_tag;
         const std::uint32_t pipeline_state = EncodeParticlePipelineState(component);
@@ -513,14 +514,14 @@ void BuildGpuStateRecords(const ParticleT* particles_,
 
         if (!batch_valid ||
             current_sort_key != sort_key ||
-            current_material_id != material_id ||
+            current_visual_resource_id != visual_resource_id ||
             current_texture_id != texture_id ||
             current_batch_tag != batch_tag ||
             current_pipeline_state != pipeline_state ||
             current_batch_instance_end != instance_begin) {
             current_batch_index = batch_valid ? (current_batch_index + 1U) : 0U;
             current_sort_key = sort_key;
-            current_material_id = material_id;
+            current_visual_resource_id = visual_resource_id;
             current_texture_id = texture_id;
             current_batch_tag = batch_tag;
             current_pipeline_state = pipeline_state;
@@ -1148,9 +1149,9 @@ ParticleSimulationGpuBuildResult ParticleSimulationHost::PrepareGpuBuild2D(
         record.texture_id = ResolveBindlessTextureSlot(texture_host_,
                                                        bindless_resources_,
                                                        raw_texture_id);
-        record.material_id = ResolveBindlessSamplerSlot(texture_host_,
-                                                        bindless_resources_,
-                                                        raw_texture_id);
+        record.sampler_slot = ResolveBindlessSamplerSlot(texture_host_,
+                                                         bindless_resources_,
+                                                         raw_texture_id);
     }
 
     result.state_record_count = static_cast<std::uint32_t>(gpu_build_scratch_2d.state_records.size());
@@ -1457,9 +1458,9 @@ ParticleSimulationGpuBuildResult ParticleSimulationHost::PrepareGpuBuild3D(
         record.texture_id = ResolveBindlessTextureSlot(texture_host_,
                                                        bindless_resources_,
                                                        raw_texture_id);
-        record.material_id = ResolveBindlessSamplerSlot(texture_host_,
-                                                        bindless_resources_,
-                                                        raw_texture_id);
+        record.sampler_slot = ResolveBindlessSamplerSlot(texture_host_,
+                                                         bindless_resources_,
+                                                         raw_texture_id);
     }
 
     result.state_record_count = static_cast<std::uint32_t>(gpu_build_scratch_3d.state_records.size());
@@ -2498,3 +2499,4 @@ const ParticleSimulationHost::FrameState& ParticleSimulationHost::FrameAt(
 }
 
 } // namespace vr::particle
+

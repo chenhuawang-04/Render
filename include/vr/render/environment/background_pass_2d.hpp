@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "vr/render/pipeline_host.hpp"
 #include "vr/render/render_target_pass.hpp"
@@ -75,3 +75,4 @@ private:
 };
 
 } // namespace vr::render
+

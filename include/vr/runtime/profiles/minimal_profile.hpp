@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "vr/runtime/runtime_profile.hpp"
 #include "vr/runtime/services/command_service.hpp"
@@ -15,3 +15,4 @@ using MinimalProfile = vr::runtime::RuntimeProfile<
     services::PipelineService>;
 
 } // namespace vr::runtime::profiles
+

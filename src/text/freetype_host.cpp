@@ -1,4 +1,4 @@
-#include "vr/text/freetype_host.hpp"
+﻿#include "vr/text/freetype_host.hpp"
 
 #include <ft2build.h>
 #include FT_FREETYPE_H
@@ -753,3 +753,4 @@ void FreeTypeHost::SetLastError(std::string message_) {
 }
 
 } // namespace vr::text
+

@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "vr/render/render_target_view.hpp"
 
@@ -42,3 +42,4 @@ struct RenderPassPreset final {
 };
 
 } // namespace vr::render
+

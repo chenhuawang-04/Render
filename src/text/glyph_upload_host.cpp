@@ -1,4 +1,4 @@
-#include "vr/text/glyph_upload_host.hpp"
+﻿#include "vr/text/glyph_upload_host.hpp"
 
 #include "vr/render/descriptor_host.hpp"
 #include "vr/resource/gpu_memory_host.hpp"
@@ -564,3 +564,4 @@ void GlyphUploadHost::TransitionImageLayoutIfNeeded(render::UploadHost& upload_h
 }
 
 } // namespace vr::text
+

@@ -1,4 +1,4 @@
-#include "vr/geometry/geometry_resource_host.hpp"
+﻿#include "vr/geometry/geometry_resource_host.hpp"
 
 #include "vr/geometry/geometry_tangent_space.hpp"
 #include "vr/resource/gpu_memory_host.hpp"
@@ -509,3 +509,4 @@ GeometryResourceHost::MeshRecord GeometryResourceHost::BuildMeshRecord(
 }
 
 } // namespace vr::geometry
+

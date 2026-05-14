@@ -1,5 +1,6 @@
-#include "Center/Memory/Container/Vector/McVector.hpp"
+﻿#include "Center/Memory/Container/Vector/McVector.hpp"
 #include "support/bench_framework.hpp"
+#include "vr/ecs/system/appearance_system.hpp"
 #include "vr/ecs/system/geometry_mesh_system.hpp"
 #include "vr/ecs/system/geometry_runtime_system.hpp"
 #include "vr/ecs/system/geometry_system.hpp"
@@ -10,6 +11,8 @@
 namespace {
 
 using Geometry3D = vr::ecs::Geometry<vr::ecs::Dim3>;
+using Appearance3D = vr::ecs::Appearance<vr::ecs::Dim3>;
+using AppearanceSystem3D = vr::ecs::AppearanceSystem<vr::ecs::Dim3>;
 using GeometryRuntimeSystem3D = vr::ecs::GeometryRuntimeSystem<vr::ecs::Dim3>;
 using GeometrySystem3D = vr::ecs::GeometrySystem<vr::ecs::Dim3>;
 using GeometryMeshSystem = vr::ecs::GeometryMeshSystem;
@@ -32,23 +35,15 @@ void InitializeScene(GeometryBenchMcVector<Geometry3D>& components_,
                                          1U + (i % 64U),
                                          i % 3U,
                                          static_cast<std::uint16_t>(i % 2U));
-        GeometrySystem3D::SetMaterialId(components_[i], 1U + (i % 256U));
+        GeometrySystem3D::SetVisualResourceId(components_[i], 1U + (i % 256U));
         GeometrySystem3D::SetDepthBin(components_[i], static_cast<std::uint16_t>(i % 1024U));
         GeometryMeshSystem::SetTopology(components_[i], vr::ecs::Geometry3DTopology::triangles);
-        GeometryMeshSystem::SetShadingModel(components_[i], vr::ecs::Geometry3DShadingModel::lit);
-        GeometryMeshSystem::SetAlbedoColor(components_[i],
-                                           vr::ecs::Rgba8{
-                                               static_cast<std::uint8_t>(40U + (i % 180U)),
-                                               static_cast<std::uint8_t>(70U + ((i * 3U) % 160U)),
-                                               static_cast<std::uint8_t>(90U + ((i * 5U) % 140U)),
-                                               255U});
-        GeometryMeshSystem::SetDepthTest(components_[i], true);
-        GeometryMeshSystem::SetDepthWrite(components_[i], (i & 1U) == 0U);
-        GeometryMeshSystem::SetDoubleSided(components_[i], (i & 3U) == 0U);
-        GeometryMeshSystem::SetMaterialScalars(components_[i],
-                                               static_cast<float>(i % 100U) * 0.01F,
-                                               0.35F + static_cast<float>(i % 50U) * 0.01F,
-                                               1.0F);
+        Appearance3D appearance{};
+        AppearanceSystem3D::Initialize(appearance);
+        AppearanceSystem3D::SetDepthTest(appearance, true);
+        AppearanceSystem3D::SetDepthWrite(appearance, (i & 1U) == 0U);
+        AppearanceSystem3D::SetDoubleSided(appearance, (i & 3U) == 0U);
+        (void)GeometrySystem3D::ApplyAppearanceRuntimeState(components_[i], appearance.style);
         GeometryMeshSystem::SetBounds(components_[i],
                                       vr::ecs::Float3{.x = -0.5F, .y = -0.5F, .z = -0.05F},
                                       vr::ecs::Float3{.x = 0.5F, .y = 0.5F, .z = 0.05F});
@@ -84,7 +79,7 @@ VR_BENCHMARK_CASE(EcsGeometryRuntimeSystem_dim3_build_1k_full_rebuild, "core;ecs
     const std::uint64_t iterations = bench_context_.Iterations();
     for (std::uint64_t i = 0U; i < iterations; ++i) {
         const std::uint32_t hot_index = static_cast<std::uint32_t>(i) & (k_component_count - 1U);
-        GeometrySystem3D::SetMaterialId(components[hot_index], 1U + ((hot_index + static_cast<std::uint32_t>(i)) & 255U));
+        GeometrySystem3D::SetVisualResourceId(components[hot_index], 1U + ((hot_index + static_cast<std::uint32_t>(i)) & 255U));
         GeometrySystem3D::SetDepthBin(components[hot_index], static_cast<std::uint16_t>((hot_index + i) & 1023U));
 
         TransformSystem3D::SetLocalPosition(transforms[hot_index],
@@ -295,3 +290,4 @@ VR_BENCHMARK_CASE(EcsGeometryRuntimeSystem_dim3_build_1k_candidate_visibility_ha
 }
 
 } // namespace
+

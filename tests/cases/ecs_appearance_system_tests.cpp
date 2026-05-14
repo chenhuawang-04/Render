@@ -1,4 +1,4 @@
-#include "support/test_framework.hpp"
+﻿#include "support/test_framework.hpp"
 #include "vr/ecs/system/appearance_system.hpp"
 
 #include <cstdint>
@@ -69,4 +69,5 @@ VR_TEST_CASE(EcsAppearanceSystem_dim3_style_binding_and_visibility, "unit;core;e
 }
 
 } // namespace
+
 

@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <cstdint>
 #include <type_traits>
@@ -50,3 +50,4 @@ static_assert(PodTextType<GlyphAtlasRegion>);
 static_assert(PodTextType<GlyphMetrics26_6>);
 
 } // namespace vr::text
+

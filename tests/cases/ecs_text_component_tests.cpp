@@ -1,4 +1,4 @@
-#include "support/test_framework.hpp"
+﻿#include "support/test_framework.hpp"
 #include "vr/ecs/component/text_component.hpp"
 #include "vr/ecs/system/text_batch_system.hpp"
 #include "vr/ecs/system/text_system.hpp"
@@ -102,7 +102,7 @@ VR_TEST_CASE(EcsTextSystem_runtime_route_and_sort_key_layout, "unit;core;ecs;tex
 
     const std::uint64_t sort_key = TextSystem2D::SortKey(text_component);
     VR_CHECK(TextSystem2D::ExtractPassBucket(sort_key) == static_cast<std::uint32_t>(vr::ecs::TextRenderPassHint::transparent));
-    VR_CHECK(TextSystem2D::ExtractMaterialBucket(sort_key) == 456U);
+    VR_CHECK(TextSystem2D::ExtractVisualResourceBucket(sort_key) == 456U);
     VR_CHECK(TextSystem2D::ExtractFontBucket(sort_key) == 123U);
     VR_CHECK(TextSystem2D::ExtractAtlasBucket(sort_key) == 7U);
     VR_CHECK(TextSystem2D::ExtractBatchBucket(sort_key) == 63U);
@@ -304,3 +304,4 @@ VR_TEST_CASE(EcsTextComponent_dimension_meta_matches_expectation, "unit;core;ecs
 }
 
 } // namespace
+

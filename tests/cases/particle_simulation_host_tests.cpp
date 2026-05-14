@@ -1,4 +1,4 @@
-#include "support/test_framework.hpp"
+﻿#include "support/test_framework.hpp"
 #include "vr/particle/particle_simulation_host.hpp"
 
 #include <type_traits>
@@ -40,3 +40,4 @@ VR_TEST_CASE(ParticleSimulationHost_resolve_simulation_path_respects_capabilitie
                  vr::ecs::ParticleSimulationMode::hybrid_gpu,
                  gpu_caps) == vr::particle::ParticleSimulationResolvedPath::hybrid_gpu);
 }
+

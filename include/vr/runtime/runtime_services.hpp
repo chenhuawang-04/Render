@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "vr/runtime/runtime_profile.hpp"
 #include "vr/runtime/runtime_service.hpp"
@@ -206,3 +206,4 @@ private:
 };
 
 } // namespace vr::runtime
+

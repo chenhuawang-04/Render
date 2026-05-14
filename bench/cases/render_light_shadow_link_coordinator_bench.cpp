@@ -1,4 +1,4 @@
-#include "support/bench_framework.hpp"
+﻿#include "support/bench_framework.hpp"
 #include "vr/render/light_shadow_link_coordinator.hpp"
 
 #include <cstdint>
@@ -195,3 +195,4 @@ VR_BENCHMARK_CASE(RenderLightShadowLinkCoordinator3D_incremental_patch_sparse_4k
 }
 
 } // namespace
+

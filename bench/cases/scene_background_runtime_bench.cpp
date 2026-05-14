@@ -1,4 +1,4 @@
-#include "support/bench_framework.hpp"
+﻿#include "support/bench_framework.hpp"
 #include "vr/render/environment/sky_environment_gpu_host.hpp"
 #include "vr/render/pipeline_host.hpp"
 #include "vr/render/render_target_host.hpp"
@@ -220,3 +220,4 @@ VR_BENCHMARK_CASE(SceneRecorder3D_prepare_static_environment_cpu,
 }
 
 } // namespace
+

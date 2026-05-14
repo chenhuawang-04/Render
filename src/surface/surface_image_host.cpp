@@ -1,4 +1,4 @@
-#include "vr/surface/surface_image_host.hpp"
+﻿#include "vr/surface/surface_image_host.hpp"
 
 #include "vr/render/descriptor_host.hpp"
 #include "vr/resource/gpu_memory_host.hpp"
@@ -469,3 +469,4 @@ void SurfaceImageHost::RecordImageBarrier(render::UploadHost& upload_host_,
 }
 
 } // namespace vr::surface
+

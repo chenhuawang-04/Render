@@ -136,3 +136,4 @@ static_assert(offsetof(ShadowGpuRecord3D, projection_kind) == 32U);
 static_assert(offsetof(ShadowGpuRecord3D, atlas_namespace_id) == 48U);
 
 } // namespace vr::ecs
+

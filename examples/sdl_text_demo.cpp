@@ -1,4 +1,4 @@
-#include "vr/ecs/system/text_system.hpp"
+﻿#include "vr/ecs/system/text_system.hpp"
 #include "vr/render/render_runtime_host.hpp"
 #include "vr/runtime/crash_tracer_support.hpp"
 #include "vr/text/text_renderer_2d.hpp"
@@ -94,7 +94,7 @@ struct DemoFontPaths final {
 
 void InitializeTextComponent(Text2D& component_,
                              std::uint32_t font_id_,
-                             std::uint32_t material_id_,
+                             std::uint32_t appearance_id_,
                              std::int16_t layer_,
                              float pixel_size_,
                              vr::ecs::Rgba8 color_,
@@ -108,7 +108,7 @@ void InitializeTextComponent(Text2D& component_,
                              float letter_spacing_,
                              std::string_view text_) {
     TextSystem2D::Initialize(component_);
-    TextSystem2D::SetRuntimeRoute(component_, font_id_, material_id_, 0U, 0U);
+    TextSystem2D::SetRuntimeRoute(component_, font_id_, appearance_id_, 0U, 0U);
     TextSystem2D::SetLayer(component_, layer_);
     TextSystem2D::SetPixelSize(component_, pixel_size_);
     TextSystem2D::SetColor(component_, color_);
@@ -489,3 +489,4 @@ int main(int argc_, char** argv_) {
         return 1;
     }
 }
+

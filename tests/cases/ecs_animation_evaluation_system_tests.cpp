@@ -1,8 +1,8 @@
-#include "support/test_framework.hpp"
+﻿#include "support/test_framework.hpp"
 #include "vr/animation/animation_clip_host.hpp"
 #include "vr/animation/animation_path_host.hpp"
 #include "vr/ecs/system/animation_camera_evaluation_system.hpp"
-#include "vr/ecs/system/animation_material_evaluation_system.hpp"
+#include "vr/ecs/system/animation_visual_evaluation_system.hpp"
 #include "vr/ecs/system/animation_path_evaluation_system.hpp"
 #include "vr/ecs/system/animation_property_evaluation_system.hpp"
 #include "vr/ecs/system/appearance_system.hpp"
@@ -70,7 +70,7 @@ VR_TEST_CASE(EcsAnimationPropertyEvaluationSystem_samples_clip_and_applies_trans
     VR_CHECK(NearlyEqual(transforms[0U].style.position.z, 15.0F));
 }
 
-VR_TEST_CASE(EcsAnimationMaterialEvaluationSystem_samples_clip_and_applies_surface_and_appearance,
+VR_TEST_CASE(EcsAnimationVisualEvaluationSystem_samples_clip_and_applies_surface_and_appearance,
              "unit;core;ecs;animation") {
     vr::animation::AnimationClipHost clip_host{};
     clip_host.Initialize();
@@ -79,8 +79,8 @@ VR_TEST_CASE(EcsAnimationMaterialEvaluationSystem_samples_clip_and_applies_surfa
         {.time_s = 0.0F, .value = 1.0F, .interpolation_mode = vr::ecs::AnimationInterpolationMode::linear, .reserved0 = 0U, .reserved1 = 0U},
         {.time_s = 1.0F, .value = 0.5F, .interpolation_mode = vr::ecs::AnimationInterpolationMode::linear, .reserved0 = 0U, .reserved1 = 0U},
     }};
-    const vr::animation::MaterialScalarChannelDesc opacity_channel{
-        .semantic = vr::ecs::MaterialTrackSemantic::surface_opacity,
+    const vr::animation::VisualScalarChannelDesc opacity_channel{
+        .semantic = vr::ecs::VisualTrackSemantic::appearance_opacity,
         .channel_mask = 0x1U,
         .reserved0 = 0U,
         .curve = vr::ecs::AnimationCurveView<float>{.keyframes = opacity_keys.data(), .keyframe_count = 2U},
@@ -90,51 +90,51 @@ VR_TEST_CASE(EcsAnimationMaterialEvaluationSystem_samples_clip_and_applies_surfa
         {.time_s = 0.0F, .value = vr::ecs::Rgba8{255U, 0U, 0U, 255U}, .interpolation_mode = vr::ecs::AnimationInterpolationMode::linear, .reserved0 = 0U, .reserved1 = 0U},
         {.time_s = 1.0F, .value = vr::ecs::Rgba8{0U, 0U, 255U, 255U}, .interpolation_mode = vr::ecs::AnimationInterpolationMode::linear, .reserved0 = 0U, .reserved1 = 0U},
     }};
-    const vr::animation::MaterialColorChannelDesc color_channel{
-        .semantic = vr::ecs::MaterialTrackSemantic::appearance_color,
+    const vr::animation::VisualColorChannelDesc color_channel{
+        .semantic = vr::ecs::VisualTrackSemantic::appearance_color,
         .channel_mask = 0xFU,
         .reserved0 = 0U,
         .curve = vr::ecs::AnimationCurveView<vr::ecs::Rgba8>{.keyframes = color_keys.data(), .keyframe_count = 2U},
     };
 
-    vr::animation::MaterialAnimationClipDesc desc{};
+    vr::animation::VisualAnimationClipDesc desc{};
     desc.clip_id = 2U;
     desc.duration_s = 1.0F;
     desc.scalar_channels = &opacity_channel;
     desc.scalar_channel_count = 1U;
     desc.color_channels = &color_channel;
     desc.color_channel_count = 1U;
-    const vr::ecs::AnimationClipHandle clip_handle = clip_host.UpsertMaterialClip(desc);
+    const vr::ecs::AnimationClipHandle clip_handle = clip_host.UpsertVisualClip(desc);
 
-    vr::ecs::Animation<vr::ecs::Dim2, vr::ecs::MaterialTrack> surface_animation{};
-    vr::ecs::AnimationMaterialTrackSystem<vr::ecs::Dim2>::Initialize(surface_animation);
-    vr::ecs::AnimationClockSystem<vr::ecs::Dim2, vr::ecs::MaterialTrack>::SetClipHandle(surface_animation, clip_handle);
-    vr::ecs::AnimationClockSystem<vr::ecs::Dim2, vr::ecs::MaterialTrack>::SetDurationSeconds(surface_animation, 1.0F);
-    vr::ecs::AnimationMaterialTrackSystem<vr::ecs::Dim2>::SetSemantic(surface_animation,
-                                                                       vr::ecs::MaterialTrackSemantic::surface_opacity);
-    vr::ecs::AnimationMaterialTrackSystem<vr::ecs::Dim2>::SetTarget(surface_animation,
+    vr::ecs::Animation<vr::ecs::Dim2, vr::ecs::VisualTrack> surface_animation{};
+    vr::ecs::AnimationVisualTrackSystem<vr::ecs::Dim2>::Initialize(surface_animation);
+    vr::ecs::AnimationClockSystem<vr::ecs::Dim2, vr::ecs::VisualTrack>::SetClipHandle(surface_animation, clip_handle);
+    vr::ecs::AnimationClockSystem<vr::ecs::Dim2, vr::ecs::VisualTrack>::SetDurationSeconds(surface_animation, 1.0F);
+    vr::ecs::AnimationVisualTrackSystem<vr::ecs::Dim2>::SetSemantic(surface_animation,
+                                                                       vr::ecs::VisualTrackSemantic::appearance_opacity);
+    vr::ecs::AnimationVisualTrackSystem<vr::ecs::Dim2>::SetTarget(surface_animation,
                                                                      {.entity_id = 0U, .slot = 0U, .domain = vr::ecs::AnimationTargetDomain::surface, .reserved0 = 0U, .sub_index = 0U});
     vr::ecs::Surface<vr::ecs::Dim2> surface{};
     vr::ecs::SurfaceSystem<vr::ecs::Dim2>::Initialize(surface);
     vr::ecs::AnimationEvaluationContext<vr::ecs::Dim2> context{};
     context.surfaces = {.components = &surface, .count = 1U};
-    VR_REQUIRE(vr::ecs::AnimationMaterialEvaluationSystem<vr::ecs::Dim2>::Tick(surface_animation, clip_host, context, 0.5F));
-    VR_CHECK(NearlyEqual(surface.style.opacity, 0.75F));
+    VR_REQUIRE(vr::ecs::AnimationVisualEvaluationSystem<vr::ecs::Dim2>::Tick(surface_animation, clip_host, context, 0.5F));
+    VR_CHECK(NearlyEqual(vr::ecs::ReadAppearanceRuntimeBridge2D(surface.runtime).opacity, 0.75F));
 
-    vr::ecs::Animation<vr::ecs::Dim2, vr::ecs::MaterialTrack> appearance_animation{};
-    vr::ecs::AnimationMaterialTrackSystem<vr::ecs::Dim2>::Initialize(appearance_animation);
-    vr::ecs::AnimationClockSystem<vr::ecs::Dim2, vr::ecs::MaterialTrack>::SetClipHandle(appearance_animation, clip_handle);
-    vr::ecs::AnimationClockSystem<vr::ecs::Dim2, vr::ecs::MaterialTrack>::SetDurationSeconds(appearance_animation, 1.0F);
-    vr::ecs::AnimationMaterialTrackSystem<vr::ecs::Dim2>::SetSemantic(appearance_animation,
-                                                                       vr::ecs::MaterialTrackSemantic::appearance_color);
-    vr::ecs::AnimationMaterialTrackSystem<vr::ecs::Dim2>::SetValueEncoding(appearance_animation,
+    vr::ecs::Animation<vr::ecs::Dim2, vr::ecs::VisualTrack> appearance_animation{};
+    vr::ecs::AnimationVisualTrackSystem<vr::ecs::Dim2>::Initialize(appearance_animation);
+    vr::ecs::AnimationClockSystem<vr::ecs::Dim2, vr::ecs::VisualTrack>::SetClipHandle(appearance_animation, clip_handle);
+    vr::ecs::AnimationClockSystem<vr::ecs::Dim2, vr::ecs::VisualTrack>::SetDurationSeconds(appearance_animation, 1.0F);
+    vr::ecs::AnimationVisualTrackSystem<vr::ecs::Dim2>::SetSemantic(appearance_animation,
+                                                                       vr::ecs::VisualTrackSemantic::appearance_color);
+    vr::ecs::AnimationVisualTrackSystem<vr::ecs::Dim2>::SetValueEncoding(appearance_animation,
                                                                             vr::ecs::AnimationValueEncoding::color_rgba8);
-    vr::ecs::AnimationMaterialTrackSystem<vr::ecs::Dim2>::SetTarget(appearance_animation,
+    vr::ecs::AnimationVisualTrackSystem<vr::ecs::Dim2>::SetTarget(appearance_animation,
                                                                      {.entity_id = 0U, .slot = 0U, .domain = vr::ecs::AnimationTargetDomain::appearance, .reserved0 = 0U, .sub_index = 0U});
     vr::ecs::Appearance<vr::ecs::Dim2> appearance{};
     vr::ecs::AppearanceSystem<vr::ecs::Dim2>::Initialize(appearance);
     context.appearances = {.components = &appearance, .count = 1U};
-    VR_REQUIRE(vr::ecs::AnimationMaterialEvaluationSystem<vr::ecs::Dim2>::Tick(appearance_animation, clip_host, context, 0.5F));
+    VR_REQUIRE(vr::ecs::AnimationVisualEvaluationSystem<vr::ecs::Dim2>::Tick(appearance_animation, clip_host, context, 0.5F));
     VR_CHECK(appearance.style.fill_color.r == 128U);
     VR_CHECK(appearance.style.fill_color.b == 128U);
 }
@@ -232,3 +232,5 @@ VR_TEST_CASE(EcsAnimationCameraEvaluationSystem_samples_clip_and_applies_camera_
 }
 
 } // namespace
+
+

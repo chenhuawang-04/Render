@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "vr/platform/render_host.hpp"
 #include "vr/render/render_runtime_host.hpp"
@@ -20,3 +20,4 @@ using RuntimePipelineWarmupCreateInfo =
     typename vr::render::RenderRuntimeHost<BackendTagT, frames_in_flight_v>::PipelineWarmupCreateInfo;
 
 } // namespace vr::runtime
+

@@ -1,4 +1,4 @@
-#include "support/test_framework.hpp"
+﻿#include "support/test_framework.hpp"
 #include "vr/animation/animation_frame_sequence_host.hpp"
 #include "vr/animation/animation_vertex_deform_host.hpp"
 #include "vr/ecs/system/animation_clock_system.hpp"
@@ -108,3 +108,4 @@ VR_TEST_CASE(EcsAnimationFrameSequenceEvaluationSystem_samples_clip_into_frame_o
 }
 
 } // namespace
+

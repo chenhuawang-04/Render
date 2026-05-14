@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "Center/Memory/Container/Vector/McVector.hpp"
 #include "Center/Memory/Vulkan/Types.hpp"
@@ -70,3 +70,4 @@ public:
 };
 
 } // namespace vr::resource
+

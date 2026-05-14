@@ -1,4 +1,4 @@
-#include "support/test_framework.hpp"
+﻿#include "support/test_framework.hpp"
 #include "vr/render/render_target_desc.hpp"
 #include "vr/render/render_target_format_utils.hpp"
 #include "vr/render/render_target_pass.hpp"
@@ -852,3 +852,4 @@ VR_TEST_CASE(RuntimeIntegration_upload_staging_exhaustion_reports_capacity_detai
 }
 
 } // namespace
+

@@ -1,4 +1,4 @@
-#include "vr/render/environment/sky_environment_gpu_host.hpp"
+﻿#include "vr/render/environment/sky_environment_gpu_host.hpp"
 #include "vr/render/ibl_bake_host.hpp"
 
 #include <algorithm>
@@ -856,3 +856,4 @@ SkyEnvironmentIblData SkyEnvironmentGpuHost::BuildIblData(
 }
 
 } // namespace vr::render
+

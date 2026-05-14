@@ -1,4 +1,4 @@
-#include "vr/ecs/system/surface_system.hpp"
+﻿#include "vr/ecs/system/surface_system.hpp"
 #include "vr/ecs/system/surface_runtime_system.hpp"
 #include "vr/ecs/system/surface_upload_plan_system.hpp"
 #include "vr/ecs/system/transform_system.hpp"
@@ -29,7 +29,7 @@ VR_TEST_CASE(EcsSurfaceUploadPlan_dim3_sparse_dirty_builds_merged_ranges, "unit;
 
     for (std::uint32_t i = 0U; i < surfaces.size(); ++i) {
         SurfaceSystem3D::Initialize(surfaces[i]);
-        SurfaceSystem3D::SetTextureRoute(surfaces[i], 1000U + i, 10U, 0U, 0U);
+        SurfaceSystem3D::SetSource(surfaces[i], vr::ecs::SurfaceSampledSource3DDesc{.surface_id = 1000U + i, .sampler_id = 10U, .uv_set = 0U, .flags = 0U});
         SurfaceSystem3D::SetRuntimeRoute(surfaces[i], 1000U + i, 2U, 0U);
         TransformSystem3D::Initialize(transforms[i]);
     }
@@ -73,7 +73,7 @@ VR_TEST_CASE(EcsSurfaceUploadPlan_dim3_dense_dirty_prefers_dense_path, "unit;cor
 
     for (std::uint32_t i = 0U; i < surfaces.size(); ++i) {
         SurfaceSystem3D::Initialize(surfaces[i]);
-        SurfaceSystem3D::SetTextureRoute(surfaces[i], 2000U + i, 9U, 0U, 0U);
+        SurfaceSystem3D::SetSource(surfaces[i], vr::ecs::SurfaceSampledSource3DDesc{.surface_id = 2000U + i, .sampler_id = 9U, .uv_set = 0U, .flags = 0U});
         SurfaceSystem3D::SetRuntimeRoute(surfaces[i], 2000U + i, 3U, 0U);
         TransformSystem3D::Initialize(transforms[i]);
     }
@@ -121,12 +121,12 @@ VR_TEST_CASE(EcsSurfaceUploadPlan_dim2_skips_invalid_or_unmapped_components, "un
         TransformSystem2D::Initialize(transforms[i]);
     }
 
-    SurfaceSystem2D::SetImageId(surfaces[0U], 4001U);
-    SurfaceSystem2D::SetImageId(surfaces[1U], 0U);
-    SurfaceSystem2D::SetImageId(surfaces[2U], 4003U);
+    SurfaceSystem2D::SetSource(surfaces[0U], vr::ecs::SurfaceImageSourceDesc{.surface_id = 4001U, .atlas_page_id = 0U});
+    SurfaceSystem2D::SetSource(surfaces[1U], vr::ecs::SurfaceImageSourceDesc{.surface_id = 0U, .atlas_page_id = 0U});
+    SurfaceSystem2D::SetSource(surfaces[2U], vr::ecs::SurfaceImageSourceDesc{.surface_id = 4003U, .atlas_page_id = 0U});
     SurfaceSystem2D::SetVisible(surfaces[2U], false);
-    SurfaceSystem2D::SetSpriteId(surfaces[3U], 5001U);
-    SurfaceSystem2D::SetImageId(surfaces[4U], 4005U);
+    SurfaceSystem2D::SetSource(surfaces[3U], vr::ecs::SurfaceSpriteSourceDesc{.surface_id = 5001U, .atlas_page_id = 0U});
+    SurfaceSystem2D::SetSource(surfaces[4U], vr::ecs::SurfaceImageSourceDesc{.surface_id = 4005U, .atlas_page_id = 0U});
     SurfaceSystem2D::SetVisible(surfaces[4U], false);
 
     TransformSystem2D::UpdateHierarchy(transforms.data(),
@@ -165,7 +165,7 @@ VR_TEST_CASE(EcsSurfaceUploadPlan_dim3_merge_gap_options_reduce_copy_ranges, "un
 
     for (std::uint32_t i = 0U; i < surfaces.size(); ++i) {
         SurfaceSystem3D::Initialize(surfaces[i]);
-        SurfaceSystem3D::SetTextureRoute(surfaces[i], 5000U + i, 31U, 0U, 0U);
+        SurfaceSystem3D::SetSource(surfaces[i], vr::ecs::SurfaceSampledSource3DDesc{.surface_id = 5000U + i, .sampler_id = 31U, .uv_set = 0U, .flags = 0U});
         SurfaceSystem3D::SetRuntimeRoute(surfaces[i], 5000U + i, 4U, 0U);
         TransformSystem3D::Initialize(transforms[i]);
     }
@@ -216,3 +216,4 @@ VR_TEST_CASE(EcsSurfaceUploadPlan_dim3_merge_gap_options_reduce_copy_ranges, "un
 }
 
 } // namespace
+

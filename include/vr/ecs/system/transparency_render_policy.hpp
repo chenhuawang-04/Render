@@ -1,10 +1,11 @@
-#pragma once
+﻿#pragma once
 
 #include "vr/ecs/component/appearance_component.hpp"
 #include "vr/ecs/component/geometry_component.hpp"
 #include "vr/ecs/component/particle_component.hpp"
 #include "vr/ecs/component/surface_component.hpp"
 #include "vr/ecs/component/text_component.hpp"
+#include "vr/ecs/system/visual_runtime_route_common.hpp"
 
 #include <cstdint>
 #include <limits>
@@ -101,6 +102,8 @@ inline constexpr std::uint32_t appearance_pipeline_alpha_shift = 25U;
 inline constexpr std::uint32_t appearance_pipeline_alpha_mask = 0x3U;
 inline constexpr std::uint32_t appearance_pipeline_blend_shift = 27U;
 inline constexpr std::uint32_t appearance_pipeline_blend_mask = 0xFU;
+inline constexpr std::uint32_t appearance_pipeline_premultiplied_shift = 19U;
+inline constexpr std::uint32_t appearance_pipeline_premultiplied_mask = 0x1U;
 inline constexpr std::uint32_t runtime_blend_mask = 0x7U;
 inline constexpr std::uint32_t geometry2d_runtime_blend_shift = 8U;
 inline constexpr std::uint32_t surface2d_runtime_blend_shift = 8U;
@@ -121,16 +124,30 @@ inline constexpr std::uint32_t surface3d_runtime_blend_shift = 11U;
         appearance_pipeline_blend_mask);
 }
 
+[[nodiscard]] constexpr bool DecodeAppearancePremultipliedAlpha(
+    std::uint32_t appearance_pipeline_bucket_) noexcept {
+    return ((appearance_pipeline_bucket_ >> appearance_pipeline_premultiplied_shift) &
+            appearance_pipeline_premultiplied_mask) != 0U;
+}
+
 [[nodiscard]] constexpr RuntimeBlendPreset ResolveRuntimeBlendPreset(
     AppearanceBlendMode blend_mode_,
-    AppearanceAlphaMode alpha_mode_) noexcept {
+    AppearanceAlphaMode alpha_mode_,
+    bool premultiplied_alpha_ = false) noexcept {
     switch (blend_mode_) {
-    case AppearanceBlendMode::alpha: return RuntimeBlendPreset::alpha;
+    case AppearanceBlendMode::alpha:
+        return premultiplied_alpha_
+            ? RuntimeBlendPreset::premultiplied_alpha
+            : RuntimeBlendPreset::alpha;
     case AppearanceBlendMode::additive: return RuntimeBlendPreset::additive;
     case AppearanceBlendMode::multiply: return RuntimeBlendPreset::multiply;
     case AppearanceBlendMode::premultiplied: return RuntimeBlendPreset::premultiplied_alpha;
+    case AppearanceBlendMode::screen: return RuntimeBlendPreset::screen;
     case AppearanceBlendMode::opaque:
     default: break;
+    }
+    if (premultiplied_alpha_ && alpha_mode_ == AppearanceAlphaMode::blend) {
+        return RuntimeBlendPreset::premultiplied_alpha;
     }
     return alpha_mode_ == AppearanceAlphaMode::blend
         ? RuntimeBlendPreset::alpha
@@ -138,24 +155,23 @@ inline constexpr std::uint32_t surface3d_runtime_blend_shift = 11U;
 }
 
 [[nodiscard]] constexpr RuntimeBlendPreset ResolveRuntimeBlendPreset(
-    std::uint32_t appearance_pipeline_bucket_) noexcept {
-    return ResolveRuntimeBlendPreset(DecodeAppearanceBlendMode(appearance_pipeline_bucket_),
-                                     DecodeAppearanceAlphaMode(appearance_pipeline_bucket_));
+    const AppearanceRuntimeBridge2D& appearance_bridge_) noexcept {
+    return ResolveRuntimeBlendPreset(appearance_bridge_.blend_mode,
+                                     appearance_bridge_.alpha_mode,
+                                     appearance_bridge_.premultiplied_alpha != 0U);
 }
 
 [[nodiscard]] constexpr RuntimeBlendPreset ResolveRuntimeBlendPreset(
-    Surface2DBlendMode blend_mode_,
-    bool premultiplied_alpha_) noexcept {
-    switch (blend_mode_) {
-    case Surface2DBlendMode::additive: return RuntimeBlendPreset::additive;
-    case Surface2DBlendMode::multiply: return RuntimeBlendPreset::multiply;
-    case Surface2DBlendMode::screen: return RuntimeBlendPreset::screen;
-    case Surface2DBlendMode::alpha:
-    default:
-        return premultiplied_alpha_
-            ? RuntimeBlendPreset::premultiplied_alpha
-            : RuntimeBlendPreset::alpha;
-    }
+    const AppearanceRuntimeBridge3D& appearance_bridge_) noexcept {
+    return ResolveRuntimeBlendPreset(appearance_bridge_.blend_mode,
+                                     appearance_bridge_.alpha_mode);
+}
+
+[[nodiscard]] constexpr RuntimeBlendPreset ResolveRuntimeBlendPreset(
+    std::uint32_t appearance_pipeline_bucket_) noexcept {
+    return ResolveRuntimeBlendPreset(DecodeAppearanceBlendMode(appearance_pipeline_bucket_),
+                                     DecodeAppearanceAlphaMode(appearance_pipeline_bucket_),
+                                     DecodeAppearancePremultipliedAlpha(appearance_pipeline_bucket_));
 }
 
 [[nodiscard]] constexpr RuntimeBlendPreset ResolveRuntimeBlendPreset(
@@ -193,13 +209,12 @@ inline constexpr std::uint32_t surface3d_runtime_blend_shift = 11U;
 }
 
 template<typename RouteT>
-[[nodiscard]] constexpr std::uint32_t ResolveEffectiveMaterialId(const RouteT& route_) noexcept {
-    // Keep the authoring/base material route intact and layer linked appearance resources on top.
-    // This lets clear/unlink fall back to the original material without storing restoration state.
-    const bool has_linked_appearance =
-        route_.appearance_handle.index != invalid_appearance_index &&
-        route_.appearance_handle.generation != 0U;
-    return has_linked_appearance ? route_.appearance_resource_bucket : route_.material_id;
+[[nodiscard]] constexpr std::uint32_t ResolveEffectiveVisualResourceId(const RouteT& route_) noexcept {
+    // Keep the authoring/base visual resource route intact and layer linked appearance resources on
+    // top. This lets clear/unlink fall back to the original resource without restoration state.
+    return HasLinkedAppearanceHandle(route_)
+        ? route_.appearance_visual_resource_id
+        : route_.visual_resource_id;
 }
 
 [[nodiscard]] constexpr bool AppearanceUsesTransparency(
@@ -210,16 +225,79 @@ template<typename RouteT>
     return IsTransparentBlendPreset(ResolveRuntimeBlendPreset(appearance_pipeline_bucket_));
 }
 
+[[nodiscard]] constexpr bool AppearanceUsesTransparency(
+    const AppearanceRuntimeBridge2D& appearance_bridge_) noexcept {
+    return IsTransparentBlendPreset(ResolveRuntimeBlendPreset(appearance_bridge_));
+}
+
+[[nodiscard]] constexpr bool AppearanceUsesTransparency(
+    const AppearanceRuntimeBridge3D& appearance_bridge_) noexcept {
+    return IsTransparentBlendPreset(ResolveRuntimeBlendPreset(appearance_bridge_));
+}
+
+template<typename PassHintT>
+[[nodiscard]] constexpr PassHintT ResolveAppearancePassHint(
+    PassHintT current_pass_hint_,
+    bool transparent_) noexcept {
+    if (IsOverlayPassHint(current_pass_hint_)) {
+        return current_pass_hint_;
+    }
+    return transparent_
+        ? PassHintTraits<PassHintT>::transparent
+        : PassHintTraits<PassHintT>::opaque;
+}
+
+template<typename PassHintT>
+[[nodiscard]] constexpr PassHintT ResolveAppearancePassHint(
+    PassHintT current_pass_hint_,
+    const AppearanceRuntimeBridge2D& appearance_bridge_) noexcept {
+    return ResolveAppearancePassHint(current_pass_hint_,
+                                     AppearanceUsesTransparency(appearance_bridge_));
+}
+
+template<typename PassHintT>
+[[nodiscard]] constexpr PassHintT ResolveAppearancePassHint(
+    PassHintT current_pass_hint_,
+    const AppearanceRuntimeBridge3D& appearance_bridge_) noexcept {
+    return ResolveAppearancePassHint(current_pass_hint_,
+                                     AppearanceUsesTransparency(appearance_bridge_));
+}
+
+template<typename PassHintT>
+[[nodiscard]] constexpr PassHintT ResolveFallbackAppearancePassHint(
+    PassHintT current_pass_hint_,
+    bool transparent_) noexcept {
+    if (IsOverlayPassHint(current_pass_hint_) ||
+        IsTransparentPassHint(current_pass_hint_)) {
+        return current_pass_hint_;
+    }
+    return transparent_
+        ? PassHintTraits<PassHintT>::transparent
+        : PassHintTraits<PassHintT>::opaque;
+}
+
+template<typename PassHintT>
+[[nodiscard]] constexpr PassHintT ResolveFallbackAppearancePassHint(
+    PassHintT current_pass_hint_,
+    const AppearanceRuntimeBridge2D& appearance_bridge_) noexcept {
+    return ResolveFallbackAppearancePassHint(current_pass_hint_,
+                                             AppearanceUsesTransparency(appearance_bridge_));
+}
+
+template<typename PassHintT>
+[[nodiscard]] constexpr PassHintT ResolveFallbackAppearancePassHint(
+    PassHintT current_pass_hint_,
+    const AppearanceRuntimeBridge3D& appearance_bridge_) noexcept {
+    return ResolveFallbackAppearancePassHint(current_pass_hint_,
+                                             AppearanceUsesTransparency(appearance_bridge_));
+}
+
 template<typename PassHintT>
 [[nodiscard]] constexpr PassHintT ResolveLinkedPassHint(
     PassHintT current_pass_hint_,
     std::uint32_t appearance_pipeline_bucket_) noexcept {
-    if (IsOverlayPassHint(current_pass_hint_)) {
-        return current_pass_hint_;
-    }
-    return AppearanceUsesTransparency(appearance_pipeline_bucket_)
-        ? PassHintTraits<PassHintT>::transparent
-        : PassHintTraits<PassHintT>::opaque;
+    return ResolveAppearancePassHint(current_pass_hint_,
+                                     AppearanceUsesTransparency(appearance_pipeline_bucket_));
 }
 
 [[nodiscard]] constexpr std::uint16_t FoldPipelineSortBucket(
@@ -249,3 +327,4 @@ template<typename StyleT>
 }
 
 } // namespace vr::ecs
+

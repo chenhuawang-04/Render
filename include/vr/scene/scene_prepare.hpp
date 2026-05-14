@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "vr/scene/scene.hpp"
 
@@ -78,3 +78,4 @@ public:
 };
 
 } // namespace vr::scene
+

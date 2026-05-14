@@ -1,4 +1,4 @@
-#include "support/test_framework.hpp"
+﻿#include "support/test_framework.hpp"
 #include "vr/ecs/component/light_component.hpp"
 #include "vr/ecs/system/light_system.hpp"
 
@@ -81,4 +81,5 @@ VR_TEST_CASE(EcsLightSystem_dim3_shadow_and_runtime_keys, "unit;core;ecs;light")
 }
 
 } // namespace
+
 

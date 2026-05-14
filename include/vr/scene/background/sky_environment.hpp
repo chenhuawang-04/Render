@@ -26,7 +26,7 @@ struct SkyEnvironment final {
     SkyEnvironmentMode mode;
 
     std::uint32_t sky_texture_id;
-    std::uint32_t sky_material_id;
+    std::uint32_t sky_appearance_id;
 
     std::uint32_t irradiance_texture_id;
     std::uint32_t prefiltered_texture_id;
@@ -103,3 +103,4 @@ static_assert(std::is_standard_layout_v<SkyEnvironmentRenderState>);
 static_assert(std::is_trivial_v<SkyEnvironmentRenderState>);
 
 } // namespace vr::scene
+

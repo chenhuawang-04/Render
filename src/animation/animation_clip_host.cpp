@@ -1,4 +1,4 @@
-#include "vr/animation/animation_clip_host.hpp"
+﻿#include "vr/animation/animation_clip_host.hpp"
 
 #include <algorithm>
 #include <cstddef>
@@ -118,9 +118,9 @@ void AnimationClipHost::Initialize(const AnimationClipHostCreateInfo& create_inf
     property_float4_channels.clear();
     property_quaternion_channels.clear();
     property_color_channels.clear();
-    material_scalar_channels.clear();
-    material_float4_channels.clear();
-    material_color_channels.clear();
+    visual_scalar_channels.clear();
+    visual_float4_channels.clear();
+    visual_color_channels.clear();
     camera_scalar_channels.clear();
     camera_float2_channels.clear();
     camera_float3_channels.clear();
@@ -143,9 +143,9 @@ void AnimationClipHost::Initialize(const AnimationClipHostCreateInfo& create_inf
     ReserveIfNeeded(property_float4_channels, create_info_cache.reserve_channel_count);
     ReserveIfNeeded(property_quaternion_channels, create_info_cache.reserve_channel_count);
     ReserveIfNeeded(property_color_channels, create_info_cache.reserve_channel_count);
-    ReserveIfNeeded(material_scalar_channels, create_info_cache.reserve_channel_count);
-    ReserveIfNeeded(material_float4_channels, create_info_cache.reserve_channel_count);
-    ReserveIfNeeded(material_color_channels, create_info_cache.reserve_channel_count);
+    ReserveIfNeeded(visual_scalar_channels, create_info_cache.reserve_channel_count);
+    ReserveIfNeeded(visual_float4_channels, create_info_cache.reserve_channel_count);
+    ReserveIfNeeded(visual_color_channels, create_info_cache.reserve_channel_count);
     ReserveIfNeeded(camera_scalar_channels, create_info_cache.reserve_channel_count);
     ReserveIfNeeded(camera_float2_channels, create_info_cache.reserve_channel_count);
     ReserveIfNeeded(camera_float3_channels, create_info_cache.reserve_channel_count);
@@ -172,9 +172,9 @@ void AnimationClipHost::Shutdown() noexcept {
     property_float4_channels.clear();
     property_quaternion_channels.clear();
     property_color_channels.clear();
-    material_scalar_channels.clear();
-    material_float4_channels.clear();
-    material_color_channels.clear();
+    visual_scalar_channels.clear();
+    visual_float4_channels.clear();
+    visual_color_channels.clear();
     camera_scalar_channels.clear();
     camera_float2_channels.clear();
     camera_float3_channels.clear();
@@ -264,18 +264,18 @@ ecs::AnimationClipHandle AnimationClipHost::UpsertPropertyClip(const PropertyAni
     return record->handle;
 }
 
-ecs::AnimationClipHandle AnimationClipHost::UpsertMaterialClip(const MaterialAnimationClipDesc& desc_) {
+ecs::AnimationClipHandle AnimationClipHost::UpsertVisualClip(const VisualAnimationClipDesc& desc_) {
     if (!initialized) {
-        throw std::runtime_error("AnimationClipHost::UpsertMaterialClip called before Initialize");
+        throw std::runtime_error("AnimationClipHost::UpsertVisualClip called before Initialize");
     }
     if (desc_.clip_id == 0U) {
-        throw std::invalid_argument("AnimationClipHost::UpsertMaterialClip clip_id must be non-zero");
+        throw std::invalid_argument("AnimationClipHost::UpsertVisualClip clip_id must be non-zero");
     }
 
     AnimationClipRecord* record = FindMutableClipById(desc_.clip_id);
     const bool exists = record != nullptr;
-    if (exists && record->kind != AnimationClipKind::material_track) {
-        throw std::invalid_argument("AnimationClipHost::UpsertMaterialClip clip kind mismatch");
+    if (exists && record->kind != AnimationClipKind::visual_track) {
+        throw std::invalid_argument("AnimationClipHost::UpsertVisualClip clip kind mismatch");
     }
 
     if (!exists) {
@@ -284,7 +284,7 @@ ecs::AnimationClipHandle AnimationClipHost::UpsertMaterialClip(const MaterialAni
         record = &clips.back();
         record->clip_id = desc_.clip_id;
         record->handle = handle;
-        record->kind = AnimationClipKind::material_track;
+        record->kind = AnimationClipKind::visual_track;
         record->revision = 1U;
 
         ClipLookupEntry lookup_entry{};
@@ -294,7 +294,7 @@ ecs::AnimationClipHandle AnimationClipHost::UpsertMaterialClip(const MaterialAni
         InsertVectorValue(lookup, lookup_index, lookup_entry);
 
         slots[handle.index].record_index = static_cast<std::uint32_t>(clips.size() - 1U);
-        UpdateStatsByKind(AnimationClipKind::material_track, +1);
+        UpdateStatsByKind(AnimationClipKind::visual_track, +1);
         ++stats.added_clip_count;
     } else {
         ++record->revision;
@@ -302,21 +302,21 @@ ecs::AnimationClipHandle AnimationClipHost::UpsertMaterialClip(const MaterialAni
     }
 
     record->duration_s = std::max(1e-6F, desc_.duration_s);
-    record->material.scalar = AppendChannels<MaterialScalarChannelDesc,
-                                             MaterialScalarChannelRecord,
+    record->visual.scalar = AppendChannels<VisualScalarChannelDesc,
+                                             VisualScalarChannelRecord,
                                              float,
-                                             ecs::MaterialTrackSemantic>(
-        material_scalar_channels, scalar_keyframes, desc_.scalar_channels, desc_.scalar_channel_count);
-    record->material.float4 = AppendChannels<MaterialFloat4ChannelDesc,
-                                             MaterialFloat4ChannelRecord,
+                                             ecs::VisualTrackSemantic>(
+        visual_scalar_channels, scalar_keyframes, desc_.scalar_channels, desc_.scalar_channel_count);
+    record->visual.float4 = AppendChannels<VisualFloat4ChannelDesc,
+                                             VisualFloat4ChannelRecord,
                                              ecs::Float4,
-                                             ecs::MaterialTrackSemantic>(
-        material_float4_channels, float4_keyframes, desc_.float4_channels, desc_.float4_channel_count);
-    record->material.color = AppendChannels<MaterialColorChannelDesc,
-                                            MaterialColorChannelRecord,
+                                             ecs::VisualTrackSemantic>(
+        visual_float4_channels, float4_keyframes, desc_.float4_channels, desc_.float4_channel_count);
+    record->visual.color = AppendChannels<VisualColorChannelDesc,
+                                            VisualColorChannelRecord,
                                             ecs::Rgba8,
-                                            ecs::MaterialTrackSemantic>(
-        material_color_channels, color_keyframes, desc_.color_channels, desc_.color_channel_count);
+                                            ecs::VisualTrackSemantic>(
+        visual_color_channels, color_keyframes, desc_.color_channels, desc_.color_channel_count);
 
     stats.clip_count = static_cast<std::uint32_t>(clips.size());
     ++stats.revision;
@@ -470,14 +470,14 @@ const AnimationClipRecord* AnimationClipHost::FindPropertyClipByHandle(ecs::Anim
     return (record != nullptr && record->kind == AnimationClipKind::property_track) ? record : nullptr;
 }
 
-const AnimationClipRecord* AnimationClipHost::FindMaterialClipById(std::uint32_t clip_id_) const noexcept {
+const AnimationClipRecord* AnimationClipHost::FindVisualClipById(std::uint32_t clip_id_) const noexcept {
     const AnimationClipRecord* record = FindClipById(clip_id_);
-    return (record != nullptr && record->kind == AnimationClipKind::material_track) ? record : nullptr;
+    return (record != nullptr && record->kind == AnimationClipKind::visual_track) ? record : nullptr;
 }
 
-const AnimationClipRecord* AnimationClipHost::FindMaterialClipByHandle(ecs::AnimationClipHandle handle_) const noexcept {
+const AnimationClipRecord* AnimationClipHost::FindVisualClipByHandle(ecs::AnimationClipHandle handle_) const noexcept {
     const AnimationClipRecord* record = FindClipByHandle(handle_);
-    return (record != nullptr && record->kind == AnimationClipKind::material_track) ? record : nullptr;
+    return (record != nullptr && record->kind == AnimationClipKind::visual_track) ? record : nullptr;
 }
 
 const AnimationClipRecord* AnimationClipHost::FindCameraClipById(std::uint32_t clip_id_) const noexcept {
@@ -514,16 +514,16 @@ const PropertyColorChannelRecord* AnimationClipHost::PropertyColorChannels(const
     return ChannelsOrNull(property_color_channels, clip_.property.color);
 }
 
-const MaterialScalarChannelRecord* AnimationClipHost::MaterialScalarChannels(const AnimationClipRecord& clip_) const noexcept {
-    return ChannelsOrNull(material_scalar_channels, clip_.material.scalar);
+const VisualScalarChannelRecord* AnimationClipHost::VisualScalarChannels(const AnimationClipRecord& clip_) const noexcept {
+    return ChannelsOrNull(visual_scalar_channels, clip_.visual.scalar);
 }
 
-const MaterialFloat4ChannelRecord* AnimationClipHost::MaterialFloat4Channels(const AnimationClipRecord& clip_) const noexcept {
-    return ChannelsOrNull(material_float4_channels, clip_.material.float4);
+const VisualFloat4ChannelRecord* AnimationClipHost::VisualFloat4Channels(const AnimationClipRecord& clip_) const noexcept {
+    return ChannelsOrNull(visual_float4_channels, clip_.visual.float4);
 }
 
-const MaterialColorChannelRecord* AnimationClipHost::MaterialColorChannels(const AnimationClipRecord& clip_) const noexcept {
-    return ChannelsOrNull(material_color_channels, clip_.material.color);
+const VisualColorChannelRecord* AnimationClipHost::VisualColorChannels(const AnimationClipRecord& clip_) const noexcept {
+    return ChannelsOrNull(visual_color_channels, clip_.visual.color);
 }
 
 const CameraScalarChannelRecord* AnimationClipHost::CameraScalarChannels(const AnimationClipRecord& clip_) const noexcept {
@@ -566,15 +566,15 @@ ecs::AnimationCurveView<ecs::Rgba8> AnimationClipHost::BuildCurveView(const Prop
     return BuildView(color_keyframes, channel_.keyframe_begin, channel_.keyframe_count);
 }
 
-ecs::AnimationCurveView<float> AnimationClipHost::BuildCurveView(const MaterialScalarChannelRecord& channel_) const noexcept {
+ecs::AnimationCurveView<float> AnimationClipHost::BuildCurveView(const VisualScalarChannelRecord& channel_) const noexcept {
     return BuildView(scalar_keyframes, channel_.keyframe_begin, channel_.keyframe_count);
 }
 
-ecs::AnimationCurveView<ecs::Float4> AnimationClipHost::BuildCurveView(const MaterialFloat4ChannelRecord& channel_) const noexcept {
+ecs::AnimationCurveView<ecs::Float4> AnimationClipHost::BuildCurveView(const VisualFloat4ChannelRecord& channel_) const noexcept {
     return BuildView(float4_keyframes, channel_.keyframe_begin, channel_.keyframe_count);
 }
 
-ecs::AnimationCurveView<ecs::Rgba8> AnimationClipHost::BuildCurveView(const MaterialColorChannelRecord& channel_) const noexcept {
+ecs::AnimationCurveView<ecs::Rgba8> AnimationClipHost::BuildCurveView(const VisualColorChannelRecord& channel_) const noexcept {
     return BuildView(color_keyframes, channel_.keyframe_begin, channel_.keyframe_count);
 }
 
@@ -651,8 +651,8 @@ void AnimationClipHost::UpdateStatsByKind(AnimationClipKind kind_, int delta_) n
         case AnimationClipKind::property_track:
             apply(stats.property_clip_count);
             break;
-        case AnimationClipKind::material_track:
-            apply(stats.material_clip_count);
+        case AnimationClipKind::visual_track:
+            apply(stats.visual_clip_count);
             break;
         case AnimationClipKind::camera_track:
             apply(stats.camera_clip_count);
@@ -686,3 +686,5 @@ AnimationClipRecord* AnimationClipHost::FindMutableClipById(std::uint32_t clip_i
 }
 
 } // namespace vr::animation
+
+

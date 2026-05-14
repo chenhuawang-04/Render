@@ -1,4 +1,4 @@
-#include "vr/text/text_renderer_2d.hpp"
+﻿#include "vr/text/text_renderer_2d.hpp"
 
 #include "vr/render/color_blend_state.hpp"
 #include "vr/render/render_loop_host.hpp"
@@ -699,3 +699,4 @@ void TextRenderer2D::EnsurePipelineObjects(VulkanContext& context_,
 }
 
 } // namespace vr::text
+

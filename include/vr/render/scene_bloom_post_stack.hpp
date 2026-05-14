@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "vr/render/render_target_bloom_renderer.hpp"
 #include "vr/render/scene_render_target_set.hpp"
@@ -85,3 +85,4 @@ private:
 };
 
 } // namespace vr::render
+

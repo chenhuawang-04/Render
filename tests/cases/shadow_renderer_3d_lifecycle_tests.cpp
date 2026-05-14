@@ -1,4 +1,4 @@
-#include "support/test_framework.hpp"
+﻿#include "support/test_framework.hpp"
 #include "vr/ecs/system/bounds_system.hpp"
 #include "vr/ecs/system/camera_system.hpp"
 #include "vr/ecs/system/geometry_system.hpp"
@@ -31,7 +31,6 @@ VR_TEST_CASE(ShadowRenderer3D_lifecycle_no_runtime_calls, "unit;core;shadow;rend
     ShadowSystem3D::Initialize(shadows[0U]);
     GeometrySystem3D::Initialize(geometry_components[0U]);
     GeometrySystem3D::SetRuntimeRoute(geometry_components[0U], 1U, 1U, 0U);
-    geometry_components[0U].style.cast_shadow = 1U;
     TransformSystem3D::Initialize(transforms[0U]);
     TransformSystem3D::UpdateHierarchy(transforms.data(), 1U);
     BoundsSystem3D::Initialize(bounds[0U]);

@@ -1,4 +1,4 @@
-#include "vr/render/scene_render_target_set.hpp"
+﻿#include "vr/render/scene_render_target_set.hpp"
 
 #include <string>
 #include <stdexcept>
@@ -473,3 +473,4 @@ VkFormat SceneRenderTargetSet::ResolveDepthFormat(VulkanContext& context_,
 }
 
 } // namespace vr::render
+

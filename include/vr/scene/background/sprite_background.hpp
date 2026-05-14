@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "vr/ecs/component/spatial_types.hpp"
 
@@ -63,3 +63,4 @@ static_assert(std::is_standard_layout_v<Background2DRenderState>);
 static_assert(std::is_trivial_v<Background2DRenderState>);
 
 } // namespace vr::scene
+

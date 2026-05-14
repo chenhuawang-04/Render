@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <type_traits>
 
@@ -23,3 +23,4 @@ inline constexpr bool service_depends_on_v =
     dependency_list_contains_v<DependencyT, typename ServiceT::Dependencies>;
 
 } // namespace vr::runtime
+

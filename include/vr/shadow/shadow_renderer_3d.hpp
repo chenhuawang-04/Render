@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "Center/Memory/Container/Vector/McVector.hpp"
 #include "vr/ecs/component/bounds_component.hpp"
@@ -284,3 +284,4 @@ private:
 };
 
 } // namespace vr::shadow
+

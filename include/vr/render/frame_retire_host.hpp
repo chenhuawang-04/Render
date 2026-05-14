@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "Center/Memory/Container/Vector/McVector.hpp"
 
@@ -203,4 +203,5 @@ private:
 };
 
 } // namespace vr::render
+
 

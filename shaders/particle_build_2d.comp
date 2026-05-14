@@ -18,7 +18,7 @@ struct ParticleGpuStateRecord {
     uint start_color_rgba8;
     uint end_color_rgba8;
     uint texture_id;
-    uint material_id;
+    uint sampler_slot;
     uint component_index;
     uint user_data;
     uint packed_flags;
@@ -191,7 +191,7 @@ void main() {
     dst.normalized_age = normalized_age;
     dst.color_rgba8 = pack_color(color);
     dst.texture_slot = src.texture_id;
-    dst.sampler_slot = src.material_id;
+    dst.sampler_slot = src.sampler_slot;
     dst.component_index = src.component_index;
     dst.user_data = src.user_data;
     instance_buffer.instances[alive_entry.compacted_instance_index - 1u] = dst;

@@ -1,4 +1,4 @@
-#include "vr/surface/surface_upload_host.hpp"
+﻿#include "vr/surface/surface_upload_host.hpp"
 
 #include "vr/resource/gpu_memory_host.hpp"
 
@@ -875,3 +875,4 @@ const SurfaceUploadHost::FrameState& SurfaceUploadHost::FrameAt(std::uint32_t fr
 }
 
 } // namespace vr::surface
+

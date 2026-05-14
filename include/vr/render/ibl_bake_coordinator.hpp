@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "vr/render/ibl_bake_host.hpp"
 #include "vr/render/render_loop_host.hpp"
@@ -131,3 +131,4 @@ private:
 };
 
 } // namespace vr::render
+

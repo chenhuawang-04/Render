@@ -1,4 +1,5 @@
-#include "support/test_framework.hpp"
+﻿#include "support/test_framework.hpp"
+#include "vr/ecs/system/appearance_system.hpp"
 #include "vr/ecs/system/bounds_system.hpp"
 #include "vr/ecs/system/camera_system.hpp"
 #include "vr/ecs/system/surface_system.hpp"
@@ -24,6 +25,8 @@ namespace {
 using Runtime = vr::render::RenderRuntimeHost<vr::platform::ActiveBackendTag, 2U>;
 using Surface3D = vr::ecs::Surface<vr::ecs::Dim3>;
 using SurfaceSystem3D = vr::ecs::SurfaceSystem<vr::ecs::Dim3>;
+using Appearance3D = vr::ecs::Appearance<vr::ecs::Dim3>;
+using AppearanceSystem3D = vr::ecs::AppearanceSystem<vr::ecs::Dim3>;
 using Transform3D = vr::ecs::Transform<vr::ecs::Dim3>;
 using TransformSystem3D = vr::ecs::TransformSystem<vr::ecs::Dim3>;
 using Bounds3D = vr::ecs::Bounds<vr::ecs::Dim3>;
@@ -153,14 +156,20 @@ void InitializeSurface3DComponent(Surface3D& component_,
                                   vr::ecs::Rgba8 tint_color_,
                                   float opacity_) {
     SurfaceSystem3D::Initialize(component_);
-    SurfaceSystem3D::SetTextureRoute(component_, texture_id_, sampler_id_, 0U, 0U);
+    SurfaceSystem3D::SetSource(component_, vr::ecs::SurfaceSampledSource3DDesc{.surface_id = texture_id_, .sampler_id = sampler_id_, .uv_set = 0U, .flags = 0U});
     SurfaceSystem3D::SetDepthBin(component_, depth_bin_);
     SurfaceSystem3D::SetRenderPassHint(component_, vr::ecs::SurfaceRenderPassHint::transparent);
-    SurfaceSystem3D::SetDepthTest(component_, true);
-    SurfaceSystem3D::SetDepthWrite(component_, depth_write_);
-    SurfaceSystem3D::SetDoubleSided(component_, double_sided_);
-    SurfaceSystem3D::SetTintColor(component_, tint_color_);
-    SurfaceSystem3D::SetOpacity(component_, opacity_);
+
+    Appearance3D appearance{};
+    AppearanceSystem3D::Initialize(appearance);
+    AppearanceSystem3D::SetBaseColor(appearance, tint_color_);
+    AppearanceSystem3D::SetOpacity(appearance, opacity_);
+    AppearanceSystem3D::SetDepthTest(appearance, true);
+    AppearanceSystem3D::SetDepthWrite(appearance, depth_write_);
+    AppearanceSystem3D::SetDoubleSided(appearance, double_sided_);
+    AppearanceSystem3D::SetBlendMode(appearance, vr::ecs::AppearanceBlendMode::alpha);
+    AppearanceSystem3D::SetAlphaMode(appearance, vr::ecs::AppearanceAlphaMode::blend);
+    (void)SurfaceSystem3D::ApplyAppearanceRuntimeState(component_, appearance.style);
 }
 
 [[nodiscard]] vr::render::SceneRecorder3DCreateInfo BuildSurfaceRecorderCreateInfo() noexcept {
@@ -451,7 +460,7 @@ VR_TEST_CASE(RuntimeIntegration_surface_renderer_3d_bloom_post_stack_smoke,
         VR_CHECK(max_surface_bindless_set_binds > 0U);
         VR_CHECK(max_surface_ibl_descriptor_binds > 0U);
         VR_CHECK(max_surface_depth_test_batches > 0U);
-        VR_CHECK(max_surface_depth_write_batches > 0U);
+        VR_CHECK(max_surface_depth_write_batches == 0U);
         VR_CHECK(max_surface_culling_visible_count > 0U);
         VR_CHECK(observed_bounds_culling);
         VR_CHECK(max_prefilter_draw_calls > 0U);
@@ -512,3 +521,4 @@ VR_TEST_CASE(RuntimeIntegration_surface_renderer_3d_bloom_post_stack_smoke,
 }
 
 } // namespace
+

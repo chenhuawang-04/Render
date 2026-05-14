@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "vr/particle/particle_simulation_host.hpp"
 #include "vr/runtime/runtime_service.hpp"
@@ -76,3 +76,4 @@ public:
 };
 
 } // namespace vr::runtime::services
+

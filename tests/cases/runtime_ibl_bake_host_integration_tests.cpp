@@ -1,4 +1,4 @@
-#include "support/test_framework.hpp"
+﻿#include "support/test_framework.hpp"
 #include "vr/render/render_runtime_host.hpp"
 #include "vr/render/runtime_prepare_views.hpp"
 
@@ -203,3 +203,4 @@ VR_TEST_CASE(RuntimeIntegration_ibl_bake_host_bakes_environment_and_registers_ru
 }
 
 } // namespace
+

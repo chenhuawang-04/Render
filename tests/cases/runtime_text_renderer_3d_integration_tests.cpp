@@ -1,4 +1,4 @@
-#include "support/test_framework.hpp"
+﻿#include "support/test_framework.hpp"
 #include "vr/ecs/system/bounds_system.hpp"
 #include "vr/ecs/system/camera_system.hpp"
 #include "vr/ecs/system/text_system.hpp"
@@ -109,10 +109,10 @@ using CameraSystem3D = vr::ecs::CameraSystem<vr::ecs::Dim3>;
 
 void InitializeTextComponent(Text3D& component_,
                              std::uint32_t font_id_,
-                             std::uint32_t material_id_,
+                             std::uint32_t appearance_id_,
                              std::string_view text_) {
     TextSystem3D::Initialize(component_);
-    TextSystem3D::SetRuntimeRoute(component_, font_id_, material_id_, 0U, 0U);
+    TextSystem3D::SetRuntimeRoute(component_, font_id_, appearance_id_, 0U, 0U);
     TextSystem3D::SetColor(component_, vr::ecs::Rgba8{255U, 255U, 255U, 255U});
     TextSystem3D::SetOutlineEnabled(component_, true);
     TextSystem3D::SetOutlineWidthPx(component_, 1U);
@@ -652,3 +652,4 @@ VR_TEST_CASE(RuntimeIntegration_text_renderer_3d_bloom_post_stack_smoke,
 }
 
 } // namespace
+

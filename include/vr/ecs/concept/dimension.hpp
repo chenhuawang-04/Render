@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <concepts>
 #include <cstdint>
@@ -26,3 +26,4 @@ template<DimensionTag DimensionT>
 inline constexpr SceneDimension scene_dimension_v = DimensionT::value;
 
 } // namespace vr::ecs
+

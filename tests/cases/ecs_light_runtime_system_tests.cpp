@@ -1,4 +1,4 @@
-#include "support/test_framework.hpp"
+﻿#include "support/test_framework.hpp"
 #include "vr/ecs/system/light_runtime_system.hpp"
 #include "vr/ecs/system/light_system.hpp"
 #include "vr/ecs/system/transform_system.hpp"
@@ -113,4 +113,5 @@ VR_TEST_CASE(EcsLightRuntimeSystem_dim3_build_dirty_and_upload_ranges, "unit;cor
 }
 
 } // namespace
+
 

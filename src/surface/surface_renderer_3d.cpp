@@ -1,5 +1,6 @@
 #include "vr/surface/surface_renderer_3d.hpp"
 
+#include "vr/asset/texture_host.hpp"
 #include "vr/ecs/system/transparency_render_policy.hpp"
 #include "vr/ecs/system/spatial_math.hpp"
 #include "vr/render/bindless_resource_system.hpp"
@@ -17,6 +18,7 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <cstring>
 #include <cstdint>
 #include <stdexcept>
 #include <utility>
@@ -123,6 +125,50 @@ std::uint64_t SurfaceRenderer3D::ComposeBindlessUploadRevision(
     return revision;
 }
 
+void SurfaceRenderer3D::BuildAppearanceRecordsAndAssignIndices() {
+    appearance_source_record_scratch.clear();
+
+    const auto& appearance_runtime_scratch = appearance_prepare_bridge.RuntimeScratch();
+    const std::uint32_t linked_record_count =
+        static_cast<std::uint32_t>(appearance_runtime_scratch.gpu_records.size());
+    if (linked_record_count > 0U) {
+        appearance_source_record_scratch.resize(linked_record_count);
+        for (std::uint32_t index = 0U; index < linked_record_count; ++index) {
+            appearance_source_record_scratch[index] = appearance_runtime_scratch.gpu_records[index];
+        }
+    }
+
+    for (auto& instance : runtime_scratch.instances) {
+        ecs::AppearanceGpuRecord<ecs::Dim3> synthesized_record{};
+        ecs::AppearanceRuntimeBridge3D appearance_bridge = ecs::MakeAppearanceRuntimeBridge3D(nullptr);
+        render::AppearanceTextureBindingIds3D binding{};
+        binding.texture_source = render::AppearanceTextureSource3D::surface_image;
+
+        if (surface_components != nullptr && instance.component_index < component_count) {
+            const ecs::Surface<ecs::Dim3>& component = surface_components[instance.component_index];
+            const auto linked_appearance =
+                render::ResolveLinkedAppearanceRecord(component.runtime.route.appearance_handle,
+                                                      appearance_runtime_scratch);
+            if (linked_appearance.record != nullptr) {
+                instance.appearance_record_index = linked_appearance.record_index;
+                continue;
+            }
+
+            appearance_bridge = ecs::ReadAppearanceRuntimeBridge3D(component.runtime);
+            binding.base_color_texture_id = component.runtime.source.surface_id;
+            binding.sampler_state_id = component.runtime.source.sampler_id;
+        }
+
+        render::BuildAppearanceGpuRecord3DFromRuntimeBridge(
+            appearance_bridge,
+            binding,
+            synthesized_record);
+        instance.appearance_record_index =
+            static_cast<std::uint32_t>(appearance_source_record_scratch.size());
+        appearance_source_record_scratch.push_back(synthesized_record);
+    }
+}
+
 void SurfaceRenderer3D::Initialize(const SurfaceRenderer3DCreateInfo& create_info_) {
     create_info_cache = create_info_;
 
@@ -143,6 +189,7 @@ void SurfaceRenderer3D::Initialize(const SurfaceRenderer3DCreateInfo& create_inf
             create_info_cache.reserve_instance_count);
     }
 
+    appearance_descriptor_layout_id = {};
     pipeline_layout_id = {};
     shader_vertex_id = {};
     shader_fragment_id = {};
@@ -169,6 +216,7 @@ void SurfaceRenderer3D::Initialize(const SurfaceRenderer3DCreateInfo& create_inf
     image_initialized.clear();
     appearance_runtime_stats = {};
     appearance_link_stats = {};
+    appearance_build_invoked = false;
     appearance_prepare_bridge.Reset();
 
     surface_components = nullptr;
@@ -180,6 +228,7 @@ void SurfaceRenderer3D::Initialize(const SurfaceRenderer3DCreateInfo& create_inf
     bounds_components = nullptr;
     surface_upload_host = nullptr;
     surface_image_host = nullptr;
+    texture_host = nullptr;
     context = nullptr;
     upload_host = nullptr;
     descriptor_host = nullptr;
@@ -187,6 +236,10 @@ void SurfaceRenderer3D::Initialize(const SurfaceRenderer3DCreateInfo& create_inf
     pipeline_host = nullptr;
     ibl_host = nullptr;
     gpu_memory_host = nullptr;
+    frame_appearance_resources.clear();
+    appearance_record_scratch.clear();
+    descriptor_buffer_write_scratch.clear();
+    descriptor_image_write_scratch.clear();
 
     last_upload_result = {};
     culling_stats = {};
@@ -196,6 +249,9 @@ void SurfaceRenderer3D::Initialize(const SurfaceRenderer3DCreateInfo& create_inf
     swapchain_format = VK_FORMAT_UNDEFINED;
     last_submitted_value_seen = 0U;
     completed_submit_value_seen = 0U;
+    appearance_record_bindless_revision_seen = 0U;
+    appearance_record_texture_host_revision_seen = 0U;
+    appearance_record_content_revision = 0U;
     pending_dirty_component_indices = nullptr;
     pending_dirty_component_count = 0U;
 
@@ -219,6 +275,7 @@ void SurfaceRenderer3D::Shutdown(VulkanContext& context_) {
     bounds_components = nullptr;
     surface_upload_host = nullptr;
     surface_image_host = nullptr;
+    texture_host = nullptr;
 
     context = nullptr;
     upload_host = nullptr;
@@ -228,6 +285,7 @@ void SurfaceRenderer3D::Shutdown(VulkanContext& context_) {
     ibl_host = nullptr;
     gpu_memory_host = nullptr;
 
+    appearance_descriptor_layout_id = {};
     pipeline_layout_id = {};
     shader_vertex_id = {};
     shader_fragment_id = {};
@@ -250,6 +308,7 @@ void SurfaceRenderer3D::Shutdown(VulkanContext& context_) {
     appearance_prepare_bridge.Reset();
     appearance_runtime_stats = {};
     appearance_link_stats = {};
+    appearance_build_invoked = false;
     culling_scratch.visible_indices.clear();
     culling_scratch.visibility_stamps.clear();
     culling_stats = {};
@@ -263,6 +322,13 @@ void SurfaceRenderer3D::Shutdown(VulkanContext& context_) {
     output_target_config = {};
     depth_output_target_config = {};
     image_initialized.clear();
+    for (auto& frame_resources : frame_appearance_resources) {
+        resource::BufferHost::DestroyBuffer(context_, frame_resources.appearance_records);
+    }
+    frame_appearance_resources.clear();
+    appearance_record_scratch.clear();
+    descriptor_buffer_write_scratch.clear();
+    descriptor_image_write_scratch.clear();
     last_upload_result = {};
     stats = {};
 
@@ -272,6 +338,9 @@ void SurfaceRenderer3D::Shutdown(VulkanContext& context_) {
     swapchain_format = VK_FORMAT_UNDEFINED;
     last_submitted_value_seen = 0U;
     completed_submit_value_seen = 0U;
+    appearance_record_bindless_revision_seen = 0U;
+    appearance_record_texture_host_revision_seen = 0U;
+    appearance_record_content_revision = 0U;
     pending_dirty_component_indices = nullptr;
     pending_dirty_component_count = 0U;
     initialized = false;
@@ -366,6 +435,7 @@ void SurfaceRenderer3D::PrepareFrame(const render::SurfaceRenderer3DPrepareView&
     pipeline_host = &prepare_view_.pipeline;
     ibl_host = &prepare_view_.ibl;
     gpu_memory_host = &prepare_view_.gpu_memory;
+    texture_host = prepare_view_.texture;
     if (prepare_view_.bindless != nullptr) {
         bindless_resources = prepare_view_.bindless;
     }
@@ -374,6 +444,12 @@ void SurfaceRenderer3D::PrepareFrame(const render::SurfaceRenderer3DPrepareView&
             "SurfaceRenderer3D::PrepareFrame requires initialized BindlessResourceSystem");
     }
     const std::uint64_t bindless_revision_now = bindless_resources->Revision();
+    if (texture_host != nullptr &&
+        texture_host->IsInitialized() &&
+        (!texture_host->BindlessConfig().Enabled() ||
+         texture_host->BindlessConfig().bindless_revision != bindless_revision_now)) {
+        bindless_resources->ConfigureTextureHost(*texture_host);
+    }
     if (surface_image_host != nullptr &&
         surface_image_host->IsInitialized() &&
         (!surface_image_host->BindlessConfig().Enabled() ||
@@ -381,6 +457,14 @@ void SurfaceRenderer3D::PrepareFrame(const render::SurfaceRenderer3DPrepareView&
         bindless_resources->ConfigureSurfaceImageHost(*surface_image_host);
     }
     active_frame_index = prepare_view_.frame.frame_index;
+    if (active_frame_index >= frame_appearance_resources.size()) {
+        frame_appearance_resources.resize(active_frame_index + 1U);
+    }
+    {
+        FrameAppearanceResources& frame_resources = frame_appearance_resources[active_frame_index];
+        frame_resources.descriptor_set = VK_NULL_HANDLE;
+        frame_resources.descriptor_buffer_signature = 0U;
+    }
     last_submitted_value_seen = std::max(last_submitted_value_seen, prepare_view_.progress.last_submitted_value);
     completed_submit_value_seen = std::max(completed_submit_value_seen,
                                            prepare_view_.progress.completed_submit_value);
@@ -420,6 +504,7 @@ void SurfaceRenderer3D::PrepareFrame(const render::SurfaceRenderer3DPrepareView&
         surface_components,
         component_count,
         active_frame_index);
+    appearance_build_invoked = appearance_prepare_result.build_invoked;
     if (appearance_prepare_result.has_appearance_data) {
         appearance_runtime_stats = appearance_prepare_result.runtime_stats;
         appearance_link_stats = appearance_prepare_result.link_stats;
@@ -431,6 +516,8 @@ void SurfaceRenderer3D::PrepareFrame(const render::SurfaceRenderer3DPrepareView&
     }
 
     if (surface_components == nullptr || component_count == 0U) {
+        appearance_source_record_scratch.clear();
+        EnsureAppearanceResourcesForFrame(bindless_revision_now);
         runtime_scratch.instances.clear();
         runtime_scratch.draw_batches.clear();
         culling_scratch.visible_indices.clear();
@@ -486,8 +573,8 @@ void SurfaceRenderer3D::PrepareFrame(const render::SurfaceRenderer3DPrepareView&
 
     if (!runtime_scratch.instances.empty() &&
         last_upload_result.runtime.emitted_instance_count > 0U) {
-        RemapInstancesToBindless(runtime_scratch.instances.data(),
-                                 static_cast<std::uint32_t>(runtime_scratch.instances.size()));
+        BuildAppearanceRecordsAndAssignIndices();
+        EnsureAppearanceResourcesForFrame(bindless_revision_now);
         const std::uint64_t upload_revision = ComposeBindlessUploadRevision(
             last_upload_result.runtime,
             surface_image_host != nullptr ? surface_image_host->Stats().revision : 0U);
@@ -546,6 +633,8 @@ void SurfaceRenderer3D::PrepareFrame(const render::SurfaceRenderer3DPrepareView&
             last_upload_result.skipped_upload = !last_upload_result.upload.uploaded;
         }
     } else {
+        appearance_source_record_scratch.clear();
+        EnsureAppearanceResourcesForFrame(bindless_revision_now);
         last_upload_result.skipped_upload = true;
     }
 
@@ -556,7 +645,7 @@ void SurfaceRenderer3D::PrepareFrame(const render::SurfaceRenderer3DPrepareView&
     stats.depth_write_batch_count = last_upload_result.runtime.depth_write_batch_count;
     stats.uploaded_instance_count = last_upload_result.upload.element_count;
     stats.uploaded_patch_count = last_upload_result.upload.patch_count;
-    stats.uploaded_bytes = last_upload_result.upload.size_bytes;
+    stats.uploaded_bytes += last_upload_result.upload.size_bytes;
     stats.cache_reused = last_upload_result.runtime.cache_reused;
     stats.transform_only_update = last_upload_result.runtime.transform_only_update;
     stats.used_partial_upload = last_upload_result.used_partial_upload;
@@ -752,15 +841,23 @@ void SurfaceRenderer3D::RecordInternal(const render::FrameRecordContext& record_
         push_constants.ibl_brdf_lut_texture_slot = active_ibl_brdf_lut_texture_slot;
         push_constants.ibl_sampler_slot = active_ibl_sampler_slot;
 
-        const std::array<VkDescriptorSet, 3U> descriptor_sets{
+        const VkDescriptorSet appearance_descriptor_set =
+            (active_frame_index < frame_appearance_resources.size())
+                ? frame_appearance_resources[active_frame_index].descriptor_set
+                : VK_NULL_HANDLE;
+        const std::array<VkDescriptorSet, 4U> descriptor_sets{
             bindless_resources->SampledImageSet(),
             bindless_resources->SamplerSet(),
+            appearance_descriptor_set,
             active_ibl_params_descriptor_set
         };
         if (descriptor_sets[0U] == VK_NULL_HANDLE || descriptor_sets[1U] == VK_NULL_HANDLE) {
             throw std::runtime_error("SurfaceRenderer3D::Record requires valid bindless descriptor sets");
         }
         if (descriptor_sets[2U] == VK_NULL_HANDLE) {
+            throw std::runtime_error("SurfaceRenderer3D::Record requires valid appearance descriptor set");
+        }
+        if (descriptor_sets[3U] == VK_NULL_HANDLE) {
             throw std::runtime_error("SurfaceRenderer3D::Record requires valid IBL params descriptor set");
         }
 
@@ -928,19 +1025,24 @@ void SurfaceRenderer3D::EnsurePipelineObjects(VulkanContext& context_,
         if (ibl_host == nullptr || !ibl_host->ParamsDescriptorLayoutId().IsValid()) {
             throw std::runtime_error("SurfaceRenderer3D requires initialized IBL params descriptor layout");
         }
+        EnsureAppearanceDescriptorObjects(context_, *descriptor_host);
         const VkDescriptorSetLayout sampled_image_layout = bindless_resources_.SampledImageLayout();
         const VkDescriptorSetLayout sampler_layout = bindless_resources_.SamplerLayout();
+        const VkDescriptorSetLayout appearance_layout =
+            descriptor_host->GetLayout(appearance_descriptor_layout_id);
         const VkDescriptorSetLayout ibl_layout =
             descriptor_host->GetLayout(ibl_host->ParamsDescriptorLayoutId());
         if (sampled_image_layout == VK_NULL_HANDLE ||
             sampler_layout == VK_NULL_HANDLE ||
+            appearance_layout == VK_NULL_HANDLE ||
             ibl_layout == VK_NULL_HANDLE) {
             throw std::runtime_error(
-                "SurfaceRenderer3D::EnsurePipelineObjects requires valid bindless / IBL params layouts");
+                "SurfaceRenderer3D::EnsurePipelineObjects requires valid bindless / appearance / IBL params layouts");
         }
         render::PipelineLayoutDesc layout_desc{};
         layout_desc.set_layouts.push_back(sampled_image_layout);
         layout_desc.set_layouts.push_back(sampler_layout);
+        layout_desc.set_layouts.push_back(appearance_layout);
         layout_desc.set_layouts.push_back(ibl_layout);
         layout_desc.push_constant_ranges.push_back({
             .stage_flags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
@@ -1016,21 +1118,12 @@ render::GraphicsPipelineId SurfaceRenderer3D::EnsurePipelineForMode(
         .stride = static_cast<std::uint32_t>(sizeof(ecs::Surface3DGpuInstance)),
         .inputRate = VK_VERTEX_INPUT_RATE_INSTANCE
     });
-    desc.vertex_input.attributes.push_back({.location = 0U, .binding = 0U, .format = VK_FORMAT_R32G32B32A32_SFLOAT, .offset = 0U});
-    desc.vertex_input.attributes.push_back({.location = 1U, .binding = 0U, .format = VK_FORMAT_R32G32B32A32_SFLOAT, .offset = 16U});
-    desc.vertex_input.attributes.push_back({.location = 2U, .binding = 0U, .format = VK_FORMAT_R32G32B32A32_SFLOAT, .offset = 32U});
-    desc.vertex_input.attributes.push_back({.location = 3U, .binding = 0U, .format = VK_FORMAT_R32G32B32A32_SFLOAT, .offset = 48U});
-    desc.vertex_input.attributes.push_back({.location = 4U, .binding = 0U, .format = VK_FORMAT_R32G32B32A32_SFLOAT, .offset = 64U});
-    desc.vertex_input.attributes.push_back({.location = 5U, .binding = 0U, .format = VK_FORMAT_R32_SFLOAT, .offset = 80U});
-    desc.vertex_input.attributes.push_back({.location = 6U, .binding = 0U, .format = VK_FORMAT_R32_UINT, .offset = 84U});
-    desc.vertex_input.attributes.push_back({.location = 7U, .binding = 0U, .format = VK_FORMAT_R32_UINT, .offset = 88U});
-    desc.vertex_input.attributes.push_back({.location = 8U, .binding = 0U, .format = VK_FORMAT_R32_UINT, .offset = 92U});
-    desc.vertex_input.attributes.push_back({.location = 9U, .binding = 0U, .format = VK_FORMAT_R32_UINT, .offset = 96U});
-    desc.vertex_input.attributes.push_back({.location = 10U, .binding = 0U, .format = VK_FORMAT_R32_UINT, .offset = 100U});
-    desc.vertex_input.attributes.push_back({.location = 11U, .binding = 0U, .format = VK_FORMAT_R32_UINT, .offset = 104U});
-    desc.vertex_input.attributes.push_back({.location = 12U, .binding = 0U, .format = VK_FORMAT_R32_UINT, .offset = 108U});
-    desc.vertex_input.attributes.push_back({.location = 13U, .binding = 0U, .format = VK_FORMAT_R32_UINT, .offset = 112U});
-    desc.vertex_input.attributes.push_back({.location = 14U, .binding = 0U, .format = VK_FORMAT_R32_UINT, .offset = 116U});
+    desc.vertex_input.attributes.push_back({.location = 0U, .binding = 0U, .format = VK_FORMAT_R32G32B32A32_SFLOAT, .offset = static_cast<std::uint32_t>(offsetof(ecs::Surface3DGpuInstance, world_m00))});
+    desc.vertex_input.attributes.push_back({.location = 1U, .binding = 0U, .format = VK_FORMAT_R32G32B32A32_SFLOAT, .offset = static_cast<std::uint32_t>(offsetof(ecs::Surface3DGpuInstance, world_m10))});
+    desc.vertex_input.attributes.push_back({.location = 2U, .binding = 0U, .format = VK_FORMAT_R32G32B32A32_SFLOAT, .offset = static_cast<std::uint32_t>(offsetof(ecs::Surface3DGpuInstance, world_m20))});
+    desc.vertex_input.attributes.push_back({.location = 3U, .binding = 0U, .format = VK_FORMAT_R32G32B32A32_SFLOAT, .offset = static_cast<std::uint32_t>(offsetof(ecs::Surface3DGpuInstance, world_m30))});
+    desc.vertex_input.attributes.push_back({.location = 4U, .binding = 0U, .format = VK_FORMAT_R32G32B32A32_SFLOAT, .offset = static_cast<std::uint32_t>(offsetof(ecs::Surface3DGpuInstance, uv_scale_u))});
+    desc.vertex_input.attributes.push_back({.location = 5U, .binding = 0U, .format = VK_FORMAT_R32_UINT, .offset = static_cast<std::uint32_t>(offsetof(ecs::Surface3DGpuInstance, appearance_record_index))});
 
     desc.input_assembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
     desc.input_assembly.primitive_restart_enable = false;
@@ -1101,47 +1194,265 @@ render::GraphicsPipelineId SurfaceRenderer3D::EnsurePipelineForMode(
     return pipeline_id;
 }
 
-void SurfaceRenderer3D::RemapInstancesToBindless(ecs::Surface3DGpuInstance* instances_,
-                                                 std::uint32_t instance_count_) noexcept {
-    if (instances_ == nullptr || instance_count_ == 0U) {
+void SurfaceRenderer3D::EnsureAppearanceDescriptorObjects(
+    VulkanContext& context_,
+    render::DescriptorHost& descriptor_host_) {
+    if (appearance_descriptor_layout_id.IsValid()) {
         return;
     }
-    for (std::uint32_t index = 0U; index < instance_count_; ++index) {
-        ecs::Surface3DGpuInstance& instance = instances_[index];
-        const std::uint32_t raw_surface_id = instance.texture_slot;
-        const std::uint32_t raw_sampler_id = instance.sampler_slot;
-        instance.texture_slot = ResolveImageSlot(raw_surface_id);
-        instance.sampler_slot = ResolveSamplerSlot(raw_sampler_id);
-    }
+
+    render::DescriptorSetLayoutDesc layout_desc{};
+    VkDescriptorSetLayoutBinding binding{};
+    binding.binding = 0U;
+    binding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    binding.descriptorCount = 1U;
+    binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    binding.pImmutableSamplers = nullptr;
+    layout_desc.bindings.push_back(binding);
+
+    appearance_descriptor_layout_id = descriptor_host_.RegisterLayout(context_, layout_desc);
 }
 
-std::uint32_t SurfaceRenderer3D::ResolveImageSlot(std::uint32_t surface_id_) const noexcept {
-    if (bindless_resources == nullptr || !bindless_resources->IsInitialized()) {
-        return 0U;
+void SurfaceRenderer3D::DestroyStorageBuffer(resource::BufferResource& buffer_) noexcept {
+    if (context == nullptr || context->Device() == VK_NULL_HANDLE) {
+        buffer_ = {};
+        return;
     }
-
-    const std::uint32_t placeholder_slot = bindless_resources->PlaceholderImageSlot().index;
-    if (surface_id_ == 0U || surface_image_host == nullptr || !surface_image_host->IsInitialized()) {
-        return placeholder_slot;
-    }
-
-    const render::BindlessSlot image_slot = surface_image_host->ResolveBindlessImageSlot(surface_id_);
-    return image_slot.IsValid() ? image_slot.index : placeholder_slot;
+    resource::BufferHost::DestroyBuffer(*context, buffer_);
 }
 
-std::uint32_t SurfaceRenderer3D::ResolveSamplerSlot(std::uint32_t sampler_id_) const noexcept {
-    if (bindless_resources == nullptr || !bindless_resources->IsInitialized()) {
-        return 0U;
+void SurfaceRenderer3D::EnsureStorageBufferCapacity(resource::BufferResource& buffer_,
+                                                    VkDeviceSize required_bytes_) {
+    if (context == nullptr || gpu_memory_host == nullptr) {
+        throw std::runtime_error("SurfaceRenderer3D::EnsureStorageBufferCapacity missing runtime hosts");
     }
-    if (sampler_id_ == 0U) {
-        return bindless_resources->DefaultSamplerSlot().index;
+    if (required_bytes_ == 0U) {
+        return;
     }
-    try {
-        return bindless_resources
-            ->ResolveRegisteredSamplerSlot(resource::SamplerId{sampler_id_}).index;
-    } catch (...) {
-        return bindless_resources->DefaultSamplerSlot().index;
+    if (buffer_.buffer != VK_NULL_HANDLE && buffer_.size >= required_bytes_) {
+        return;
     }
+
+    if (buffer_.buffer != VK_NULL_HANDLE) {
+        resource::BufferHost::DestroyBuffer(*context, buffer_);
+    }
+
+    VkDeviceSize capacity = 256U;
+    while (capacity < required_bytes_) {
+        capacity <<= 1U;
+    }
+
+    resource::BufferCreateInfo create_info{};
+    create_info.size = capacity;
+    create_info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+    create_info.memory_properties =
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+    create_info.persistently_mapped = true;
+    buffer_ = resource::BufferHost::CreateBuffer(*context, create_info, *gpu_memory_host);
+}
+
+void SurfaceRenderer3D::EnsureAppearanceResourcesForFrame(std::uint64_t bindless_revision_now) {
+    if (descriptor_host == nullptr ||
+        active_frame_index >= frame_appearance_resources.size()) {
+        return;
+    }
+
+    EnsureAppearanceDescriptorObjects(*context, *descriptor_host);
+
+    FrameAppearanceResources& frame_resources = frame_appearance_resources[active_frame_index];
+    const std::uint32_t appearance_record_count =
+        static_cast<std::uint32_t>(appearance_source_record_scratch.size());
+    const std::uint32_t appearance_upload_count = std::max<std::uint32_t>(appearance_record_count, 1U);
+    const VkDeviceSize appearance_record_bytes =
+        static_cast<VkDeviceSize>(appearance_upload_count) *
+        sizeof(ecs::AppearanceGpuRecord<ecs::Dim3>);
+    auto mix_texture_source_revision = [](std::uint32_t accumulator_,
+                                          std::uint32_t revision_) noexcept {
+        accumulator_ ^= revision_ + 0x9e3779b9U + (accumulator_ << 6U) + (accumulator_ >> 2U);
+        return accumulator_;
+    };
+    std::uint32_t texture_host_revision = 0U;
+    if (texture_host != nullptr && texture_host->IsInitialized()) {
+        texture_host_revision =
+            mix_texture_source_revision(texture_host_revision, texture_host->Stats().revision);
+    }
+    if (surface_image_host != nullptr && surface_image_host->IsInitialized()) {
+        texture_host_revision = mix_texture_source_revision(texture_host_revision,
+                                                            surface_image_host->Stats().revision);
+    }
+
+    const std::uint64_t previous_appearance_content_revision = appearance_record_content_revision;
+    const bool appearance_record_count_changed =
+        appearance_record_scratch.size() != static_cast<std::size_t>(appearance_upload_count);
+    const bool appearance_binding_state_changed =
+        appearance_record_bindless_revision_seen != bindless_revision_now ||
+        appearance_record_texture_host_revision_seen != texture_host_revision;
+    const bool can_attempt_partial_frame_sync =
+        !appearance_record_count_changed &&
+        !appearance_binding_state_changed &&
+        frame_resources.appearance_records.buffer != VK_NULL_HANDLE &&
+        frame_resources.appearance_record_count == appearance_upload_count &&
+        frame_resources.appearance_bindless_revision == appearance_record_bindless_revision_seen &&
+        frame_resources.appearance_texture_host_revision == appearance_record_texture_host_revision_seen &&
+        frame_resources.appearance_content_revision == previous_appearance_content_revision;
+
+    struct ChangedRange final {
+        std::uint32_t begin_index = 0U;
+        std::uint32_t count = 0U;
+    };
+    std::vector<ChangedRange> changed_ranges{};
+    changed_ranges.reserve(8U);
+
+    appearance_record_scratch.resize(appearance_upload_count);
+    bool appearance_scratch_changed = false;
+    VkDeviceSize partial_upload_bytes = 0U;
+    std::uint32_t current_range_begin = 0U;
+    std::uint32_t current_range_count = 0U;
+    for (std::uint32_t index = 0U; index < appearance_upload_count; ++index) {
+        ecs::AppearanceGpuRecord<ecs::Dim3> encoded_record{};
+        if (index < appearance_record_count) {
+            render::EncodeAppearanceGpuRecord3DForSampling(
+                appearance_source_record_scratch[index],
+                bindless_resources,
+                texture_host,
+                surface_image_host,
+                nullptr,
+                encoded_record);
+        }
+
+        const bool changed =
+            appearance_record_count_changed ||
+            appearance_binding_state_changed ||
+            !render::AppearanceGpuRecord3DEquals(appearance_record_scratch[index], encoded_record);
+        if (changed) {
+            appearance_record_scratch[index] = encoded_record;
+            appearance_scratch_changed = true;
+            if (current_range_count == 0U) {
+                current_range_begin = index;
+                current_range_count = 1U;
+            } else if (current_range_begin + current_range_count == index) {
+                ++current_range_count;
+            } else {
+                changed_ranges.push_back({.begin_index = current_range_begin, .count = current_range_count});
+                current_range_begin = index;
+                current_range_count = 1U;
+            }
+        } else if (current_range_count > 0U) {
+            changed_ranges.push_back({.begin_index = current_range_begin, .count = current_range_count});
+            current_range_count = 0U;
+        }
+    }
+    if (current_range_count > 0U) {
+        changed_ranges.push_back({.begin_index = current_range_begin, .count = current_range_count});
+    }
+
+    if (appearance_scratch_changed) {
+        appearance_record_bindless_revision_seen = bindless_revision_now;
+        appearance_record_texture_host_revision_seen = texture_host_revision;
+        ++appearance_record_content_revision;
+    }
+
+    const bool frame_sync_required =
+        frame_resources.appearance_records.buffer == VK_NULL_HANDLE ||
+        frame_resources.appearance_record_count != appearance_upload_count ||
+        frame_resources.appearance_bindless_revision != appearance_record_bindless_revision_seen ||
+        frame_resources.appearance_texture_host_revision !=
+            appearance_record_texture_host_revision_seen ||
+        frame_resources.appearance_content_revision != appearance_record_content_revision;
+    if (frame_sync_required) {
+        EnsureStorageBufferCapacity(frame_resources.appearance_records, appearance_record_bytes);
+
+        const bool can_use_partial_upload =
+            !changed_ranges.empty() &&
+            frame_resources.appearance_records.buffer != VK_NULL_HANDLE &&
+            frame_resources.appearance_record_count == appearance_upload_count &&
+            frame_resources.appearance_bindless_revision == appearance_record_bindless_revision_seen &&
+            frame_resources.appearance_texture_host_revision ==
+                appearance_record_texture_host_revision_seen &&
+            frame_resources.appearance_content_revision == previous_appearance_content_revision &&
+            appearance_record_content_revision != previous_appearance_content_revision &&
+            can_attempt_partial_frame_sync;
+        if (can_use_partial_upload) {
+            for (const ChangedRange& range : changed_ranges) {
+                render::CopyAppearanceGpuRecord3DRange(appearance_record_scratch.data(),
+                                                       frame_resources.appearance_records,
+                                                       range.begin_index,
+                                                       range.count);
+                partial_upload_bytes +=
+                    static_cast<VkDeviceSize>(range.count) *
+                    sizeof(ecs::AppearanceGpuRecord<ecs::Dim3>);
+            }
+            stats.uploaded_bytes += partial_upload_bytes;
+        } else {
+            render::CopyAppearanceGpuRecord3DRange(appearance_record_scratch.data(),
+                                                   frame_resources.appearance_records,
+                                                   0U,
+                                                   appearance_upload_count);
+            stats.uploaded_bytes += appearance_record_bytes;
+        }
+
+        frame_resources.appearance_bindless_revision = appearance_record_bindless_revision_seen;
+        frame_resources.appearance_texture_host_revision =
+            appearance_record_texture_host_revision_seen;
+        frame_resources.appearance_content_revision = appearance_record_content_revision;
+    }
+    frame_resources.appearance_record_count = appearance_upload_count;
+
+    std::uint64_t descriptor_signature = 14695981039346656037ULL;
+    descriptor_signature ^= reinterpret_cast<std::uintptr_t>(frame_resources.appearance_records.buffer);
+    descriptor_signature *= 1099511628211ULL;
+    descriptor_signature ^= static_cast<std::uint64_t>(appearance_record_bytes);
+    descriptor_signature *= 1099511628211ULL;
+    frame_resources.descriptor_payload_signature = descriptor_signature;
+
+    PrepareAppearanceDescriptorSetForFrame(active_frame_index);
+}
+
+void SurfaceRenderer3D::PrepareAppearanceDescriptorSetForFrame(std::uint32_t frame_index_) {
+    if (descriptor_host == nullptr ||
+        frame_index_ >= frame_appearance_resources.size() ||
+        !appearance_descriptor_layout_id.IsValid()) {
+        return;
+    }
+
+    FrameAppearanceResources& frame_resources = frame_appearance_resources[frame_index_];
+    if (frame_resources.appearance_records.buffer == VK_NULL_HANDLE) {
+        return;
+    }
+    if (frame_resources.descriptor_set == VK_NULL_HANDLE) {
+        frame_resources.descriptor_set = descriptor_host->AllocateSet(*context,
+                                                                      frame_index_,
+                                                                      appearance_descriptor_layout_id);
+        frame_resources.descriptor_buffer_signature = 0U;
+    }
+    if (frame_resources.descriptor_set == VK_NULL_HANDLE) {
+        return;
+    }
+
+    const std::uint64_t buffer_signature = frame_resources.descriptor_payload_signature;
+    if (frame_resources.descriptor_buffer_signature == buffer_signature) {
+        return;
+    }
+
+    descriptor_buffer_write_scratch.clear();
+    descriptor_image_write_scratch.clear();
+    descriptor_buffer_write_scratch.push_back({
+        .binding = 0U,
+        .array_element = 0U,
+        .descriptor_type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+        .buffer = frame_resources.appearance_records.buffer,
+        .offset = 0U,
+        .range = static_cast<VkDeviceSize>(frame_resources.appearance_record_count) *
+                 sizeof(ecs::AppearanceGpuRecord<ecs::Dim3>)
+    });
+
+    descriptor_host->UpdateSet(*context,
+                               frame_resources.descriptor_set,
+                               descriptor_buffer_write_scratch,
+                               descriptor_image_write_scratch,
+                               {});
+    frame_resources.descriptor_buffer_signature = buffer_signature;
+    ++stats.descriptor_set_update_count;
 }
 
 void SurfaceRenderer3D::EnsureDepthResources(VulkanContext& context_,
@@ -1362,3 +1673,4 @@ void SurfaceRenderer3D::RecordDepthTransitionToAttachment(VkCommandBuffer comman
 }
 
 } // namespace vr::surface
+

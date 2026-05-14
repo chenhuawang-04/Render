@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "vr/ecs/system/appearance_system.hpp"
 #include "vr/ecs/system/geometry_system.hpp"
@@ -135,39 +135,80 @@ public:
     }
 
 private:
+    struct ResolvedAppearanceLink final {
+        const AppearanceType* component = nullptr;
+        AppearanceHandle handle{
+            .index = invalid_appearance_index,
+            .generation = 0U
+        };
+    };
+
+    [[nodiscard]] static ResolvedAppearanceLink ResolveVisibleAppearanceForLink(
+        AppearanceHandle handle_,
+        const AppearanceType* appearance_components_,
+        std::uint32_t appearance_component_count_,
+        AppearanceLinkStats& stats_) noexcept {
+        if (handle_.index == invalid_appearance_index || handle_.generation == 0U) {
+            ++stats_.missing_handle_count;
+            return {};
+        }
+        if (appearance_components_ == nullptr || handle_.index >= appearance_component_count_) {
+            ++stats_.out_of_range_handle_count;
+            return {};
+        }
+
+        const AppearanceType& appearance_component = appearance_components_[handle_.index];
+        if (appearance_component.runtime.gpu_record_handle.index != handle_.index ||
+            appearance_component.runtime.gpu_record_handle.generation != handle_.generation) {
+            ++stats_.generation_mismatch_count;
+            return {};
+        }
+        if (!AppearanceSystemType::IsVisibleForBatch(appearance_component)) {
+            ++stats_.invisible_appearance_count;
+            return {};
+        }
+
+        ++stats_.resolved_count;
+        return ResolvedAppearanceLink{
+            .component = &appearance_component,
+            .handle = handle_
+        };
+    }
+
     static void LinkOneGeometry(GeometryType& geometry_component_,
                                 const AppearanceType* appearance_components_,
                                 std::uint32_t appearance_component_count_,
                                 AppearanceLinkStats& stats_) noexcept {
         ++stats_.scanned_count;
 
-        const AppearanceHandle handle = geometry_component_.runtime.route.appearance_handle;
-        if (handle.index == invalid_appearance_index || handle.generation == 0U) {
-            ++stats_.missing_handle_count;
-            return;
-        }
-        if (appearance_components_ == nullptr || handle.index >= appearance_component_count_) {
-            ++stats_.out_of_range_handle_count;
-            return;
-        }
-
-        const AppearanceType& appearance_component = appearance_components_[handle.index];
-        if (appearance_component.runtime.gpu_record_handle.index != handle.index ||
-            appearance_component.runtime.gpu_record_handle.generation != handle.generation) {
-            ++stats_.generation_mismatch_count;
-            return;
-        }
-        if (!AppearanceSystemType::IsVisibleForBatch(appearance_component)) {
-            ++stats_.invisible_appearance_count;
+        const ResolvedAppearanceLink resolved = ResolveVisibleAppearanceForLink(
+            geometry_component_.runtime.route.appearance_handle,
+            appearance_components_,
+            appearance_component_count_,
+            stats_);
+        if (resolved.component == nullptr) {
             return;
         }
 
-        ++stats_.resolved_count;
-        if (GeometrySystemType::SetAppearanceRuntimeLink(geometry_component_,
-                                                         handle,
-                                                         appearance_component.runtime.sort_key,
-                                                         appearance_component.runtime.pipeline_key,
-                                                         appearance_component.runtime.resource_key)) {
+        bool updated = false;
+        if constexpr (std::same_as<DimensionT, Dim2>) {
+            updated = GeometrySystemType::SetAppearanceRuntimeLink(
+                geometry_component_,
+                resolved.handle,
+                resolved.component->runtime.sort_key,
+                resolved.component->runtime.pipeline_key,
+                resolved.component->runtime.resource_key,
+                &resolved.component->style);
+        } else {
+            updated = GeometrySystemType::SetAppearanceRuntimeLink(
+                geometry_component_,
+                resolved.handle,
+                resolved.component->runtime.sort_key,
+                resolved.component->runtime.pipeline_key,
+                resolved.component->runtime.resource_key,
+                &resolved.component->style);
+        }
+        if (updated) {
             ++stats_.updated_count;
         }
     }
@@ -178,33 +219,34 @@ private:
                                AppearanceLinkStats& stats_) noexcept {
         ++stats_.scanned_count;
 
-        const AppearanceHandle handle = surface_component_.runtime.route.appearance_handle;
-        if (handle.index == invalid_appearance_index || handle.generation == 0U) {
-            ++stats_.missing_handle_count;
-            return;
-        }
-        if (appearance_components_ == nullptr || handle.index >= appearance_component_count_) {
-            ++stats_.out_of_range_handle_count;
-            return;
-        }
-
-        const AppearanceType& appearance_component = appearance_components_[handle.index];
-        if (appearance_component.runtime.gpu_record_handle.index != handle.index ||
-            appearance_component.runtime.gpu_record_handle.generation != handle.generation) {
-            ++stats_.generation_mismatch_count;
-            return;
-        }
-        if (!AppearanceSystemType::IsVisibleForBatch(appearance_component)) {
-            ++stats_.invisible_appearance_count;
+        const ResolvedAppearanceLink resolved = ResolveVisibleAppearanceForLink(
+            surface_component_.runtime.route.appearance_handle,
+            appearance_components_,
+            appearance_component_count_,
+            stats_);
+        if (resolved.component == nullptr) {
             return;
         }
 
-        ++stats_.resolved_count;
-        if (SurfaceSystemType::SetAppearanceRuntimeLink(surface_component_,
-                                                        handle,
-                                                        appearance_component.runtime.sort_key,
-                                                        appearance_component.runtime.pipeline_key,
-                                                        appearance_component.runtime.resource_key)) {
+        bool updated = false;
+        if constexpr (std::same_as<DimensionT, Dim2>) {
+            updated = SurfaceSystemType::SetAppearanceRuntimeLink(
+                surface_component_,
+                resolved.handle,
+                resolved.component->runtime.sort_key,
+                resolved.component->runtime.pipeline_key,
+                resolved.component->runtime.resource_key,
+                &resolved.component->style);
+        } else {
+            updated = SurfaceSystemType::SetAppearanceRuntimeLink(
+                surface_component_,
+                resolved.handle,
+                resolved.component->runtime.sort_key,
+                resolved.component->runtime.pipeline_key,
+                resolved.component->runtime.resource_key,
+                &resolved.component->style);
+        }
+        if (updated) {
             ++stats_.updated_count;
         }
     }

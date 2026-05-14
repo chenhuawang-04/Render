@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "vr/render/render_loop_host.hpp"
 #include "vr/render/render_target_host.hpp"
@@ -81,3 +81,4 @@ void RecordEndColorDepthPass(const FrameRecordContext& record_context_,
                              const RenderTargetDepthOutputConfig& depth_output_config_);
 
 } // namespace vr::render
+

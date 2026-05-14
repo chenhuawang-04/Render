@@ -1,4 +1,4 @@
-#include "support/test_framework.hpp"
+﻿#include "support/test_framework.hpp"
 #include "vr/geometry/geometry_image_host.hpp"
 #include "vr/render/render_runtime_host.hpp"
 
@@ -177,4 +177,5 @@ VR_TEST_CASE(RuntimeIntegration_geometry_image_host_upload_and_lifecycle, "integ
 }
 
 } // namespace
+
 

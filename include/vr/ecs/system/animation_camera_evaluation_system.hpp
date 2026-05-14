@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "vr/animation/animation_clip_host.hpp"
 #include "vr/ecs/system/animation_camera_track_system.hpp"
@@ -126,3 +126,4 @@ public:
 };
 
 } // namespace vr::ecs
+

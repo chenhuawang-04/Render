@@ -1,4 +1,4 @@
-#include "vr/resource/image_host.hpp"
+﻿#include "vr/resource/image_host.hpp"
 #include "vr/resource/gpu_memory_host.hpp"
 
 #include <sstream>
@@ -226,3 +226,4 @@ void ImageHost::DestroyView(VulkanContext& context_,
 }
 
 } // namespace vr::resource
+

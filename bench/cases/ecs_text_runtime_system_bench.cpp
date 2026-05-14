@@ -1,4 +1,4 @@
-#include "support/bench_framework.hpp"
+﻿#include "support/bench_framework.hpp"
 #include "vr/ecs/system/text_runtime_system.hpp"
 #include "vr/ecs/system/text_system.hpp"
 #include "vr/text/freetype_host.hpp"
@@ -102,4 +102,5 @@ VR_BENCHMARK_CASE(EcsTextRuntimeSystem_dim2_build_1k, "core;ecs;text;runtime;cpu
 }
 
 } // namespace
+
 

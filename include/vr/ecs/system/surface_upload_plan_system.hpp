@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "Center/Memory/Container/Vector/McVector.hpp"
 #include "vr/ecs/system/surface_runtime_system.hpp"
@@ -387,3 +387,4 @@ private:
 };
 
 } // namespace vr::ecs
+

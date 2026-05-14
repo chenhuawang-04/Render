@@ -1,4 +1,4 @@
-#include "vr/render/scene_recorder_2d.hpp"
+﻿#include "vr/render/scene_recorder_2d.hpp"
 
 #include <stdexcept>
 #include <string>
@@ -832,3 +832,4 @@ void SceneRecorder2D::EnsureRuntimeBinding(const char* operation_) const {
 }
 
 } // namespace vr::render
+

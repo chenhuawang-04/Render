@@ -289,3 +289,4 @@ VR_TEST_CASE(EcsTextRender3DSystem_depth_batch_split_follows_component_depth_fla
 }
 
 } // namespace
+

@@ -1,4 +1,4 @@
-#include "support/test_framework.hpp"
+﻿#include "support/test_framework.hpp"
 #include "vr/text/freetype_host.hpp"
 #include "vr/text/glyph_atlas_host.hpp"
 
@@ -147,3 +147,4 @@ VR_TEST_CASE(GlyphAtlasHost_small_page_grows_multiple_pages, "unit;core;text;fre
 }
 
 } // namespace
+

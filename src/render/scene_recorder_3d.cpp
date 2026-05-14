@@ -1,4 +1,4 @@
-#include "vr/render/scene_recorder_3d.hpp"
+﻿#include "vr/render/scene_recorder_3d.hpp"
 #include "vr/render/environment/sky_environment_gpu_host.hpp"
 #include "vr/render/ibl_bake_host.hpp"
 
@@ -1238,3 +1238,4 @@ void SceneRecorder3D::EnsureRuntimeBinding(const char* operation_) const {
 }
 
 } // namespace vr::render
+

@@ -531,7 +531,7 @@ add_library(vulkan_init STATIC
     src/text/text_renderer_2d.cpp
     src/text/text_renderer_3d.cpp
     src/geometry/geometry_resource_host.cpp
-    src/geometry/geometry_material_host.cpp
+    src/geometry/geometry_appearance_host.cpp
     src/geometry/geometry_image_host.cpp
     src/geometry/geometry_upload_host.cpp
     src/geometry/geometry_renderer_2d.cpp

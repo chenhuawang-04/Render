@@ -13,6 +13,8 @@
 
 namespace {
 
+using Appearance3D = vr::ecs::Appearance<vr::ecs::Dim3>;
+using AppearanceSystem3D = vr::ecs::AppearanceSystem<vr::ecs::Dim3>;
 VR_TEST_CASE(EcsGeometryRuntimeSystem_dim2_builds_primitives_and_batches, "unit;core;ecs;geometry;runtime") {
     using Geometry2D = vr::ecs::Geometry<vr::ecs::Dim2>;
     using PathSystem = vr::ecs::GeometryPathSystem;
@@ -180,9 +182,11 @@ VR_TEST_CASE(EcsGeometryRuntimeSystem_dim2_linked_appearance_encodes_effective_b
         GeometrySystem2D::SetRuntimeRoute(component, 2U, 7U, 1U);
     }
 
-    components[1U].runtime.route.appearance_handle = appearance.runtime.gpu_record_handle;
-    components[1U].runtime.route.appearance_pipeline_bucket =
-        static_cast<std::uint32_t>(appearance.runtime.pipeline_key);
+    (void)GeometrySystem2D::SetAppearanceRuntimeLink(components[1U],
+                                                     appearance.runtime.gpu_record_handle,
+                                                     appearance.runtime.sort_key,
+                                                     appearance.runtime.pipeline_key,
+                                                     appearance.runtime.resource_key);
 
     vr::ecs::Geometry2DRuntimeScratch scratch{};
     const auto stats = RuntimeSystem2D::Build(components.data(),
@@ -216,17 +220,20 @@ VR_TEST_CASE(EcsGeometryRuntimeSystem_dim3_builds_instances_and_batches, "unit;c
     using TransformSystem3D = vr::ecs::TransformSystem<vr::ecs::Dim3>;
 
     std::array<Geometry3D, 2U> components{};
+    std::array<Appearance3D, 2U> appearances{};
     std::array<Transform3D, 2U> transforms{};
 
     for (std::uint32_t i = 0U; i < components.size(); ++i) {
         MeshSystem::Initialize(components[i]);
         MeshSystem::SetMeshRoute(components[i], 41U, 0U, 0U);
-        GeometrySystem3D::SetMaterialId(components[i], 5U);
+        GeometrySystem3D::SetVisualResourceId(components[i], 5U);
         GeometrySystem3D::SetBatchTag(components[i], 0U);
         GeometrySystem3D::SetDepthBin(components[i], 2U);
-        MeshSystem::SetDepthTest(components[i], true);
-        MeshSystem::SetDepthWrite(components[i], (i == 0U));
-        MeshSystem::SetCastShadow(components[i], true);
+        AppearanceSystem3D::Initialize(appearances[i]);
+        AppearanceSystem3D::SetDepthTest(appearances[i], true);
+        AppearanceSystem3D::SetDepthWrite(appearances[i], (i == 0U));
+        AppearanceSystem3D::SetCastShadow(appearances[i], true);
+        (void)GeometrySystem3D::ApplyAppearanceRuntimeState(components[i], appearances[i].style);
 
         TransformSystem3D::Initialize(transforms[i]);
         TransformSystem3D::SetLocalPosition(transforms[i],
@@ -262,9 +269,11 @@ VR_TEST_CASE(EcsGeometryRuntimeSystem_dim3_builds_instances_and_batches, "unit;c
 
     const vr::ecs::Geometry3DGpuInstance& instance0 = scratch.instances[0U];
     const vr::ecs::Geometry3DGpuInstance& instance1 = scratch.instances[1U];
+    VR_REQUIRE(!scratch.draw_batches.empty());
     VR_CHECK(instance0.geometry_id == 41U);
     VR_CHECK(instance1.geometry_id == 41U);
-    VR_CHECK(instance0.material_id == 5U);
+    VR_CHECK(instance0.visual_resource_id == 5U);
+    VR_CHECK(scratch.draw_batches[0U].visual_resource_id == 5U);
     VR_CHECK(instance0.world_m32 == 2.0F);
     VR_CHECK(instance1.world_m30 == 1.0F);
 }
@@ -280,7 +289,7 @@ VR_TEST_CASE(EcsGeometryRuntimeSystem_dim3_updates_transform_without_rebuild, "u
     Geometry3D component{};
     MeshSystem::Initialize(component);
     MeshSystem::SetMeshRoute(component, 88U, 0U, 0U);
-    GeometrySystem3D::SetMaterialId(component, 9U);
+    GeometrySystem3D::SetVisualResourceId(component, 9U);
 
     Transform3D transform{};
     TransformSystem3D::Initialize(transform);
@@ -341,7 +350,58 @@ VR_TEST_CASE(EcsGeometryRuntimeSystem_dim3_updates_transform_without_rebuild, "u
     VR_CHECK(stats2.transform_rewritten_instance_count == 0U);
 }
 
-VR_TEST_CASE(EcsGeometryRuntimeSystem_dim3_linked_appearance_uses_effective_material_id,
+VR_TEST_CASE(EcsGeometryRuntimeSystem_dim3_unlinked_appearance_bridge_drives_fallback_appearance_state,
+             "unit;core;ecs;geometry;runtime") {
+    using Geometry3D = vr::ecs::Geometry<vr::ecs::Dim3>;
+    using MeshSystem = vr::ecs::GeometryMeshSystem;
+    using GeometrySystem3D = vr::ecs::GeometrySystem<vr::ecs::Dim3>;
+    using RuntimeSystem3D = vr::ecs::GeometryRuntimeSystem<vr::ecs::Dim3>;
+    using Transform3D = vr::ecs::Transform<vr::ecs::Dim3>;
+    using TransformSystem3D = vr::ecs::TransformSystem<vr::ecs::Dim3>;
+
+    Geometry3D component{};
+    MeshSystem::Initialize(component);
+    MeshSystem::SetMeshRoute(component, 91U, 0U, 0U);
+    GeometrySystem3D::SetVisualResourceId(component, 13U);
+
+    Appearance3D appearance{};
+    AppearanceSystem3D::Initialize(appearance);
+    AppearanceSystem3D::SetBaseColor(appearance, vr::ecs::Rgba8{120U, 160U, 200U, 180U});
+    AppearanceSystem3D::SetOpacity(appearance, 0.5F);
+    AppearanceSystem3D::SetMetallic(appearance, 0.35F);
+    AppearanceSystem3D::SetRoughness(appearance, 0.65F);
+    AppearanceSystem3D::SetNormalScale(appearance, 2.25F);
+    AppearanceSystem3D::SetOcclusionStrength(appearance, 0.45F);
+    AppearanceSystem3D::SetShadingModel(appearance, vr::ecs::AppearanceShadingModel3D::unlit);
+    AppearanceSystem3D::SetDepthWrite(appearance, true);
+    AppearanceSystem3D::SetBlendMode(appearance, vr::ecs::AppearanceBlendMode::alpha);
+    AppearanceSystem3D::SetAlphaMode(appearance, vr::ecs::AppearanceAlphaMode::blend);
+    (void)GeometrySystem3D::ApplyAppearanceRuntimeState(component, appearance.style);
+
+    Transform3D transform{};
+    TransformSystem3D::Initialize(transform);
+    TransformSystem3D::SetLocalPosition(transform,
+                                        vr::ecs::Float3{
+                                            .x = 0.0F,
+                                            .y = 0.0F,
+                                            .z = 2.5F
+                                        });
+    TransformSystem3D::UpdateHierarchy(&transform, 1U);
+
+    vr::ecs::Geometry3DRuntimeScratch scratch{};
+    const auto stats = RuntimeSystem3D::Build(&component, &transform, 1U, scratch, {});
+    VR_REQUIRE(stats.emitted_instance_count == 1U);
+    VR_REQUIRE(scratch.instances.size() == 1U);
+
+    const auto& instance = scratch.instances[0U];
+    VR_CHECK(instance.visual_resource_id == 13U);
+    VR_CHECK(instance.appearance_record_index == vr::ecs::invalid_appearance_index);
+    VR_CHECK(instance.component_index == 0U);
+    VR_CHECK((instance.params & 0x2U) == 0U);
+    VR_CHECK((instance.params & (0x1U << 7U)) == 0U);
+}
+
+VR_TEST_CASE(EcsGeometryRuntimeSystem_dim3_linked_appearance_uses_effective_visual_resource_id,
              "unit;core;ecs;geometry;runtime") {
     using Geometry3D = vr::ecs::Geometry<vr::ecs::Dim3>;
     using MeshSystem = vr::ecs::GeometryMeshSystem;
@@ -353,9 +413,12 @@ VR_TEST_CASE(EcsGeometryRuntimeSystem_dim3_linked_appearance_uses_effective_mate
     Geometry3D component{};
     MeshSystem::Initialize(component);
     MeshSystem::SetMeshRoute(component, 77U, 0U, 0U);
-    GeometrySystem3D::SetMaterialId(component, 11U);
-    component.runtime.route.appearance_handle = vr::ecs::AppearanceHandle{.index = 4U, .generation = 1U};
-    component.runtime.route.appearance_resource_bucket = 901U;
+    GeometrySystem3D::SetVisualResourceId(component, 11U);
+    (void)GeometrySystem3D::SetAppearanceRuntimeLink(component,
+                                                     vr::ecs::AppearanceHandle{.index = 4U, .generation = 1U},
+                                                     0ULL,
+                                                     0ULL,
+                                                     901ULL);
 
     Transform3D transform{};
     TransformSystem3D::Initialize(transform);
@@ -366,16 +429,19 @@ VR_TEST_CASE(EcsGeometryRuntimeSystem_dim3_linked_appearance_uses_effective_mate
     const auto stats = RuntimeSystem3D::Build(&component, &transform, 1U, scratch, {});
     VR_REQUIRE(stats.emitted_instance_count == 1U);
     VR_REQUIRE(!scratch.instances.empty());
-    VR_CHECK(component.runtime.route.material_id == 11U);
-    VR_CHECK(scratch.instances[0U].material_id == 901U);
+    VR_REQUIRE(!scratch.draw_batches.empty());
+    VR_CHECK(component.runtime.route.visual_resource_id == 11U);
+    VR_CHECK(scratch.instances[0U].visual_resource_id == 901U);
+    VR_CHECK(scratch.draw_batches[0U].visual_resource_id == 901U);
 }
 
-VR_TEST_CASE(EcsGeometryRuntimeSystem_dim3_linked_appearance_ignores_fallback_material_style_for_batching,
+VR_TEST_CASE(EcsGeometryRuntimeSystem_dim3_linked_appearance_ignores_fallback_appearance_style_for_batching,
              "unit;core;ecs;geometry;runtime") {
     using Appearance3D = vr::ecs::Appearance<vr::ecs::Dim3>;
     using AppearanceSystem3D = vr::ecs::AppearanceSystem<vr::ecs::Dim3>;
     using AppearanceRuntimeSystem3D = vr::ecs::AppearanceRuntimeSystem<vr::ecs::Dim3>;
     using Geometry3D = vr::ecs::Geometry<vr::ecs::Dim3>;
+    using GeometrySystem3D = vr::ecs::GeometrySystem<vr::ecs::Dim3>;
     using MeshSystem = vr::ecs::GeometryMeshSystem;
     using RuntimeSystem3D = vr::ecs::GeometryRuntimeSystem<vr::ecs::Dim3>;
     using Transform3D = vr::ecs::Transform<vr::ecs::Dim3>;
@@ -397,10 +463,11 @@ VR_TEST_CASE(EcsGeometryRuntimeSystem_dim3_linked_appearance_ignores_fallback_ma
     for (std::uint32_t i = 0U; i < components.size(); ++i) {
         MeshSystem::Initialize(components[i]);
         MeshSystem::SetMeshRoute(components[i], 211U, 0U, 0U);
-        components[i].runtime.route.appearance_handle = appearance.runtime.gpu_record_handle;
-        components[i].runtime.route.appearance_pipeline_bucket =
-            static_cast<std::uint32_t>(appearance.runtime.pipeline_key);
-        components[i].runtime.route.appearance_resource_bucket = 444U;
+        (void)GeometrySystem3D::SetAppearanceRuntimeLink(components[i],
+                                                         appearance.runtime.gpu_record_handle,
+                                                         appearance.runtime.sort_key,
+                                                         appearance.runtime.pipeline_key,
+                                                         444ULL);
 
         TransformSystem3D::Initialize(transforms[i]);
         TransformSystem3D::SetLocalPosition(transforms[i],
@@ -411,18 +478,6 @@ VR_TEST_CASE(EcsGeometryRuntimeSystem_dim3_linked_appearance_ignores_fallback_ma
                                             });
     }
     TransformSystem3D::UpdateHierarchy(transforms.data(), static_cast<std::uint32_t>(transforms.size()));
-
-    components[0U].style.albedo_color = vr::ecs::Rgba8{255U, 32U, 16U, 128U};
-    components[0U].style.metallic = 0.10F;
-    components[0U].style.roughness = 0.25F;
-    components[0U].style.normal_scale = 0.50F;
-    components[0U].style.shading_model = vr::ecs::Geometry3DShadingModel::lit;
-
-    components[1U].style.albedo_color = vr::ecs::Rgba8{12U, 64U, 255U, 255U};
-    components[1U].style.metallic = 0.95F;
-    components[1U].style.roughness = 0.90F;
-    components[1U].style.normal_scale = 3.00F;
-    components[1U].style.shading_model = vr::ecs::Geometry3DShadingModel::unlit;
 
     vr::ecs::Geometry3DRuntimeScratch scratch{};
     const auto stats = RuntimeSystem3D::Build(components.data(),
@@ -437,20 +492,19 @@ VR_TEST_CASE(EcsGeometryRuntimeSystem_dim3_linked_appearance_ignores_fallback_ma
     VR_REQUIRE(scratch.draw_batches.size() == 1U);
 
     for (const auto& instance : scratch.instances) {
-        VR_CHECK(instance.albedo_rgba8 == 0xFFFFFFFFU);
-        VR_CHECK(instance.metallic == 0.0F);
-        VR_CHECK(instance.roughness == 1.0F);
-        VR_CHECK(instance.normal_scale == 1.0F);
+        VR_CHECK(instance.visual_resource_id == 444U);
+        VR_CHECK(instance.appearance_record_index == vr::ecs::invalid_appearance_index);
         VR_CHECK((instance.params & (0x1U << 7U)) != 0U);
     }
 }
 
-VR_TEST_CASE(EcsGeometryRuntimeSystem_dim3_linked_appearance_material_style_changes_do_not_invalidate_cache,
+VR_TEST_CASE(EcsGeometryRuntimeSystem_dim3_geometry_style_changes_still_invalidate_cache_under_linked_appearance,
              "unit;core;ecs;geometry;runtime") {
     using Appearance3D = vr::ecs::Appearance<vr::ecs::Dim3>;
     using AppearanceSystem3D = vr::ecs::AppearanceSystem<vr::ecs::Dim3>;
     using AppearanceRuntimeSystem3D = vr::ecs::AppearanceRuntimeSystem<vr::ecs::Dim3>;
     using Geometry3D = vr::ecs::Geometry<vr::ecs::Dim3>;
+    using GeometrySystem3D = vr::ecs::GeometrySystem<vr::ecs::Dim3>;
     using MeshSystem = vr::ecs::GeometryMeshSystem;
     using RuntimeSystem3D = vr::ecs::GeometryRuntimeSystem<vr::ecs::Dim3>;
     using Transform3D = vr::ecs::Transform<vr::ecs::Dim3>;
@@ -470,15 +524,11 @@ VR_TEST_CASE(EcsGeometryRuntimeSystem_dim3_linked_appearance_material_style_chan
     Geometry3D component{};
     MeshSystem::Initialize(component);
     MeshSystem::SetMeshRoute(component, 305U, 0U, 0U);
-    component.runtime.route.appearance_handle = appearance.runtime.gpu_record_handle;
-    component.runtime.route.appearance_pipeline_bucket =
-        static_cast<std::uint32_t>(appearance.runtime.pipeline_key);
-    component.runtime.route.appearance_resource_bucket = 512U;
-    component.style.albedo_color = vr::ecs::Rgba8{16U, 24U, 32U, 255U};
-    component.style.metallic = 0.15F;
-    component.style.roughness = 0.65F;
-    component.style.normal_scale = 1.25F;
-    component.style.shading_model = vr::ecs::Geometry3DShadingModel::lit;
+    (void)GeometrySystem3D::SetAppearanceRuntimeLink(component,
+                                                     appearance.runtime.gpu_record_handle,
+                                                     appearance.runtime.sort_key,
+                                                     appearance.runtime.pipeline_key,
+                                                     512ULL);
 
     Transform3D transform{};
     TransformSystem3D::Initialize(transform);
@@ -491,26 +541,19 @@ VR_TEST_CASE(EcsGeometryRuntimeSystem_dim3_linked_appearance_material_style_chan
     const std::uint64_t signature0 = stats0.geometry_signature;
     VR_REQUIRE(stats0.emitted_instance_count == 1U);
     VR_CHECK(stats0.cache_status == vr::ecs::GeometryRuntimeCacheStatus::miss);
-    VR_CHECK(scratch.instances[0U].albedo_rgba8 == 0xFFFFFFFFU);
+    VR_CHECK(scratch.instances[0U].appearance_record_index == vr::ecs::invalid_appearance_index);
     VR_CHECK((scratch.instances[0U].params & (0x1U << 7U)) != 0U);
 
-    component.style.albedo_color = vr::ecs::Rgba8{210U, 40U, 90U, 180U};
-    component.style.metallic = 0.92F;
-    component.style.roughness = 0.08F;
-    component.style.normal_scale = 3.50F;
-    component.style.shading_model = vr::ecs::Geometry3DShadingModel::unlit;
+    MeshSystem::SetLineWidth(component, 3.5F);
 
     const auto stats1 = RuntimeSystem3D::Build(&component, &transform, 1U, scratch, {});
-    VR_CHECK(stats1.cache_status == vr::ecs::GeometryRuntimeCacheStatus::hit_reused);
-    VR_CHECK(stats1.cache_miss_reason == vr::ecs::GeometryRuntimeCacheMissReason::none);
-    VR_CHECK(stats1.cache_reused);
-    VR_CHECK(stats1.cache_key_matched);
-    VR_CHECK(stats1.cache_epoch == epoch0);
-    VR_CHECK(stats1.geometry_signature == signature0);
-    VR_CHECK(scratch.instances[0U].albedo_rgba8 == 0xFFFFFFFFU);
-    VR_CHECK(scratch.instances[0U].metallic == 0.0F);
-    VR_CHECK(scratch.instances[0U].roughness == 1.0F);
-    VR_CHECK(scratch.instances[0U].normal_scale == 1.0F);
+    VR_CHECK(stats1.cache_status == vr::ecs::GeometryRuntimeCacheStatus::miss);
+    VR_CHECK(stats1.cache_miss_reason == vr::ecs::GeometryRuntimeCacheMissReason::geometry_signature_changed);
+    VR_CHECK(!stats1.cache_reused);
+    VR_CHECK(!stats1.cache_key_matched);
+    VR_CHECK(stats1.cache_epoch != epoch0);
+    VR_CHECK(stats1.geometry_signature != signature0);
+    VR_CHECK(scratch.instances[0U].appearance_record_index == vr::ecs::invalid_appearance_index);
     VR_CHECK((scratch.instances[0U].params & (0x1U << 7U)) != 0U);
 }
 
@@ -528,7 +571,7 @@ VR_TEST_CASE(EcsGeometryRuntimeSystem_dim3_transform_dirty_hint_updates_single_i
     for (std::uint32_t i = 0U; i < components.size(); ++i) {
         MeshSystem::Initialize(components[i]);
         MeshSystem::SetMeshRoute(components[i], 201U + i, 0U, 0U);
-        GeometrySystem3D::SetMaterialId(components[i], 17U);
+        GeometrySystem3D::SetVisualResourceId(components[i], 17U);
 
         TransformSystem3D::Initialize(transforms[i]);
         TransformSystem3D::SetLocalPosition(transforms[i],
@@ -595,7 +638,7 @@ VR_TEST_CASE(EcsGeometryRuntimeSystem_dim3_vertex_deform_partial_update_rewrites
     MeshSystem::Initialize(component);
     MeshSystem::SetMeshRoute(component, 93U, 0U, 0U);
     MeshSystem::EnableVertexDeformShader(component, true);
-    GeometrySystem3D::SetMaterialId(component, 5U);
+    GeometrySystem3D::SetVisualResourceId(component, 5U);
 
     Transform3D transform{};
     TransformSystem3D::Initialize(transform);
@@ -648,7 +691,7 @@ VR_TEST_CASE(EcsGeometryRuntimeSystem_dim3_morph_partial_update_rewrites_instanc
     MeshSystem::Initialize(component);
     MeshSystem::SetMeshRoute(component, 95U, 0U, 0U);
     MeshSystem::EnableMorphTargets(component, true);
-    GeometrySystem3D::SetMaterialId(component, 8U);
+    GeometrySystem3D::SetVisualResourceId(component, 8U);
 
     Transform3D transform{};
     TransformSystem3D::Initialize(transform);
@@ -700,7 +743,7 @@ VR_TEST_CASE(EcsGeometryRuntimeSystem_dim3_skeletal_root_motion_updates_world_ma
     MeshSystem::Initialize(component);
     MeshSystem::SetMeshRoute(component, 97U, 0U, 0U);
     MeshSystem::EnableSkeletalRootMotion(component, true);
-    GeometrySystem3D::SetMaterialId(component, 6U);
+    GeometrySystem3D::SetVisualResourceId(component, 6U);
 
     Transform3D transform{};
     TransformSystem3D::Initialize(transform);
@@ -755,7 +798,7 @@ VR_TEST_CASE(EcsGeometryRuntimeSystem_dim3_frame_sequence_signature_rebuilds_sub
     MeshSystem::Initialize(component);
     MeshSystem::SetMeshRoute(component, 109U, 2U, 0U);
     MeshSystem::EnableFrameSequenceSubmeshAnimation(component, true);
-    GeometrySystem3D::SetMaterialId(component, 9U);
+    GeometrySystem3D::SetVisualResourceId(component, 9U);
 
     Transform3D transform{};
     TransformSystem3D::Initialize(transform);
@@ -803,7 +846,7 @@ VR_TEST_CASE(EcsGeometryRuntimeSystem_dim3_reports_cache_miss_reasons_and_epoch_
     Geometry3D component{};
     MeshSystem::Initialize(component);
     MeshSystem::SetMeshRoute(component, 120U, 0U, 0U);
-    GeometrySystem3D::SetMaterialId(component, 12U);
+    GeometrySystem3D::SetVisualResourceId(component, 12U);
 
     Transform3D transform_a{};
     TransformSystem3D::Initialize(transform_a);
@@ -840,7 +883,7 @@ VR_TEST_CASE(EcsGeometryRuntimeSystem_dim3_reports_cache_miss_reasons_and_epoch_
     VR_CHECK(!stats2.cache_key_matched);
     VR_CHECK(epoch2 > epoch1);
 
-    GeometrySystem3D::SetMaterialId(component, 99U);
+    GeometrySystem3D::SetVisualResourceId(component, 99U);
     const auto stats3 = RuntimeSystem3D::Build(&component, &transform_b, 1U, scratch, config_changed);
     VR_CHECK(stats3.cache_status == vr::ecs::GeometryRuntimeCacheStatus::miss);
     VR_CHECK(stats3.cache_miss_reason == vr::ecs::GeometryRuntimeCacheMissReason::geometry_signature_changed);
@@ -863,7 +906,7 @@ VR_TEST_CASE(EcsGeometryRuntimeSystem_dim3_candidate_visibility_hint_controls_bu
     for (std::uint32_t i = 0U; i < components.size(); ++i) {
         MeshSystem::Initialize(components[i]);
         MeshSystem::SetMeshRoute(components[i], 77U, 0U, 0U);
-        GeometrySystem3D::SetMaterialId(components[i], 5U);
+        GeometrySystem3D::SetVisualResourceId(components[i], 5U);
 
         TransformSystem3D::Initialize(transforms[i]);
         TransformSystem3D::SetLocalPosition(transforms[i],
@@ -938,3 +981,4 @@ VR_TEST_CASE(EcsGeometryRuntimeSystem_dim3_candidate_visibility_hint_controls_bu
 }
 
 } // namespace
+

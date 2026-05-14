@@ -1,4 +1,4 @@
-#include "support/test_framework.hpp"
+﻿#include "support/test_framework.hpp"
 #include "vr/render/render_runtime_host.hpp"
 #include "vr/render/runtime_prepare_views.hpp"
 
@@ -438,3 +438,4 @@ VR_TEST_CASE(RuntimeIntegration_ibl_host_prepares_environment_without_explicit_s
 }
 
 } // namespace
+

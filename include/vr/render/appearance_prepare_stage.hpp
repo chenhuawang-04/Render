@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "vr/ecs/system/appearance_link_system.hpp"
 #include "vr/ecs/system/appearance_runtime_system.hpp"
@@ -173,3 +173,4 @@ private:
 };
 
 } // namespace vr::render
+

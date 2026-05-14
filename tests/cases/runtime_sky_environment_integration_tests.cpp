@@ -1,4 +1,4 @@
-#include "support/test_framework.hpp"
+﻿#include "support/test_framework.hpp"
 #include "vr/ecs/system/camera_system.hpp"
 #include "vr/ecs/system/transform_system.hpp"
 #include "vr/render/render_runtime_host.hpp"
@@ -643,3 +643,4 @@ VR_TEST_CASE(RuntimeIntegration_sky_environment_3d_hdri_lazy_bake_ibl_smoke,
 }
 
 } // namespace
+

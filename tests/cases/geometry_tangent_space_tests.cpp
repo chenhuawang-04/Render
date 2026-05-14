@@ -1,4 +1,4 @@
-#include "support/test_framework.hpp"
+﻿#include "support/test_framework.hpp"
 #include "vr/geometry/geometry_tangent_space.hpp"
 
 #include <array>
@@ -99,3 +99,4 @@ VR_TEST_CASE(GeometryTangentSpace_normalizes_existing_tangent_and_preserves_hand
 }
 
 } // namespace
+

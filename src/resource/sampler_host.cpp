@@ -1,4 +1,4 @@
-#include "vr/resource/sampler_host.hpp"
+﻿#include "vr/resource/sampler_host.hpp"
 
 #include <algorithm>
 #include <bit>
@@ -297,3 +297,4 @@ void SamplerHost::HashCombine(uint64_t& hash_, uint64_t value_) noexcept {
 }
 
 } // namespace vr::resource
+

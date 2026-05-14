@@ -1,4 +1,4 @@
-#include "support/test_framework.hpp"
+﻿#include "support/test_framework.hpp"
 #include "vr/ecs/system/camera_system.hpp"
 #include "vr/ecs/system/light_system.hpp"
 #include "vr/ecs/system/transform_system.hpp"
@@ -114,4 +114,5 @@ VR_TEST_CASE(RenderLightFrameCoordinator_dim3_dirty_hint_rebuilds_runtime, "unit
 }
 
 } // namespace
+
 

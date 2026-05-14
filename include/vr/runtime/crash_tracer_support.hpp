@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <string>
 
@@ -15,3 +15,4 @@ void InstallProcessCrashTracer(int argc_,
                                const CrashTracerInstallOptions& options_ = {}) noexcept;
 
 } // namespace vr::runtime
+

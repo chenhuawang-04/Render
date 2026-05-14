@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "vr/ecs/component/appearance_component.hpp"
 
@@ -30,21 +30,20 @@ public:
 
     static void SetDefaultStyle(AppearanceType& component_) noexcept {
         if constexpr (std::same_as<DimensionT, Dim2>) {
-            component_.style.fill_color = Rgba8{255U, 255U, 255U, 255U};
-            component_.style.stroke_color = Rgba8{255U, 255U, 255U, 255U};
-            component_.style.stroke_width_px = 1.0F;
-            component_.style.opacity = 1.0F;
-            component_.style.gradient_p0_x = 0.0F;
-            component_.style.gradient_p0_y = 0.0F;
-            component_.style.gradient_p1_x = 1.0F;
-            component_.style.gradient_p1_y = 0.0F;
-            component_.style.gradient_radius = 1.0F;
-            component_.style.layer = 0;
-            component_.style.blend_mode = AppearanceBlendMode::alpha;
-            component_.style.alpha_mode = AppearanceAlphaMode::blend;
-            component_.style.paint_mode = AppearancePaintMode::solid;
-            component_.style.antialiasing = 1U;
-            component_.style.premultiplied_alpha = 0U;
+            component_.style.fill_color = default_appearance_style2d_fill_color;
+            component_.style.stroke_color = default_appearance_style2d_stroke_color;
+            component_.style.opacity = default_appearance_style2d_opacity;
+            component_.style.gradient_p0_x = default_appearance_style2d_gradient_p0_x;
+            component_.style.gradient_p0_y = default_appearance_style2d_gradient_p0_y;
+            component_.style.gradient_p1_x = default_appearance_style2d_gradient_p1_x;
+            component_.style.gradient_p1_y = default_appearance_style2d_gradient_p1_y;
+            component_.style.gradient_radius = default_appearance_style2d_gradient_radius;
+            component_.style.layer = default_appearance_style2d_layer;
+            component_.style.blend_mode = default_appearance_style2d_blend_mode;
+            component_.style.alpha_mode = default_appearance_style2d_alpha_mode;
+            component_.style.paint_mode = default_appearance_style2d_paint_mode;
+            component_.style.antialiasing = default_appearance_style2d_antialiasing;
+            component_.style.premultiplied_alpha = default_appearance_style2d_premultiplied_alpha;
             component_.style.reserved0 = 0U;
         } else {
             component_.style.base_color = Rgba8{255U, 255U, 255U, 255U};
@@ -60,6 +59,8 @@ public:
             component_.style.blend_mode = AppearanceBlendMode::opaque;
             component_.style.alpha_mode = AppearanceAlphaMode::opaque;
             component_.style.shading_model = AppearanceShadingModel3D::lit_pbr;
+            component_.style.depth_test = 1U;
+            component_.style.depth_write = 1U;
             component_.style.double_sided = 0U;
             component_.style.cast_shadow = 1U;
             component_.style.receive_shadow = 1U;
@@ -262,17 +263,6 @@ public:
         MarkStyleRevisionDirty(component_);
     }
 
-    static void SetStrokeWidthPx(AppearanceType& component_, float stroke_width_px_) noexcept
-    requires std::same_as<DimensionT, Dim2>
-    {
-        const float clamped = std::max(0.0F, stroke_width_px_);
-        if (component_.style.stroke_width_px == clamped) {
-            return;
-        }
-        component_.style.stroke_width_px = clamped;
-        MarkStyleRevisionDirty(component_);
-    }
-
     static void SetPaintMode(AppearanceType& component_, AppearancePaintMode paint_mode_) noexcept
     requires std::same_as<DimensionT, Dim2>
     {
@@ -460,6 +450,28 @@ public:
             return;
         }
         component_.style.shading_model = shading_model_;
+        MarkStyleRevisionDirty(component_);
+    }
+
+    static void SetDepthTest(AppearanceType& component_, bool enabled_) noexcept
+    requires std::same_as<DimensionT, Dim3>
+    {
+        const std::uint8_t enabled_value = enabled_ ? 1U : 0U;
+        if (component_.style.depth_test == enabled_value) {
+            return;
+        }
+        component_.style.depth_test = enabled_value;
+        MarkStyleRevisionDirty(component_);
+    }
+
+    static void SetDepthWrite(AppearanceType& component_, bool enabled_) noexcept
+    requires std::same_as<DimensionT, Dim3>
+    {
+        const std::uint8_t enabled_value = enabled_ ? 1U : 0U;
+        if (component_.style.depth_write == enabled_value) {
+            return;
+        }
+        component_.style.depth_write = enabled_value;
         MarkStyleRevisionDirty(component_);
     }
 

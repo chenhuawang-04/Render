@@ -1,4 +1,4 @@
-#include "support/test_framework.hpp"
+﻿#include "support/test_framework.hpp"
 #include "vr/ecs/system/surface_system.hpp"
 #include "vr/ecs/system/transform_system.hpp"
 #include "vr/render/render_runtime_host.hpp"
@@ -71,7 +71,7 @@ VR_TEST_CASE(RuntimeIntegration_surface_upload_host_prepare_runtime_and_incremen
 
     for (std::uint32_t i = 0U; i < component_count; ++i) {
         SurfaceSystem3D::Initialize(components[i]);
-        SurfaceSystem3D::SetTextureRoute(components[i], 1000U + i, 1U, 0U, 0U);
+        SurfaceSystem3D::SetSource(components[i], vr::ecs::SurfaceSampledSource3DDesc{.surface_id = 1000U + i, .sampler_id = 1U, .uv_set = 0U, .flags = 0U});
         SurfaceSystem3D::SetRuntimeRoute(components[i], 1000U + i, 1U, 0U);
         SurfaceSystem3D::SetDepthBin(components[i], static_cast<std::uint16_t>(i & 0x3FU));
 
@@ -222,3 +222,4 @@ VR_TEST_CASE(RuntimeIntegration_surface_upload_host_prepare_runtime_and_incremen
 }
 
 } // namespace
+

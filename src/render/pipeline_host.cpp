@@ -1,4 +1,4 @@
-#include "vr/render/pipeline_host.hpp"
+﻿#include "vr/render/pipeline_host.hpp"
 
 #include <algorithm>
 #include <array>
@@ -2178,3 +2178,4 @@ void PipelineHost::CreatePipelineCache(VulkanContext& context_,
 }
 
 } // namespace vr::render
+

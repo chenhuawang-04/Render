@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "vr/ecs/component/appearance_component.hpp"
 #include "vr/ecs/component/spatial_types.hpp"
@@ -80,13 +80,13 @@ enum class ParticleBlendMode : std::uint8_t {
 
 struct ParticleRuntimeRoute final {
     std::uint64_t sort_key;
-    std::uint32_t material_id;
+    std::uint32_t visual_resource_id;
     std::uint32_t texture_id;
     std::uint32_t batch_tag;
     std::uint32_t user_data;
     AppearanceHandle appearance_handle;
     std::uint32_t appearance_pipeline_bucket;
-    std::uint32_t appearance_resource_bucket;
+    std::uint32_t appearance_visual_resource_id;
     std::uint16_t depth_bin;
     std::uint8_t visible;
     std::uint8_t cast_shadow;
@@ -206,3 +206,4 @@ static_assert(PurePodParticleComponent<Particle<Dim3>>);
 static_assert(sizeof(ParticleRuntimeRoute) <= 64U);
 
 } // namespace vr::ecs
+

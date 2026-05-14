@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "vr/ecs/concept/dimension.hpp"
 #include "vr/render/render_view.hpp"
@@ -415,3 +415,4 @@ static_assert(std::is_standard_layout_v<RenderScenePacket2D>);
 static_assert(std::is_standard_layout_v<RenderScenePacket3D>);
 
 } // namespace vr::render
+

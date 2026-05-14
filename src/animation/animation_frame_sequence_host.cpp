@@ -1,4 +1,4 @@
-#include "vr/animation/animation_frame_sequence_host.hpp"
+﻿#include "vr/animation/animation_frame_sequence_host.hpp"
 
 #include <algorithm>
 #include <cstddef>
@@ -261,3 +261,4 @@ void FrameSequenceAnimationHost::UpdateMovedRecordSlot(std::uint32_t record_inde
 }
 
 } // namespace vr::animation
+

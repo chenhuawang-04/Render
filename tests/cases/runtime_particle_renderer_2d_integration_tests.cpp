@@ -1,4 +1,4 @@
-#include "support/test_framework.hpp"
+﻿#include "support/test_framework.hpp"
 #include "vr/ecs/system/particle_emitter_system.hpp"
 #include "vr/ecs/system/particle_system.hpp"
 #include "vr/ecs/system/transform_system.hpp"
@@ -392,3 +392,4 @@ VR_TEST_CASE(RuntimeIntegration_particle_renderer_2d_gpu_persistent_seed_once,
 }
 
 } // namespace
+

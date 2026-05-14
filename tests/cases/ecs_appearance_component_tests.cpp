@@ -1,4 +1,4 @@
-#include "support/test_framework.hpp"
+﻿#include "support/test_framework.hpp"
 #include "vr/ecs/component/appearance_component.hpp"
 
 #include <type_traits>
@@ -23,4 +23,5 @@ VR_TEST_CASE(EcsAppearanceComponent_invalid_handle_defaults, "unit;core;ecs;appe
 }
 
 } // namespace
+
 

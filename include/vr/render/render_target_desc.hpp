@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "vr/render/render_target_types.hpp"
 
@@ -46,3 +46,4 @@ struct ImportedRenderTargetDesc final {
 };
 
 } // namespace vr::render
+

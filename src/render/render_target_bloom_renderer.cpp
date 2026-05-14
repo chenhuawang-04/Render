@@ -1,4 +1,4 @@
-#include "vr/render/render_target_bloom_renderer.hpp"
+﻿#include "vr/render/render_target_bloom_renderer.hpp"
 
 #include "vr/render/generated/render_target_bloom_blur_frag_spv.hpp"
 #include "vr/render/generated/render_target_bloom_combine_frag_spv.hpp"
@@ -686,3 +686,4 @@ float RenderTargetBloomRenderer::SafeInvGamma(float gamma_) noexcept {
 }
 
 } // namespace vr::render
+

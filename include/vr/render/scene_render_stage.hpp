@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <cstdint>
 
@@ -25,3 +25,4 @@ using SceneRecorder3DSceneStage = SceneRenderStage;
 }
 
 } // namespace vr::render
+

@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "Center/Memory/Container/Vector/McVector.hpp"
 
@@ -24,3 +24,4 @@ static_assert(std::is_standard_layout_v<ParticleUploadRange>);
 static_assert(std::is_trivial_v<ParticleUploadRange>);
 
 } // namespace vr::particle
+

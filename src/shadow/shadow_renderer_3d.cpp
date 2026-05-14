@@ -1,4 +1,4 @@
-#include "vr/shadow/shadow_renderer_3d.hpp"
+﻿#include "vr/shadow/shadow_renderer_3d.hpp"
 
 #include "vr/ecs/system/spatial_math.hpp"
 #include "vr/shadow/generated/shadow_depth_3d_vert_spv.hpp"
@@ -184,7 +184,10 @@ ShadowRenderer3D::TopologyMode ShadowRenderer3D::ResolveTopologyMode(ecs::Geomet
 }
 
 ShadowRenderer3D::CullMode ShadowRenderer3D::ResolveCullMode(const ecs::Geometry<ecs::Dim3>& geometry_component_) noexcept {
-    return (geometry_component_.style.double_sided != 0U) ? CullMode::none : CullMode::back;
+    return ecs::IsAppearanceRuntimeBridge3DDoubleSided(
+        ecs::ReadAppearanceRuntimeBridge3D(geometry_component_.runtime))
+        ? CullMode::none
+        : CullMode::back;
 }
 
 ShadowRenderer3D::DepthMode ShadowRenderer3D::ResolveDepthMode(
@@ -867,7 +870,8 @@ void ShadowRenderer3D::CompileRequiredPipelinesForCurrentFrame(VulkanContext& co
                 continue;
             }
             const ecs::Geometry<ecs::Dim3>& geometry_component = geometry_components[caster_index];
-            if (geometry_component.style.cast_shadow == 0U) {
+            if (!ecs::IsAppearanceRuntimeBridge3DCastShadowEnabled(
+                    ecs::ReadAppearanceRuntimeBridge3D(geometry_component.runtime))) {
                 continue;
             }
             const CullMode cull_mode = ResolveCullMode(geometry_component);
@@ -1282,7 +1286,8 @@ void ShadowRenderer3D::RecordOneAtlas(const render::FrameRecordContext& record_c
             }
 
             const ecs::Geometry<ecs::Dim3>& geometry_component = geometry_components[caster_index];
-            if (geometry_component.style.cast_shadow == 0U) {
+            if (!ecs::IsAppearanceRuntimeBridge3DCastShadowEnabled(
+                    ecs::ReadAppearanceRuntimeBridge3D(geometry_component.runtime))) {
                 ++stats.skipped_no_shadow_flag_count;
                 continue;
             }
@@ -1421,3 +1426,4 @@ void ShadowRenderer3D::RecordOneAtlas(const render::FrameRecordContext& record_c
 }
 
 } // namespace vr::shadow
+

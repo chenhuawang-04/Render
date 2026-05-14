@@ -1,4 +1,4 @@
-#include "support/test_framework.hpp"
+﻿#include "support/test_framework.hpp"
 #include "vr/surface/surface_upload_host.hpp"
 
 namespace {
@@ -79,4 +79,5 @@ VR_TEST_CASE(SurfaceUploadHostPolicy_upload_revision_depends_on_surface_and_tran
 }
 
 } // namespace
+
 

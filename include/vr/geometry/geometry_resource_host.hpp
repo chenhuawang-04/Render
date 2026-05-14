@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "vr/geometry/geometry_types.hpp"
 #include "vr/render/upload_host.hpp"
@@ -137,3 +137,4 @@ private:
 };
 
 } // namespace vr::geometry
+

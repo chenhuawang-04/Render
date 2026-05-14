@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "vr/ecs/component/spatial_types.hpp"
 #include "vr/ecs/concept/dimension.hpp"
@@ -98,4 +98,5 @@ static_assert(PurePodBoundsComponent<Bounds<Dim2>>);
 static_assert(PurePodBoundsComponent<Bounds<Dim3>>);
 
 } // namespace vr::ecs
+
 

@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "vr/ecs/system/spatial_math.hpp"
 #include "vr/geometry/geometry_types.hpp"
@@ -267,3 +267,4 @@ inline void WriteNormalizedTangent(GeometryMeshVertex& vertex_,
 }
 
 } // namespace vr::geometry
+

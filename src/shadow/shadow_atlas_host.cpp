@@ -1,4 +1,4 @@
-#include "vr/shadow/shadow_atlas_host.hpp"
+﻿#include "vr/shadow/shadow_atlas_host.hpp"
 
 #include "vr/render/descriptor_host.hpp"
 #include "vr/resource/gpu_memory_host.hpp"
@@ -431,3 +431,4 @@ void ShadowAtlasHost::SyncBindlessRecords() {
 }
 
 } // namespace vr::shadow
+

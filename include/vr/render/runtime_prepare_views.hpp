@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "vr/vulkan_context.hpp"
 
@@ -301,6 +301,7 @@ struct SurfaceRenderer3DPrepareView final {
     resource::GpuMemoryHost& gpu_memory;
     IblHost& ibl;
     resource::SamplerHost& sampler;
+    asset::TextureHost* texture = nullptr;
     BindlessResourceSystem* bindless = nullptr;
     RenderTargetHost* render_target = nullptr;
     std::uint32_t ibl_environment_id = 0U;
@@ -971,6 +972,7 @@ template<typename T>
         .sampler = detail::RequirePrepareService(prepare_view_.sampler,
                                                  "sampler",
                                                  "SurfaceRenderer3DPrepareView"),
+        .texture = prepare_view_.texture,
         .bindless = prepare_view_.bindless,
         .render_target = &prepare_view_.render_target,
         .ibl_environment_id = prepare_view_.ibl_environment_id,
@@ -1010,3 +1012,4 @@ template<typename T>
 }
 
 } // namespace vr::render
+

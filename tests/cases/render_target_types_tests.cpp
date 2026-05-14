@@ -1,4 +1,4 @@
-#include "support/test_framework.hpp"
+﻿#include "support/test_framework.hpp"
 #include "vr/render/render_pass_preset.hpp"
 #include "vr/render/animation_frame_coordinator.hpp"
 #include "vr/render/scene_recorder_2d.hpp"
@@ -1558,3 +1558,4 @@ VR_TEST_CASE(SceneRecorder3D_reflection_view_explicit_targets_override_scene_rou
 }
 
 } // namespace
+

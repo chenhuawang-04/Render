@@ -1,4 +1,4 @@
-#include "vr/particle/particle_renderer_3d.hpp"
+﻿#include "vr/particle/particle_renderer_3d.hpp"
 
 #include "vr/ecs/system/particle_system.hpp"
 #include "vr/ecs/system/spatial_math.hpp"
@@ -1618,3 +1618,4 @@ void ParticleRenderer3D::DestroyRetiredDepthResources(VulkanContext& context_) {
 }
 
 } // namespace vr::particle
+

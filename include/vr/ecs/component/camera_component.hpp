@@ -96,3 +96,4 @@ static_assert(std::is_standard_layout_v<Camera<Dim3>> &&
               std::is_trivial_v<Camera<Dim3>>);
 
 } // namespace vr::ecs
+

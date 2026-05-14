@@ -1,10 +1,11 @@
 #include "vr/ecs/system/camera_system.hpp"
+#include "vr/ecs/system/appearance_system.hpp"
 #include "vr/ecs/system/geometry_mesh_system.hpp"
 #include "vr/ecs/system/geometry_path_system.hpp"
 #include "vr/ecs/system/geometry_system.hpp"
 #include "vr/ecs/system/transform_system.hpp"
 #include "vr/geometry/geometry_image_host.hpp"
-#include "vr/geometry/geometry_material_host.hpp"
+#include "vr/geometry/geometry_appearance_host.hpp"
 #include "vr/geometry/geometry_renderer_2d.hpp"
 #include "vr/geometry/geometry_renderer_3d.hpp"
 #include "vr/geometry/geometry_resource_host.hpp"
@@ -29,8 +30,12 @@ namespace {
 using Runtime = vr::render::RenderRuntimeHost<vr::platform::ActiveBackendTag, 2U>;
 using Geometry2D = vr::ecs::Geometry<vr::ecs::Dim2>;
 using Geometry3D = vr::ecs::Geometry<vr::ecs::Dim3>;
+using Appearance2D = vr::ecs::Appearance<vr::ecs::Dim2>;
+using Appearance3D = vr::ecs::Appearance<vr::ecs::Dim3>;
 using Transform3D = vr::ecs::Transform<vr::ecs::Dim3>;
 using Camera3D = vr::ecs::Camera<vr::ecs::Dim3>;
+using AppearanceSystem2D = vr::ecs::AppearanceSystem<vr::ecs::Dim2>;
+using AppearanceSystem3D = vr::ecs::AppearanceSystem<vr::ecs::Dim3>;
 using GeometrySystem2D = vr::ecs::GeometrySystem<vr::ecs::Dim2>;
 using GeometrySystem3D = vr::ecs::GeometrySystem<vr::ecs::Dim3>;
 using GeometryPathSystem = vr::ecs::GeometryPathSystem;
@@ -61,31 +66,68 @@ using CameraSystem3D = vr::ecs::CameraSystem<vr::ecs::Dim3>;
     return create_info;
 }
 
+[[nodiscard]] constexpr vr::ecs::AppearanceHandle MakeStaticAppearanceHandle(
+    std::uint32_t index_) noexcept {
+    return vr::ecs::AppearanceHandle{
+        .index = index_,
+        .generation = 1U
+    };
+}
+
 void InitializeGeometry3DComponent(Geometry3D& component_,
+                                   Appearance3D& appearance_,
+                                   std::uint32_t appearance_index_,
                                    std::uint32_t geometry_id_,
-                                   std::uint32_t material_id_,
+                                   std::uint32_t appearance_id_,
                                    vr::ecs::Rgba8 albedo_color_,
                                    bool depth_write_,
                                    bool double_sided_) {
     GeometryMeshSystem::Initialize(component_);
     GeometryMeshSystem::SetMeshRoute(component_, geometry_id_, 0U, 0U);
-    GeometrySystem3D::SetMaterialId(component_, material_id_);
+    GeometrySystem3D::SetVisualResourceId(component_, appearance_id_);
     GeometrySystem3D::SetDepthBin(component_, 32U);
     GeometryMeshSystem::SetTopology(component_, vr::ecs::Geometry3DTopology::triangles);
-    GeometryMeshSystem::SetShadingModel(component_, vr::ecs::Geometry3DShadingModel::lit);
-    GeometryMeshSystem::SetAlbedoColor(component_, albedo_color_);
-    GeometryMeshSystem::SetDepthTest(component_, true);
-    GeometryMeshSystem::SetDepthWrite(component_, depth_write_);
-    GeometryMeshSystem::SetDoubleSided(component_, double_sided_);
-    GeometryMeshSystem::SetMaterialScalars(component_, 0.05F, 0.92F, 1.0F);
     GeometryMeshSystem::SetBounds(component_,
                                   vr::ecs::Float3{.x = -0.5F, .y = -0.5F, .z = -0.05F},
                                   vr::ecs::Float3{.x = 0.5F, .y = 0.5F, .z = 0.05F});
+
+    AppearanceSystem3D::Initialize(appearance_);
+    AppearanceSystem3D::SetBaseColor(appearance_, albedo_color_);
+    AppearanceSystem3D::SetDepthTest(appearance_, true);
+    AppearanceSystem3D::SetDepthWrite(appearance_, depth_write_);
+    AppearanceSystem3D::SetDoubleSided(appearance_, double_sided_);
+    AppearanceSystem3D::SetCastShadow(appearance_, true);
+    AppearanceSystem3D::SetReceiveShadow(appearance_, true);
+    if (albedo_color_.a < 255U || !depth_write_) {
+        AppearanceSystem3D::SetBlendMode(appearance_, vr::ecs::AppearanceBlendMode::alpha);
+        AppearanceSystem3D::SetAlphaMode(appearance_, vr::ecs::AppearanceAlphaMode::blend);
+    }
+
+    (void)GeometrySystem3D::SetAppearanceRuntimeLink(component_,
+                                                     MakeStaticAppearanceHandle(appearance_index_),
+                                                     0ULL,
+                                                     0ULL,
+                                                     appearance_id_,
+                                                     &appearance_.style);
+}
+
+void ApplyGeometry2DAppearance(Geometry2D& component_,
+                               vr::ecs::Rgba8 fill_color_,
+                               vr::ecs::Rgba8 stroke_color_,
+                               float opacity_,
+                               std::int16_t layer_) {
+    Appearance2D appearance{};
+    AppearanceSystem2D::Initialize(appearance);
+    AppearanceSystem2D::SetFillColor(appearance, fill_color_);
+    AppearanceSystem2D::SetStrokeColor(appearance, stroke_color_);
+    AppearanceSystem2D::SetOpacity(appearance, opacity_);
+    AppearanceSystem2D::SetLayer(appearance, layer_);
+    (void)GeometrySystem2D::ApplyAppearanceRuntimeState(component_, appearance.style);
 }
 
 void InitializeRectPath(Geometry2D& component_,
                         std::uint32_t geometry_id_,
-                        std::uint32_t material_id_,
+                        std::uint32_t appearance_id_,
                         std::int16_t layer_,
                         vr::ecs::Rgba8 fill_color_,
                         vr::ecs::Rgba8 stroke_color_,
@@ -95,12 +137,10 @@ void InitializeRectPath(Geometry2D& component_,
                         float max_x_,
                         float max_y_) {
     GeometryPathSystem::Initialize(component_);
-    GeometrySystem2D::SetRuntimeRoute(component_, geometry_id_, material_id_, 0U);
-    GeometrySystem2D::SetLayer(component_, layer_);
+    GeometrySystem2D::SetRuntimeRoute(component_, geometry_id_, appearance_id_, 0U);
     component_.style.topology = vr::ecs::Geometry2DTopology::fill_and_stroke;
-    component_.style.fill_color = fill_color_;
-    component_.style.stroke_color = stroke_color_;
     component_.style.stroke_width_px = stroke_width_;
+    ApplyGeometry2DAppearance(component_, fill_color_, stroke_color_, 1.0F, layer_);
 
     (void)GeometryPathSystem::AppendMoveTo(component_, min_x_, min_y_);
     (void)GeometryPathSystem::AppendLineTo(component_, max_x_, min_y_);
@@ -111,16 +151,19 @@ void InitializeRectPath(Geometry2D& component_,
 
 void InitializeCurvePath(Geometry2D& component_,
                          std::uint32_t geometry_id_,
-                         std::uint32_t material_id_,
+                         std::uint32_t appearance_id_,
                          std::int16_t layer_) {
     GeometryPathSystem::Initialize(component_);
-    GeometrySystem2D::SetRuntimeRoute(component_, geometry_id_, material_id_, 0U);
-    GeometrySystem2D::SetLayer(component_, layer_);
+    GeometrySystem2D::SetRuntimeRoute(component_, geometry_id_, appearance_id_, 0U);
     component_.style.topology = vr::ecs::Geometry2DTopology::stroke;
-    component_.style.stroke_color = vr::ecs::Rgba8{220U, 234U, 255U, 255U};
     component_.style.stroke_width_px = 4.0F;
     component_.style.line_cap = vr::ecs::Geometry2DLineCap::round;
     component_.style.line_join = vr::ecs::Geometry2DLineJoin::round;
+    ApplyGeometry2DAppearance(component_,
+                              vr::ecs::Rgba8{220U, 234U, 255U, 255U},
+                              vr::ecs::Rgba8{220U, 234U, 255U, 255U},
+                              1.0F,
+                              layer_);
 
     (void)GeometryPathSystem::AppendMoveTo(component_, 60.0F, 640.0F);
     (void)GeometryPathSystem::AppendCubicTo(component_,
@@ -156,7 +199,7 @@ int main(int argc_,
     vr::geometry::GeometryResourceHost geometry_resource_host{};
     vr::geometry::GeometryUploadHost geometry_upload_host{};
     vr::geometry::GeometryImageHost geometry_image_host{};
-    vr::geometry::GeometryMaterialHost geometry_material_host{};
+    vr::geometry::GeometryAppearanceHost geometry_appearance_host{};
     vr::render::SceneRecorder3D recorder{};
     vr::geometry::GeometryRenderer3D renderer_3d{};
     vr::geometry::GeometryRenderer2D renderer_2d{};
@@ -166,7 +209,7 @@ int main(int argc_,
     bool geometry_resource_host_initialized = false;
     bool geometry_upload_host_initialized = false;
     bool geometry_image_host_initialized = false;
-    bool geometry_material_host_initialized = false;
+    bool geometry_appearance_host_initialized = false;
     bool renderer_3d_initialized = false;
     bool renderer_2d_initialized = false;
 
@@ -217,10 +260,10 @@ int main(int argc_,
                                        image_create_info);
         geometry_image_host_initialized = true;
 
-        vr::geometry::GeometryMaterialHostCreateInfo material_create_info{};
-        material_create_info.reserve_material_count = 128U;
-        geometry_material_host.Initialize(material_create_info);
-        geometry_material_host_initialized = true;
+        vr::geometry::GeometryAppearanceHostCreateInfo appearance_create_info{};
+        appearance_create_info.reserve_appearance_count = 128U;
+        geometry_appearance_host.Initialize(appearance_create_info);
+        geometry_appearance_host_initialized = true;
 
         std::array<vr::geometry::GeometryMeshVertex, 4U> quad_vertices{
             vr::geometry::GeometryMeshVertex{
@@ -316,32 +359,37 @@ int main(int argc_,
         geometry_resource_host.BeginFrame(runtime.Context(), 0U);
         geometry_image_host.BeginFrame(runtime.Context(), 0U);
 
-        vr::geometry::GeometryMaterialDesc material_a{};
-        material_a.material_id = 11U;
-        material_a.image_id = 1001U;
-        material_a.uv_scale_u = 1.0F;
-        material_a.uv_scale_v = 1.0F;
-        geometry_material_host.UpsertMaterial(material_a);
+        vr::geometry::GeometryAppearanceDesc appearance_a{};
+        appearance_a.appearance_id = 11U;
+        appearance_a.image_id = 1001U;
+        appearance_a.uv_scale_u = 1.0F;
+        appearance_a.uv_scale_v = 1.0F;
+        geometry_appearance_host.UpsertAppearance(appearance_a);
 
-        vr::geometry::GeometryMaterialDesc material_b{};
-        material_b.material_id = 22U;
-        material_b.image_id = 1002U;
-        material_b.uv_scale_u = 1.35F;
-        material_b.uv_scale_v = 1.35F;
-        material_b.uv_bias_u = -0.15F;
-        material_b.uv_bias_v = 0.10F;
-        material_b.flags = vr::geometry::geometry_material_flag_alpha_test;
-        material_b.alpha_cutoff = 0.2F;
-        geometry_material_host.UpsertMaterial(material_b);
+        vr::geometry::GeometryAppearanceDesc appearance_b{};
+        appearance_b.appearance_id = 22U;
+        appearance_b.image_id = 1002U;
+        appearance_b.uv_scale_u = 1.35F;
+        appearance_b.uv_scale_v = 1.35F;
+        appearance_b.uv_bias_u = -0.15F;
+        appearance_b.uv_bias_v = 0.10F;
+        appearance_b.flags = vr::geometry::geometry_appearance_flag_alpha_test;
+        appearance_b.alpha_cutoff = 0.2F;
+        geometry_appearance_host.UpsertAppearance(appearance_b);
 
         std::array<Geometry3D, 2U> geometry_3d_components{};
+        std::array<Appearance3D, 2U> geometry_3d_appearances{};
         InitializeGeometry3DComponent(geometry_3d_components[0U],
+                                      geometry_3d_appearances[0U],
+                                      0U,
                                       1U,
                                       11U,
                                       vr::ecs::Rgba8{255U, 255U, 255U, 255U},
                                       true,
                                       false);
         InitializeGeometry3DComponent(geometry_3d_components[1U],
+                                      geometry_3d_appearances[1U],
+                                      1U,
                                       1U,
                                       22U,
                                       vr::ecs::Rgba8{220U, 245U, 255U, 230U},
@@ -394,7 +442,7 @@ int main(int argc_,
         renderer_3d_create_info.reserve_component_count =
             static_cast<std::uint32_t>(geometry_3d_components.size());
         renderer_3d_create_info.reserve_instance_count = 256U;
-        renderer_3d_create_info.reserve_material_set_count = 64U;
+        renderer_3d_create_info.reserve_appearance_set_count = 64U;
         renderer_3d_create_info.enable_depth = true;
         renderer_3d_create_info.clear_depth = true;
         renderer_3d_create_info.clear_swapchain = false;
@@ -406,7 +454,9 @@ int main(int argc_,
         renderer_3d.Initialize(renderer_3d_create_info);
         renderer_3d_initialized = true;
         renderer_3d.SetHosts(&geometry_resource_host, &geometry_upload_host);
-        renderer_3d.SetMaterialHosts(&geometry_material_host, &geometry_image_host);
+        renderer_3d.SetAppearanceHosts(&geometry_appearance_host, &geometry_image_host);
+        renderer_3d.SetAppearanceData(geometry_3d_appearances.data(),
+                                      static_cast<std::uint32_t>(geometry_3d_appearances.size()));
         renderer_3d.SetSceneData(geometry_3d_components.data(),
                                  geometry_3d_transforms.data(),
                                  static_cast<std::uint32_t>(geometry_3d_components.size()),
@@ -469,8 +519,14 @@ int main(int argc_,
 
             const std::uint8_t pulse_alpha = static_cast<std::uint8_t>(
                 120.0F + 100.0F * (0.5F + 0.5F * std::sin(time_seconds * 2.0F)));
-            geometry_2d_components[0U].style.fill_color = vr::ecs::Rgba8{
-                40U, 56U, 86U, static_cast<std::uint8_t>(110U + pulse_alpha / 2U)};
+            const auto appearance_bridge =
+                vr::ecs::ReadAppearanceRuntimeBridge2D(geometry_2d_components[0U].runtime);
+            ApplyGeometry2DAppearance(
+                geometry_2d_components[0U],
+                vr::ecs::Rgba8{40U, 56U, 86U, static_cast<std::uint8_t>(110U + pulse_alpha / 2U)},
+                appearance_bridge.stroke_color,
+                appearance_bridge.opacity,
+                appearance_bridge.layer);
 
             const Runtime::RuntimeTickResult tick_result = runtime.Tick(recorder);
             (void)tick_result;
@@ -495,7 +551,7 @@ int main(int argc_,
                           << " | Frame:" << frame_index
                           << " | 3D Draw:" << stats_3d.draw_call_count
                           << " Batch:" << stats_3d.draw_batch_count
-                          << " MatSet:" << stats_3d.material_set_count
+                          << " AppSet:" << stats_3d.appearance_set_count
                           << " | Bloom P:" << bloom_stats.prefilter_draw_call_count
                           << " B:" << bloom_stats.blur_draw_call_count
                           << " C:" << bloom_stats.combine_draw_call_count
@@ -515,8 +571,8 @@ int main(int argc_,
         recorder.Shutdown(runtime.Context());
         renderer_3d.Shutdown(runtime.Context());
         renderer_3d_initialized = false;
-        geometry_material_host.Shutdown();
-        geometry_material_host_initialized = false;
+        geometry_appearance_host.Shutdown();
+        geometry_appearance_host_initialized = false;
         geometry_image_host.Shutdown(runtime.Context());
         geometry_image_host_initialized = false;
         geometry_upload_host.Shutdown(runtime.Context());
@@ -539,9 +595,9 @@ int main(int argc_,
             renderer_3d.Shutdown(runtime.Context());
             renderer_3d_initialized = false;
         }
-        if (geometry_material_host_initialized) {
-            geometry_material_host.Shutdown();
-            geometry_material_host_initialized = false;
+        if (geometry_appearance_host_initialized) {
+            geometry_appearance_host.Shutdown();
+            geometry_appearance_host_initialized = false;
         }
         if (geometry_image_host_initialized && runtime_initialized && runtime.IsInitialized()) {
             geometry_image_host.Shutdown(runtime.Context());
@@ -564,3 +620,4 @@ int main(int argc_,
 
     return 0;
 }
+

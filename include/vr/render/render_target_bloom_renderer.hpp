@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "Center/Memory/Container/Vector/McVector.hpp"
 #include "vr/render/bindless_resource_system.hpp"
@@ -149,3 +149,4 @@ private:
 };
 
 } // namespace vr::render
+

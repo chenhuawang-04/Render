@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "vr/render/appearance_frame_coordinator.hpp"
 #include "vr/render/appearance_prepare_stage.hpp"
@@ -176,3 +176,4 @@ private:
 };
 
 } // namespace vr::render
+

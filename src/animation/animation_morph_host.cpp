@@ -1,4 +1,4 @@
-#include "vr/animation/animation_morph_host.hpp"
+﻿#include "vr/animation/animation_morph_host.hpp"
 
 #include <algorithm>
 #include <cstddef>
@@ -318,3 +318,4 @@ void MorphAnimationHost::UpdateMovedRecordSlot(std::uint32_t record_index_) noex
 }
 
 } // namespace vr::animation
+

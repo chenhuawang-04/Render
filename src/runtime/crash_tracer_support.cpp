@@ -1,4 +1,4 @@
-#include "vr/runtime/crash_tracer_support.hpp"
+﻿#include "vr/runtime/crash_tracer_support.hpp"
 
 #include <cstdlib>
 #include <exception>
@@ -199,3 +199,4 @@ void InstallProcessCrashTracer(int argc_,
 }
 
 } // namespace vr::runtime
+

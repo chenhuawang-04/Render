@@ -504,3 +504,4 @@ private:
 };
 
 } // namespace vr::ecs
+

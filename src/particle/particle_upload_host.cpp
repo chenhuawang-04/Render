@@ -1,4 +1,4 @@
-#include "vr/particle/particle_upload_host.hpp"
+﻿#include "vr/particle/particle_upload_host.hpp"
 
 #include "vr/resource/gpu_memory_host.hpp"
 
@@ -425,3 +425,4 @@ const ParticleUploadHost::FrameState& ParticleUploadHost::FrameAt(std::uint32_t 
 }
 
 } // namespace vr::particle
+

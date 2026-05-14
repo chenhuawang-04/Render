@@ -1,4 +1,4 @@
-#include "support/test_framework.hpp"
+﻿#include "support/test_framework.hpp"
 #include "vr/text/freetype_host.hpp"
 
 #include <array>
@@ -118,3 +118,4 @@ VR_TEST_CASE(FreeTypeHost_set_face_pixel_size_updates_metrics, "unit;core;text;f
 }
 
 } // namespace
+

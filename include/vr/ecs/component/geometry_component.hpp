@@ -1,9 +1,10 @@
-#pragma once
+﻿#pragma once
 
 #include "vr/ecs/component/appearance_component.hpp"
 #include "vr/ecs/component/spatial_types.hpp"
 #include "vr/ecs/component/text_component.hpp"
 #include "vr/ecs/concept/dimension.hpp"
+#include "vr/ecs/system/visual_runtime_route_common.hpp"
 
 #include <cstdint>
 #include <type_traits>
@@ -52,11 +53,6 @@ enum class Geometry3DTopology : std::uint8_t {
     points = 2U,
 };
 
-enum class Geometry3DShadingModel : std::uint8_t {
-    unlit = 0U,
-    lit = 1U,
-};
-
 struct GeometryPathInlineData final {
     static constexpr std::uint32_t inline_capacity_bytes = 1024U;
 
@@ -82,51 +78,27 @@ enum GeometryMeshAnimationFlags : std::uint16_t {
 };
 
 struct GeometryRuntimeRoute final {
-    std::uint64_t sort_key;
+    VR_ECS_VISUAL_RUNTIME_ROUTE_SORT_KEY_FIELD();
     std::uint32_t geometry_id;
-    // Authoring/base material route. Linked appearance overrides are stored separately so unlink can
-    // restore this value without back-filling state.
-    std::uint32_t material_id;
-    std::uint32_t batch_tag;
-    std::uint32_t user_data;
-    AppearanceHandle appearance_handle;
-    std::uint32_t appearance_pipeline_bucket;
-    // Effective material override contributed by a linked appearance handle when present.
-    std::uint32_t appearance_resource_bucket;
-    std::uint16_t depth_bin;
-    std::uint8_t visible;
-    GeometryRenderPassHint pass_hint;
-    std::uint32_t dirty_flags;
+    VR_ECS_VISUAL_RUNTIME_ROUTE_TRAILING_FIELDS(GeometryRenderPassHint);
 };
 
 struct GeometryStyle2D final {
     float stroke_width_px;
     float miter_limit;
-    Rgba8 fill_color;
-    Rgba8 stroke_color;
-    std::int16_t layer;
     Geometry2DTopology topology;
     Geometry2DFillRule fill_rule;
     Geometry2DLineJoin line_join;
     Geometry2DLineCap line_cap;
-    std::uint8_t antialiasing;
     std::uint8_t reserved0;
     std::uint16_t reserved1;
+    std::uint32_t reserved2;
 };
 
 struct GeometryStyle3D final {
-    Rgba8 albedo_color;
-    std::uint8_t depth_test;
-    std::uint8_t depth_write;
-    std::uint8_t double_sided;
     Geometry3DTopology topology;
-    Geometry3DShadingModel shading_model;
-    std::uint8_t cast_shadow;
-    std::uint8_t receive_shadow;
     std::uint8_t reserved0;
-    float metallic;
-    float roughness;
-    float normal_scale;
+    std::uint16_t reserved1;
     float line_width;
 };
 
@@ -136,6 +108,7 @@ struct GeometryRuntime2D final {
     std::uint32_t tessellation_revision;
     std::uint32_t path_data_hash;
     std::uint32_t reserved0;
+    AppearanceRuntimeBridge2D appearance;
     Float2 bounds_min;
     Float2 bounds_max;
 };
@@ -144,11 +117,42 @@ struct GeometryRuntime3D final {
     GeometryRuntimeRoute route;
     std::uint32_t mesh_revision;
     std::uint32_t meshlet_count_hint;
-    std::uint32_t reserved0;
-    std::uint32_t reserved1;
+    AppearanceRuntimeBridge3D appearance;
     Float3 bounds_min;
     Float3 bounds_max;
 };
+
+[[nodiscard]] constexpr AppearanceRuntimeBridge2D ReadAppearanceRuntimeBridge2D(
+    const GeometryRuntime2D& runtime_) noexcept {
+    return runtime_.appearance;
+}
+
+[[nodiscard]] constexpr bool HasSameAppearanceRuntimeBridge2D(
+    const GeometryRuntime2D& runtime_,
+    const AppearanceRuntimeBridge2D& bridge_) noexcept {
+    return IsSameAppearanceRuntimeBridge2D(runtime_.appearance, bridge_);
+}
+
+constexpr void StoreAppearanceRuntimeBridge2D(GeometryRuntime2D& runtime_,
+                                              const AppearanceRuntimeBridge2D& bridge_) noexcept {
+    runtime_.appearance = bridge_;
+}
+
+[[nodiscard]] constexpr AppearanceRuntimeBridge3D ReadAppearanceRuntimeBridge3D(
+    const GeometryRuntime3D& runtime_) noexcept {
+    return runtime_.appearance;
+}
+
+[[nodiscard]] constexpr bool HasSameAppearanceRuntimeBridge3D(
+    const GeometryRuntime3D& runtime_,
+    const AppearanceRuntimeBridge3D& bridge_) noexcept {
+    return IsSameAppearanceRuntimeBridge3D(runtime_.appearance, bridge_);
+}
+
+constexpr void StoreAppearanceRuntimeBridge3D(GeometryRuntime3D& runtime_,
+                                              const AppearanceRuntimeBridge3D& bridge_) noexcept {
+    runtime_.appearance = bridge_;
+}
 
 template<DimensionTag DimensionT>
 struct GeometryComponent;
@@ -192,3 +196,4 @@ static_assert(PurePodGeometryComponent<Geometry<Dim3>>);
 static_assert(sizeof(GeometryRuntimeRoute) <= 48U);
 
 } // namespace vr::ecs
+

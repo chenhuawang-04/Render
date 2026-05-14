@@ -1,4 +1,4 @@
-#include "vr/render/render_target_pool.hpp"
+﻿#include "vr/render/render_target_pool.hpp"
 
 #include <cstddef>
 #include <stdexcept>
@@ -444,3 +444,4 @@ void RenderTargetPool::RefreshStats() noexcept {
 }
 
 } // namespace vr::render
+

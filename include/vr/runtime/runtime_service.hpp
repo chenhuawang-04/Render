@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <concepts>
 #include <cstdint>
@@ -167,3 +167,4 @@ inline void CallShutdownIfSupported(ServiceT& service_, ContextT& context_) {
 }
 
 } // namespace vr::runtime
+

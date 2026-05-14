@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "Center/Memory/Container/Vector/McVector.hpp"
 #include "vr/render/light_prepare_stage.hpp"
@@ -490,3 +490,4 @@ private:
 };
 
 } // namespace vr::render
+

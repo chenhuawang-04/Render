@@ -1,9 +1,9 @@
-#include "support/test_framework.hpp"
+﻿#include "support/test_framework.hpp"
 #include "vr/ecs/component/animation_component.hpp"
 #include "vr/ecs/system/animation_camera_track_system.hpp"
 #include "vr/ecs/system/animation_clock_system.hpp"
 #include "vr/ecs/system/animation_curve_system.hpp"
-#include "vr/ecs/system/animation_material_track_system.hpp"
+#include "vr/ecs/system/animation_visual_track_system.hpp"
 #include "vr/ecs/system/animation_path_motion_system.hpp"
 #include "vr/ecs/system/animation_property_track_system.hpp"
 #include "vr/ecs/system/appearance_system.hpp"
@@ -25,7 +25,7 @@ namespace {
 VR_TEST_CASE(EcsAnimationComponents_are_pure_pod_and_future_kinds_exist,
              "unit;core;ecs;animation") {
     using AnimationProperty2D = vr::ecs::Animation<vr::ecs::Dim2, vr::ecs::PropertyTrack>;
-    using AnimationMaterial3D = vr::ecs::Animation<vr::ecs::Dim3, vr::ecs::MaterialTrack>;
+    using AnimationVisual3D = vr::ecs::Animation<vr::ecs::Dim3, vr::ecs::VisualTrack>;
     using AnimationPath2D = vr::ecs::Animation<vr::ecs::Dim2, vr::ecs::PathMotion>;
     using AnimationCamera3D = vr::ecs::Animation<vr::ecs::Dim3, vr::ecs::CameraTrack>;
     using AnimationMorph2D = vr::ecs::Animation<vr::ecs::Dim2, vr::ecs::Morph>;
@@ -33,8 +33,8 @@ VR_TEST_CASE(EcsAnimationComponents_are_pure_pod_and_future_kinds_exist,
 
     VR_CHECK(std::is_standard_layout_v<AnimationProperty2D>);
     VR_CHECK(std::is_trivial_v<AnimationProperty2D>);
-    VR_CHECK(std::is_standard_layout_v<AnimationMaterial3D>);
-    VR_CHECK(std::is_trivial_v<AnimationMaterial3D>);
+    VR_CHECK(std::is_standard_layout_v<AnimationVisual3D>);
+    VR_CHECK(std::is_trivial_v<AnimationVisual3D>);
     VR_CHECK(std::is_standard_layout_v<AnimationPath2D>);
     VR_CHECK(std::is_trivial_v<AnimationPath2D>);
     VR_CHECK(std::is_standard_layout_v<AnimationCamera3D>);
@@ -165,29 +165,67 @@ VR_TEST_CASE(EcsAnimationPropertyTrackSystem_applies_transform_and_camera,
     VR_CHECK(NearlyEqual(camera.style.zoom, 1.25F));
 }
 
-VR_TEST_CASE(EcsAnimationMaterialTrackSystem_applies_surface_and_appearance,
+VR_TEST_CASE(EcsAnimationVisualTrackSystem_applies_surface_and_appearance,
              "unit;core;ecs;animation") {
-    using MaterialSystem2D = vr::ecs::AnimationMaterialTrackSystem<vr::ecs::Dim2>;
-    using MaterialSystem3D = vr::ecs::AnimationMaterialTrackSystem<vr::ecs::Dim3>;
+    using VisualSystem2D = vr::ecs::AnimationVisualTrackSystem<vr::ecs::Dim2>;
+    using VisualSystem3D = vr::ecs::AnimationVisualTrackSystem<vr::ecs::Dim3>;
 
-    vr::ecs::Animation<vr::ecs::Dim2, vr::ecs::MaterialTrack> surface_track_2d{};
-    MaterialSystem2D::Initialize(surface_track_2d);
-    MaterialSystem2D::SetSemantic(surface_track_2d, vr::ecs::MaterialTrackSemantic::surface_uv_rect);
+    vr::ecs::Animation<vr::ecs::Dim2, vr::ecs::VisualTrack> surface_track_2d{};
+    VisualSystem2D::Initialize(surface_track_2d);
+    VisualSystem2D::SetSemantic(surface_track_2d, vr::ecs::VisualTrackSemantic::surface_uv_rect);
     surface_track_2d.sample.value = vr::ecs::Float4{.x = 0.1F, .y = 0.2F, .z = 0.9F, .w = 0.8F};
     vr::ecs::Surface<vr::ecs::Dim2> surface_2d{};
     vr::ecs::SurfaceSystem<vr::ecs::Dim2>::Initialize(surface_2d);
-    VR_REQUIRE(MaterialSystem2D::ApplyToSurface(surface_track_2d, surface_2d));
+    VR_REQUIRE(VisualSystem2D::ApplyToSurface(surface_track_2d, surface_2d));
     VR_CHECK(NearlyEqual(surface_2d.style.uv_u0, 0.1F));
     VR_CHECK(NearlyEqual(surface_2d.style.uv_v1, 0.8F));
 
-    vr::ecs::Animation<vr::ecs::Dim3, vr::ecs::MaterialTrack> appearance_track_3d{};
-    MaterialSystem3D::Initialize(appearance_track_3d);
-    MaterialSystem3D::SetSemantic(appearance_track_3d, vr::ecs::MaterialTrackSemantic::appearance_emissive_intensity);
+    vr::ecs::Animation<vr::ecs::Dim2, vr::ecs::VisualTrack> surface_appearance_track_2d{};
+    VisualSystem2D::Initialize(surface_appearance_track_2d);
+    VisualSystem2D::SetSemantic(surface_appearance_track_2d, vr::ecs::VisualTrackSemantic::appearance_color);
+    surface_appearance_track_2d.sample.value = vr::ecs::Float4{.x = 0.25F, .y = 0.5F, .z = 0.75F, .w = 1.0F};
+    VR_REQUIRE(VisualSystem2D::ApplyToSurface(surface_appearance_track_2d, surface_2d));
+    const vr::ecs::AppearanceRuntimeBridge2D surface_appearance_2d =
+        vr::ecs::ReadAppearanceRuntimeBridge2D(surface_2d.runtime);
+    VR_CHECK(surface_appearance_2d.fill_color.r == 64U);
+    VR_CHECK(surface_appearance_2d.fill_color.g == 128U);
+    VR_CHECK(surface_appearance_2d.fill_color.b == 191U);
+
+    vr::ecs::Animation<vr::ecs::Dim3, vr::ecs::VisualTrack> surface_appearance_track_3d{};
+    VisualSystem3D::Initialize(surface_appearance_track_3d);
+    VisualSystem3D::SetSemantic(surface_appearance_track_3d, vr::ecs::VisualTrackSemantic::appearance_opacity);
+    surface_appearance_track_3d.sample.value = vr::ecs::Float4{.x = 0.35F, .y = 0.0F, .z = 0.0F, .w = 0.0F};
+    vr::ecs::Surface<vr::ecs::Dim3> surface_3d{};
+    vr::ecs::SurfaceSystem<vr::ecs::Dim3>::Initialize(surface_3d);
+    VR_REQUIRE(VisualSystem3D::ApplyToSurface(surface_appearance_track_3d, surface_3d));
+    VR_CHECK(NearlyEqual(vr::ecs::ReadAppearanceRuntimeBridge3D(surface_3d.runtime).opacity, 0.35F));
+
+    vr::ecs::Animation<vr::ecs::Dim3, vr::ecs::VisualTrack> appearance_track_3d{};
+    VisualSystem3D::Initialize(appearance_track_3d);
+    VisualSystem3D::SetSemantic(appearance_track_3d, vr::ecs::VisualTrackSemantic::appearance_emissive_intensity);
     appearance_track_3d.sample.value = vr::ecs::Float4{.x = 3.5F, .y = 0.0F, .z = 0.0F, .w = 0.0F};
     vr::ecs::Appearance<vr::ecs::Dim3> appearance_3d{};
     vr::ecs::AppearanceSystem<vr::ecs::Dim3>::Initialize(appearance_3d);
-    VR_REQUIRE(MaterialSystem3D::ApplyToAppearance(appearance_track_3d, appearance_3d));
+    VR_REQUIRE(VisualSystem3D::ApplyToAppearance(appearance_track_3d, appearance_3d));
     VR_CHECK(NearlyEqual(appearance_3d.style.emissive_intensity, 3.5F));
+}
+
+VR_TEST_CASE(EcsAnimationVisualTrackSystem_semantic_target_classification,
+             "unit;core;ecs;animation") {
+    using VisualSystem2D = vr::ecs::AnimationVisualTrackSystem<vr::ecs::Dim2>;
+    using VisualSystem3D = vr::ecs::AnimationVisualTrackSystem<vr::ecs::Dim3>;
+
+    VR_CHECK(VisualSystem2D::IsSurfaceSourceSemantic(vr::ecs::VisualTrackSemantic::surface_uv_rect));
+    VR_CHECK(VisualSystem2D::IsSurfaceTargetSemantic(vr::ecs::VisualTrackSemantic::surface_uv_rect));
+    VR_CHECK(!VisualSystem2D::IsAppearanceTargetSemantic(vr::ecs::VisualTrackSemantic::surface_uv_rect));
+
+    VR_CHECK(VisualSystem2D::IsSurfaceFallbackAppearanceSemantic(vr::ecs::VisualTrackSemantic::appearance_color));
+    VR_CHECK(VisualSystem2D::IsSurfaceTargetSemantic(vr::ecs::VisualTrackSemantic::appearance_color));
+    VR_CHECK(VisualSystem2D::IsAppearanceTargetSemantic(vr::ecs::VisualTrackSemantic::appearance_color));
+
+    VR_CHECK(VisualSystem3D::IsAppearanceSemantic(vr::ecs::VisualTrackSemantic::appearance_emissive_intensity));
+    VR_CHECK(VisualSystem3D::IsAppearanceTargetSemantic(vr::ecs::VisualTrackSemantic::appearance_emissive_intensity));
+    VR_CHECK(!VisualSystem3D::IsSurfaceTargetSemantic(vr::ecs::VisualTrackSemantic::appearance_emissive_intensity));
 }
 
 VR_TEST_CASE(EcsAnimationPathMotionSystem_samples_bezier_and_applies_transform,
@@ -251,3 +289,5 @@ VR_TEST_CASE(EcsAnimationCameraTrackSystem_applies_pose_and_projection,
 }
 
 } // namespace
+
+

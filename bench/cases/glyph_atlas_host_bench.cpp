@@ -1,4 +1,4 @@
-#include "support/bench_framework.hpp"
+﻿#include "support/bench_framework.hpp"
 #include "vr/text/freetype_host.hpp"
 #include "vr/text/glyph_atlas_host.hpp"
 
@@ -75,4 +75,5 @@ VR_BENCHMARK_CASE(GlyphAtlasHost_resolve_ascii_hot_cache, "core;text;atlas;cpu")
 }
 
 } // namespace
+
 

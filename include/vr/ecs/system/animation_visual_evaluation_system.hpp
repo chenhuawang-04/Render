@@ -1,18 +1,18 @@
-#pragma once
+﻿#pragma once
 
 #include "vr/animation/animation_clip_host.hpp"
 #include "vr/ecs/system/animation_clock_system.hpp"
 #include "vr/ecs/system/animation_evaluation_context.hpp"
-#include "vr/ecs/system/animation_material_track_system.hpp"
+#include "vr/ecs/system/animation_visual_track_system.hpp"
 
 namespace vr::ecs {
 
 template<DimensionTag DimensionT>
-class AnimationMaterialEvaluationSystem final {
+class AnimationVisualEvaluationSystem final {
 public:
-    using AnimationType = Animation<DimensionT, MaterialTrack>;
-    using TrackSystem = AnimationMaterialTrackSystem<DimensionT>;
-    using ClockSystem = AnimationClockSystem<DimensionT, MaterialTrack>;
+    using AnimationType = Animation<DimensionT, VisualTrack>;
+    using TrackSystem = AnimationVisualTrackSystem<DimensionT>;
+    using ClockSystem = AnimationClockSystem<DimensionT, VisualTrack>;
 
     [[nodiscard]] static bool Tick(AnimationType& component_,
                                    const animation::AnimationClipHost& clip_host_,
@@ -29,32 +29,32 @@ public:
 
     [[nodiscard]] static bool SampleFromClip(AnimationType& component_,
                                              const animation::AnimationClipHost& clip_host_) noexcept {
-        const animation::AnimationClipRecord* clip = clip_host_.FindMaterialClipByHandle(component_.playback.clip_handle);
+        const animation::AnimationClipRecord* clip = clip_host_.FindVisualClipByHandle(component_.playback.clip_handle);
         if (clip == nullptr) {
             return false;
         }
 
         const AnimationValueEncoding preferred_encoding = component_.binding.value_encoding;
         if (preferred_encoding == AnimationValueEncoding::scalar &&
-            SampleChannels(component_, clip_host_.MaterialScalarChannels(*clip), clip->material.scalar.count, clip_host_)) {
+            SampleChannels(component_, clip_host_.VisualScalarChannels(*clip), clip->visual.scalar.count, clip_host_)) {
             return true;
         }
         if (preferred_encoding == AnimationValueEncoding::float4 &&
-            SampleChannels(component_, clip_host_.MaterialFloat4Channels(*clip), clip->material.float4.count, clip_host_)) {
+            SampleChannels(component_, clip_host_.VisualFloat4Channels(*clip), clip->visual.float4.count, clip_host_)) {
             return true;
         }
         if (preferred_encoding == AnimationValueEncoding::color_rgba8 &&
-            SampleChannels(component_, clip_host_.MaterialColorChannels(*clip), clip->material.color.count, clip_host_)) {
+            SampleChannels(component_, clip_host_.VisualColorChannels(*clip), clip->visual.color.count, clip_host_)) {
             return true;
         }
 
-        if (SampleChannels(component_, clip_host_.MaterialScalarChannels(*clip), clip->material.scalar.count, clip_host_)) {
+        if (SampleChannels(component_, clip_host_.VisualScalarChannels(*clip), clip->visual.scalar.count, clip_host_)) {
             return true;
         }
-        if (SampleChannels(component_, clip_host_.MaterialFloat4Channels(*clip), clip->material.float4.count, clip_host_)) {
+        if (SampleChannels(component_, clip_host_.VisualFloat4Channels(*clip), clip->visual.float4.count, clip_host_)) {
             return true;
         }
-        return SampleChannels(component_, clip_host_.MaterialColorChannels(*clip), clip->material.color.count, clip_host_);
+        return SampleChannels(component_, clip_host_.VisualColorChannels(*clip), clip->visual.color.count, clip_host_);
     }
 
     [[nodiscard]] static bool Apply(AnimationType& component_,
@@ -93,21 +93,21 @@ private:
     }
 
     static void SampleSingle(AnimationType& component_,
-                             const animation::MaterialScalarChannelRecord& channel_,
+                             const animation::VisualScalarChannelRecord& channel_,
                              const animation::AnimationClipHost& clip_host_) noexcept {
         TrackSystem::SampleScalarCurve(component_, clip_host_.BuildCurveView(channel_));
         component_.sample.channel_mask = channel_.channel_mask;
     }
 
     static void SampleSingle(AnimationType& component_,
-                             const animation::MaterialFloat4ChannelRecord& channel_,
+                             const animation::VisualFloat4ChannelRecord& channel_,
                              const animation::AnimationClipHost& clip_host_) noexcept {
         TrackSystem::SampleFloat4Curve(component_, clip_host_.BuildCurveView(channel_));
         component_.sample.channel_mask = channel_.channel_mask;
     }
 
     static void SampleSingle(AnimationType& component_,
-                             const animation::MaterialColorChannelRecord& channel_,
+                             const animation::VisualColorChannelRecord& channel_,
                              const animation::AnimationClipHost& clip_host_) noexcept {
         TrackSystem::SampleColorCurve(component_, clip_host_.BuildCurveView(channel_));
         component_.sample.channel_mask = channel_.channel_mask;
@@ -115,3 +115,5 @@ private:
 };
 
 } // namespace vr::ecs
+
+

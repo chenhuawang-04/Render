@@ -1,4 +1,4 @@
-#include "vr/platform/render_host.hpp"
+﻿#include "vr/platform/render_host.hpp"
 #include "vr/runtime/crash_tracer_support.hpp"
 #include "vr/render/render_loop_host.hpp"
 
@@ -175,3 +175,4 @@ int main(int argc_, char** argv_) {
         return 1;
     }
 }
+

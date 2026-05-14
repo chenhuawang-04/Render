@@ -81,7 +81,7 @@ template<>
 struct alignas(16) AppearanceGpuRecord<Dim3> final {
     std::array<float, 4U> base_rgba;
     std::array<float, 4U> emissive_rgba;
-    std::array<float, 4U> material_params;
+    std::array<float, 4U> appearance_params;
     std::array<float, 4U> extras;
     std::array<std::uint32_t, 4U> flags_u32;
     std::array<std::uint32_t, 4U> textures0_u32;
@@ -547,6 +547,8 @@ private:
             key |= (static_cast<std::uint64_t>(component_.style.double_sided & 0x1U)) << 20U;
             key |= (static_cast<std::uint64_t>(component_.style.cast_shadow & 0x1U)) << 19U;
             key |= (static_cast<std::uint64_t>(component_.style.receive_shadow & 0x1U)) << 18U;
+            key |= (static_cast<std::uint64_t>(component_.style.depth_test & 0x1U)) << 17U;
+            key |= (static_cast<std::uint64_t>(component_.style.depth_write & 0x1U)) << 16U;
         }
 
         return key;
@@ -633,6 +635,8 @@ private:
         flags |= (static_cast<std::uint32_t>(style_.double_sided) & 0x1U) << 7U;
         flags |= (static_cast<std::uint32_t>(style_.cast_shadow) & 0x1U) << 8U;
         flags |= (static_cast<std::uint32_t>(style_.receive_shadow) & 0x1U) << 9U;
+        flags |= (static_cast<std::uint32_t>(style_.depth_test) & 0x1U) << 10U;
+        flags |= (static_cast<std::uint32_t>(style_.depth_write) & 0x1U) << 11U;
         return flags;
     }
 
@@ -660,7 +664,7 @@ private:
         };
         out_record_.params = {
             component_.style.gradient_radius,
-            component_.style.stroke_width_px,
+            0.0F,
             component_.style.opacity,
             0.0F
         };
@@ -694,7 +698,7 @@ private:
             ColorChannelToFloat(component_.style.emissive_color.b),
             ColorChannelToFloat(component_.style.emissive_color.a)
         };
-        out_record_.material_params = {
+        out_record_.appearance_params = {
             component_.style.metallic,
             component_.style.roughness,
             component_.style.normal_scale,
@@ -728,3 +732,4 @@ private:
 };
 
 } // namespace vr::ecs
+

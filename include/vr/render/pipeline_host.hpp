@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "Center/Memory/Container/Vector/McVector.hpp"
 #include "vr/vulkan_context.hpp"
@@ -432,3 +432,4 @@ private:
 };
 
 } // namespace vr::render
+

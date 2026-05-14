@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "Center/Memory/Container/Vector/McVector.hpp"
 #include "vr/ecs/system/light_culling_system.hpp"
@@ -226,3 +226,4 @@ private:
 };
 
 } // namespace vr::light
+

@@ -1,6 +1,7 @@
 #include "support/test_framework.hpp"
 #include "vr/asset/texture_host.hpp"
 #include "vr/ecs/system/animation_evaluation_context.hpp"
+#include "vr/ecs/system/appearance_system.hpp"
 #include "vr/ecs/system/bounds_system.hpp"
 #include "vr/ecs/system/camera_system.hpp"
 #include "vr/ecs/system/geometry_mesh_system.hpp"
@@ -12,7 +13,7 @@
 #include "vr/ecs/system/text_system.hpp"
 #include "vr/ecs/system/transform_system.hpp"
 #include "vr/geometry/geometry_image_host.hpp"
-#include "vr/geometry/geometry_material_host.hpp"
+#include "vr/geometry/geometry_appearance_host.hpp"
 #include "vr/geometry/geometry_renderer_3d.hpp"
 #include "vr/geometry/geometry_resource_host.hpp"
 #include "vr/geometry/geometry_upload_host.hpp"
@@ -46,6 +47,8 @@
 namespace {
 
 using Runtime = vr::render::RenderRuntimeHost<vr::platform::ActiveBackendTag, 2U>;
+using Appearance3D = vr::ecs::Appearance<vr::ecs::Dim3>;
+using AppearanceSystem3D = vr::ecs::AppearanceSystem<vr::ecs::Dim3>;
 using Geometry3D = vr::ecs::Geometry<vr::ecs::Dim3>;
 using Light3D = vr::ecs::Light<vr::ecs::Dim3>;
 using Shadow3D = vr::ecs::Shadow<vr::ecs::Dim3>;
@@ -352,21 +355,26 @@ void UploadHdrEnvironmentTexture(Runtime& runtime_,
 
 void InitializeGeometryComponent(Geometry3D& component_,
                                  std::uint32_t geometry_id_,
-                                 std::uint32_t material_id_,
+                                 std::uint32_t appearance_id_,
                                  vr::ecs::Rgba8 albedo_) {
     GeometrySystem3D::Initialize(component_);
-    GeometrySystem3D::SetRuntimeRoute(component_, geometry_id_, material_id_, 0U);
+    GeometrySystem3D::SetRuntimeRoute(component_, geometry_id_, appearance_id_, 0U);
     GeometrySystem3D::SetBounds(component_,
                                 vr::ecs::Float3{.x = -0.5F, .y = -0.5F, .z = -0.05F},
                                 vr::ecs::Float3{.x = 0.5F, .y = 0.5F, .z = 0.05F});
-    component_.style.depth_test = 1U;
-    component_.style.depth_write = 1U;
-    component_.style.cast_shadow = 1U;
-    component_.style.shading_model = vr::ecs::Geometry3DShadingModel::lit;
-    component_.style.albedo_color = albedo_;
     component_.mesh.submesh_index = 0U;
     component_.mesh.lod_index = 0U;
     component_.mesh.flags = 0U;
+
+    Appearance3D appearance{};
+    AppearanceSystem3D::Initialize(appearance);
+    AppearanceSystem3D::SetBaseColor(appearance, albedo_);
+    AppearanceSystem3D::SetOpacity(appearance, static_cast<float>(albedo_.a) / 255.0F);
+    AppearanceSystem3D::SetDepthTest(appearance, true);
+    AppearanceSystem3D::SetDepthWrite(appearance, true);
+    AppearanceSystem3D::SetCastShadow(appearance, true);
+    AppearanceSystem3D::SetReceiveShadow(appearance, true);
+    (void)GeometrySystem3D::ApplyAppearanceRuntimeState(component_, appearance.style);
 }
 
 void InitializeLightComponent(Light3D& component_) {
@@ -401,22 +409,28 @@ void InitializeSurface3DComponent(Surface3D& component_,
                                   std::uint16_t depth_bin_,
                                   vr::ecs::Rgba8 tint_color_) {
     SurfaceSystem3D::Initialize(component_);
-    SurfaceSystem3D::SetTextureRoute(component_, texture_id_, sampler_id_, 0U, 0U);
+    SurfaceSystem3D::SetSource(component_, vr::ecs::SurfaceSampledSource3DDesc{.surface_id = texture_id_, .sampler_id = sampler_id_, .uv_set = 0U, .flags = 0U});
     SurfaceSystem3D::SetDepthBin(component_, depth_bin_);
     SurfaceSystem3D::SetRenderPassHint(component_, vr::ecs::SurfaceRenderPassHint::transparent);
-    SurfaceSystem3D::SetDepthTest(component_, true);
-    SurfaceSystem3D::SetDepthWrite(component_, false);
-    SurfaceSystem3D::SetDoubleSided(component_, true);
-    SurfaceSystem3D::SetTintColor(component_, tint_color_);
-    SurfaceSystem3D::SetOpacity(component_, 0.92F);
+
+    Appearance3D appearance{};
+    AppearanceSystem3D::Initialize(appearance);
+    AppearanceSystem3D::SetBaseColor(appearance, tint_color_);
+    AppearanceSystem3D::SetOpacity(appearance, 0.92F);
+    AppearanceSystem3D::SetDepthTest(appearance, true);
+    AppearanceSystem3D::SetDepthWrite(appearance, false);
+    AppearanceSystem3D::SetDoubleSided(appearance, true);
+    AppearanceSystem3D::SetBlendMode(appearance, vr::ecs::AppearanceBlendMode::alpha);
+    AppearanceSystem3D::SetAlphaMode(appearance, vr::ecs::AppearanceAlphaMode::blend);
+    (void)SurfaceSystem3D::ApplyAppearanceRuntimeState(component_, appearance.style);
 }
 
 void InitializeText3DComponent(Text3D& component_,
                                std::uint32_t font_id_,
-                               std::uint32_t material_id_,
+                               std::uint32_t appearance_id_,
                                std::string_view text_) {
     TextSystem3D::Initialize(component_);
-    TextSystem3D::SetRuntimeRoute(component_, font_id_, material_id_, 0U, 0U);
+    TextSystem3D::SetRuntimeRoute(component_, font_id_, appearance_id_, 0U, 0U);
     TextSystem3D::SetColor(component_, vr::ecs::Rgba8{245U, 248U, 255U, 255U});
     TextSystem3D::SetOutlineEnabled(component_, true);
     TextSystem3D::SetOutlineWidthPx(component_, 1U);
@@ -482,7 +496,7 @@ VR_TEST_CASE(RuntimeIntegration_unified_scene_3d_bloom_post_stack_smoke,
     vr::geometry::GeometryResourceHost geometry_resource_host{};
     vr::geometry::GeometryUploadHost geometry_upload_host{};
     vr::geometry::GeometryImageHost geometry_image_host{};
-    vr::geometry::GeometryMaterialHost geometry_material_host{};
+    vr::geometry::GeometryAppearanceHost geometry_appearance_host{};
     vr::surface::SurfaceUploadHost surface_upload_host{};
     vr::surface::SurfaceImageHost surface_image_host{};
     vr::render::SceneRecorder3D recorder{};
@@ -496,7 +510,7 @@ VR_TEST_CASE(RuntimeIntegration_unified_scene_3d_bloom_post_stack_smoke,
     bool geometry_resource_host_initialized = false;
     bool geometry_upload_host_initialized = false;
     bool geometry_image_host_initialized = false;
-    bool geometry_material_host_initialized = false;
+    bool geometry_appearance_host_initialized = false;
     bool surface_upload_host_initialized = false;
     bool surface_image_host_initialized = false;
     bool geometry_renderer_initialized = false;
@@ -563,10 +577,10 @@ VR_TEST_CASE(RuntimeIntegration_unified_scene_3d_bloom_post_stack_smoke,
         geometry_image_host.Initialize(runtime.Context(), runtime.GpuMemory(), geometry_image_create_info);
         geometry_image_host_initialized = true;
 
-        vr::geometry::GeometryMaterialHostCreateInfo geometry_material_create_info{};
-        geometry_material_create_info.reserve_material_count = 16U;
-        geometry_material_host.Initialize(geometry_material_create_info);
-        geometry_material_host_initialized = true;
+        vr::geometry::GeometryAppearanceHostCreateInfo geometry_appearance_create_info{};
+        geometry_appearance_create_info.reserve_appearance_count = 16U;
+        geometry_appearance_host.Initialize(geometry_appearance_create_info);
+        geometry_appearance_host_initialized = true;
 
         vr::surface::SurfaceUploadHostCreateInfo surface_upload_create_info{};
         surface_upload_create_info.frames_in_flight = 2U;
@@ -648,12 +662,12 @@ VR_TEST_CASE(RuntimeIntegration_unified_scene_3d_bloom_post_stack_smoke,
         geometry_image_host.BeginFrame(runtime.Context(), 0U);
         surface_image_host.BeginFrame(runtime.Context(), 0U);
 
-        vr::geometry::GeometryMaterialDesc geometry_material{};
-        geometry_material.material_id = 11U;
-        geometry_material.image_id = 101U;
-        geometry_material.uv_scale_u = 1.0F;
-        geometry_material.uv_scale_v = 1.0F;
-        geometry_material_host.UpsertMaterial(geometry_material);
+        vr::geometry::GeometryAppearanceDesc geometry_appearance_desc{};
+        geometry_appearance_desc.appearance_id = 11U;
+        geometry_appearance_desc.image_id = 101U;
+        geometry_appearance_desc.uv_scale_u = 1.0F;
+        geometry_appearance_desc.uv_scale_v = 1.0F;
+        geometry_appearance_host.UpsertAppearance(geometry_appearance_desc);
 
         vr::resource::SamplerId surface_sampler_id{};
         {
@@ -676,7 +690,10 @@ VR_TEST_CASE(RuntimeIntegration_unified_scene_3d_bloom_post_stack_smoke,
         runtime.GlyphAtlas().MapFont(1U, base_face_id);
 
         Geometry3D geometry_component{};
-        InitializeGeometryComponent(geometry_component, 1U, 11U, vr::ecs::Rgba8{235U, 214U, 170U, 255U});
+        InitializeGeometryComponent(geometry_component,
+                                    1U,
+                                    11U,
+                                    vr::ecs::Rgba8{235U, 214U, 170U, 255U});
         GeometryMeshSystem3D::EnableVertexDeformShader(geometry_component, true);
         GeometryMeshSystem3D::EnableMorphTargets(geometry_component, true);
         GeometryMeshSystem3D::EnableSkeletalRootMotion(geometry_component, true);
@@ -862,7 +879,7 @@ VR_TEST_CASE(RuntimeIntegration_unified_scene_3d_bloom_post_stack_smoke,
         geometry_renderer.Initialize(geometry_renderer_create_info);
         geometry_renderer_initialized = true;
         geometry_renderer.SetHosts(&geometry_resource_host, &geometry_upload_host);
-        geometry_renderer.SetMaterialHosts(&geometry_material_host, &geometry_image_host);
+        geometry_renderer.SetAppearanceHosts(&geometry_appearance_host, &geometry_image_host);
         geometry_renderer.SetSceneData(&geometry_component,
                                        &geometry_transform,
                                        1U,
@@ -1180,8 +1197,8 @@ VR_TEST_CASE(RuntimeIntegration_unified_scene_3d_bloom_post_stack_smoke,
         surface_renderer_initialized = false;
         geometry_renderer.Shutdown(runtime.Context());
         geometry_renderer_initialized = false;
-        geometry_material_host.Shutdown();
-        geometry_material_host_initialized = false;
+        geometry_appearance_host.Shutdown();
+        geometry_appearance_host_initialized = false;
         geometry_image_host.Shutdown(runtime.Context());
         geometry_image_host_initialized = false;
         geometry_upload_host.Shutdown(runtime.Context());
@@ -1214,9 +1231,9 @@ VR_TEST_CASE(RuntimeIntegration_unified_scene_3d_bloom_post_stack_smoke,
             geometry_renderer.Shutdown(runtime.Context());
             geometry_renderer_initialized = false;
         }
-        if (geometry_material_host_initialized) {
-            geometry_material_host.Shutdown();
-            geometry_material_host_initialized = false;
+        if (geometry_appearance_host_initialized) {
+            geometry_appearance_host.Shutdown();
+            geometry_appearance_host_initialized = false;
         }
         if (geometry_image_host_initialized && runtime_initialized && runtime.IsInitialized()) {
             geometry_image_host.Shutdown(runtime.Context());
@@ -1251,3 +1268,4 @@ VR_TEST_CASE(RuntimeIntegration_unified_scene_3d_bloom_post_stack_smoke,
 }
 
 } // namespace
+

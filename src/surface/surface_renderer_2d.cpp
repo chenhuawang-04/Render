@@ -1,4 +1,4 @@
-#include "vr/surface/surface_renderer_2d.hpp"
+﻿#include "vr/surface/surface_renderer_2d.hpp"
 
 #include "vr/render/color_blend_state.hpp"
 #include "vr/render/bindless_resource_system.hpp"
@@ -1702,3 +1702,4 @@ void SurfaceRenderer2D::PrepareLightingDescriptorSetForFrame(std::uint32_t frame
 }
 
 } // namespace vr::surface
+

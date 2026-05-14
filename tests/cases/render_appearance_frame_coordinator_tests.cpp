@@ -1,4 +1,4 @@
-#include "support/test_framework.hpp"
+﻿#include "support/test_framework.hpp"
 #include "vr/ecs/system/appearance_system.hpp"
 #include "vr/ecs/system/geometry_system.hpp"
 #include "vr/ecs/system/surface_system.hpp"
@@ -111,7 +111,7 @@ VR_TEST_CASE(RenderAppearanceFrameCoordinator_dim3_link_geometry_and_surface,
         GeometrySystem3D::SetAppearanceHandle(geometry_components[i], vr::ecs::invalid_appearance_handle);
 
         SurfaceSystem3D::Initialize(surface_components[i]);
-        SurfaceSystem3D::SetTextureId(surface_components[i], 600U + i);
+        SurfaceSystem3D::SetSource(surface_components[i], vr::ecs::SurfaceSampledSource3DDesc{.surface_id = 600U + i});
         SurfaceSystem3D::SetAppearanceHandle(surface_components[i], vr::ecs::invalid_appearance_handle);
     }
 
@@ -385,7 +385,7 @@ VR_TEST_CASE(RenderAppearancePrepareBridge_dim3_dual_renderer_duplicate_dirty_hi
         GeometrySystem3D::SetGeometryId(geometry_components[i], 3000U + i);
 
         SurfaceSystem3D::Initialize(surface_components[i]);
-        SurfaceSystem3D::SetTextureId(surface_components[i], 4000U + i);
+        SurfaceSystem3D::SetSource(surface_components[i], vr::ecs::SurfaceSampledSource3DDesc{.surface_id = 4000U + i});
     }
 
     Coordinator3D coordinator{};
@@ -461,3 +461,4 @@ VR_TEST_CASE(RenderAppearanceFrameCoordinator_dim3_dirty_normalization_dedup_and
 }
 
 } // namespace
+

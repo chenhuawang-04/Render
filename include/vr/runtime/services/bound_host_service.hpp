@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <stdexcept>
 #include <string>
@@ -53,3 +53,4 @@ private:
 };
 
 } // namespace vr::runtime::services::detail
+

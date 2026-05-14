@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "Center/Memory/Container/Vector/McVector.hpp"
 
@@ -33,3 +33,4 @@ static_assert(std::is_standard_layout_v<SurfaceUploadRange>);
 static_assert(std::is_trivial_v<SurfaceUploadRange>);
 
 } // namespace vr::surface
+

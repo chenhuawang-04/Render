@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "vr/scene/background/sprite_background.hpp"
 #include "vr/scene/background/sky_environment.hpp"
@@ -27,3 +27,4 @@ using Scene2D = Scene<ecs::Dim2, SpriteBackground>;
 using Scene3D = Scene<ecs::Dim3, SkyEnvironment>;
 
 } // namespace vr::scene
+

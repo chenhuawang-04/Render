@@ -1,7 +1,8 @@
-#pragma once
+﻿#pragma once
 
 #include "vr/ecs/component/surface_component.hpp"
 #include "vr/ecs/system/transparency_render_policy.hpp"
+#include "vr/ecs/system/visual_runtime_route_common.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -10,6 +11,23 @@
 #include <limits>
 
 namespace vr::ecs {
+
+struct SurfaceImageSourceDesc final {
+    std::uint32_t surface_id = 0U;
+    std::uint32_t atlas_page_id = 0U;
+};
+
+struct SurfaceSpriteSourceDesc final {
+    std::uint32_t surface_id = 0U;
+    std::uint32_t atlas_page_id = 0U;
+};
+
+struct SurfaceSampledSource3DDesc final {
+    std::uint32_t surface_id = 0U;
+    std::uint32_t sampler_id = 0U;
+    std::uint16_t uv_set = 0U;
+    std::uint16_t flags = 0U;
+};
 
 template<DimensionTag DimensionT>
 class SurfaceSystem final {
@@ -22,28 +40,28 @@ public:
     }
 
     // 64-bit sort key layout (MSB -> LSB):
-    // [pass:2][material:16][surface:16][minor:16][batch:14]
+    // [pass:2][visual_resource:16][surface:16][minor:16][batch:14]
     static constexpr std::uint32_t sort_key_batch_bits = 14U;
     static constexpr std::uint32_t sort_key_minor_bits = 16U;
     static constexpr std::uint32_t sort_key_surface_bits = 16U;
-    static constexpr std::uint32_t sort_key_material_bits = 16U;
+    static constexpr std::uint32_t sort_key_visual_resource_bits = 16U;
     static constexpr std::uint32_t sort_key_pass_bits = 2U;
 
     static constexpr std::uint32_t sort_key_batch_shift = 0U;
     static constexpr std::uint32_t sort_key_minor_shift = sort_key_batch_shift + sort_key_batch_bits;
     static constexpr std::uint32_t sort_key_surface_shift = sort_key_minor_shift + sort_key_minor_bits;
-    static constexpr std::uint32_t sort_key_material_shift = sort_key_surface_shift + sort_key_surface_bits;
-    static constexpr std::uint32_t sort_key_pass_shift = sort_key_material_shift + sort_key_material_bits;
+    static constexpr std::uint32_t sort_key_visual_resource_shift = sort_key_surface_shift + sort_key_surface_bits;
+    static constexpr std::uint32_t sort_key_pass_shift = sort_key_visual_resource_shift + sort_key_visual_resource_bits;
 
     static constexpr std::uint32_t sort_key_binding_shift = sort_key_surface_shift;
 
     static constexpr std::uint64_t sort_key_batch_mask = (std::uint64_t{1U} << sort_key_batch_bits) - 1U;
     static constexpr std::uint64_t sort_key_minor_mask = (std::uint64_t{1U} << sort_key_minor_bits) - 1U;
     static constexpr std::uint64_t sort_key_surface_mask = (std::uint64_t{1U} << sort_key_surface_bits) - 1U;
-    static constexpr std::uint64_t sort_key_material_mask = (std::uint64_t{1U} << sort_key_material_bits) - 1U;
+    static constexpr std::uint64_t sort_key_visual_resource_mask = (std::uint64_t{1U} << sort_key_visual_resource_bits) - 1U;
     static constexpr std::uint64_t sort_key_pass_mask = (std::uint64_t{1U} << sort_key_pass_bits) - 1U;
 
-    static_assert(sort_key_pass_bits + sort_key_material_bits + sort_key_surface_bits +
+    static_assert(sort_key_pass_bits + sort_key_visual_resource_bits + sort_key_surface_bits +
                       sort_key_minor_bits + sort_key_batch_bits == 64U,
                   "SurfaceSystem sort-key bit layout must be exactly 64 bits");
 
@@ -59,29 +77,21 @@ public:
             component_.style.uv_v0 = 0.0F;
             component_.style.uv_u1 = 1.0F;
             component_.style.uv_v1 = 1.0F;
-            component_.style.tint_color = Rgba8{255U, 255U, 255U, 255U};
-            component_.style.opacity = 1.0F;
-            component_.style.layer = 0;
-            component_.style.blend_mode = Surface2DBlendMode::alpha;
             component_.style.flip_x = 0U;
             component_.style.flip_y = 0U;
-            component_.style.premultiplied_alpha = 0U;
             component_.style.reserved0 = 0U;
+            component_.style.reserved1 = 0U;
         } else {
-            component_.style.tint_color = Rgba8{255U, 255U, 255U, 255U};
             component_.style.uv_scale_u = 1.0F;
             component_.style.uv_scale_v = 1.0F;
             component_.style.uv_bias_u = 0.0F;
             component_.style.uv_bias_v = 0.0F;
-            component_.style.opacity = 1.0F;
-            component_.style.depth_test = 1U;
-            component_.style.depth_write = 0U;
-            component_.style.double_sided = 0U;
             component_.style.filter_mode = Surface3DFilterMode::linear;
             component_.style.address_u = Surface3DAddressMode::wrap;
             component_.style.address_v = Surface3DAddressMode::wrap;
             component_.style.address_w = Surface3DAddressMode::wrap;
             component_.style.reserved0 = 0U;
+            component_.style.reserved1 = 0U;
         }
 
         MarkDirty(component_, surface_dirty_style_flag | surface_dirty_runtime_flag);
@@ -90,12 +100,10 @@ public:
     static void SetDefaultRuntime(SurfaceType& component_) noexcept {
         component_.runtime.route.sort_key = 0U;
         component_.runtime.route.surface_id = 0U;
-        component_.runtime.route.material_id = 0U;
+        component_.runtime.route.visual_resource_id = 0U;
         component_.runtime.route.batch_tag = 0U;
         component_.runtime.route.user_data = 0U;
-        component_.runtime.route.appearance_handle = invalid_appearance_handle;
-        component_.runtime.route.appearance_pipeline_bucket = 0U;
-        component_.runtime.route.appearance_resource_bucket = 0U;
+        ClearAppearanceRuntimeRoute(component_.runtime.route);
         component_.runtime.route.depth_bin = 0U;
         component_.runtime.route.visible = 1U;
         component_.runtime.route.pass_hint = std::same_as<DimensionT, Dim2>
@@ -106,24 +114,23 @@ public:
                                                surface_dirty_runtime_flag;
 
         if constexpr (std::same_as<DimensionT, Dim2>) {
-            component_.runtime.source.image_id = 0U;
-            component_.runtime.source.sprite_id = 0U;
+            component_.runtime.source.surface_id = 0U;
             component_.runtime.source.atlas_page_id = 0U;
             component_.runtime.source.source_kind = Surface2DSourceKind::none;
             component_.runtime.source.reserved0 = 0U;
             component_.runtime.source.reserved1 = 0U;
             component_.runtime.source_revision = 0U;
             component_.runtime.reserved0 = 0U;
+            StoreAppearanceRuntimeBridge2D(component_.runtime, MakeAppearanceRuntimeBridge2D(nullptr));
             component_.runtime.size = Float2{.x = 0.0F, .y = 0.0F};
             component_.runtime.pivot = Float2{.x = 0.5F, .y = 0.5F};
         } else {
-            component_.runtime.texture.texture_id = 0U;
-            component_.runtime.texture.sampler_id = 0U;
-            component_.runtime.texture.uv_set = 0U;
-            component_.runtime.texture.flags = 0U;
-            component_.runtime.texture_revision = 0U;
-            component_.runtime.reserved0 = 0U;
-            component_.runtime.reserved1 = 0U;
+            component_.runtime.source.surface_id = 0U;
+            component_.runtime.source.sampler_id = 0U;
+            component_.runtime.source.uv_set = 0U;
+            component_.runtime.source.flags = 0U;
+            component_.runtime.source_revision = 0U;
+            StoreAppearanceRuntimeBridge3D(component_.runtime, MakeAppearanceRuntimeBridge3D(nullptr));
         }
     }
 
@@ -165,15 +172,15 @@ public:
 
     static void SetRuntimeRoute(SurfaceType& component_,
                                 std::uint32_t surface_id_,
-                                std::uint32_t material_id_,
+                                std::uint32_t visual_resource_id_,
                                 std::uint32_t batch_tag_) noexcept {
         if (component_.runtime.route.surface_id == surface_id_ &&
-            component_.runtime.route.material_id == material_id_ &&
+            component_.runtime.route.visual_resource_id == visual_resource_id_ &&
             component_.runtime.route.batch_tag == batch_tag_) {
             return;
         }
         component_.runtime.route.surface_id = surface_id_;
-        component_.runtime.route.material_id = material_id_;
+        component_.runtime.route.visual_resource_id = visual_resource_id_;
         component_.runtime.route.batch_tag = batch_tag_;
         MarkDirty(component_, surface_dirty_runtime_flag);
         RebuildSortKey(component_);
@@ -188,11 +195,12 @@ public:
         RebuildSortKey(component_);
     }
 
-    static void SetMaterialId(SurfaceType& component_, std::uint32_t material_id_) noexcept {
-        if (component_.runtime.route.material_id == material_id_) {
+    static void SetVisualResourceId(SurfaceType& component_,
+                                    std::uint32_t visual_resource_id_) noexcept {
+        if (component_.runtime.route.visual_resource_id == visual_resource_id_) {
             return;
         }
-        component_.runtime.route.material_id = material_id_;
+        component_.runtime.route.visual_resource_id = visual_resource_id_;
         MarkDirty(component_, surface_dirty_runtime_flag);
         RebuildSortKey(component_);
     }
@@ -226,15 +234,15 @@ public:
     }
 
     static void ClearAppearanceHandle(SurfaceType& component_) noexcept {
-        if (component_.runtime.route.appearance_handle.index == invalid_appearance_handle.index &&
-            component_.runtime.route.appearance_handle.generation == invalid_appearance_handle.generation &&
-            component_.runtime.route.appearance_pipeline_bucket == 0U &&
-            component_.runtime.route.appearance_resource_bucket == 0U) {
+        if (IsAppearanceRuntimeRouteClear(component_.runtime.route)) {
             return;
         }
-        component_.runtime.route.appearance_handle = invalid_appearance_handle;
-        component_.runtime.route.appearance_pipeline_bucket = 0U;
-        component_.runtime.route.appearance_resource_bucket = 0U;
+        ClearAppearanceRuntimeRoute(component_.runtime.route);
+        if constexpr (std::same_as<DimensionT, Dim2>) {
+            StoreAppearanceRuntimeBridge2D(component_.runtime, MakeAppearanceRuntimeBridge2D(nullptr));
+        } else {
+            StoreAppearanceRuntimeBridge3D(component_.runtime, MakeAppearanceRuntimeBridge3D(nullptr));
+        }
         BumpAppearanceHandleMutationSerial();
         MarkDirty(component_, surface_dirty_runtime_flag);
         RebuildSortKey(component_);
@@ -248,24 +256,161 @@ public:
         (void)appearance_sort_key_;
         const std::uint32_t pipeline_bucket = static_cast<std::uint32_t>(appearance_pipeline_key_);
         const std::uint32_t resource_bucket = static_cast<std::uint32_t>(appearance_resource_key_);
-        const bool changed =
-            component_.runtime.route.appearance_handle.index != appearance_handle_.index ||
-            component_.runtime.route.appearance_handle.generation != appearance_handle_.generation ||
-            component_.runtime.route.appearance_pipeline_bucket != pipeline_bucket ||
-            component_.runtime.route.appearance_resource_bucket != resource_bucket;
+        const bool changed = vr::ecs::HasAppearanceRuntimeRouteChanged(component_.runtime.route,
+                                                                       appearance_handle_,
+                                                                       pipeline_bucket,
+                                                                       resource_bucket);
         if (!changed) {
             return false;
         }
 
         const bool handle_changed =
-            component_.runtime.route.appearance_handle.index != appearance_handle_.index ||
-            component_.runtime.route.appearance_handle.generation != appearance_handle_.generation;
-        component_.runtime.route.appearance_handle = appearance_handle_;
-        component_.runtime.route.appearance_pipeline_bucket = pipeline_bucket;
-        component_.runtime.route.appearance_resource_bucket = resource_bucket;
+            vr::ecs::HasAppearanceHandleChanged(component_.runtime.route, appearance_handle_);
+        vr::ecs::StoreAppearanceRuntimeRoute(component_.runtime.route,
+                                             appearance_handle_,
+                                             pipeline_bucket,
+                                             resource_bucket);
         if (handle_changed) {
             BumpAppearanceHandleMutationSerial();
         }
+        MarkDirty(component_, surface_dirty_runtime_flag);
+        RebuildSortKey(component_);
+        return true;
+    }
+
+    [[nodiscard]] static bool SetAppearanceRuntimeLink(SurfaceType& component_,
+                                                       AppearanceHandle appearance_handle_,
+                                                       std::uint64_t appearance_sort_key_,
+                                                       std::uint64_t appearance_pipeline_key_,
+                                                       std::uint64_t appearance_resource_key_,
+                                                       const AppearanceStyle2D* appearance_style_) noexcept
+    requires std::same_as<DimensionT, Dim2>
+    {
+        (void)appearance_sort_key_;
+        const std::uint32_t pipeline_bucket = static_cast<std::uint32_t>(appearance_pipeline_key_);
+        const std::uint32_t resource_bucket = static_cast<std::uint32_t>(appearance_resource_key_);
+        const bool route_changed = vr::ecs::HasAppearanceRuntimeRouteChanged(component_.runtime.route,
+                                                                             appearance_handle_,
+                                                                             pipeline_bucket,
+                                                                             resource_bucket);
+        const bool appearance_state_changed =
+            WriteAppearanceRuntimeState(component_.runtime, appearance_style_);
+        if (!route_changed && !appearance_state_changed) {
+            return false;
+        }
+
+        const bool handle_changed =
+            vr::ecs::HasAppearanceHandleChanged(component_.runtime.route, appearance_handle_);
+        vr::ecs::StoreAppearanceRuntimeRoute(component_.runtime.route,
+                                             appearance_handle_,
+                                             pipeline_bucket,
+                                             resource_bucket);
+        if (handle_changed) {
+            BumpAppearanceHandleMutationSerial();
+        }
+        MarkDirty(component_, surface_dirty_runtime_flag);
+        RebuildSortKey(component_);
+        return true;
+    }
+
+    [[nodiscard]] static bool SetAppearanceRuntimeLink(SurfaceType& component_,
+                                                       AppearanceHandle appearance_handle_,
+                                                       std::uint64_t appearance_sort_key_,
+                                                       std::uint64_t appearance_pipeline_key_,
+                                                       std::uint64_t appearance_resource_key_,
+                                                       const AppearanceStyle3D* appearance_style_) noexcept
+    requires std::same_as<DimensionT, Dim3>
+    {
+        (void)appearance_sort_key_;
+        const std::uint32_t pipeline_bucket = static_cast<std::uint32_t>(appearance_pipeline_key_);
+        const std::uint32_t resource_bucket = static_cast<std::uint32_t>(appearance_resource_key_);
+        const bool route_changed = vr::ecs::HasAppearanceRuntimeRouteChanged(component_.runtime.route,
+                                                                             appearance_handle_,
+                                                                             pipeline_bucket,
+                                                                             resource_bucket);
+        const bool appearance_state_changed =
+            WriteAppearanceRuntimeState(component_.runtime, appearance_style_);
+        if (!route_changed && !appearance_state_changed) {
+            return false;
+        }
+
+        const bool handle_changed =
+            vr::ecs::HasAppearanceHandleChanged(component_.runtime.route, appearance_handle_);
+        vr::ecs::StoreAppearanceRuntimeRoute(component_.runtime.route,
+                                             appearance_handle_,
+                                             pipeline_bucket,
+                                             resource_bucket);
+        if (handle_changed) {
+            BumpAppearanceHandleMutationSerial();
+        }
+        MarkDirty(component_, surface_dirty_runtime_flag);
+        RebuildSortKey(component_);
+        return true;
+    }
+
+    [[nodiscard]] static bool ApplyAppearanceRuntimeState(SurfaceType& component_,
+                                                          const AppearanceStyle2D& appearance_style_) noexcept
+    requires std::same_as<DimensionT, Dim2>
+    {
+        return ApplyAppearanceRuntimeState(component_, &appearance_style_);
+    }
+
+    [[nodiscard]] static bool ApplyAppearanceRuntimeState(SurfaceType& component_,
+                                                          const AppearanceStyle2D* appearance_style_) noexcept
+    requires std::same_as<DimensionT, Dim2>
+    {
+        const bool changed = WriteAppearanceRuntimeState(component_.runtime, appearance_style_);
+        if (!changed) {
+            return false;
+        }
+        MarkDirty(component_, surface_dirty_runtime_flag);
+        RebuildSortKey(component_);
+        return true;
+    }
+
+    [[nodiscard]] static bool ApplyAppearanceRuntimeState(SurfaceType& component_,
+                                                          const AppearanceStyle3D& appearance_style_) noexcept
+    requires std::same_as<DimensionT, Dim3>
+    {
+        return ApplyAppearanceRuntimeState(component_, &appearance_style_);
+    }
+
+    [[nodiscard]] static bool ApplyAppearanceRuntimeState(SurfaceType& component_,
+                                                          const AppearanceStyle3D* appearance_style_) noexcept
+    requires std::same_as<DimensionT, Dim3>
+    {
+        const bool changed = WriteAppearanceRuntimeState(component_.runtime, appearance_style_);
+        if (!changed) {
+            return false;
+        }
+        MarkDirty(component_, surface_dirty_runtime_flag);
+        RebuildSortKey(component_);
+        return true;
+    }
+
+    [[nodiscard]] static bool ApplyAppearanceRuntimeBridgeState(
+        SurfaceType& component_,
+        const AppearanceRuntimeBridge2D& appearance_bridge_) noexcept
+    requires std::same_as<DimensionT, Dim2>
+    {
+        if (HasSameAppearanceRuntimeBridge2D(component_.runtime, appearance_bridge_)) {
+            return false;
+        }
+        StoreAppearanceRuntimeBridge2D(component_.runtime, appearance_bridge_);
+        MarkDirty(component_, surface_dirty_runtime_flag);
+        RebuildSortKey(component_);
+        return true;
+    }
+
+    [[nodiscard]] static bool ApplyAppearanceRuntimeBridgeState(
+        SurfaceType& component_,
+        const AppearanceRuntimeBridge3D& appearance_bridge_) noexcept
+    requires std::same_as<DimensionT, Dim3>
+    {
+        if (HasSameAppearanceRuntimeBridge3D(component_.runtime, appearance_bridge_)) {
+            return false;
+        }
+        StoreAppearanceRuntimeBridge3D(component_.runtime, appearance_bridge_);
         MarkDirty(component_, surface_dirty_runtime_flag);
         RebuildSortKey(component_);
         return true;
@@ -280,23 +425,6 @@ public:
         component_.runtime.route.depth_bin = depth_bin_;
         MarkDirty(component_, surface_dirty_runtime_flag);
         RebuildSortKey(component_);
-    }
-
-    static void SetOpacity(SurfaceType& component_, float opacity_) noexcept {
-        const float clamped = std::clamp(opacity_, 0.0F, 1.0F);
-        if (component_.style.opacity == clamped) {
-            return;
-        }
-        component_.style.opacity = clamped;
-        MarkDirty(component_, surface_dirty_style_flag | surface_dirty_runtime_flag);
-    }
-
-    static void SetTintColor(SurfaceType& component_, Rgba8 tint_color_) noexcept {
-        if (IsSameColor(component_.style.tint_color, tint_color_)) {
-            return;
-        }
-        component_.style.tint_color = tint_color_;
-        MarkDirty(component_, surface_dirty_style_flag | surface_dirty_runtime_flag);
     }
 
     static void SetUvRect(SurfaceType& component_,
@@ -319,28 +447,6 @@ public:
         MarkDirty(component_, surface_dirty_style_flag | surface_dirty_runtime_flag);
     }
 
-    static void SetLayer(SurfaceType& component_, std::int16_t layer_) noexcept
-    requires std::same_as<DimensionT, Dim2>
-    {
-        if (component_.style.layer == layer_) {
-            return;
-        }
-        component_.style.layer = layer_;
-        MarkDirty(component_, surface_dirty_style_flag | surface_dirty_runtime_flag);
-        RebuildSortKey(component_);
-    }
-
-    static void SetBlendMode(SurfaceType& component_,
-                             Surface2DBlendMode blend_mode_) noexcept
-    requires std::same_as<DimensionT, Dim2>
-    {
-        if (component_.style.blend_mode == blend_mode_) {
-            return;
-        }
-        component_.style.blend_mode = blend_mode_;
-        MarkDirty(component_, surface_dirty_style_flag | surface_dirty_runtime_flag);
-    }
-
     static void SetFlip(SurfaceType& component_,
                         bool flip_x_,
                         bool flip_y_) noexcept
@@ -357,58 +463,45 @@ public:
         MarkDirty(component_, surface_dirty_style_flag | surface_dirty_runtime_flag);
     }
 
-    static void SetPremultipliedAlpha(SurfaceType& component_, bool enabled_) noexcept
-    requires std::same_as<DimensionT, Dim2>
-    {
-        const std::uint8_t enabled_value = enabled_ ? 1U : 0U;
-        if (component_.style.premultiplied_alpha == enabled_value) {
-            return;
-        }
-        component_.style.premultiplied_alpha = enabled_value;
-        MarkDirty(component_, surface_dirty_style_flag | surface_dirty_runtime_flag);
-    }
-
-    static void SetImageId(SurfaceType& component_,
-                           std::uint32_t image_id_,
-                           std::uint32_t atlas_page_id_ = 0U) noexcept
+    static void SetSource(SurfaceType& component_,
+                          const SurfaceImageSourceDesc& source_) noexcept
     requires std::same_as<DimensionT, Dim2>
     {
         const bool changed =
-            component_.runtime.source.image_id != image_id_ ||
-            component_.runtime.source.atlas_page_id != atlas_page_id_ ||
+            component_.runtime.source.surface_id != source_.surface_id ||
+            component_.runtime.source.atlas_page_id != source_.atlas_page_id ||
             component_.runtime.source.source_kind != Surface2DSourceKind::image ||
-            component_.runtime.route.surface_id != image_id_;
+            component_.runtime.route.surface_id != source_.surface_id;
         if (!changed) {
             return;
         }
 
-        component_.runtime.source.image_id = image_id_;
-        component_.runtime.source.atlas_page_id = atlas_page_id_;
+        component_.runtime.source.surface_id = source_.surface_id;
+        component_.runtime.source.atlas_page_id = source_.atlas_page_id;
         component_.runtime.source.source_kind = Surface2DSourceKind::image;
-        component_.runtime.route.surface_id = image_id_;
+        component_.runtime.route.surface_id = source_.surface_id;
         ++component_.runtime.source_revision;
         MarkDirty(component_, surface_dirty_source_flag | surface_dirty_runtime_flag);
         RebuildSortKey(component_);
     }
 
-    static void SetSpriteId(SurfaceType& component_,
-                            std::uint32_t sprite_id_,
-                            std::uint32_t atlas_page_id_ = 0U) noexcept
+    static void SetSource(SurfaceType& component_,
+                          const SurfaceSpriteSourceDesc& source_) noexcept
     requires std::same_as<DimensionT, Dim2>
     {
         const bool changed =
-            component_.runtime.source.sprite_id != sprite_id_ ||
-            component_.runtime.source.atlas_page_id != atlas_page_id_ ||
+            component_.runtime.source.surface_id != source_.surface_id ||
+            component_.runtime.source.atlas_page_id != source_.atlas_page_id ||
             component_.runtime.source.source_kind != Surface2DSourceKind::sprite ||
-            component_.runtime.route.surface_id != sprite_id_;
+            component_.runtime.route.surface_id != source_.surface_id;
         if (!changed) {
             return;
         }
 
-        component_.runtime.source.sprite_id = sprite_id_;
-        component_.runtime.source.atlas_page_id = atlas_page_id_;
+        component_.runtime.source.surface_id = source_.surface_id;
+        component_.runtime.source.atlas_page_id = source_.atlas_page_id;
         component_.runtime.source.source_kind = Surface2DSourceKind::sprite;
-        component_.runtime.route.surface_id = sprite_id_;
+        component_.runtime.route.surface_id = source_.surface_id;
         ++component_.runtime.source_revision;
         MarkDirty(component_, surface_dirty_source_flag | surface_dirty_runtime_flag);
         RebuildSortKey(component_);
@@ -447,55 +540,25 @@ public:
         MarkDirty(component_, surface_dirty_runtime_flag);
     }
 
-    static void SetTextureId(SurfaceType& component_, std::uint32_t texture_id_) noexcept
+    static void SetSource(SurfaceType& component_,
+                          const SurfaceSampledSource3DDesc& source_) noexcept
     requires std::same_as<DimensionT, Dim3>
     {
         const bool changed =
-            component_.runtime.texture.texture_id != texture_id_ ||
-            component_.runtime.route.surface_id != texture_id_;
+            component_.runtime.source.surface_id != source_.surface_id ||
+            component_.runtime.source.sampler_id != source_.sampler_id ||
+            component_.runtime.source.uv_set != source_.uv_set ||
+            component_.runtime.source.flags != source_.flags ||
+            component_.runtime.route.surface_id != source_.surface_id;
         if (!changed) {
             return;
         }
-        component_.runtime.texture.texture_id = texture_id_;
-        component_.runtime.route.surface_id = texture_id_;
-        ++component_.runtime.texture_revision;
-        MarkDirty(component_, surface_dirty_source_flag | surface_dirty_runtime_flag);
-        RebuildSortKey(component_);
-    }
-
-    static void SetSamplerId(SurfaceType& component_, std::uint32_t sampler_id_) noexcept
-    requires std::same_as<DimensionT, Dim3>
-    {
-        if (component_.runtime.texture.sampler_id == sampler_id_) {
-            return;
-        }
-        component_.runtime.texture.sampler_id = sampler_id_;
-        ++component_.runtime.texture_revision;
-        MarkDirty(component_, surface_dirty_source_flag | surface_dirty_runtime_flag);
-    }
-
-    static void SetTextureRoute(SurfaceType& component_,
-                                std::uint32_t texture_id_,
-                                std::uint32_t sampler_id_,
-                                std::uint16_t uv_set_,
-                                std::uint16_t texture_flags_) noexcept
-    requires std::same_as<DimensionT, Dim3>
-    {
-        const bool changed =
-            component_.runtime.texture.texture_id != texture_id_ ||
-            component_.runtime.texture.sampler_id != sampler_id_ ||
-            component_.runtime.texture.uv_set != uv_set_ ||
-            component_.runtime.texture.flags != texture_flags_ ||
-            component_.runtime.route.surface_id != texture_id_;
-        if (!changed) {
-            return;
-        }
-        component_.runtime.texture.texture_id = texture_id_;
-        component_.runtime.texture.sampler_id = sampler_id_;
-        component_.runtime.texture.uv_set = uv_set_;
-        component_.runtime.texture.flags = texture_flags_;
-        component_.runtime.route.surface_id = texture_id_;
-        ++component_.runtime.texture_revision;
+        component_.runtime.source.surface_id = source_.surface_id;
+        component_.runtime.source.sampler_id = source_.sampler_id;
+        component_.runtime.source.uv_set = source_.uv_set;
+        component_.runtime.source.flags = source_.flags;
+        component_.runtime.route.surface_id = source_.surface_id;
+        ++component_.runtime.source_revision;
         MarkDirty(component_, surface_dirty_source_flag | surface_dirty_runtime_flag);
         RebuildSortKey(component_);
     }
@@ -517,39 +580,6 @@ public:
         component_.style.uv_scale_v = uv_scale_v_;
         component_.style.uv_bias_u = uv_bias_u_;
         component_.style.uv_bias_v = uv_bias_v_;
-        MarkDirty(component_, surface_dirty_style_flag | surface_dirty_runtime_flag);
-    }
-
-    static void SetDepthTest(SurfaceType& component_, bool enabled_) noexcept
-    requires std::same_as<DimensionT, Dim3>
-    {
-        const std::uint8_t enabled_value = enabled_ ? 1U : 0U;
-        if (component_.style.depth_test == enabled_value) {
-            return;
-        }
-        component_.style.depth_test = enabled_value;
-        MarkDirty(component_, surface_dirty_style_flag | surface_dirty_runtime_flag);
-    }
-
-    static void SetDepthWrite(SurfaceType& component_, bool enabled_) noexcept
-    requires std::same_as<DimensionT, Dim3>
-    {
-        const std::uint8_t enabled_value = enabled_ ? 1U : 0U;
-        if (component_.style.depth_write == enabled_value) {
-            return;
-        }
-        component_.style.depth_write = enabled_value;
-        MarkDirty(component_, surface_dirty_style_flag | surface_dirty_runtime_flag);
-    }
-
-    static void SetDoubleSided(SurfaceType& component_, bool enabled_) noexcept
-    requires std::same_as<DimensionT, Dim3>
-    {
-        const std::uint8_t enabled_value = enabled_ ? 1U : 0U;
-        if (component_.style.double_sided == enabled_value) {
-            return;
-        }
-        component_.style.double_sided = enabled_value;
         MarkDirty(component_, surface_dirty_style_flag | surface_dirty_runtime_flag);
     }
 
@@ -582,26 +612,35 @@ public:
     }
 
     [[nodiscard]] static std::uint64_t ComposeSortKey(const SurfaceType& component_) noexcept {
-        const bool has_linked_appearance =
-            component_.runtime.route.appearance_handle.index != invalid_appearance_handle.index &&
-            component_.runtime.route.appearance_handle.generation != 0U;
-        const SurfaceRenderPassHint effective_pass_hint = has_linked_appearance
-            ? ResolveLinkedPassHint(component_.runtime.route.pass_hint,
-                                    component_.runtime.route.appearance_pipeline_bucket)
-            : component_.runtime.route.pass_hint;
+        const bool has_linked_appearance = HasLinkedAppearanceHandle(component_.runtime.route);
+        SurfaceRenderPassHint effective_pass_hint = component_.runtime.route.pass_hint;
+        if (has_linked_appearance) {
+            effective_pass_hint = ResolveLinkedPassHint(component_.runtime.route.pass_hint,
+                                                        component_.runtime.route.appearance_pipeline_bucket);
+        } else if constexpr (std::same_as<DimensionT, Dim2>) {
+            effective_pass_hint = ResolveFallbackAppearancePassHint(
+                component_.runtime.route.pass_hint,
+                ReadAppearanceRuntimeBridge2D(component_.runtime));
+        } else {
+            effective_pass_hint = ResolveFallbackAppearancePassHint(
+                component_.runtime.route.pass_hint,
+                ReadAppearanceRuntimeBridge3D(component_.runtime));
+        }
         const std::uint64_t pass_bits = static_cast<std::uint64_t>(SortPassBucket(effective_pass_hint)) &
                                         sort_key_pass_mask;
-        const std::uint64_t material_bits =
-            static_cast<std::uint64_t>(ResolveEffectiveMaterialId(component_.runtime.route)) &
-            sort_key_material_mask;
+        const std::uint64_t visual_resource_bits =
+            static_cast<std::uint64_t>(ResolveEffectiveVisualResourceId(component_.runtime.route)) &
+            sort_key_visual_resource_mask;
         const std::uint64_t surface_bits =
-            static_cast<std::uint64_t>(component_.runtime.route.surface_id) & sort_key_surface_mask;
+            static_cast<std::uint64_t>(ResolveSortSurfaceId(component_, has_linked_appearance)) &
+            sort_key_surface_mask;
         const std::uint64_t batch_bits =
             static_cast<std::uint64_t>(component_.runtime.route.batch_tag) & sort_key_batch_mask;
 
         std::uint64_t minor_bits = 0U;
         if constexpr (std::same_as<DimensionT, Dim2>) {
-            const std::int32_t shifted_layer = static_cast<std::int32_t>(component_.style.layer) -
+            const std::int32_t shifted_layer = static_cast<std::int32_t>(
+                                                   ReadAppearanceRuntimeBridge2D(component_.runtime).layer) -
                                                static_cast<std::int32_t>(std::numeric_limits<std::int16_t>::min());
             minor_bits = static_cast<std::uint64_t>(static_cast<std::uint32_t>(shifted_layer)) & sort_key_minor_mask;
         } else {
@@ -612,7 +651,7 @@ public:
 
         std::uint64_t key = 0U;
         key |= (pass_bits << sort_key_pass_shift);
-        key |= (material_bits << sort_key_material_shift);
+        key |= (visual_resource_bits << sort_key_visual_resource_shift);
         key |= (surface_bits << sort_key_surface_shift);
         key |= (minor_bits << sort_key_minor_shift);
         key |= (batch_bits << sort_key_batch_shift);
@@ -640,8 +679,8 @@ public:
             static_cast<std::uint32_t>((sort_key_ >> sort_key_pass_shift) & sort_key_pass_mask)));
     }
 
-    [[nodiscard]] static std::uint32_t ExtractMaterialBucket(std::uint64_t sort_key_) noexcept {
-        return static_cast<std::uint32_t>((sort_key_ >> sort_key_material_shift) & sort_key_material_mask);
+    [[nodiscard]] static std::uint32_t ExtractVisualResourceBucket(std::uint64_t sort_key_) noexcept {
+        return static_cast<std::uint32_t>((sort_key_ >> sort_key_visual_resource_shift) & sort_key_visual_resource_mask);
     }
 
     [[nodiscard]] static std::uint32_t ExtractSurfaceBucket(std::uint64_t sort_key_) noexcept {
@@ -664,32 +703,61 @@ public:
         if constexpr (std::same_as<DimensionT, Dim2>) {
             switch (component_.runtime.source.source_kind) {
                 case Surface2DSourceKind::image:
-                    return component_.runtime.source.image_id != 0U;
+                    return component_.runtime.source.surface_id != 0U;
                 case Surface2DSourceKind::sprite:
-                    return component_.runtime.source.sprite_id != 0U;
+                    return component_.runtime.source.surface_id != 0U;
                 case Surface2DSourceKind::none:
                 default:
                     return component_.runtime.route.surface_id != 0U;
             }
         } else {
-            return component_.runtime.texture.texture_id != 0U;
+            return HasLinkedAppearanceHandle(component_.runtime.route) ||
+                   component_.runtime.source.surface_id != 0U;
         }
     }
 
 private:
-    static void BumpAppearanceHandleMutationSerial() noexcept {
-        (void)appearance_handle_mutation_serial.fetch_add(1U, std::memory_order_relaxed);
+    [[nodiscard]] static std::uint32_t ResolveSortSurfaceId(
+        const SurfaceType& component_,
+        bool has_linked_appearance_) noexcept {
+        if constexpr (std::same_as<DimensionT, Dim2>) {
+            (void)has_linked_appearance_;
+            return component_.runtime.route.surface_id;
+        } else {
+            return has_linked_appearance_ ? 0U : component_.runtime.route.surface_id;
+        }
     }
 
-    [[nodiscard]] static bool IsSameColor(const Rgba8& lhs_,
-                                          const Rgba8& rhs_) noexcept {
-        return lhs_.r == rhs_.r &&
-               lhs_.g == rhs_.g &&
-               lhs_.b == rhs_.b &&
-               lhs_.a == rhs_.a;
+    [[nodiscard]] static bool WriteAppearanceRuntimeState(SurfaceRuntime2D& runtime_,
+                                                          const AppearanceStyle2D* appearance_style_) noexcept
+    requires std::same_as<DimensionT, Dim2>
+    {
+        const AppearanceRuntimeBridge2D bridge = MakeAppearanceRuntimeBridge2D(appearance_style_);
+        if (HasSameAppearanceRuntimeBridge2D(runtime_, bridge)) {
+            return false;
+        }
+        StoreAppearanceRuntimeBridge2D(runtime_, bridge);
+        return true;
+    }
+
+    [[nodiscard]] static bool WriteAppearanceRuntimeState(SurfaceRuntime3D& runtime_,
+                                                          const AppearanceStyle3D* appearance_style_) noexcept
+    requires std::same_as<DimensionT, Dim3>
+    {
+        const AppearanceRuntimeBridge3D bridge = MakeAppearanceRuntimeBridge3D(appearance_style_);
+        if (HasSameAppearanceRuntimeBridge3D(runtime_, bridge)) {
+            return false;
+        }
+        StoreAppearanceRuntimeBridge3D(runtime_, bridge);
+        return true;
+    }
+
+    static void BumpAppearanceHandleMutationSerial() noexcept {
+        (void)appearance_handle_mutation_serial.fetch_add(1U, std::memory_order_relaxed);
     }
 
     inline static std::atomic<std::uint64_t> appearance_handle_mutation_serial{1U};
 };
 
 } // namespace vr::ecs
+

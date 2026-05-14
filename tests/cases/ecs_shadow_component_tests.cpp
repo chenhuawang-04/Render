@@ -79,3 +79,4 @@ VR_TEST_CASE(EcsShadowSystem_dim3_cascade_and_binding, "unit;core;ecs;shadow") {
 }
 
 } // namespace
+

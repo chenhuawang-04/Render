@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "vr/text/glyph_atlas_host.hpp"
 #include "vr/runtime/runtime_service.hpp"
@@ -26,3 +26,4 @@ public:
 };
 
 } // namespace vr::runtime::services
+

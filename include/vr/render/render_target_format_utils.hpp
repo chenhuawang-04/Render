@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "vr/vulkan_context.hpp"
 
@@ -59,3 +59,4 @@ template<std::size_t candidate_count_v>
 }
 
 } // namespace vr::render
+

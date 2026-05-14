@@ -1,4 +1,4 @@
-#include "vr/animation/animation_vertex_deform_host.hpp"
+﻿#include "vr/animation/animation_vertex_deform_host.hpp"
 
 #include <algorithm>
 #include <cstddef>
@@ -320,3 +320,4 @@ void VertexDeformAnimationHost::UpdateMovedRecordSlot(std::uint32_t record_index
 }
 
 } // namespace vr::animation
+

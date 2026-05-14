@@ -1,4 +1,4 @@
-#include "Center/Memory/Container/Vector/McVector.hpp"
+﻿#include "Center/Memory/Container/Vector/McVector.hpp"
 #include "support/bench_framework.hpp"
 #include "vr/ecs/system/bounds_system.hpp"
 #include "vr/ecs/system/transform_system.hpp"
@@ -107,4 +107,5 @@ VR_BENCHMARK_CASE(EcsBoundsSystem_dim3_update_aligned_4k_dirty_indices, "core;ec
 }
 
 } // namespace
+
 

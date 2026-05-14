@@ -1,4 +1,4 @@
-#include "vr/text/glyph_atlas_host.hpp"
+﻿#include "vr/text/glyph_atlas_host.hpp"
 
 #include <algorithm>
 #include <cstring>
@@ -696,3 +696,4 @@ void GlyphAtlasHost::RefreshStatsDerived() noexcept {
 }
 
 } // namespace vr::text
+

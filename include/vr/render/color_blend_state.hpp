@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <cstdint>
 #include <vulkan/vulkan.h>
@@ -86,3 +86,4 @@ enum class ColorBlendPreset : std::uint8_t {
 }
 
 } // namespace vr::render
+

@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "vr/ecs/component/animation_component.hpp"
 #include "vr/ecs/component/camera_component.hpp"
@@ -326,3 +326,4 @@ private:
 };
 
 } // namespace vr::ecs
+

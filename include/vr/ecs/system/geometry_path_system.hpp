@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "vr/ecs/system/geometry_system.hpp"
 
@@ -379,3 +379,4 @@ private:
 };
 
 } // namespace vr::ecs
+

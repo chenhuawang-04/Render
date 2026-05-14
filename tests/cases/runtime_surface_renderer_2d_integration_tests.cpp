@@ -1,4 +1,5 @@
-#include "support/test_framework.hpp"
+﻿#include "support/test_framework.hpp"
+#include "vr/ecs/system/appearance_system.hpp"
 #include "vr/ecs/system/surface_system.hpp"
 #include "vr/ecs/system/transform_system.hpp"
 #include "vr/render/render_runtime_host.hpp"
@@ -21,6 +22,8 @@
 namespace {
 
 using Runtime = vr::render::RenderRuntimeHost<vr::platform::ActiveBackendTag, 2U>;
+using Appearance2D = vr::ecs::Appearance<vr::ecs::Dim2>;
+using AppearanceSystem2D = vr::ecs::AppearanceSystem<vr::ecs::Dim2>;
 using Surface2D = vr::ecs::Surface<vr::ecs::Dim2>;
 using SurfaceSystem2D = vr::ecs::SurfaceSystem<vr::ecs::Dim2>;
 using Transform2D = vr::ecs::Transform<vr::ecs::Dim2>;
@@ -120,27 +123,44 @@ void ConfigureSurface2DRuntimeCreateInfo(Runtime::CreateInfo& create_info_,
     create_info_.poll_events_each_tick = true;
 }
 
+void ApplySurface2DAppearance(Surface2D& component_,
+                              vr::ecs::Rgba8 tint_color_,
+                              float opacity_,
+                              vr::ecs::AppearanceBlendMode blend_mode_,
+                              bool premultiplied_alpha_,
+                              std::int16_t layer_) {
+    Appearance2D appearance{};
+    AppearanceSystem2D::Initialize(appearance);
+    AppearanceSystem2D::SetFillColor(appearance, tint_color_);
+    AppearanceSystem2D::SetOpacity(appearance, opacity_);
+    AppearanceSystem2D::SetBlendMode(appearance, blend_mode_);
+    AppearanceSystem2D::SetPremultipliedAlpha(appearance, premultiplied_alpha_);
+    AppearanceSystem2D::SetLayer(appearance, layer_);
+    (void)SurfaceSystem2D::ApplyAppearanceRuntimeState(component_, appearance.style);
+}
+
 void InitializeSurfaceComponent(Surface2D& component_,
                                 std::uint32_t image_id_,
                                 vr::ecs::Float2 size_,
                                 vr::ecs::Float2 pivot_,
                                 vr::ecs::Rgba8 tint_color_,
                                 float opacity_,
-                                vr::ecs::Surface2DBlendMode blend_mode_,
+                                vr::ecs::AppearanceBlendMode blend_mode_,
                                 bool premultiplied_alpha_,
                                 std::int16_t layer_) {
     SurfaceSystem2D::Initialize(component_);
-    SurfaceSystem2D::SetImageId(component_, image_id_);
-    SurfaceSystem2D::SetMaterialId(component_, 1U);
+    SurfaceSystem2D::SetSource(component_, vr::ecs::SurfaceImageSourceDesc{.surface_id = image_id_, .atlas_page_id = 0U});
+    SurfaceSystem2D::SetVisualResourceId(component_, 1U);
     SurfaceSystem2D::SetBatchTag(component_, 0U);
     SurfaceSystem2D::SetRenderPassHint(component_, vr::ecs::SurfaceRenderPassHint::transparent);
     SurfaceSystem2D::SetSize(component_, size_);
     SurfaceSystem2D::SetPivot(component_, pivot_);
-    SurfaceSystem2D::SetTintColor(component_, tint_color_);
-    SurfaceSystem2D::SetOpacity(component_, opacity_);
-    SurfaceSystem2D::SetBlendMode(component_, blend_mode_);
-    SurfaceSystem2D::SetPremultipliedAlpha(component_, premultiplied_alpha_);
-    SurfaceSystem2D::SetLayer(component_, layer_);
+    ApplySurface2DAppearance(component_,
+                             tint_color_,
+                             opacity_,
+                             blend_mode_,
+                             premultiplied_alpha_,
+                             layer_);
 }
 
 VR_TEST_CASE(RuntimeIntegration_surface_renderer_2d_bindless_scene_packet_smoke,
@@ -222,7 +242,7 @@ VR_TEST_CASE(RuntimeIntegration_surface_renderer_2d_bindless_scene_packet_smoke,
                                    vr::ecs::Float2{.x = 0.5F, .y = 0.5F},
                                    vr::ecs::Rgba8{255U, 255U, 255U, 255U},
                                    1.0F,
-                                   vr::ecs::Surface2DBlendMode::alpha,
+                                   vr::ecs::AppearanceBlendMode::alpha,
                                    false,
                                    0);
         InitializeSurfaceComponent(components[1U],
@@ -231,7 +251,7 @@ VR_TEST_CASE(RuntimeIntegration_surface_renderer_2d_bindless_scene_packet_smoke,
                                    vr::ecs::Float2{.x = 0.5F, .y = 0.5F},
                                    vr::ecs::Rgba8{220U, 240U, 255U, 224U},
                                    0.90F,
-                                   vr::ecs::Surface2DBlendMode::alpha,
+                                   vr::ecs::AppearanceBlendMode::alpha,
                                    true,
                                    2);
         SurfaceSystem2D::SetUvRect(components[1U], 0.05F, 0.08F, 0.95F, 0.92F);
@@ -378,3 +398,4 @@ VR_TEST_CASE(RuntimeIntegration_surface_renderer_2d_bindless_scene_packet_smoke,
 }
 
 } // namespace
+

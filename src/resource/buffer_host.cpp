@@ -1,4 +1,4 @@
-#include "vr/resource/buffer_host.hpp"
+﻿#include "vr/resource/buffer_host.hpp"
 #include "vr/resource/gpu_memory_host.hpp"
 
 #include <cstddef>
@@ -286,3 +286,4 @@ bool BufferHost::IsHostCoherent(const BufferResource& resource_) noexcept {
 }
 
 } // namespace vr::resource
+

@@ -1,4 +1,4 @@
-#include "support/test_framework.hpp"
+﻿#include "support/test_framework.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -808,3 +808,4 @@ int RunAllTestsMain(int argc_, char** argv_) {
 }
 
 } // namespace vr::test
+

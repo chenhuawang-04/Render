@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "Center/Memory/Container/Vector/McVector.hpp"
 #include "vr/ecs/system/geometry_runtime_system.hpp"
@@ -165,3 +165,4 @@ private:
 };
 
 } // namespace vr::geometry
+

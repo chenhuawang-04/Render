@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "vr/render/swapchain_target_set.hpp"
 #include "vr/runtime/queue_timeline.hpp"
@@ -111,3 +111,4 @@ struct RuntimeShutdownContext final {
 };
 
 } // namespace vr::runtime
+

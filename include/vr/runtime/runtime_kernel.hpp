@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "vr/platform/render_host.hpp"
 #include "vr/render/render_runtime_host.hpp"
@@ -392,3 +392,4 @@ private:
 };
 
 } // namespace vr::runtime
+

@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "vr/ecs/component/light_component.hpp"
 
@@ -105,3 +105,4 @@ static_assert(offsetof(LightGpuRecord3D, shadow_meta) == 88U);
 static_assert(offsetof(LightGpuRecord3D, shadow_namespace_id) == 92U);
 
 } // namespace vr::ecs
+

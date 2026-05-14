@@ -1,4 +1,4 @@
-#include "support/bench_framework.hpp"
+﻿#include "support/bench_framework.hpp"
 #include "vr/render/frame_sync_host.hpp"
 
 #include <cstdint>
@@ -19,3 +19,4 @@ VR_BENCHMARK_CASE(FrameSyncHost_advance_frame_ring, "core;render;cpu") {
 }
 
 } // namespace
+

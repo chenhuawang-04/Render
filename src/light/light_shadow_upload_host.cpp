@@ -1,4 +1,4 @@
-#include "vr/light/light_shadow_upload_host.hpp"
+﻿#include "vr/light/light_shadow_upload_host.hpp"
 
 #include "vr/ecs/system/light_runtime_system.hpp"
 #include "vr/ecs/system/shadow_runtime_system.hpp"
@@ -685,3 +685,4 @@ const LightShadowUploadHost::FrameState& LightShadowUploadHost::FrameAt(std::uin
 }
 
 } // namespace vr::light
+

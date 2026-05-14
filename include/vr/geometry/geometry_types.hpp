@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "Center/Memory/Container/Vector/McVector.hpp"
 #include "vr/ecs/component/spatial_types.hpp"
@@ -104,3 +104,4 @@ static_assert(std::is_standard_layout_v<GeometrySkeletalMatrixGpu> &&
               std::is_trivial_v<GeometrySkeletalMatrixGpu>);
 
 } // namespace vr::geometry
+

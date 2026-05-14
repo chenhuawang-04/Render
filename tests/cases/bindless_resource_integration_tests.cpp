@@ -1,4 +1,4 @@
-#include "support/test_framework.hpp"
+﻿#include "support/test_framework.hpp"
 
 #include "vr/asset/texture_host.hpp"
 #include "vr/geometry/geometry_image_host.hpp"
@@ -1186,3 +1186,4 @@ VR_TEST_CASE(BindlessIntegration_glyph_upload_host_slot_survives_page_recreate_a
 }
 
 } // namespace
+

@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "Center/Memory/Container/Vector/McVector.hpp"
 #include "vr/ecs/system/text_batch_system.hpp"
@@ -43,7 +43,7 @@ struct TextDrawBatch final {
     std::uint32_t glyph_count;
     std::uint32_t atlas_page_id;
     std::uint32_t font_id;
-    std::uint32_t material_id;
+    std::uint32_t visual_resource_id;
     std::uint32_t first_component_index;
     std::uint32_t reserved0;
 };
@@ -811,7 +811,7 @@ private:
                                    std::uint32_t glyph_count_,
                                    std::uint32_t atlas_page_id_,
                                    std::uint32_t font_id_,
-                                   std::uint32_t material_id_,
+                                   std::uint32_t visual_resource_id_,
                                    std::uint32_t component_index_) {
         if (glyph_count_ == 0U) {
             return;
@@ -822,7 +822,7 @@ private:
             if (last.sort_key == sort_key_ &&
                 last.atlas_page_id == atlas_page_id_ &&
                 last.font_id == font_id_ &&
-                last.material_id == material_id_ &&
+                last.visual_resource_id == visual_resource_id_ &&
                 last.glyph_begin + last.glyph_count == glyph_begin_) {
                 last.glyph_count += glyph_count_;
                 return;
@@ -835,7 +835,7 @@ private:
         batch.glyph_count = glyph_count_;
         batch.atlas_page_id = atlas_page_id_;
         batch.font_id = font_id_;
-        batch.material_id = material_id_;
+        batch.visual_resource_id = visual_resource_id_;
         batch.first_component_index = component_index_;
         batch.reserved0 = 0U;
         scratch_.draw_batches.push_back(batch);
@@ -922,7 +922,7 @@ private:
                                segment_count,
                                segment_page,
                                component_.runtime.font_id,
-                               component_.runtime.material_id,
+                               component_.runtime.visual_resource_id,
                                component_index_);
 
             segment_begin = static_cast<std::uint32_t>(scratch_.glyph_quads.size() - 1U);
@@ -938,7 +938,7 @@ private:
                                segment_count,
                                segment_page,
                                component_.runtime.font_id,
-                               component_.runtime.material_id,
+                               component_.runtime.visual_resource_id,
                                component_index_);
         }
 
@@ -946,3 +946,4 @@ private:
 };
 
 } // namespace vr::ecs
+

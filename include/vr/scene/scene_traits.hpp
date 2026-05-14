@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "vr/render/render_view.hpp"
 #include "vr/render/scene_submission.hpp"
@@ -17,3 +17,4 @@ struct SceneTraits final {
 };
 
 } // namespace vr::scene
+
