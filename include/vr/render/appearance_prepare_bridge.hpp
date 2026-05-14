@@ -114,6 +114,9 @@ public:
     }
 
     [[nodiscard]] const RuntimeScratchType& RuntimeScratch() const noexcept {
+        if (appearance_frame_coordinator != nullptr) {
+            return appearance_frame_coordinator->RuntimeScratch();
+        }
         return runtime_scratch;
     }
 
@@ -173,4 +176,3 @@ private:
 };
 
 } // namespace vr::render
-

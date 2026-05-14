@@ -7,6 +7,7 @@
 #include "vr/ecs/system/geometry_runtime_system.hpp"
 #include "vr/ecs/system/light_culling_system.hpp"
 #include "vr/geometry/geometry_image_host.hpp"
+#include "vr/geometry/geometry_material_gpu.hpp"
 #include "vr/geometry/geometry_material_host.hpp"
 #include "vr/geometry/geometry_resource_host.hpp"
 #include "vr/geometry/geometry_skeletal_palette_builder.hpp"
@@ -31,6 +32,10 @@
 
 namespace vr {
 class VulkanContext;
+}
+
+namespace vr::asset {
+class TextureHost;
 }
 
 namespace vr::render {
@@ -272,14 +277,18 @@ private:
         light::LightShadowBufferRange cluster_indices{};
         light::LightShadowBufferRange shadow_views{};
         light::LightShadowBufferRange lighting_uniform{};
+        resource::BufferResource material_records{};
         resource::BufferResource skeletal_components{};
         resource::BufferResource skeletal_matrices{};
         VkDescriptorSet descriptor_set = VK_NULL_HANDLE;
         std::uint32_t shadow_namespace_id = 0U;
+        std::uint32_t material_record_count = 0U;
         std::uint32_t skeletal_component_count = 0U;
         std::uint32_t skeletal_matrix_count = 0U;
+        std::uint64_t material_content_revision = 0U;
+        std::uint64_t material_bindless_revision = 0U;
+        std::uint32_t material_texture_host_revision = 0U;
         std::uint64_t upload_signature = 0U;
-        std::uint64_t skeletal_signature = 0U;
         std::uint64_t descriptor_payload_signature = 0U;
         std::uint64_t descriptor_buffer_signature = 0U;
         std::uint64_t descriptor_image_signature = 0U;
@@ -347,6 +356,11 @@ private:
     [[nodiscard]] static std::size_t LowerBoundResolvedMaterialIndex(
         const GeometryRenderer3DMcVector<ResolvedMaterialEntry>& entries_,
         std::uint32_t material_id_) noexcept;
+    static void ApplyFallbackMaterialFactorsToInstance(
+        ecs::Geometry3DGpuInstance& instance_,
+        const ecs::Geometry<ecs::Dim3>* component_,
+        const GeometryMaterialDesc* material_desc_) noexcept;
+    [[nodiscard]] std::uint64_t ApplyMaterialFactorOverrides();
     [[nodiscard]] static PipelineMode ResolvePipelineMode(const ecs::Geometry3DDrawBatch& batch_,
                                                           bool use_depth_) noexcept;
     [[nodiscard]] static TopologyMode ResolveTopologyMode(VkPrimitiveTopology mesh_topology_,
@@ -377,9 +391,9 @@ private:
     void EnsureLightingDescriptorObjects(VulkanContext& context_,
                                          render::DescriptorHost& descriptor_host_);
     void EnsureLightingResourcesForFrame(VulkanContext& context_);
-    void EnsureSkeletalBufferCapacity(resource::BufferResource& buffer_,
-                                      VkDeviceSize required_bytes_);
-    void DestroySkeletalBuffer(resource::BufferResource& buffer_) noexcept;
+    void EnsureStorageBufferCapacity(resource::BufferResource& buffer_,
+                                     VkDeviceSize required_bytes_);
+    void DestroyStorageBuffer(resource::BufferResource& buffer_) noexcept;
     void PrepareLightingDescriptorSetForFrame(std::uint32_t frame_index_);
     [[nodiscard]] LightingParamsGpu BuildLightingParamsGpu(VkExtent2D extent_) const noexcept;
     [[nodiscard]] static MaterialPushConstants BuildMaterialPushConstants(
@@ -429,6 +443,8 @@ private:
     render::AppearancePrepareBridge<ecs::Dim3> appearance_prepare_bridge{};
     ecs::AppearanceRuntimeBuildStats appearance_runtime_stats{};
     ecs::AppearanceLinkStats appearance_link_stats{};
+    bool appearance_build_invoked = false;
+    bool appearance_full_rebuild = false;
     ecs::CullingScratch<ecs::Dim3> culling_scratch{};
     ecs::CullingBuildStats culling_stats{};
 
@@ -436,6 +452,7 @@ private:
     GeometryUploadHost* geometry_upload_host = nullptr;
     GeometryMaterialHost* geometry_material_host = nullptr;
     GeometryImageHost* geometry_image_host = nullptr;
+    asset::TextureHost* texture_host = nullptr;
 
     VulkanContext* context = nullptr;
     render::UploadHost* upload_host = nullptr;
@@ -464,6 +481,7 @@ private:
     GeometryRenderer3DMcVector<std::uint8_t> image_initialized{};
     GeometryRenderer3DMcVector<FrameLightingResources> frame_lighting_resources{};
     GeometryRenderer3DMcVector<ResolvedMaterialEntry> resolved_materials{};
+    GeometryRenderer3DMcVector<MaterialGpuRecord> material_record_scratch{};
     GeometryRenderer3DMcVector<GeometrySkeletalComponentGpu> skeletal_component_scratch{};
     GeometryRenderer3DMcVector<GeometrySkeletalMatrixGpu> skeletal_matrix_scratch{};
     render::DescriptorMcVector<render::DescriptorBufferWrite> descriptor_buffer_write_scratch{};
@@ -479,6 +497,9 @@ private:
     std::uint64_t last_submitted_value_seen = 0U;
     std::uint64_t completed_submit_value_seen = 0U;
     std::uint64_t bindless_revision_seen = 0U;
+    std::uint64_t material_record_bindless_revision_seen = 0U;
+    std::uint32_t material_record_texture_host_revision_seen = 0U;
+    std::uint64_t material_record_content_revision = 0U;
     std::uint32_t material_host_revision_seen = 0U;
     std::uint32_t image_host_revision_seen = 0U;
     render::LightFrameCoordinator<ecs::Dim3>* light_frame_coordinator = nullptr;

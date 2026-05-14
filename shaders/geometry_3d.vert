@@ -3,6 +3,7 @@
 layout(location = 0) in vec3 in_position;
 layout(location = 1) in vec3 in_normal;
 layout(location = 2) in vec2 in_uv;
+layout(location = 22) in vec4 in_tangent;
 layout(location = 12) in vec3 in_morph0_position_delta;
 layout(location = 13) in vec3 in_morph0_normal_delta;
 layout(location = 14) in vec3 in_morph1_position_delta;
@@ -20,6 +21,8 @@ layout(location = 11) in vec4 in_deform_param1;
 layout(location = 16) in vec4 in_morph_weights;
 layout(location = 17) in uvec4 in_joint_indices;
 layout(location = 18) in vec4 in_joint_weights;
+layout(location = 19) in float in_occlusion_strength;
+layout(location = 20) in uint in_appearance_record_index;
 layout(location = 21) in uint in_component_index;
 
 layout(push_constant) uniform Geometry3DPushConstants {
@@ -48,6 +51,10 @@ layout(location = 2) out vec4 out_material_params;
 layout(location = 3) flat out uint out_instance_params;
 layout(location = 4) out vec2 out_uv;
 layout(location = 5) out vec3 out_world_position;
+layout(location = 6) out float out_occlusion_strength;
+layout(location = 7) flat out uint out_appearance_record_index;
+layout(location = 8) out vec3 out_tangent_world;
+layout(location = 9) out vec3 out_bitangent_world;
 
 vec3 apply_vertex_deform(vec3 local_position, vec3 local_normal) {
     if (all(equal(in_deform_param0, vec4(0.0))) &&
@@ -148,10 +155,24 @@ vec3 apply_skinning_normal(vec3 local_normal) {
     return (skinned_length > 1e-6) ? (skinned / skinned_length) : local_normal;
 }
 
+vec4 apply_skinning_tangent(vec4 local_tangent) {
+    if (!skeletal_enabled() || dot(in_joint_weights, vec4(1.0)) <= 1e-6) {
+        return local_tangent;
+    }
+
+    vec3 skinned = vec3(0.0);
+    skinned += mat3(fetch_joint_matrix(in_joint_indices.x)) * local_tangent.xyz * in_joint_weights.x;
+    skinned += mat3(fetch_joint_matrix(in_joint_indices.y)) * local_tangent.xyz * in_joint_weights.y;
+    skinned += mat3(fetch_joint_matrix(in_joint_indices.z)) * local_tangent.xyz * in_joint_weights.z;
+    skinned += mat3(fetch_joint_matrix(in_joint_indices.w)) * local_tangent.xyz * in_joint_weights.w;
+    return vec4(skinned, local_tangent.w);
+}
+
 void main() {
     vec3 morphed_normal = apply_morph_normal(in_normal);
     vec3 morphed_position = apply_morph_position(in_position);
     vec3 skinned_normal = apply_skinning_normal(morphed_normal);
+    vec4 skinned_tangent = apply_skinning_tangent(in_tangent);
     vec3 skinned_position = apply_skinning_position(morphed_position);
     vec3 local_position = apply_vertex_deform(skinned_position, skinned_normal);
     mat4 world = mat4(in_world_row0, in_world_row1, in_world_row2, in_world_row3);
@@ -168,4 +189,22 @@ void main() {
     out_material_params = in_material_params;
     out_instance_params = in_instance_params;
     out_uv = in_uv;
+    out_occlusion_strength = in_occlusion_strength;
+    out_appearance_record_index = in_appearance_record_index;
+
+    vec3 tangent_world = world3x3 * skinned_tangent.xyz;
+    tangent_world -= out_normal_world * dot(out_normal_world, tangent_world);
+    float tangent_length = length(tangent_world);
+    if (tangent_length > 1e-6 && abs(skinned_tangent.w) > 1e-6) {
+        tangent_world /= tangent_length;
+        vec3 bitangent_world = cross(out_normal_world, tangent_world) * sign(skinned_tangent.w);
+        float bitangent_length = length(bitangent_world);
+        out_tangent_world = tangent_world;
+        out_bitangent_world = (bitangent_length > 1e-6)
+            ? (bitangent_world / bitangent_length)
+            : vec3(0.0);
+    } else {
+        out_tangent_world = vec3(0.0);
+        out_bitangent_world = vec3(0.0);
+    }
 }

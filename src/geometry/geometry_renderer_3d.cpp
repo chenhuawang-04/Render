@@ -1,6 +1,8 @@
 #include "vr/geometry/geometry_renderer_3d.hpp"
 
+#include "vr/asset/texture_host.hpp"
 #include "vr/ecs/system/transparency_render_policy.hpp"
+#include "vr/geometry/geometry_material_resolver.hpp"
 #include "vr/geometry/generated/geometry_3d_frag_spv.hpp"
 #include "vr/geometry/generated/geometry_3d_vert_spv.hpp"
 #include "vr/render/bindless_resource_system.hpp"
@@ -23,6 +25,230 @@
 #include <utility>
 
 namespace vr::geometry {
+
+namespace {
+
+[[nodiscard]] std::uint32_t PackRgba8(const ecs::Rgba8& color_) noexcept {
+    return static_cast<std::uint32_t>(color_.r) |
+           (static_cast<std::uint32_t>(color_.g) << 8U) |
+           (static_cast<std::uint32_t>(color_.b) << 16U) |
+           (static_cast<std::uint32_t>(color_.a) << 24U);
+}
+
+[[nodiscard]] std::uint32_t FloatBits(float value_) noexcept {
+    std::uint32_t bits = 0U;
+    std::memcpy(&bits, &value_, sizeof(bits));
+    return bits;
+}
+
+void HashCombine64(std::uint64_t& hash_, std::uint64_t value_) noexcept {
+    constexpr std::uint64_t k_hash_prime = 1099511628211ULL;
+    hash_ ^= value_;
+    hash_ *= k_hash_prime;
+}
+
+[[nodiscard]] bool MaterialGpuRecordEquals(const MaterialGpuRecord& lhs_,
+                                           const MaterialGpuRecord& rhs_) noexcept {
+    return std::memcmp(&lhs_, &rhs_, sizeof(MaterialGpuRecord)) == 0;
+}
+
+void CopyMaterialGpuRecordRange(const GeometryRenderer3DMcVector<MaterialGpuRecord>& scratch_,
+                                resource::BufferResource& buffer_,
+                                std::uint32_t begin_index_,
+                                std::uint32_t count_) noexcept {
+    if (buffer_.mapped_ptr == nullptr || count_ == 0U) {
+        return;
+    }
+
+    auto* dst = static_cast<std::byte*>(buffer_.mapped_ptr) +
+                static_cast<std::size_t>(begin_index_) * sizeof(MaterialGpuRecord);
+    std::memcpy(dst,
+                scratch_.data() + begin_index_,
+                static_cast<std::size_t>(count_) * sizeof(MaterialGpuRecord));
+}
+
+[[nodiscard]] const ecs::GeometryStyle3D& ResolveFallbackGeometryStyle(
+    const ecs::Geometry<ecs::Dim3>* component_) noexcept {
+    static const ecs::GeometryStyle3D k_default_style = [] {
+        ecs::GeometryStyle3D style{};
+        style.albedo_color = ecs::Rgba8{255U, 255U, 255U, 255U};
+        style.shading_model = ecs::Geometry3DShadingModel::lit;
+        style.metallic = 0.0F;
+        style.roughness = 1.0F;
+        style.normal_scale = 1.0F;
+        return style;
+    }();
+    return component_ != nullptr ? component_->style : k_default_style;
+}
+
+struct LinkedAppearanceRecord final {
+    const ecs::AppearanceGpuRecord<ecs::Dim3>* record = nullptr;
+    std::uint32_t record_index = invalid_material_record_index;
+};
+
+[[nodiscard]] LinkedAppearanceRecord ResolveLinkedAppearanceRecord(
+    const ecs::Geometry<ecs::Dim3>* component_,
+    const ecs::AppearanceRuntimeScratch<ecs::Dim3>& appearance_runtime_scratch_) noexcept {
+    LinkedAppearanceRecord resolved{};
+    if (component_ == nullptr) {
+        return resolved;
+    }
+
+    const ecs::AppearanceHandle handle = component_->runtime.route.appearance_handle;
+    if (handle.index == ecs::invalid_appearance_index || handle.generation == 0U) {
+        return resolved;
+    }
+    if (handle.index >= appearance_runtime_scratch_.gpu_records.size() ||
+        handle.index >= appearance_runtime_scratch_.handle_generations.size()) {
+        return resolved;
+    }
+    if (appearance_runtime_scratch_.handle_generations[handle.index] != handle.generation) {
+        return resolved;
+    }
+    resolved.record = &appearance_runtime_scratch_.gpu_records[handle.index];
+    resolved.record_index = handle.index;
+    return resolved;
+}
+
+struct ResolvedMaterialTextureBinding final {
+    std::uint32_t slot = 0U;
+    bool present = false;
+};
+
+[[nodiscard]] ResolvedMaterialTextureBinding ResolveMaterialTextureBinding(
+    const render::BindlessResourceSystem* bindless_resources_,
+    const asset::TextureHost* texture_host_,
+    std::uint32_t texture_id_) noexcept {
+    ResolvedMaterialTextureBinding resolved{};
+    if (bindless_resources_ == nullptr || !bindless_resources_->IsInitialized()) {
+        return resolved;
+    }
+
+    resolved.slot = bindless_resources_->PlaceholderImageSlot().index;
+    if (texture_id_ == 0U || texture_host_ == nullptr || !texture_host_->IsInitialized()) {
+        return resolved;
+    }
+
+    const asset::TextureId texture_id{texture_id_};
+    if (texture_host_->FindTexture(texture_id) == nullptr) {
+        return resolved;
+    }
+
+    resolved.slot = bindless_resources_->ResolveTextureImageSlot(*texture_host_, texture_id).index;
+    resolved.present = true;
+    return resolved;
+}
+
+[[nodiscard]] std::uint32_t ResolveMaterialSamplerSlot(
+    const render::BindlessResourceSystem* bindless_resources_,
+    const asset::TextureHost* texture_host_,
+    std::uint32_t sampler_state_id_,
+    std::uint32_t fallback_texture_id_) noexcept {
+    if (bindless_resources_ == nullptr || !bindless_resources_->IsInitialized()) {
+        return 0U;
+    }
+    if (sampler_state_id_ != 0U) {
+        return bindless_resources_
+            ->ResolveRegisteredSamplerSlot(resource::SamplerId{sampler_state_id_}).index;
+    }
+    if (fallback_texture_id_ != 0U &&
+        texture_host_ != nullptr &&
+        texture_host_->IsInitialized()) {
+        const asset::TextureId texture_id{fallback_texture_id_};
+        if (texture_host_->FindTexture(texture_id) != nullptr) {
+            return bindless_resources_->ResolveTextureSamplerSlot(*texture_host_, texture_id).index;
+        }
+    }
+    return bindless_resources_->DefaultSamplerSlot().index;
+}
+
+void EncodeMaterialGpuRecord(
+    const ecs::AppearanceGpuRecord<ecs::Dim3>& appearance_record_,
+    const render::BindlessResourceSystem* bindless_resources_,
+    const asset::TextureHost* texture_host_,
+    MaterialGpuRecord& out_record_) noexcept {
+    out_record_ = {};
+    out_record_.base_rgba = appearance_record_.base_rgba;
+    out_record_.emissive_rgba = appearance_record_.emissive_rgba;
+    out_record_.material_params = appearance_record_.material_params;
+    out_record_.extras = {
+        appearance_record_.extras[1U],
+        appearance_record_.extras[0U],
+        appearance_record_.extras[2U],
+        0.0F
+    };
+    out_record_.flags_u32 = appearance_record_.flags_u32;
+
+    const ResolvedMaterialTextureBinding base_color =
+        ResolveMaterialTextureBinding(bindless_resources_,
+                                      texture_host_,
+                                      appearance_record_.textures0_u32[0U]);
+    const ResolvedMaterialTextureBinding normal =
+        ResolveMaterialTextureBinding(bindless_resources_,
+                                      texture_host_,
+                                      appearance_record_.textures0_u32[1U]);
+    const ResolvedMaterialTextureBinding metal_rough =
+        ResolveMaterialTextureBinding(bindless_resources_,
+                                      texture_host_,
+                                      appearance_record_.textures0_u32[2U]);
+    const ResolvedMaterialTextureBinding occlusion =
+        ResolveMaterialTextureBinding(bindless_resources_,
+                                      texture_host_,
+                                      appearance_record_.textures0_u32[3U]);
+    const ResolvedMaterialTextureBinding emissive =
+        ResolveMaterialTextureBinding(bindless_resources_,
+                                      texture_host_,
+                                      appearance_record_.textures1_u32[0U]);
+
+    std::uint32_t sampler_fallback_texture_id = appearance_record_.textures0_u32[0U];
+    if (sampler_fallback_texture_id == 0U) {
+        sampler_fallback_texture_id = appearance_record_.textures0_u32[2U];
+    }
+    if (sampler_fallback_texture_id == 0U) {
+        sampler_fallback_texture_id = appearance_record_.textures0_u32[3U];
+    }
+    if (sampler_fallback_texture_id == 0U) {
+        sampler_fallback_texture_id = appearance_record_.textures1_u32[0U];
+    }
+    if (sampler_fallback_texture_id == 0U) {
+        sampler_fallback_texture_id = appearance_record_.textures0_u32[1U];
+    }
+
+    std::uint32_t presence_mask = 0U;
+    if (base_color.present) {
+        presence_mask |= material_texture_presence_base_color;
+    }
+    if (normal.present) {
+        presence_mask |= material_texture_presence_normal;
+    }
+    if (metal_rough.present) {
+        presence_mask |= material_texture_presence_metal_rough;
+    }
+    if (occlusion.present) {
+        presence_mask |= material_texture_presence_occlusion;
+    }
+    if (emissive.present) {
+        presence_mask |= material_texture_presence_emissive;
+    }
+
+    out_record_.textures0_u32 = {
+        base_color.slot,
+        normal.slot,
+        metal_rough.slot,
+        occlusion.slot
+    };
+    out_record_.textures1_u32 = {
+        emissive.slot,
+        ResolveMaterialSamplerSlot(bindless_resources_,
+                                   texture_host_,
+                                   appearance_record_.textures1_u32[1U],
+                                   sampler_fallback_texture_id),
+        appearance_record_.textures1_u32[2U],
+        presence_mask
+    };
+}
+
+} // namespace
 
 bool GeometryRenderer3D::IsDepthFormatSupported(VulkanContext& context_, VkFormat format_) noexcept {
     if (format_ == VK_FORMAT_UNDEFINED || context_.PhysicalDevice() == VK_NULL_HANDLE) {
@@ -99,6 +325,81 @@ std::size_t GeometryRenderer3D::LowerBoundResolvedMaterialIndex(
         }
     }
     return first;
+}
+
+void GeometryRenderer3D::ApplyFallbackMaterialFactorsToInstance(
+    ecs::Geometry3DGpuInstance& instance_,
+    const ecs::Geometry<ecs::Dim3>* component_,
+    const GeometryMaterialDesc* material_desc_) noexcept {
+    const GeometryMaterialResolvedState resolved =
+        ResolveGeometryFallbackMaterialState(ResolveFallbackGeometryStyle(component_), material_desc_);
+
+    instance_.albedo_rgba8 = PackRgba8(resolved.albedo_color);
+    instance_.metallic = resolved.metallic;
+    instance_.roughness = resolved.roughness;
+    instance_.normal_scale = resolved.normal_scale;
+    instance_.occlusion_strength = resolved.occlusion_strength;
+    instance_.params &= ~(0x1U << 7U);
+    if (!resolved.unlit) {
+        instance_.params |= (0x1U << 7U);
+    }
+}
+
+std::uint64_t GeometryRenderer3D::ApplyMaterialFactorOverrides() {
+    if (runtime_scratch.instances.empty()) {
+        return 14695981039346656037ULL;
+    }
+
+    const bool has_material_host = geometry_material_host != nullptr &&
+                                   geometry_material_host->IsInitialized();
+    const auto& appearance_runtime_scratch = appearance_prepare_bridge.RuntimeScratch();
+    const GeometryMaterialHost::MaterialRecord* cached_material_record = nullptr;
+    std::uint32_t cached_material_id = std::numeric_limits<std::uint32_t>::max();
+    std::uint64_t material_override_signature = 14695981039346656037ULL;
+
+    for (auto& instance : runtime_scratch.instances) {
+        const ecs::Geometry<ecs::Dim3>* component = nullptr;
+        if (geometry_components != nullptr && instance.component_index < component_count) {
+            component = &geometry_components[instance.component_index];
+        }
+
+        const std::uint32_t authoring_material_id =
+            component != nullptr ? component->runtime.route.material_id : instance.material_id;
+        const GeometryMaterialDesc* material_desc = nullptr;
+        if (has_material_host && authoring_material_id != 0U) {
+            if (authoring_material_id != cached_material_id) {
+                cached_material_record = geometry_material_host->FindMaterial(authoring_material_id);
+                cached_material_id = authoring_material_id;
+            }
+            material_desc = cached_material_record != nullptr ? &cached_material_record->desc : nullptr;
+        }
+
+        const LinkedAppearanceRecord linked_appearance =
+            ResolveLinkedAppearanceRecord(component, appearance_runtime_scratch);
+        instance.appearance_record_index = linked_appearance.record_index;
+        if (linked_appearance.record == nullptr) {
+            ApplyFallbackMaterialFactorsToInstance(instance,
+                                                  component,
+                                                  material_desc);
+        }
+
+        HashCombine64(material_override_signature,
+                      static_cast<std::uint64_t>(instance.appearance_record_index));
+        HashCombine64(material_override_signature,
+                      static_cast<std::uint64_t>(instance.albedo_rgba8));
+        HashCombine64(material_override_signature,
+                      static_cast<std::uint64_t>(FloatBits(instance.metallic)));
+        HashCombine64(material_override_signature,
+                      static_cast<std::uint64_t>(FloatBits(instance.roughness)));
+        HashCombine64(material_override_signature,
+                      static_cast<std::uint64_t>(FloatBits(instance.normal_scale)));
+        HashCombine64(material_override_signature,
+                      static_cast<std::uint64_t>(FloatBits(instance.occlusion_strength)));
+        HashCombine64(material_override_signature,
+                      static_cast<std::uint64_t>(instance.params));
+    }
+
+    return material_override_signature;
 }
 
 GeometryRenderer3D::PipelineMode GeometryRenderer3D::ResolvePipelineMode(
@@ -199,6 +500,7 @@ void GeometryRenderer3D::Initialize(const GeometryRenderer3DCreateInfo& create_i
     geometry_upload_host = nullptr;
     geometry_material_host = nullptr;
     geometry_image_host = nullptr;
+    texture_host = nullptr;
 
     context = nullptr;
     upload_host = nullptr;
@@ -232,6 +534,9 @@ void GeometryRenderer3D::Initialize(const GeometryRenderer3DCreateInfo& create_i
     active_frame_index = 0U;
     instance_range = {};
     bindless_revision_seen = 0U;
+    material_record_bindless_revision_seen = 0U;
+    material_record_texture_host_revision_seen = 0U;
+    material_record_content_revision = 0U;
 
     depth_images.clear();
     depth_image_initialized.clear();
@@ -239,6 +544,7 @@ void GeometryRenderer3D::Initialize(const GeometryRenderer3DCreateInfo& create_i
     image_initialized.clear();
     frame_lighting_resources.clear();
     resolved_materials.clear();
+    material_record_scratch.clear();
     skeletal_component_scratch.clear();
     skeletal_matrix_scratch.clear();
     descriptor_buffer_write_scratch.clear();
@@ -248,6 +554,7 @@ void GeometryRenderer3D::Initialize(const GeometryRenderer3DCreateInfo& create_i
         resolved_materials.reserve(create_info_cache.reserve_material_set_count);
     }
     if (create_info_cache.reserve_component_count > 0U) {
+        material_record_scratch.reserve(create_info_cache.reserve_component_count);
         skeletal_component_scratch.reserve(create_info_cache.reserve_component_count);
         skeletal_matrix_scratch.reserve(create_info_cache.reserve_component_count);
     }
@@ -262,6 +569,8 @@ void GeometryRenderer3D::Initialize(const GeometryRenderer3DCreateInfo& create_i
     appearance_prepare_bridge.Reset();
     appearance_runtime_stats = {};
     appearance_link_stats = {};
+    appearance_build_invoked = false;
+    appearance_full_rebuild = false;
     culling_scratch.visible_indices.clear();
     culling_scratch.visibility_stamps.clear();
     culling_stats = {};
@@ -297,8 +606,9 @@ void GeometryRenderer3D::Shutdown(VulkanContext& context_) {
         light_shadow_upload_host.Shutdown(context_);
     }
     for (auto& frame_resources : frame_lighting_resources) {
-        DestroySkeletalBuffer(frame_resources.skeletal_components);
-        DestroySkeletalBuffer(frame_resources.skeletal_matrices);
+        DestroyStorageBuffer(frame_resources.material_records);
+        DestroyStorageBuffer(frame_resources.skeletal_components);
+        DestroyStorageBuffer(frame_resources.skeletal_matrices);
     }
 
     depth_images.clear();
@@ -307,6 +617,7 @@ void GeometryRenderer3D::Shutdown(VulkanContext& context_) {
     image_initialized.clear();
     frame_lighting_resources.clear();
     resolved_materials.clear();
+    material_record_scratch.clear();
     skeletal_component_scratch.clear();
     skeletal_matrix_scratch.clear();
     descriptor_buffer_write_scratch.clear();
@@ -350,6 +661,7 @@ void GeometryRenderer3D::Shutdown(VulkanContext& context_) {
     geometry_upload_host = nullptr;
     geometry_material_host = nullptr;
     geometry_image_host = nullptr;
+    texture_host = nullptr;
     light_frame_coordinator = nullptr;
     ibl_host = nullptr;
     light_shadow_link_coordinator = nullptr;
@@ -371,6 +683,9 @@ void GeometryRenderer3D::Shutdown(VulkanContext& context_) {
     swapchain_format = VK_FORMAT_UNDEFINED;
     instance_range = {};
     bindless_revision_seen = 0U;
+    material_record_bindless_revision_seen = 0U;
+    material_record_texture_host_revision_seen = 0U;
+    material_record_content_revision = 0U;
 
     runtime_scratch.instances.clear();
     runtime_scratch.draw_batches.clear();
@@ -382,6 +697,8 @@ void GeometryRenderer3D::Shutdown(VulkanContext& context_) {
     appearance_prepare_bridge.Reset();
     appearance_runtime_stats = {};
     appearance_link_stats = {};
+    appearance_build_invoked = false;
+    appearance_full_rebuild = false;
     culling_scratch.visible_indices.clear();
     culling_scratch.visibility_stamps.clear();
     culling_stats = {};
@@ -548,10 +865,17 @@ void GeometryRenderer3D::PrepareFrame(const render::GeometryRenderer3DPrepareVie
     gpu_memory_host = &prepare_view_.gpu_memory;
     ibl_host = &prepare_view_.ibl;
     sampler_host = &prepare_view_.sampler;
+    texture_host = prepare_view_.texture;
     if (bindless_resources == nullptr || !bindless_resources->IsInitialized()) {
         throw std::runtime_error("GeometryRenderer3D::PrepareFrame requires initialized BindlessResourceSystem");
     }
     const std::uint64_t bindless_revision_now = bindless_resources->Revision();
+    if (texture_host != nullptr &&
+        texture_host->IsInitialized() &&
+        (!texture_host->BindlessConfig().Enabled() ||
+         texture_host->BindlessConfig().bindless_revision != bindless_revision_now)) {
+        bindless_resources->ConfigureTextureHost(*texture_host);
+    }
     if (geometry_image_host != nullptr &&
         geometry_image_host->IsInitialized() &&
         (!geometry_image_host->BindlessConfig().Enabled() ||
@@ -618,8 +942,6 @@ void GeometryRenderer3D::PrepareFrame(const render::GeometryRenderer3DPrepareVie
                                         active_frame_index,
                                         last_submitted_value_seen,
                                         completed_submit_value_seen);
-    EnsureLightingResourcesForFrame(*context);
-    PrepareLightingDescriptorSetForFrame(active_frame_index);
 
     stats.component_count = component_count;
     stats.appearance_component_count = appearance_component_count;
@@ -628,6 +950,8 @@ void GeometryRenderer3D::PrepareFrame(const render::GeometryRenderer3DPrepareVie
     culling_stats = {};
     appearance_runtime_stats = {};
     appearance_link_stats = {};
+    appearance_build_invoked = false;
+    appearance_full_rebuild = false;
     const render::IblEnvironmentId ibl_environment_id{prepare_view_.ibl_environment_id};
     const asset::TextureId ibl_brdf_lut_texture_id{prepare_view_.ibl_brdf_lut_texture_id};
     if (ibl_environment_id.IsValid() || ibl_brdf_lut_texture_id.IsValid()) {
@@ -641,6 +965,10 @@ void GeometryRenderer3D::PrepareFrame(const render::GeometryRenderer3DPrepareVie
         geometry_components,
         component_count,
         active_frame_index);
+    appearance_build_invoked = appearance_prepare_result.build_invoked;
+    appearance_full_rebuild =
+        appearance_prepare_result.build_invoked &&
+        appearance_prepare_result.runtime_stats.full_rebuild != 0U;
     if (appearance_prepare_result.has_appearance_data) {
         appearance_runtime_stats = appearance_prepare_result.runtime_stats;
         appearance_link_stats = appearance_prepare_result.link_stats;
@@ -650,6 +978,9 @@ void GeometryRenderer3D::PrepareFrame(const render::GeometryRenderer3DPrepareVie
         stats.appearance_link_scanned_count = appearance_link_stats.scanned_count;
         stats.appearance_link_updated_count = appearance_link_stats.updated_count;
     }
+
+    EnsureLightingResourcesForFrame(*context);
+    PrepareLightingDescriptorSetForFrame(active_frame_index);
 
     if (geometry_components == nullptr || component_count == 0U) {
         runtime_scratch.instances.clear();
@@ -719,8 +1050,11 @@ void GeometryRenderer3D::PrepareFrame(const render::GeometryRenderer3DPrepareVie
     stats.transform_only_update = runtime_stats.transform_only_update;
 
     if (!runtime_scratch.instances.empty()) {
+        const std::uint64_t material_override_signature = ApplyMaterialFactorOverrides();
         const std::uint64_t upload_revision =
-            runtime_stats.geometry_signature ^ (runtime_stats.transform_signature * 0x9e3779b97f4a7c15ULL);
+            runtime_stats.geometry_signature ^
+            (runtime_stats.transform_signature * 0x9e3779b97f4a7c15ULL) ^
+            (material_override_signature * 0xbf58476d1ce4e5b9ULL);
         instance_range = geometry_upload_host->Upload3DInstances(*context,
                                                                  *upload_host,
                                                                  active_frame_index,
@@ -1223,6 +1557,11 @@ void GeometryRenderer3D::EnsureLightingDescriptorObjects(VulkanContext& context_
     binding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
     layout_desc.bindings.push_back(binding);
 
+    binding.binding = 7U;
+    binding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    layout_desc.bindings.push_back(binding);
+
     lighting_descriptor_layout_id = descriptor_host_.RegisterLayout(context_, layout_desc);
 }
 
@@ -1272,7 +1611,7 @@ GeometryRenderer3D::LightingParamsGpu GeometryRenderer3D::BuildLightingParamsGpu
     return params;
 }
 
-void GeometryRenderer3D::DestroySkeletalBuffer(resource::BufferResource& buffer_) noexcept {
+void GeometryRenderer3D::DestroyStorageBuffer(resource::BufferResource& buffer_) noexcept {
     if (context == nullptr || context->Device() == VK_NULL_HANDLE) {
         buffer_ = {};
         return;
@@ -1280,10 +1619,10 @@ void GeometryRenderer3D::DestroySkeletalBuffer(resource::BufferResource& buffer_
     resource::BufferHost::DestroyBuffer(*context, buffer_);
 }
 
-void GeometryRenderer3D::EnsureSkeletalBufferCapacity(resource::BufferResource& buffer_,
-                                                      VkDeviceSize required_bytes_) {
+void GeometryRenderer3D::EnsureStorageBufferCapacity(resource::BufferResource& buffer_,
+                                                     VkDeviceSize required_bytes_) {
     if (context == nullptr || gpu_memory_host == nullptr) {
-        throw std::runtime_error("GeometryRenderer3D::EnsureSkeletalBufferCapacity missing runtime hosts");
+        throw std::runtime_error("GeometryRenderer3D::EnsureStorageBufferCapacity missing runtime hosts");
     }
     if (required_bytes_ == 0U) {
         return;
@@ -1631,6 +1970,127 @@ void GeometryRenderer3D::EnsureLightingResourcesForFrame(
     frame_resources.shadow_namespace_id = lighting_enabled ? shadow_namespace_id : 0U;
     frame_resources.upload_signature = uniform_revision ^ cluster_revision ^ shadow_view_revision;
 
+    const auto& appearance_runtime_scratch = appearance_prepare_bridge.RuntimeScratch();
+    const std::uint32_t appearance_record_count =
+        static_cast<std::uint32_t>(appearance_runtime_scratch.gpu_records.size());
+    const std::uint32_t material_upload_count = std::max<std::uint32_t>(appearance_record_count, 1U);
+    const VkDeviceSize material_record_bytes =
+        static_cast<VkDeviceSize>(material_upload_count) * sizeof(MaterialGpuRecord);
+    const std::uint32_t texture_host_revision =
+        (texture_host != nullptr && texture_host->IsInitialized())
+            ? texture_host->Stats().revision
+            : 0U;
+
+    const std::uint64_t previous_material_content_revision = material_record_content_revision;
+    const bool material_record_count_changed =
+        material_record_scratch.size() != static_cast<std::size_t>(material_upload_count);
+    const bool material_binding_state_changed =
+        material_record_bindless_revision_seen != bindless_revision_seen ||
+        material_record_texture_host_revision_seen != texture_host_revision;
+    const bool appearance_material_full_rebuild = appearance_full_rebuild;
+
+    const bool can_attempt_partial_material_frame_sync =
+        !material_record_count_changed &&
+        !material_binding_state_changed &&
+        !appearance_material_full_rebuild &&
+        frame_resources.material_records.buffer != VK_NULL_HANDLE &&
+        frame_resources.material_record_count == material_upload_count &&
+        frame_resources.material_bindless_revision == material_record_bindless_revision_seen &&
+        frame_resources.material_texture_host_revision == material_record_texture_host_revision_seen &&
+        frame_resources.material_content_revision == previous_material_content_revision;
+
+    bool material_scratch_changed = false;
+    VkDeviceSize partial_material_upload_bytes = 0U;
+    if (material_record_count_changed ||
+        material_binding_state_changed ||
+        appearance_material_full_rebuild) {
+        material_record_scratch.resize(material_upload_count);
+        if (appearance_record_count == 0U) {
+            material_record_scratch[0U] = {};
+        } else {
+            for (std::uint32_t index = 0U; index < appearance_record_count; ++index) {
+                EncodeMaterialGpuRecord(appearance_runtime_scratch.gpu_records[index],
+                                        bindless_resources,
+                                        texture_host,
+                                        material_record_scratch[index]);
+            }
+        }
+        material_scratch_changed = true;
+    } else if (appearance_build_invoked) {
+        for (const auto& upload_range : appearance_runtime_scratch.upload_ranges) {
+            if (upload_range.begin_index >= appearance_record_count || upload_range.count == 0U) {
+                continue;
+            }
+
+            const std::uint32_t clamped_count =
+                std::min(upload_range.count, appearance_record_count - upload_range.begin_index);
+            bool range_changed = false;
+            for (std::uint32_t offset = 0U; offset < clamped_count; ++offset) {
+                const std::uint32_t record_index = upload_range.begin_index + offset;
+                MaterialGpuRecord encoded_record{};
+                EncodeMaterialGpuRecord(appearance_runtime_scratch.gpu_records[record_index],
+                                        bindless_resources,
+                                        texture_host,
+                                        encoded_record);
+                if (MaterialGpuRecordEquals(material_record_scratch[record_index], encoded_record)) {
+                    continue;
+                }
+
+                material_record_scratch[record_index] = encoded_record;
+                material_scratch_changed = true;
+                range_changed = true;
+            }
+
+            if (range_changed && can_attempt_partial_material_frame_sync) {
+                CopyMaterialGpuRecordRange(material_record_scratch,
+                                           frame_resources.material_records,
+                                           upload_range.begin_index,
+                                           clamped_count);
+                partial_material_upload_bytes +=
+                    static_cast<VkDeviceSize>(clamped_count) * sizeof(MaterialGpuRecord);
+            }
+        }
+    }
+
+    if (material_scratch_changed) {
+        material_record_bindless_revision_seen = bindless_revision_seen;
+        material_record_texture_host_revision_seen = texture_host_revision;
+        ++material_record_content_revision;
+    }
+
+    const bool material_frame_sync_required =
+        frame_resources.material_records.buffer == VK_NULL_HANDLE ||
+        frame_resources.material_record_count != material_upload_count ||
+        frame_resources.material_bindless_revision != material_record_bindless_revision_seen ||
+        frame_resources.material_texture_host_revision != material_record_texture_host_revision_seen ||
+        frame_resources.material_content_revision != material_record_content_revision;
+    if (material_frame_sync_required) {
+        EnsureStorageBufferCapacity(frame_resources.material_records, material_record_bytes);
+
+        const bool can_use_partial_material_upload =
+            partial_material_upload_bytes > 0U &&
+            frame_resources.material_records.buffer != VK_NULL_HANDLE &&
+            frame_resources.material_record_count == material_upload_count &&
+            frame_resources.material_bindless_revision == material_record_bindless_revision_seen &&
+            frame_resources.material_texture_host_revision == material_record_texture_host_revision_seen &&
+            frame_resources.material_content_revision == previous_material_content_revision &&
+            material_record_content_revision != previous_material_content_revision;
+        if (can_use_partial_material_upload) {
+            stats.uploaded_bytes += partial_material_upload_bytes;
+        } else {
+            CopyMaterialGpuRecordRange(material_record_scratch,
+                                       frame_resources.material_records,
+                                       0U,
+                                       material_upload_count);
+            stats.uploaded_bytes += material_record_bytes;
+        }
+
+        frame_resources.material_bindless_revision = material_record_bindless_revision_seen;
+        frame_resources.material_texture_host_revision = material_record_texture_host_revision_seen;
+        frame_resources.material_content_revision = material_record_content_revision;
+    }
+    frame_resources.material_record_count = material_upload_count;
+
     const GeometrySkeletalPaletteBuildStats skeletal_build_stats =
         GeometrySkeletalPaletteBuilder::Build(geometry_components,
                                              component_count,
@@ -1655,8 +2115,8 @@ void GeometryRenderer3D::EnsureLightingResourcesForFrame(
         static_cast<VkDeviceSize>(skeletal_component_upload_count) * sizeof(GeometrySkeletalComponentGpu);
     const VkDeviceSize skeletal_matrix_bytes =
         static_cast<VkDeviceSize>(skeletal_matrix_upload_count) * sizeof(GeometrySkeletalMatrixGpu);
-    EnsureSkeletalBufferCapacity(frame_resources.skeletal_components, skeletal_component_bytes);
-    EnsureSkeletalBufferCapacity(frame_resources.skeletal_matrices, skeletal_matrix_bytes);
+    EnsureStorageBufferCapacity(frame_resources.skeletal_components, skeletal_component_bytes);
+    EnsureStorageBufferCapacity(frame_resources.skeletal_matrices, skeletal_matrix_bytes);
     std::memcpy(frame_resources.skeletal_components.mapped_ptr,
                 skeletal_component_scratch.data(),
                 static_cast<std::size_t>(skeletal_component_bytes));
@@ -1667,7 +2127,6 @@ void GeometryRenderer3D::EnsureLightingResourcesForFrame(
         skeletal_component_upload_count;
     frame_resources.skeletal_matrix_count =
         skeletal_matrix_upload_count;
-    frame_resources.skeletal_signature = skeletal_build_stats.signature;
 
     stats.light_count = resolved_light_count;
     stats.visible_light_count = resolved_visible_light_count;
@@ -1716,6 +2175,8 @@ void GeometryRenderer3D::EnsureLightingResourcesForFrame(
     hash_from_handle(descriptor_signature,
                      reinterpret_cast<std::uintptr_t>(frame_resources.lighting_uniform.buffer));
     hash_from_handle(descriptor_signature,
+                     reinterpret_cast<std::uintptr_t>(frame_resources.material_records.buffer));
+    hash_from_handle(descriptor_signature,
                      reinterpret_cast<std::uintptr_t>(frame_resources.skeletal_components.buffer));
     hash_from_handle(descriptor_signature,
                      reinterpret_cast<std::uintptr_t>(frame_resources.skeletal_matrices.buffer));
@@ -1726,14 +2187,15 @@ void GeometryRenderer3D::EnsureLightingResourcesForFrame(
     hash_combine(descriptor_signature, static_cast<std::uint64_t>(frame_resources.lighting_uniform.offset));
     hash_combine(descriptor_signature, 0U);
     hash_combine(descriptor_signature, 0U);
+    hash_combine(descriptor_signature, 0U);
     hash_combine(descriptor_signature, static_cast<std::uint64_t>(frame_resources.light_records.size_bytes));
     hash_combine(descriptor_signature, static_cast<std::uint64_t>(frame_resources.cluster_headers.size_bytes));
     hash_combine(descriptor_signature, static_cast<std::uint64_t>(frame_resources.cluster_indices.size_bytes));
     hash_combine(descriptor_signature, static_cast<std::uint64_t>(frame_resources.shadow_views.size_bytes));
     hash_combine(descriptor_signature, static_cast<std::uint64_t>(frame_resources.lighting_uniform.size_bytes));
+    hash_combine(descriptor_signature, static_cast<std::uint64_t>(material_record_bytes));
     hash_combine(descriptor_signature, static_cast<std::uint64_t>(skeletal_component_bytes));
     hash_combine(descriptor_signature, static_cast<std::uint64_t>(skeletal_matrix_bytes));
-    hash_combine(descriptor_signature, frame_resources.skeletal_signature);
     frame_resources.descriptor_payload_signature = descriptor_signature;
 }
 
@@ -1752,6 +2214,7 @@ void GeometryRenderer3D::PrepareLightingDescriptorSetForFrame(std::uint32_t fram
         frame_resources.cluster_indices.buffer == VK_NULL_HANDLE ||
         frame_resources.shadow_views.buffer == VK_NULL_HANDLE ||
         frame_resources.lighting_uniform.buffer == VK_NULL_HANDLE ||
+        frame_resources.material_records.buffer == VK_NULL_HANDLE ||
         frame_resources.skeletal_components.buffer == VK_NULL_HANDLE ||
         frame_resources.skeletal_matrices.buffer == VK_NULL_HANDLE) {
         return;
@@ -1780,7 +2243,7 @@ void GeometryRenderer3D::PrepareLightingDescriptorSetForFrame(std::uint32_t fram
 
     descriptor_buffer_write_scratch.clear();
     descriptor_texel_write_scratch.clear();
-    descriptor_buffer_write_scratch.reserve(7U);
+    descriptor_buffer_write_scratch.reserve(8U);
     descriptor_buffer_write_scratch.push_back({
         .binding = 0U,
         .array_element = 0U,
@@ -1838,6 +2301,15 @@ void GeometryRenderer3D::PrepareLightingDescriptorSetForFrame(std::uint32_t fram
         .offset = 0U,
         .range = static_cast<VkDeviceSize>(frame_resources.skeletal_matrix_count) *
                  sizeof(GeometrySkeletalMatrixGpu)
+    });
+    descriptor_buffer_write_scratch.push_back({
+        .binding = 7U,
+        .array_element = 0U,
+        .descriptor_type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+        .buffer = frame_resources.material_records.buffer,
+        .offset = 0U,
+        .range = static_cast<VkDeviceSize>(frame_resources.material_record_count) *
+                 sizeof(MaterialGpuRecord)
     });
 
     descriptor_host->UpdateSet(*context,
@@ -1993,6 +2465,7 @@ render::GraphicsPipelineId GeometryRenderer3D::EnsurePipelineForMode(VulkanConte
     desc.vertex_input.attributes.push_back({.location = 0U, .binding = 0U, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = static_cast<std::uint32_t>(offsetof(GeometryMeshVertex, position_x))});
     desc.vertex_input.attributes.push_back({.location = 1U, .binding = 0U, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = static_cast<std::uint32_t>(offsetof(GeometryMeshVertex, normal_x))});
     desc.vertex_input.attributes.push_back({.location = 2U, .binding = 0U, .format = VK_FORMAT_R32G32_SFLOAT, .offset = static_cast<std::uint32_t>(offsetof(GeometryMeshVertex, uv_u))});
+    desc.vertex_input.attributes.push_back({.location = 22U, .binding = 0U, .format = VK_FORMAT_R32G32B32A32_SFLOAT, .offset = static_cast<std::uint32_t>(offsetof(GeometryMeshVertex, tangent_x))});
     desc.vertex_input.attributes.push_back({.location = 12U, .binding = 0U, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = static_cast<std::uint32_t>(offsetof(GeometryMeshVertex, morph0_position_delta_x))});
     desc.vertex_input.attributes.push_back({.location = 13U, .binding = 0U, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = static_cast<std::uint32_t>(offsetof(GeometryMeshVertex, morph0_normal_delta_x))});
     desc.vertex_input.attributes.push_back({.location = 14U, .binding = 0U, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = static_cast<std::uint32_t>(offsetof(GeometryMeshVertex, morph1_position_delta_x))});
@@ -2009,6 +2482,8 @@ render::GraphicsPipelineId GeometryRenderer3D::EnsurePipelineForMode(VulkanConte
     desc.vertex_input.attributes.push_back({.location = 10U, .binding = 1U, .format = VK_FORMAT_R32G32B32A32_SFLOAT, .offset = static_cast<std::uint32_t>(offsetof(ecs::Geometry3DGpuInstance, deform_param0_x))});
     desc.vertex_input.attributes.push_back({.location = 11U, .binding = 1U, .format = VK_FORMAT_R32G32B32A32_SFLOAT, .offset = static_cast<std::uint32_t>(offsetof(ecs::Geometry3DGpuInstance, deform_param1_x))});
     desc.vertex_input.attributes.push_back({.location = 16U, .binding = 1U, .format = VK_FORMAT_R32G32B32A32_SFLOAT, .offset = static_cast<std::uint32_t>(offsetof(ecs::Geometry3DGpuInstance, morph_weight0))});
+    desc.vertex_input.attributes.push_back({.location = 19U, .binding = 1U, .format = VK_FORMAT_R32_SFLOAT, .offset = static_cast<std::uint32_t>(offsetof(ecs::Geometry3DGpuInstance, occlusion_strength))});
+    desc.vertex_input.attributes.push_back({.location = 20U, .binding = 1U, .format = VK_FORMAT_R32_UINT, .offset = static_cast<std::uint32_t>(offsetof(ecs::Geometry3DGpuInstance, appearance_record_index))});
     desc.vertex_input.attributes.push_back({.location = 21U, .binding = 1U, .format = VK_FORMAT_R32_UINT, .offset = static_cast<std::uint32_t>(offsetof(ecs::Geometry3DGpuInstance, component_index))});
 
     switch (topology_mode_) {

@@ -154,6 +154,7 @@ struct Geometry3DGpuInstance final {
     float roughness;
     float normal_scale;
     float line_width;
+    float occlusion_strength;
 
     std::uint32_t albedo_rgba8;
     std::uint32_t params;
@@ -161,6 +162,7 @@ struct Geometry3DGpuInstance final {
     std::uint32_t material_id;
 
     std::uint32_t submesh_index;
+    std::uint32_t appearance_record_index;
     std::uint32_t component_index;
     std::uint32_t user_data;
     std::uint32_t reserved2;
@@ -1154,12 +1156,14 @@ public:
             instance.bounds_max_z = component.runtime.bounds_max.z;
             instance.reserved1 = 0.0F;
 
-            instance.metallic = component.style.metallic;
-            instance.roughness = component.style.roughness;
-            instance.normal_scale = component.style.normal_scale;
+            const GeometryStyle3D fallback_style = ResolveFallbackMaterialStyle(component);
+            instance.metallic = fallback_style.metallic;
+            instance.roughness = fallback_style.roughness;
+            instance.normal_scale = fallback_style.normal_scale;
             instance.line_width = component.style.line_width;
+            instance.occlusion_strength = 1.0F;
 
-            instance.albedo_rgba8 = PackRgba8(component.style.albedo_color);
+            instance.albedo_rgba8 = PackRgba8(fallback_style.albedo_color);
             instance.params = PackParams(component);
             instance.geometry_id = component.runtime.route.geometry_id;
             instance.material_id = ResolveEffectiveMaterialId(component.runtime.route);
@@ -1167,6 +1171,7 @@ public:
                                                                  item.component_index,
                                                                  build_hint_.frame_sequence_outputs,
                                                                  build_hint_.frame_sequence_output_count);
+            instance.appearance_record_index = invalid_appearance_index;
             instance.component_index = item.component_index;
             instance.user_data = component.runtime.route.user_data;
             instance.reserved2 = 0U;
@@ -1345,12 +1350,31 @@ private:
                (static_cast<std::uint32_t>(color_.a) << 24U);
     }
 
+    [[nodiscard]] static bool UsesAppearanceMaterialPath(const GeometryType& component_) noexcept {
+        return component_.runtime.route.appearance_handle.index != invalid_appearance_handle.index &&
+               component_.runtime.route.appearance_handle.generation != 0U;
+    }
+
+    [[nodiscard]] static GeometryStyle3D ResolveFallbackMaterialStyle(const GeometryType& component_) noexcept {
+        GeometryStyle3D style = component_.style;
+        if (!UsesAppearanceMaterialPath(component_)) {
+            return style;
+        }
+
+        style.albedo_color = Rgba8{255U, 255U, 255U, 255U};
+        style.metallic = 0.0F;
+        style.roughness = 1.0F;
+        style.normal_scale = 1.0F;
+        style.shading_model = Geometry3DShadingModel::lit;
+        return style;
+    }
+
     [[nodiscard]] static std::uint32_t PackParams(const GeometryType& component_) noexcept {
         RuntimeBlendPreset blend_preset = RuntimeBlendPreset::opaque;
-        if (component_.runtime.route.appearance_handle.index != invalid_appearance_handle.index &&
-            component_.runtime.route.appearance_handle.generation != 0U) {
+        if (UsesAppearanceMaterialPath(component_)) {
             blend_preset = ResolveRuntimeBlendPreset(component_.runtime.route.appearance_pipeline_bucket);
         }
+        const GeometryStyle3D fallback_style = ResolveFallbackMaterialStyle(component_);
         const bool depth_write_enabled =
             (component_.style.depth_write != 0U) && !IsTransparentBlendPreset(blend_preset);
         std::uint32_t params = 0U;
@@ -1360,7 +1384,7 @@ private:
         params |= (component_.style.cast_shadow != 0U) ? 0x8U : 0U;
         params |= (component_.style.receive_shadow != 0U) ? 0x10U : 0U;
         params |= (static_cast<std::uint32_t>(component_.style.topology) & 0x3U) << 5U;
-        params |= (static_cast<std::uint32_t>(component_.style.shading_model) & 0x1U) << 7U;
+        params |= (static_cast<std::uint32_t>(fallback_style.shading_model) & 0x1U) << 7U;
         params |= (static_cast<std::uint32_t>(component_.mesh.lod_index) & 0xFFFFU) << 8U;
         params |= EncodeRuntimeBlendPresetBits(blend_preset, geometry_runtime_blend_shift);
         return params;
@@ -1475,6 +1499,7 @@ private:
         if (component_.runtime.route.visible == 0U) {
             return;
         }
+        const GeometryStyle3D fallback_style = ResolveFallbackMaterialStyle(component_);
 
         HashCombine(hash_, component_.runtime.route.sort_key);
         HashCombine(hash_, static_cast<std::uint64_t>(component_.runtime.route.geometry_id));
@@ -1485,11 +1510,11 @@ private:
         HashCombine(hash_, static_cast<std::uint64_t>(component_.mesh.lod_index));
         HashCombine(hash_, static_cast<std::uint64_t>(component_.mesh.flags));
         HashCombine(hash_, static_cast<std::uint64_t>(component_.runtime.mesh_revision));
-        HashCombine(hash_, static_cast<std::uint64_t>(PackRgba8(component_.style.albedo_color)));
+        HashCombine(hash_, static_cast<std::uint64_t>(PackRgba8(fallback_style.albedo_color)));
         HashCombine(hash_, static_cast<std::uint64_t>(PackParams(component_)));
-        HashCombine(hash_, static_cast<std::uint64_t>(FloatBits(component_.style.metallic)));
-        HashCombine(hash_, static_cast<std::uint64_t>(FloatBits(component_.style.roughness)));
-        HashCombine(hash_, static_cast<std::uint64_t>(FloatBits(component_.style.normal_scale)));
+        HashCombine(hash_, static_cast<std::uint64_t>(FloatBits(fallback_style.metallic)));
+        HashCombine(hash_, static_cast<std::uint64_t>(FloatBits(fallback_style.roughness)));
+        HashCombine(hash_, static_cast<std::uint64_t>(FloatBits(fallback_style.normal_scale)));
         HashCombine(hash_, static_cast<std::uint64_t>(FloatBits(component_.style.line_width)));
         HashCombine(hash_, static_cast<std::uint64_t>(FloatBits(component_.runtime.bounds_min.x)));
         HashCombine(hash_, static_cast<std::uint64_t>(FloatBits(component_.runtime.bounds_min.y)));

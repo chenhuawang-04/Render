@@ -2,6 +2,7 @@
 #extension GL_GOOGLE_include_directive : require
 
 #include "vr/render/bindless.glsl"
+#include "vr/render/pbr.glsl"
 
 layout(location = 0) in vec2 in_uv;
 layout(location = 1) in vec4 in_color;
@@ -72,50 +73,59 @@ vec3 evaluate_sh9_irradiance(vec3 normal_) {
     return max(irradiance, vec3(0.0));
 }
 
-vec3 evaluate_surface_ibl(vec3 base_albedo_,
-                          vec3 normal_world_,
+MaterialSample decode_surface_material(vec4 sampled_color_,
+                                       vec3 normal_world_) {
+    MaterialSample material;
+    material.base_color = sampled_color_.rgb;
+    material.alpha = sampled_color_.a;
+    material.metallic = 0.0;
+    material.roughness = 0.55;
+    material.normal_scale = 1.0;
+    material.occlusion = 1.0;
+    material.emissive = vec3(0.0);
+    material.normal_world = normalize(normal_world_);
+    return material;
+}
+
+vec3 evaluate_surface_ibl(MaterialSample material_,
                           vec3 view_dir_) {
     float ibl_intensity = max(ibl_params.ibl_tint_intensity.w, 0.0);
     if (ibl_intensity <= 1e-6) {
         return vec3(0.0);
     }
 
-    vec3 tint = ibl_params.ibl_tint_intensity.rgb;
-    float roughness = 0.55;
-    float metallic = 0.0;
-    vec3 diffuse_color = base_albedo_ * (1.0 - metallic);
-    vec3 f0 = mix(vec3(0.04), base_albedo_, metallic);
-
-    vec3 diffuse_irradiance = evaluate_sh9_irradiance(normal_world_);
-    vec3 diffuse_ibl = diffuse_irradiance * diffuse_color;
-
-    vec3 reflection_dir = rotate_environment_direction(reflect(-view_dir_, normalize(normal_world_)));
+    vec3 diffuse_irradiance = evaluate_sh9_irradiance(material_.normal_world);
+    vec3 reflection_dir = rotate_environment_direction(reflect(-normalize(view_dir_),
+                                                               normalize(material_.normal_world)));
     float max_specular_lod = max(ibl_params.ibl_rotation_max_lod_flags.z, 0.0);
     vec3 prefiltered_specular =
         SampleTextureCubeLod(pc.ibl_specular_texture_slot,
                              pc.ibl_sampler_slot,
                              reflection_dir,
-                             roughness * max_specular_lod).rgb;
-    float n_dot_v = max(dot(normalize(normal_world_), normalize(view_dir_)), 0.0);
+                             material_.roughness * max_specular_lod).rgb;
+    float n_dot_v = max(dot(normalize(material_.normal_world), normalize(view_dir_)), 0.0);
     vec2 brdf = SampleTexture2D(pc.ibl_brdf_lut_texture_slot,
                                 pc.ibl_sampler_slot,
-                                vec2(n_dot_v, roughness)).rg;
-    vec3 fresnel = f0 + (vec3(1.0) - f0) * pow(1.0 - n_dot_v, 5.0);
-    vec3 specular_ibl = prefiltered_specular * (fresnel * brdf.x + brdf.y);
-
-    return (diffuse_ibl + specular_ibl) * tint * ibl_intensity;
+                                vec2(n_dot_v, material_.roughness)).rg;
+    return EvaluatePbrIblFromTerms(material_,
+                                   view_dir_,
+                                   diffuse_irradiance,
+                                   prefiltered_specular,
+                                   brdf) *
+           ibl_params.ibl_tint_intensity.rgb *
+           ibl_intensity;
 }
 
 void main() {
-    vec4 color = SampleTexture2D(in_texture_slot, in_sampler_slot, in_uv) * in_color;
-    if (color.a <= 1e-5) {
+    vec4 sampled_color = SampleTexture2D(in_texture_slot, in_sampler_slot, in_uv) * in_color;
+    if (sampled_color.a <= 1e-5) {
         discard;
     }
 
     vec3 camera_position = pc.camera_position.xyz;
     vec3 view_dir = normalize(camera_position - in_world_position);
-    vec3 normal_world = normalize(in_normal_world);
-    vec3 ibl_lighting = evaluate_surface_ibl(color.rgb, normal_world, view_dir);
-    vec3 shaded_rgb = color.rgb + ibl_lighting * 0.35;
-    out_color = vec4(shaded_rgb, color.a);
+    MaterialSample material = decode_surface_material(sampled_color, in_normal_world);
+    vec3 ibl_lighting = evaluate_surface_ibl(material, view_dir);
+    vec3 shaded_rgb = material.base_color + ibl_lighting * 0.35 + material.emissive;
+    out_color = vec4(shaded_rgb, material.alpha);
 }

@@ -28,6 +28,10 @@ struct GeometryMaterialDesc {
     float uv_bias_u = 0.0F;
     float uv_bias_v = 0.0F;
     float alpha_cutoff = 0.0F;
+    float metallic_factor = 0.0F;
+    float roughness_factor = 1.0F;
+    float normal_scale = 1.0F;
+    float occlusion_strength = 1.0F;
 };
 
 struct GeometryMaterialHostStats {

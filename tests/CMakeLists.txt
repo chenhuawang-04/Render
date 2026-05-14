@@ -28,6 +28,7 @@ add_executable(${VR_TEST_TARGET}
     cases/ecs_geometry_component_tests.cpp
     cases/ecs_geometry_batch_system_tests.cpp
     cases/ecs_geometry_runtime_system_tests.cpp
+    cases/geometry_tangent_space_tests.cpp
     cases/ecs_text_component_tests.cpp
     cases/ecs_light_component_tests.cpp
     cases/ecs_animation_system_tests.cpp
@@ -71,6 +72,8 @@ add_executable(${VR_TEST_TARGET}
     cases/runtime_texture_host_integration_tests.cpp
     cases/bindless_resource_integration_tests.cpp
     cases/bindless_shader_contract_tests.cpp
+    cases/pbr_material_contract_tests.cpp
+    cases/pbr_shader_contract_tests.cpp
     cases/runtime_geometry_image_host_integration_tests.cpp
     cases/surface_upload_host_policy_tests.cpp
     cases/runtime_surface_upload_host_integration_tests.cpp

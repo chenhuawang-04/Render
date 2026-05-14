@@ -1,4 +1,6 @@
 #include "support/test_framework.hpp"
+#include "vr/ecs/system/appearance_runtime_system.hpp"
+#include "vr/ecs/system/appearance_system.hpp"
 #include "vr/ecs/system/bounds_system.hpp"
 #include "vr/ecs/system/camera_system.hpp"
 #include "vr/ecs/system/geometry_system.hpp"
@@ -373,6 +375,10 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_end_to_end_smoke, "integrat
         material_11.image_id = 101U;
         material_11.uv_scale_u = 1.0F;
         material_11.uv_scale_v = 1.0F;
+        material_11.metallic_factor = 0.15F;
+        material_11.roughness_factor = 0.42F;
+        material_11.normal_scale = 1.0F;
+        material_11.occlusion_strength = 0.95F;
         geometry_material_host.UpsertMaterial(material_11);
 
         vr::geometry::GeometryMaterialDesc material_22{};
@@ -384,6 +390,10 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_end_to_end_smoke, "integrat
         material_22.uv_bias_v = 0.08F;
         material_22.flags = vr::geometry::geometry_material_flag_alpha_test;
         material_22.alpha_cutoff = 0.2F;
+        material_22.metallic_factor = 0.78F;
+        material_22.roughness_factor = 0.64F;
+        material_22.normal_scale = 1.35F;
+        material_22.occlusion_strength = 0.60F;
         geometry_material_host.UpsertMaterial(material_22);
 
         vr::geometry::GeometryRenderer3DCreateInfo renderer_create_info{};
@@ -530,6 +540,230 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_end_to_end_smoke, "integrat
         if (geometry_image_host_initialized && runtime_initialized && runtime.IsInitialized()) {
             geometry_image_host.Shutdown(runtime.Context());
             geometry_image_host_initialized = false;
+        }
+        if (geometry_upload_host_initialized && runtime_initialized && runtime.IsInitialized()) {
+            geometry_upload_host.Shutdown(runtime.Context());
+            geometry_upload_host_initialized = false;
+        }
+        if (geometry_resource_host_initialized && runtime_initialized && runtime.IsInitialized()) {
+            geometry_resource_host.Shutdown(runtime.Context());
+            geometry_resource_host_initialized = false;
+        }
+        if (runtime_initialized && runtime.IsInitialized()) {
+            runtime.Shutdown();
+            runtime_initialized = false;
+        }
+
+        if (IsEnvironmentSkipError(exception_.what())) {
+            VR_SKIP(exception_.what());
+        }
+        throw;
+    }
+}
+
+VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_appearance_material_updates_reuse_descriptor_set,
+             "integration;gpu;sdl;runtime;geometry;appearance") {
+    using Appearance3D = vr::ecs::Appearance<vr::ecs::Dim3>;
+    using AppearanceRuntimeSystem3D = vr::ecs::AppearanceRuntimeSystem<vr::ecs::Dim3>;
+    using AppearanceSystem3D = vr::ecs::AppearanceSystem<vr::ecs::Dim3>;
+
+    Runtime runtime{};
+    vr::geometry::GeometryResourceHost geometry_resource_host{};
+    vr::geometry::GeometryUploadHost geometry_upload_host{};
+    vr::geometry::GeometryRenderer3D geometry_renderer{};
+
+    bool runtime_initialized = false;
+    bool geometry_resource_host_initialized = false;
+    bool geometry_upload_host_initialized = false;
+    bool geometry_renderer_initialized = false;
+
+    std::array<vr::geometry::GeometryMeshVertex, 4U> vertices{
+        vr::geometry::GeometryMeshVertex{.position_x = -0.5F, .position_y = -0.5F, .position_z = 0.0F, .normal_x = 0.0F, .normal_y = 0.0F, .normal_z = 1.0F, .uv_u = 0.0F, .uv_v = 0.0F, .tangent_x = 1.0F, .tangent_y = 0.0F, .tangent_z = 0.0F, .tangent_w = 1.0F},
+        vr::geometry::GeometryMeshVertex{.position_x = 0.5F, .position_y = -0.5F, .position_z = 0.0F, .normal_x = 0.0F, .normal_y = 0.0F, .normal_z = 1.0F, .uv_u = 1.0F, .uv_v = 0.0F, .tangent_x = 1.0F, .tangent_y = 0.0F, .tangent_z = 0.0F, .tangent_w = 1.0F},
+        vr::geometry::GeometryMeshVertex{.position_x = 0.5F, .position_y = 0.5F, .position_z = 0.0F, .normal_x = 0.0F, .normal_y = 0.0F, .normal_z = 1.0F, .uv_u = 1.0F, .uv_v = 1.0F, .tangent_x = 1.0F, .tangent_y = 0.0F, .tangent_z = 0.0F, .tangent_w = 1.0F},
+        vr::geometry::GeometryMeshVertex{.position_x = -0.5F, .position_y = 0.5F, .position_z = 0.0F, .normal_x = 0.0F, .normal_y = 0.0F, .normal_z = 1.0F, .uv_u = 0.0F, .uv_v = 1.0F, .tangent_x = 1.0F, .tangent_y = 0.0F, .tangent_z = 0.0F, .tangent_w = 1.0F}
+    };
+    std::array<std::uint32_t, 6U> indices{0U, 1U, 2U, 2U, 3U, 0U};
+    std::array<vr::geometry::GeometrySubmeshRange, 1U> submeshes{
+        vr::geometry::GeometrySubmeshRange{.first_index = 0U, .index_count = 6U, .vertex_offset = 0, .reserved0 = 0U}
+    };
+
+    vr::geometry::GeometryMeshUploadInfo mesh_upload_info{};
+    mesh_upload_info.geometry_id = 1U;
+    mesh_upload_info.vertices = vertices.data();
+    mesh_upload_info.vertex_count = static_cast<std::uint32_t>(vertices.size());
+    mesh_upload_info.indices = indices.data();
+    mesh_upload_info.index_count = static_cast<std::uint32_t>(indices.size());
+    mesh_upload_info.submeshes = submeshes.data();
+    mesh_upload_info.submesh_count = static_cast<std::uint32_t>(submeshes.size());
+    mesh_upload_info.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    mesh_upload_info.bounds_min = vr::ecs::Float3{.x = -0.5F, .y = -0.5F, .z = -0.05F};
+    mesh_upload_info.bounds_max = vr::ecs::Float3{.x = 0.5F, .y = 0.5F, .z = 0.05F};
+
+    Geometry3D geometry_component{};
+    InitializeGeometryComponent(geometry_component,
+                                1U,
+                                0U,
+                                vr::ecs::Float3{.x = -0.5F, .y = -0.5F, .z = -0.05F},
+                                vr::ecs::Float3{.x = 0.5F, .y = 0.5F, .z = 0.05F},
+                                true,
+                                true,
+                                vr::ecs::Geometry3DShadingModel::lit,
+                                vr::ecs::Rgba8{255U, 255U, 255U, 255U});
+    geometry_component.style.albedo_color = vr::ecs::Rgba8{48U, 96U, 160U, 255U};
+    geometry_component.style.metallic = 0.05F;
+    geometry_component.style.roughness = 0.92F;
+    geometry_component.style.normal_scale = 1.0F;
+
+    Transform3D transform{};
+    TransformSystem3D::Initialize(transform);
+    TransformSystem3D::SetLocalPosition(transform, vr::ecs::Float3{.x = 0.0F, .y = 0.0F, .z = 0.0F});
+    TransformSystem3D::SetLocalScale(transform, vr::ecs::Float3{.x = 2.0F, .y = 2.0F, .z = 1.0F});
+    TransformSystem3D::UpdateHierarchy(&transform, 1U);
+
+    Bounds3D bounds_component{};
+    BoundsSystem3D::Initialize(bounds_component);
+    BoundsSystem3D::SetLocalAabb(bounds_component,
+                                 vr::ecs::Float3{.x = -0.5F, .y = -0.5F, .z = -0.05F},
+                                 vr::ecs::Float3{.x = 0.5F, .y = 0.5F, .z = 0.05F});
+    (void)BoundsSystem3D::UpdateAligned(&bounds_component, &transform, 1U);
+
+    Appearance3D appearance_component{};
+    AppearanceSystem3D::Initialize(appearance_component);
+    AppearanceSystem3D::SetBaseColor(appearance_component, vr::ecs::Rgba8{210U, 200U, 180U, 255U});
+    AppearanceSystem3D::SetMetallic(appearance_component, 0.20F);
+    AppearanceSystem3D::SetRoughness(appearance_component, 0.55F);
+    AppearanceSystem3D::SetOcclusionStrength(appearance_component, 0.85F);
+    AppearanceSystem3D::SetEmissiveIntensity(appearance_component, 0.0F);
+    vr::ecs::AppearanceRuntimeScratch<vr::ecs::Dim3> appearance_scratch{};
+    (void)AppearanceRuntimeSystem3D::Build(&appearance_component, 1U, appearance_scratch);
+    GeometrySystem3D::SetAppearanceHandle(geometry_component,
+                                          appearance_component.runtime.gpu_record_handle);
+
+    Camera3D camera{};
+    CameraSystem3D::Initialize(camera);
+    CameraSystem3D::SetAspectRatio(camera, 1280.0F / 720.0F);
+    CameraSystem3D::SetNearFar(camera, 0.05F, 256.0F);
+    CameraSystem3D::SetVerticalFovRadians(camera, 60.0F * 0.01745329251994329577F);
+
+    Transform3D camera_transform{};
+    TransformSystem3D::Initialize(camera_transform);
+    TransformSystem3D::SetLocalPosition(camera_transform, vr::ecs::Float3{.x = 0.0F, .y = 0.0F, .z = 4.0F});
+    TransformSystem3D::UpdateHierarchy(&camera_transform, 1U);
+    CameraSystem3D::MarkViewDirty(camera);
+    CameraSystem3D::Update(camera, camera_transform);
+
+    try {
+        Runtime::CreateInfo create_info{};
+        create_info.platform.window.title = "vr_tests_runtime_geometry_3d_appearance_reuse";
+        create_info.platform.window.width = 640;
+        create_info.platform.window.height = 360;
+        create_info.platform.window.resizable = true;
+        create_info.platform.window.high_pixel_density = true;
+        create_info.platform.instance.enable_validation = false;
+        create_info.platform.device.required_vulkan13_features.dynamicRendering = VK_TRUE;
+        create_info.platform.device.required_vulkan13_features.synchronization2 = VK_TRUE;
+        create_info.render_loop.swapchain.enable_vsync = false;
+        create_info.render_loop.swapchain.preferred_image_count = 2U;
+        create_info.render_loop.commands.initial_primary_per_frame = 2U;
+        create_info.render_loop.commands.primary_growth_chunk = 2U;
+        create_info.poll_events_each_tick = true;
+        runtime.Initialize(create_info);
+        runtime_initialized = true;
+
+        vr::geometry::GeometryResourceHostCreateInfo resource_create_info{};
+        resource_create_info.reserve_mesh_count = 8U;
+        resource_create_info.reserve_submesh_count = 8U;
+        resource_create_info.reserve_reusable_buffer_count = 8U;
+        resource_create_info.max_reusable_vertex_buffer_count = 8U;
+        resource_create_info.max_reusable_index_buffer_count = 8U;
+        geometry_resource_host.Initialize(runtime.Context(), runtime.GpuMemory(), resource_create_info);
+        geometry_resource_host_initialized = true;
+
+        vr::geometry::GeometryUploadHostCreateInfo upload_create_info{};
+        upload_create_info.frames_in_flight = 2U;
+        upload_create_info.initial_3d_instance_buffer_bytes = 64U * 1024U;
+        geometry_upload_host.Initialize(runtime.Context(), runtime.GpuMemory(), upload_create_info);
+        geometry_upload_host_initialized = true;
+
+        runtime.Upload().BeginFrame(runtime.Context(), 0U);
+        geometry_resource_host.UploadMesh(runtime.Context(),
+                                          runtime.Upload(),
+                                          0U,
+                                          0U,
+                                          0U,
+                                          mesh_upload_info);
+        const vr::render::UploadEndFrameResult upload_end =
+            runtime.Upload().EndFrameAndSubmit(runtime.Context(), 0U);
+        if (upload_end.submitted) {
+            runtime.Upload().WaitFrame(runtime.Context(), 0U);
+        }
+        geometry_resource_host.BeginFrame(runtime.Context(), 0U);
+
+        vr::geometry::GeometryRenderer3DCreateInfo renderer_create_info{};
+        renderer_create_info.reserve_component_count = 1U;
+        renderer_create_info.reserve_instance_count = 8U;
+        renderer_create_info.enable_depth = true;
+        renderer_create_info.clear_swapchain = true;
+        renderer_create_info.clear_color = {{0.05F, 0.07F, 0.10F, 1.0F}};
+        renderer_create_info.directional_light_x = 0.0F;
+        renderer_create_info.directional_light_y = -1.0F;
+        renderer_create_info.directional_light_z = 0.0F;
+        renderer_create_info.directional_light_intensity = 1.0F;
+        geometry_renderer.Initialize(renderer_create_info);
+        geometry_renderer_initialized = true;
+        geometry_renderer.SetHosts(&geometry_resource_host, &geometry_upload_host);
+        geometry_renderer.SetSceneData(&geometry_component,
+                                       &transform,
+                                       1U,
+                                       &camera,
+                                       &camera_transform,
+                                       &bounds_component);
+        geometry_renderer.SetAppearanceData(&appearance_component, 1U);
+
+        std::uint32_t warmup_submitted_frames = 0U;
+        constexpr std::uint32_t warmup_tick_limit = 8U;
+        for (std::uint32_t tick_index = 0U;
+             tick_index < warmup_tick_limit && runtime.IsRunning() && warmup_submitted_frames < 2U;
+             ++tick_index) {
+            CameraSystem3D::Update(camera, camera_transform);
+            const Runtime::RuntimeTickResult tick_result = runtime.Tick(geometry_renderer);
+            if (tick_result.render.code == vr::render::TickCode::Submitted ||
+                tick_result.render.code == vr::render::TickCode::RecreateRequested) {
+                ++warmup_submitted_frames;
+            }
+            SDL_Delay(1U);
+        }
+        VR_REQUIRE(warmup_submitted_frames >= 2U);
+
+        AppearanceSystem3D::SetBaseColor(appearance_component, vr::ecs::Rgba8{32U, 180U, 255U, 255U});
+        AppearanceSystem3D::SetMetallic(appearance_component, 0.82F);
+        AppearanceSystem3D::SetRoughness(appearance_component, 0.18F);
+        constexpr std::uint32_t dirty_index = 0U;
+        geometry_renderer.SetAppearanceDirtyHint(&dirty_index, 1U);
+
+        CameraSystem3D::Update(camera, camera_transform);
+        const Runtime::RuntimeTickResult changed_tick_result = runtime.Tick(geometry_renderer);
+        VR_REQUIRE(changed_tick_result.render.code == vr::render::TickCode::Submitted ||
+                   changed_tick_result.render.code == vr::render::TickCode::RecreateRequested);
+
+        const vr::geometry::GeometryRenderer3DStats renderer_stats = geometry_renderer.Stats();
+        VR_CHECK(renderer_stats.appearance_updated_record_count >= 1U);
+        VR_CHECK(renderer_stats.uploaded_instance_count == 0U);
+        VR_CHECK(renderer_stats.uploaded_bytes >= sizeof(vr::geometry::MaterialGpuRecord));
+
+        geometry_renderer.Shutdown(runtime.Context());
+        geometry_renderer_initialized = false;
+        geometry_upload_host.Shutdown(runtime.Context());
+        geometry_upload_host_initialized = false;
+        geometry_resource_host.Shutdown(runtime.Context());
+        geometry_resource_host_initialized = false;
+        runtime.Shutdown();
+        runtime_initialized = false;
+    } catch (const std::exception& exception_) {
+        if (geometry_renderer_initialized && runtime_initialized && runtime.IsInitialized()) {
+            geometry_renderer.Shutdown(runtime.Context());
+            geometry_renderer_initialized = false;
         }
         if (geometry_upload_host_initialized && runtime_initialized && runtime.IsInitialized()) {
             geometry_upload_host.Shutdown(runtime.Context());
@@ -779,6 +1013,10 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_bloom_post_stack_smoke,
         material_11.image_id = 101U;
         material_11.uv_scale_u = 1.0F;
         material_11.uv_scale_v = 1.0F;
+        material_11.metallic_factor = 0.15F;
+        material_11.roughness_factor = 0.42F;
+        material_11.normal_scale = 1.0F;
+        material_11.occlusion_strength = 0.95F;
         geometry_material_host.UpsertMaterial(material_11);
 
         vr::geometry::GeometryMaterialDesc material_22{};
@@ -790,6 +1028,10 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_bloom_post_stack_smoke,
         material_22.uv_bias_v = 0.08F;
         material_22.flags = vr::geometry::geometry_material_flag_alpha_test;
         material_22.alpha_cutoff = 0.2F;
+        material_22.metallic_factor = 0.78F;
+        material_22.roughness_factor = 0.64F;
+        material_22.normal_scale = 1.35F;
+        material_22.occlusion_strength = 0.60F;
         geometry_material_host.UpsertMaterial(material_22);
 
         vr::geometry::GeometryRenderer3DCreateInfo renderer_create_info{};

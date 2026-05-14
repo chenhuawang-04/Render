@@ -1,11 +1,36 @@
 #include "vr/geometry/geometry_material_host.hpp"
 
+#include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <stdexcept>
 #include <utility>
 
 namespace vr::geometry {
+
+namespace {
+
+[[nodiscard]] GeometryMaterialDesc NormalizeMaterialDesc(const GeometryMaterialDesc& desc_) noexcept {
+    GeometryMaterialDesc normalized = desc_;
+    const auto finite_or = [](float value_, float fallback_) noexcept {
+        return std::isfinite(value_) ? value_ : fallback_;
+    };
+
+    normalized.uv_scale_u = finite_or(normalized.uv_scale_u, 1.0F);
+    normalized.uv_scale_v = finite_or(normalized.uv_scale_v, 1.0F);
+    normalized.uv_bias_u = finite_or(normalized.uv_bias_u, 0.0F);
+    normalized.uv_bias_v = finite_or(normalized.uv_bias_v, 0.0F);
+    normalized.alpha_cutoff = std::clamp(finite_or(normalized.alpha_cutoff, 0.0F), 0.0F, 1.0F);
+    normalized.metallic_factor = std::clamp(finite_or(normalized.metallic_factor, 0.0F), 0.0F, 1.0F);
+    normalized.roughness_factor = std::clamp(finite_or(normalized.roughness_factor, 1.0F), 0.04F, 1.0F);
+    normalized.normal_scale = std::clamp(finite_or(normalized.normal_scale, 1.0F), 0.0F, 4.0F);
+    normalized.occlusion_strength =
+        std::clamp(finite_or(normalized.occlusion_strength, 1.0F), 0.0F, 1.0F);
+    return normalized;
+}
+
+} // namespace
 
 void GeometryMaterialHost::Initialize(const GeometryMaterialHostCreateInfo& create_info_) {
     create_info_cache = create_info_;
@@ -32,13 +57,14 @@ void GeometryMaterialHost::UpsertMaterial(const GeometryMaterialDesc& desc_) {
     if (desc_.material_id == 0U) {
         throw std::invalid_argument("GeometryMaterialHost::UpsertMaterial material_id must be non-zero");
     }
+    const GeometryMaterialDesc normalized_desc = NormalizeMaterialDesc(desc_);
 
-    const std::size_t lower_bound_index = LowerBoundMaterialIndex(desc_.material_id);
+    const std::size_t lower_bound_index = LowerBoundMaterialIndex(normalized_desc.material_id);
     const bool exists = lower_bound_index < materials.size() &&
-                        materials[lower_bound_index].desc.material_id == desc_.material_id;
+                        materials[lower_bound_index].desc.material_id == normalized_desc.material_id;
     if (exists) {
         MaterialRecord& record = materials[lower_bound_index];
-        record.desc = desc_;
+        record.desc = normalized_desc;
         ++record.revision;
         ++stats.updated_material_count;
     } else {
@@ -48,7 +74,7 @@ void GeometryMaterialHost::UpsertMaterial(const GeometryMaterialDesc& desc_) {
             materials[index] = std::move(materials[index - 1U]);
         }
         MaterialRecord record{};
-        record.desc = desc_;
+        record.desc = normalized_desc;
         record.revision = 1U;
         materials[lower_bound_index] = record;
         ++stats.added_material_count;

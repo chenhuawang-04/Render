@@ -1,5 +1,6 @@
 #include "vr/geometry/geometry_resource_host.hpp"
 
+#include "vr/geometry/geometry_tangent_space.hpp"
 #include "vr/resource/gpu_memory_host.hpp"
 
 #include <algorithm>
@@ -415,10 +416,21 @@ GeometryResourceHost::MeshRecord GeometryResourceHost::BuildMeshRecord(
                                         reusable_index_buffers,
                                         false);
 
+    GeometryMcVector<GeometryMeshVertex> prepared_vertices{};
+    prepared_vertices.resize(upload_info_.vertex_count);
+    std::copy_n(upload_info_.vertices,
+                upload_info_.vertex_count,
+                prepared_vertices.data());
+    (void)PrepareGeometryMeshTangents(prepared_vertices.data(),
+                                      upload_info_.vertex_count,
+                                      upload_info_.indices,
+                                      upload_info_.index_count,
+                                      upload_info_.topology);
+
     upload_host_.StageAndRecordCopyBuffer(frame_index_,
                                           record.vertex_buffer.buffer,
                                           0U,
-                                          upload_info_.vertices,
+                                          prepared_vertices.data(),
                                           vertex_buffer_bytes,
                                           16U);
     upload_host_.StageAndRecordCopyBuffer(frame_index_,

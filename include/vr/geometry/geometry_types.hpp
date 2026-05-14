@@ -24,6 +24,11 @@ struct GeometryMeshVertex final {
     float uv_u;
     float uv_v;
 
+    float tangent_x;
+    float tangent_y;
+    float tangent_z;
+    float tangent_w;
+
     float morph0_position_delta_x;
     float morph0_position_delta_y;
     float morph0_position_delta_z;

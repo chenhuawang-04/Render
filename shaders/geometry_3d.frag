@@ -2,6 +2,7 @@
 #extension GL_GOOGLE_include_directive : require
 #include "vr/common/math.glsl"
 #include "vr/render/bindless.glsl"
+#include "vr/render/pbr.glsl"
 
 layout(push_constant) uniform Geometry3DPushConstants {
     mat4 view_projection;
@@ -20,6 +21,10 @@ layout(location = 2) in vec4 in_material_params;
 layout(location = 3) flat in uint in_instance_params;
 layout(location = 4) in vec2 in_uv;
 layout(location = 5) in vec3 in_world_position;
+layout(location = 6) in float in_occlusion_strength;
+layout(location = 7) flat in uint in_appearance_record_index;
+layout(location = 8) in vec3 in_tangent_world;
+layout(location = 9) in vec3 in_bitangent_world;
 
 struct LightRecord3D {
     vec4 position_radius;
@@ -52,6 +57,16 @@ struct ShadowViewRecord {
     uvec4 layer_view_cascade_flags;
 };
 
+struct MaterialGpuRecord {
+    vec4 base_rgba;
+    vec4 emissive_rgba;
+    vec4 material_params;
+    vec4 extras;
+    uvec4 flags_u32;
+    uvec4 textures0_u32;
+    uvec4 textures1_u32;
+};
+
 layout(set = 2, binding = 0, std430) readonly buffer LightRecordBuffer {
     LightRecord3D light_records[];
 };
@@ -76,6 +91,10 @@ layout(set = 2, binding = 4, std140) uniform LightingParamsBuffer {
     vec4 framebuffer_shadow_views;
     uvec4 shadow_atlas_texture_sampler_slots;
 } lighting_params;
+
+layout(set = 2, binding = 7, std430) readonly buffer MaterialRecordBuffer {
+    MaterialGpuRecord material_records[];
+};
 
 layout(set = 3, binding = 0, std140) uniform IblParamsBuffer {
     vec4 ibl_sh9[9];
@@ -103,6 +122,21 @@ const uint k_shadow_view_flag_filter_kernel_mask = 0x3u << k_shadow_view_flag_fi
 const uint k_shadow_filter_hard = 0u;
 const uint k_shadow_filter_pcf3x3 = 1u;
 const uint k_shadow_filter_pcf5x5 = 2u;
+const uint k_invalid_material_record_index = 0xFFFFFFFFu;
+
+const uint k_appearance_alpha_mode_shift = 3u;
+const uint k_appearance_alpha_mode_mask = 0x3u << k_appearance_alpha_mode_shift;
+const uint k_appearance_shading_model_shift = 5u;
+const uint k_appearance_shading_model_mask = 0x3u << k_appearance_shading_model_shift;
+const uint k_appearance_alpha_mode_opaque = 0u;
+const uint k_appearance_alpha_mode_masked = 1u;
+const uint k_appearance_shading_model_unlit = 0u;
+
+const uint k_material_texture_presence_base_color = 1u << 0u;
+const uint k_material_texture_presence_normal = 1u << 1u;
+const uint k_material_texture_presence_metal_rough = 1u << 2u;
+const uint k_material_texture_presence_occlusion = 1u << 3u;
+const uint k_material_texture_presence_emissive = 1u << 4u;
 
 uint unpack_shadow_view_count(uint shadow_meta_) {
     return shadow_meta_ & 0xFFFFu;
@@ -395,47 +429,181 @@ vec3 evaluate_sh9_irradiance(vec3 normal_) {
     return max(irradiance, vec3(0.0));
 }
 
-vec3 evaluate_ibl(vec3 base_albedo_,
-                  vec3 normal_world_,
+struct DecodedGeometryMaterial {
+    MaterialSample material;
+    bool alpha_test_enabled;
+    float alpha_cutoff;
+    bool unlit;
+};
+
+bool has_material_record() {
+    return in_appearance_record_index != k_invalid_material_record_index &&
+           in_appearance_record_index < uint(material_records.length());
+}
+
+bool material_texture_present(uint presence_mask_, uint flag_) {
+    return (presence_mask_ & flag_) != 0u;
+}
+
+uint material_alpha_mode(MaterialGpuRecord record_) {
+    return (record_.flags_u32.x >> k_appearance_alpha_mode_shift) & 0x3u;
+}
+
+uint material_shading_model(MaterialGpuRecord record_) {
+    return (record_.flags_u32.x >> k_appearance_shading_model_shift) & 0x3u;
+}
+
+bool has_valid_tangent_basis() {
+    return dot(in_tangent_world, in_tangent_world) > 1e-6 &&
+           dot(in_bitangent_world, in_bitangent_world) > 1e-6;
+}
+
+DecodedGeometryMaterial decode_fallback_geometry_material(vec3 normal_world_) {
+    DecodedGeometryMaterial decoded;
+    float occlusion_strength = clamp(in_occlusion_strength, 0.0, 1.0);
+    decoded.material.base_color = in_albedo.rgb;
+    decoded.material.alpha = in_albedo.a;
+    decoded.material.metallic = clamp(in_material_params.x, 0.0, 1.0);
+    decoded.material.roughness = clamp(in_material_params.y, 0.04, 1.0);
+    decoded.material.normal_scale = max(in_material_params.z, 0.0);
+    decoded.material.occlusion = occlusion_strength;
+    decoded.material.emissive = vec3(0.0);
+    decoded.material.normal_world = normalize(normal_world_);
+    decoded.alpha_test_enabled = (pc.material_flags & 0x1u) != 0u;
+    decoded.alpha_cutoff = clamp(pc.alpha_cutoff, 0.0, 1.0);
+    decoded.unlit = ((in_instance_params >> 7u) & 0x1u) == 0u;
+
+    vec2 fallback_uv = in_uv * pc.material_uv_transform.xy + pc.material_uv_transform.zw;
+    vec4 fallback_albedo =
+        SampleTexture2D(pc.material_texture_slot,
+                        pc.material_sampler_slot,
+                        fallback_uv);
+    decoded.material.base_color *= fallback_albedo.rgb;
+    decoded.material.alpha *= fallback_albedo.a;
+    return decoded;
+}
+
+DecodedGeometryMaterial decode_appearance_geometry_material(vec3 normal_world_,
+                                                            MaterialGpuRecord material_record) {
+    DecodedGeometryMaterial decoded;
+    uint presence_mask = material_record.textures1_u32.w;
+    uint sampler_slot = material_record.textures1_u32.y;
+    vec4 base_factor = material_record.base_rgba;
+    vec4 emissive_factor = material_record.emissive_rgba;
+    vec4 material_params = material_record.material_params;
+    vec4 extras = material_record.extras;
+    float occlusion_strength = clamp(material_params.w, 0.0, 1.0);
+
+    vec4 base_sample = vec4(1.0);
+    if (material_texture_present(presence_mask, k_material_texture_presence_base_color)) {
+        base_sample = SampleTexture2D(material_record.textures0_u32.x,
+                                      sampler_slot,
+                                      in_uv);
+    }
+
+    decoded.material.base_color = base_sample.rgb * base_factor.rgb;
+    decoded.material.alpha = base_sample.a * base_factor.a * clamp(extras.z, 0.0, 1.0);
+    decoded.material.metallic = clamp(material_params.x, 0.0, 1.0);
+    decoded.material.roughness = clamp(material_params.y, 0.04, 1.0);
+    decoded.material.normal_scale = max(material_params.z, 0.0);
+    decoded.material.occlusion = occlusion_strength;
+    decoded.material.normal_world = normalize(normal_world_);
+
+    vec3 orm_sample = vec3(1.0);
+    if (material_texture_present(presence_mask, k_material_texture_presence_metal_rough)) {
+        orm_sample = SampleTexture2D(material_record.textures0_u32.z,
+                                     sampler_slot,
+                                     in_uv).rgb;
+        decoded.material.roughness =
+            clamp(orm_sample.g * decoded.material.roughness, 0.04, 1.0);
+        decoded.material.metallic =
+            clamp(orm_sample.b * decoded.material.metallic, 0.0, 1.0);
+    }
+
+    float occlusion_value = 1.0;
+    if (material_texture_present(presence_mask, k_material_texture_presence_occlusion)) {
+        occlusion_value = SampleTexture2D(material_record.textures0_u32.w,
+                                          sampler_slot,
+                                          in_uv).r;
+    } else if (material_texture_present(presence_mask, k_material_texture_presence_metal_rough)) {
+        occlusion_value = orm_sample.r;
+    }
+    decoded.material.occlusion = mix(1.0, occlusion_value, occlusion_strength);
+
+    if (material_texture_present(presence_mask, k_material_texture_presence_normal) &&
+        has_valid_tangent_basis()) {
+        vec3 tangent_normal =
+            SampleTexture2D(material_record.textures0_u32.y,
+                            sampler_slot,
+                            in_uv).xyz * 2.0 - 1.0;
+        tangent_normal.xy *= decoded.material.normal_scale;
+        tangent_normal = normalize(tangent_normal);
+
+        vec3 tangent_world = normalize(in_tangent_world);
+        vec3 bitangent_world = normalize(in_bitangent_world);
+        mat3 tbn = mat3(tangent_world, bitangent_world, normalize(normal_world_));
+        decoded.material.normal_world = normalize(tbn * tangent_normal);
+    }
+
+    vec3 emissive_sample = vec3(1.0);
+    if (material_texture_present(presence_mask, k_material_texture_presence_emissive)) {
+        emissive_sample =
+            SampleTexture2D(material_record.textures1_u32.x,
+                            sampler_slot,
+                            in_uv).rgb;
+    }
+    decoded.material.emissive = emissive_sample * emissive_factor.rgb * max(extras.y, 0.0);
+    decoded.alpha_test_enabled =
+        material_alpha_mode(material_record) == k_appearance_alpha_mode_masked;
+    decoded.alpha_cutoff = clamp(extras.x, 0.0, 1.0);
+    decoded.unlit = material_shading_model(material_record) == k_appearance_shading_model_unlit;
+    return decoded;
+}
+
+DecodedGeometryMaterial decode_geometry_material(vec3 normal_world_) {
+    if (!has_material_record()) {
+        return decode_fallback_geometry_material(normal_world_);
+    }
+
+    MaterialGpuRecord material_record = material_records[in_appearance_record_index];
+    return decode_appearance_geometry_material(normal_world_, material_record);
+}
+
+vec3 evaluate_ibl(MaterialSample material_,
                   vec3 view_dir_) {
     float ibl_intensity = max(ibl_params.ibl_tint_intensity.w, 0.0);
     if (ibl_intensity <= 1e-6) {
         return vec3(0.0);
     }
 
-    float metallic = clamp(in_material_params.x, 0.0, 1.0);
-    float roughness = clamp(in_material_params.y, 0.04, 1.0);
     vec3 tint = ibl_params.ibl_tint_intensity.rgb;
-    vec3 diffuse_color = base_albedo_ * (1.0 - metallic);
-    vec3 f0 = mix(vec3(0.04), base_albedo_, metallic);
+    vec3 diffuse_irradiance = evaluate_sh9_irradiance(material_.normal_world);
 
-    vec3 diffuse_irradiance = evaluate_sh9_irradiance(normal_world_);
-    vec3 diffuse_ibl = diffuse_irradiance * diffuse_color;
-
-    vec3 reflection_dir = rotate_environment_direction(reflect(-view_dir_, normal_world_));
+    vec3 reflection_dir = rotate_environment_direction(reflect(-view_dir_, material_.normal_world));
     float max_specular_lod = max(ibl_params.ibl_rotation_max_lod_flags.z, 0.0);
     vec3 prefiltered_specular =
         SampleTextureCubeLod(ibl_params.texture_sampler_slots.x,
                              ibl_params.texture_sampler_slots.w,
                              reflection_dir,
-                             roughness * max_specular_lod).rgb;
-    float n_dot_v = max(dot(normal_world_, view_dir_), 0.0);
+                             material_.roughness * max_specular_lod).rgb;
+    float n_dot_v = max(dot(material_.normal_world, view_dir_), 0.0);
     vec2 brdf =
         SampleTexture2D(ibl_params.texture_sampler_slots.y,
                         ibl_params.texture_sampler_slots.w,
-                        vec2(n_dot_v, roughness)).rg;
-    vec3 fresnel = f0 + (vec3(1.0) - f0) * pow(1.0 - n_dot_v, 5.0);
-    vec3 specular_ibl = prefiltered_specular * (fresnel * brdf.x + brdf.y);
+                        vec2(n_dot_v, material_.roughness)).rg;
 
-    return (diffuse_ibl + specular_ibl) * tint * ibl_intensity;
+    return EvaluatePbrIblFromTerms(material_,
+                                   view_dir_,
+                                   diffuse_irradiance,
+                                   prefiltered_specular,
+                                   brdf) * tint * ibl_intensity;
 }
 
-void evaluate_light(LightRecord3D light_record_,
+vec3 evaluate_light(LightRecord3D light_record_,
                     vec3 world_position_,
-                    vec3 normal_world_,
+                    MaterialSample material_,
                     vec3 view_dir_,
-                    float depth_distance_,
-                    out vec3 out_contribution_) {
+                    float depth_distance_) {
     vec3 light_color = light_record_.color_intensity.rgb;
     float intensity = max(light_record_.color_intensity.a, 0.0);
     float radius = max(light_record_.position_radius.w, 1e-4);
@@ -450,8 +618,7 @@ void evaluate_light(LightRecord3D light_record_,
         vec3 to_light = light_record_.position_radius.xyz - world_position_;
         float distance_to_light = length(to_light);
         if (distance_to_light <= 1e-6) {
-            out_contribution_ = vec3(0.0);
-            return;
+            return vec3(0.0);
         }
 
         light_dir = to_light / distance_to_light;
@@ -469,41 +636,39 @@ void evaluate_light(LightRecord3D light_record_,
         }
     }
 
-    float n_dot_l = max(dot(normal_world_, light_dir), 0.0);
     float shadow_factor = evaluate_shadow_factor(light_record_,
                                                  world_position_,
-                                                 normal_world_,
+                                                 material_.normal_world,
                                                  light_dir,
                                                  depth_distance_);
-    float diffuse = n_dot_l * intensity * attenuation * shadow_factor;
-
-    vec3 half_vector = normalize(view_dir_ + light_dir);
-    float specular = pow(max(dot(normal_world_, half_vector), 0.0), 16.0) *
-                     (0.05 * attenuation * shadow_factor);
-
-    out_contribution_ = light_color * (diffuse + specular);
+    vec3 light_radiance = light_color * (intensity * attenuation * shadow_factor);
+    return EvaluatePbrDirect(material_,
+                             view_dir_,
+                             light_dir,
+                             light_radiance);
 }
 
 void main() {
     vec3 normal_world = normalize(in_normal_world);
 
-    vec2 uv = in_uv * pc.material_uv_transform.xy + pc.material_uv_transform.zw;
-    vec4 sampled_albedo = SampleTexture2D(pc.material_texture_slot, pc.material_sampler_slot, uv);
-    vec4 base_albedo = vec4(in_albedo.rgb, in_albedo.a) * sampled_albedo;
-    bool alpha_test_enabled = (pc.material_flags & 0x1u) != 0u;
-    if (alpha_test_enabled && base_albedo.a < clamp(pc.alpha_cutoff, 0.0, 1.0)) {
+    DecodedGeometryMaterial material_state = decode_geometry_material(normal_world);
+    MaterialSample material = material_state.material;
+    if (material_state.alpha_test_enabled && material.alpha < material_state.alpha_cutoff) {
         discard;
     }
 
-    bool unlit = ((in_instance_params >> 7u) & 0x1u) != 0u;
+    if (material_state.unlit) {
+        out_color = vec4(material.base_color + material.emissive, material.alpha);
+        return;
+    }
+
     vec3 camera_position = lighting_params.camera_position_light_count.xyz;
     vec3 camera_forward = normalize(lighting_params.camera_forward_max_lights.xyz);
     vec3 to_fragment = in_world_position - camera_position;
     float depth_distance = max(0.0, dot(to_fragment, camera_forward));
     vec3 view_dir = normalize(camera_position - in_world_position);
 
-    vec3 lit_accum = vec3(0.0);
-    float ambient = 0.12;
+    vec3 direct_accum = vec3(0.0);
 
     uint cluster_index = compute_cluster_index(gl_FragCoord.xy, depth_distance);
     uint header_count = uint(cluster_headers.length());
@@ -527,29 +692,23 @@ void main() {
             }
 
             LightRecord3D light_record = light_records[light_index];
-            vec3 contribution = vec3(0.0);
-            evaluate_light(light_record,
-                           in_world_position,
-                           normal_world,
-                           view_dir,
-                           depth_distance,
-                           contribution);
-            lit_accum += contribution;
+            direct_accum += evaluate_light(light_record,
+                                           in_world_position,
+                                           material,
+                                           view_dir,
+                                           depth_distance);
             ++processed;
         }
     } else {
         vec3 fallback_light_dir = normalize(pc.light_direction_intensity.xyz);
         float fallback_intensity = max(pc.light_direction_intensity.w, 0.0);
-        float n_dot_l = max(dot(normal_world, -fallback_light_dir), 0.0);
-        lit_accum = vec3(0.2 + n_dot_l * fallback_intensity);
+        direct_accum = EvaluatePbrDirect(material,
+                                         view_dir,
+                                         -fallback_light_dir,
+                                         vec3(fallback_intensity));
     }
 
-    if (unlit) {
-        lit_accum = vec3(1.0);
-        ambient = 0.0;
-    }
-
-    vec3 ibl_accum = unlit ? vec3(0.0) : evaluate_ibl(base_albedo.rgb, normal_world, view_dir);
-    vec3 lit_color = base_albedo.rgb * (ambient + lit_accum) + ibl_accum;
-    out_color = vec4(lit_color, base_albedo.a);
+    vec3 ibl_accum = evaluate_ibl(material, view_dir);
+    vec3 lit_color = direct_accum + ibl_accum * material.occlusion + material.emissive;
+    out_color = vec4(lit_color, material.alpha);
 }
