@@ -20,9 +20,38 @@ enum class ResourceLifetime : std::uint8_t {
     transient = 2U,
 };
 
-enum class AccessKind : std::uint8_t {
-    read = 0U,
-    write = 1U,
+enum class AccessKind : std::uint16_t {
+    none = 0U,
+
+    color_attachment_read = 1U,
+    color_attachment_write = 2U,
+
+    depth_stencil_read = 3U,
+    depth_stencil_write = 4U,
+    depth_stencil_read_write = 5U,
+
+    shader_sample_read = 6U,
+    shader_storage_read = 7U,
+    shader_storage_write = 8U,
+    shader_storage_read_write = 9U,
+
+    uniform_read = 10U,
+    vertex_buffer_read = 11U,
+    index_buffer_read = 12U,
+    indirect_command_read = 13U,
+
+    transfer_read = 14U,
+    transfer_write = 15U,
+
+    present = 16U,
+    host_read = 17U,
+    host_write = 18U,
+};
+
+enum class QueueClass : std::uint8_t {
+    graphics = 0U,
+    compute = 1U,
+    transfer = 2U,
 };
 
 enum TextureUsageFlags : std::uint32_t {
@@ -115,6 +144,25 @@ struct ResourceVersionHandle final {
 
 inline constexpr ResourceVersionHandle invalid_resource_version{};
 
+struct SubresourceRange final {
+    std::uint32_t base_mip_level = 0U;
+    std::uint32_t level_count = 0U;
+    std::uint32_t base_array_layer = 0U;
+    std::uint32_t layer_count = 0U;
+};
+
+struct BufferRange final {
+    std::uint64_t offset_bytes = 0U;
+    std::uint64_t size_bytes = 0U;
+};
+
+struct AccessDesc final {
+    ResourceVersionHandle resource{};
+    AccessKind access = AccessKind::none;
+    SubresourceRange subresource_range{};
+    BufferRange buffer_range{};
+};
+
 [[nodiscard]] constexpr bool IsValidResourceHandle(const ResourceHandle handle_) noexcept {
     return handle_.index != invalid_render_graph_index &&
            handle_.generation != 0U;
@@ -145,5 +193,8 @@ static_assert(std::is_standard_layout_v<BufferDesc>);
 static_assert(std::is_standard_layout_v<ResourceHandle>);
 static_assert(std::is_standard_layout_v<PassHandle>);
 static_assert(std::is_standard_layout_v<ResourceVersionHandle>);
+static_assert(std::is_standard_layout_v<SubresourceRange>);
+static_assert(std::is_standard_layout_v<BufferRange>);
+static_assert(std::is_standard_layout_v<AccessDesc>);
 
 } // namespace vr::render_graph

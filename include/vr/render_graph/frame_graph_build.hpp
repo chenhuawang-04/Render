@@ -106,14 +106,18 @@ template<ecs::DimensionTag DimensionT>
                                                     detail::MakeSceneColorDesc(snapshot_),
                                                     ResourceLifetime::transient);
         result.scene_pass = builder_.AddPass("main_scene_pass");
-        color_chain = builder_.Write(result.scene_pass, result.scene_color);
+        color_chain = builder_.Write(result.scene_pass,
+                                     result.scene_color,
+                                     AccessDesc{.access = AccessKind::color_attachment_write});
         result.has_scene_pass = true;
 
         if constexpr (std::is_same_v<DimensionT, ecs::Dim3>) {
             result.scene_depth = builder_.CreateTexture("scene_depth",
                                                         detail::MakeSceneDepthDesc(snapshot_),
                                                         ResourceLifetime::transient);
-            (void)builder_.Write(result.scene_pass, result.scene_depth);
+            (void)builder_.Write(result.scene_pass,
+                                 result.scene_depth,
+                                 AccessDesc{.access = AccessKind::depth_stencil_write});
             result.has_depth = true;
         }
     }
@@ -128,17 +132,25 @@ template<ecs::DimensionTag DimensionT>
         }
         result.overlay_pass = builder_.AddPass("overlay_pass");
         if (IsValidResourceVersionHandle(color_chain)) {
-            (void)builder_.Read(result.overlay_pass, color_chain);
+            (void)builder_.Read(result.overlay_pass,
+                                color_chain,
+                                AccessDesc{.access = AccessKind::shader_sample_read});
         }
-        color_chain = builder_.Write(result.overlay_pass, result.scene_color);
+        color_chain = builder_.Write(result.overlay_pass,
+                                     result.scene_color,
+                                     AccessDesc{.access = AccessKind::color_attachment_write});
         result.has_overlay_pass = true;
     }
 
     result.present_pass = builder_.AddPass("present_to_swapchain", true);
     if (IsValidResourceVersionHandle(color_chain)) {
-        (void)builder_.Read(result.present_pass, color_chain);
+        (void)builder_.Read(result.present_pass,
+                            color_chain,
+                            AccessDesc{.access = AccessKind::shader_sample_read});
     }
-    (void)builder_.Write(result.present_pass, result.present_target);
+    (void)builder_.Write(result.present_pass,
+                         result.present_target,
+                         AccessDesc{.access = AccessKind::present});
     result.built = true;
     return result;
 }

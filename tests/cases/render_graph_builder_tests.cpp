@@ -54,6 +54,11 @@ VR_TEST_CASE(RenderGraphBuilder_tracks_linear_resource_versioning,
     VR_CHECK(compiled.LivenessRanges()[1].version.version == 1U);
     VR_CHECK(compiled.LivenessRanges()[1].first_pass_order == 1U);
     VR_CHECK(compiled.LivenessRanges()[1].last_pass_order == 2U);
+    VR_CHECK(compiled.Passes()[0].reads.size() == 1U);
+    VR_CHECK(compiled.Passes()[0].reads[0].access == vr::render_graph::AccessKind::none);
+    VR_CHECK(compiled.Passes()[1].reads.empty());
+    VR_CHECK(compiled.Passes()[1].writes.size() == 1U);
+    VR_CHECK(compiled.Passes()[1].writes[0].access == vr::render_graph::AccessKind::none);
 }
 
 VR_TEST_CASE(RenderGraphBuilder_culls_unrooted_work,
@@ -92,6 +97,96 @@ VR_TEST_CASE(RenderGraphBuilder_rejects_non_latest_version_writes,
                                 .version = 0U,
                             });
     }));
+}
+
+VR_TEST_CASE(RenderGraphBuilder_preserves_explicit_access_descriptors_and_queue_preferences,
+             "unit;core;render_graph") {
+    vr::render_graph::RenderGraphBuilder builder{};
+    const auto scene_constants = builder.CreateBuffer(
+        "scene_constants",
+        vr::render_graph::BufferDesc{
+            .size_bytes = 4096U,
+            .usage = vr::render_graph::buffer_usage_uniform_flag |
+                     vr::render_graph::buffer_usage_transfer_dst_flag,
+        });
+    const auto scene_color = builder.CreateTexture(
+        "scene_color",
+        vr::render_graph::TextureDesc{
+            .format = vr::render_graph::TextureFormat::r16g16b16a16_sfloat,
+            .extent = {.width = 640U, .height = 360U, .depth = 1U},
+            .usage = vr::render_graph::texture_usage_color_attachment_flag |
+                     vr::render_graph::texture_usage_sampled_flag,
+        });
+    const auto present_target = builder.CreateTexture(
+        "present_target",
+        vr::render_graph::TextureDesc{
+            .format = vr::render_graph::TextureFormat::unknown,
+            .extent = {.width = 640U, .height = 360U, .depth = 1U},
+            .usage = vr::render_graph::texture_usage_color_attachment_flag |
+                     vr::render_graph::texture_usage_present_flag,
+        },
+        vr::render_graph::ResourceLifetime::imported);
+
+    const auto upload = builder.AddPass("upload_constants", false, vr::render_graph::QueueClass::transfer);
+    const auto shade = builder.AddPass("main_scene_pass", false, vr::render_graph::QueueClass::graphics);
+    const auto present = builder.AddPass("present_to_swapchain", true, vr::render_graph::QueueClass::graphics);
+
+    const auto uploaded_constants = builder.Write(
+        upload,
+        scene_constants,
+        vr::render_graph::AccessDesc{
+            .access = vr::render_graph::AccessKind::transfer_write,
+            .buffer_range = {.offset_bytes = 128U, .size_bytes = 512U},
+        });
+    (void)builder.Read(
+        shade,
+        uploaded_constants,
+        vr::render_graph::AccessDesc{
+            .access = vr::render_graph::AccessKind::uniform_read,
+            .buffer_range = {.offset_bytes = 128U, .size_bytes = 512U},
+        });
+    const auto shaded_color = builder.Write(
+        shade,
+        scene_color,
+        vr::render_graph::AccessDesc{
+            .access = vr::render_graph::AccessKind::color_attachment_write,
+            .subresource_range = {.base_mip_level = 0U, .level_count = 1U, .base_array_layer = 0U, .layer_count = 1U},
+        });
+    (void)builder.Read(
+        present,
+        shaded_color,
+        vr::render_graph::AccessDesc{
+            .access = vr::render_graph::AccessKind::shader_sample_read,
+            .subresource_range = {.base_mip_level = 0U, .level_count = 1U, .base_array_layer = 0U, .layer_count = 1U},
+        });
+    (void)builder.Write(
+        present,
+        present_target,
+        vr::render_graph::AccessDesc{
+            .access = vr::render_graph::AccessKind::present,
+        });
+
+    const auto compiled = builder.Compile();
+
+    VR_REQUIRE(compiled.Passes().size() == 3U);
+    VR_CHECK(compiled.Passes()[0].queue == vr::render_graph::QueueClass::transfer);
+    VR_CHECK(compiled.Passes()[1].queue == vr::render_graph::QueueClass::graphics);
+    VR_CHECK(compiled.Passes()[2].queue == vr::render_graph::QueueClass::graphics);
+    VR_REQUIRE(compiled.Passes()[0].writes.size() == 1U);
+    VR_CHECK(compiled.Passes()[0].writes[0].access == vr::render_graph::AccessKind::transfer_write);
+    VR_CHECK(compiled.Passes()[0].writes[0].buffer_range.offset_bytes == 128U);
+    VR_CHECK(compiled.Passes()[0].writes[0].buffer_range.size_bytes == 512U);
+    VR_REQUIRE(compiled.Passes()[1].reads.size() == 1U);
+    VR_CHECK(compiled.Passes()[1].reads[0].access == vr::render_graph::AccessKind::uniform_read);
+    VR_CHECK(compiled.Passes()[1].reads[0].buffer_range.offset_bytes == 128U);
+    VR_CHECK(compiled.Passes()[1].reads[0].buffer_range.size_bytes == 512U);
+    VR_REQUIRE(compiled.Passes()[1].writes.size() == 1U);
+    VR_CHECK(compiled.Passes()[1].writes[0].access == vr::render_graph::AccessKind::color_attachment_write);
+    VR_CHECK(compiled.Passes()[1].writes[0].subresource_range.level_count == 1U);
+    VR_REQUIRE(compiled.Passes()[2].reads.size() == 1U);
+    VR_CHECK(compiled.Passes()[2].reads[0].access == vr::render_graph::AccessKind::shader_sample_read);
+    VR_REQUIRE(compiled.Passes()[2].writes.size() == 1U);
+    VR_CHECK(compiled.Passes()[2].writes[0].access == vr::render_graph::AccessKind::present);
 }
 
 VR_TEST_CASE(RenderGraphRuntimeService_is_registered_in_runtime_profile,
@@ -290,6 +385,9 @@ VR_TEST_CASE(RenderGraphRuntimeService_resets_frame_local_state_on_begin_frame,
     VR_CHECK(service.Builder().ResourceCount() == 0U);
     VR_CHECK(service.Builder().PassCount() == 0U);
     VR_CHECK(service.TryGetCompiledGraph() == nullptr);
+    VR_CHECK(service.PlannedVulkanBarriers().barrier_batches.empty());
+    VR_CHECK(service.PlannedCommandReadyVulkanBarriers().command_batches.empty());
+    VR_CHECK(service.PlannedCommandReadyVulkanBarriers().queue_transfer_batches.empty());
     VR_CHECK(!service.HasFrameSnapshot());
 }
 
@@ -416,6 +514,15 @@ VR_TEST_CASE(RenderGraphBuilder_builds_minimal_scene_overlay_present_chain,
     VR_CHECK(compiled.Passes()[0].debug_name == "main_scene_pass");
     VR_CHECK(compiled.Passes()[1].debug_name == "overlay_pass");
     VR_CHECK(compiled.Passes()[2].debug_name == "present_to_swapchain");
+    VR_REQUIRE(compiled.Passes()[0].writes.size() == 2U);
+    VR_CHECK(compiled.Passes()[0].writes[0].access == vr::render_graph::AccessKind::color_attachment_write);
+    VR_CHECK(compiled.Passes()[0].writes[1].access == vr::render_graph::AccessKind::depth_stencil_write);
+    VR_REQUIRE(compiled.Passes()[1].reads.size() == 1U);
+    VR_CHECK(compiled.Passes()[1].reads[0].access == vr::render_graph::AccessKind::shader_sample_read);
+    VR_REQUIRE(compiled.Passes()[2].reads.size() == 1U);
+    VR_CHECK(compiled.Passes()[2].reads[0].access == vr::render_graph::AccessKind::shader_sample_read);
+    VR_REQUIRE(compiled.Passes()[2].writes.size() == 1U);
+    VR_CHECK(compiled.Passes()[2].writes[0].access == vr::render_graph::AccessKind::present);
 }
 
 VR_TEST_CASE(RenderGraphBuilder_exports_dot_and_json,
@@ -427,10 +534,20 @@ VR_TEST_CASE(RenderGraphBuilder_exports_dot_and_json,
             .format = vr::render_graph::TextureFormat::r16g16b16a16_sfloat,
             .extent = {.width = 256U, .height = 256U, .depth = 1U},
         });
-    const auto main_pass = builder.AddPass("main_scene_pass");
-    const auto present_pass = builder.AddPass("present_to_swapchain", true);
-    const auto color_version = builder.Write(main_pass, color);
-    (void)builder.Read(present_pass, color_version);
+    const auto main_pass = builder.AddPass("main_scene_pass", false, vr::render_graph::QueueClass::graphics);
+    const auto present_pass = builder.AddPass("present_to_swapchain", true, vr::render_graph::QueueClass::graphics);
+    const auto color_version = builder.Write(
+        main_pass,
+        color,
+        vr::render_graph::AccessDesc{
+            .access = vr::render_graph::AccessKind::color_attachment_write,
+        });
+    (void)builder.Read(
+        present_pass,
+        color_version,
+        vr::render_graph::AccessDesc{
+            .access = vr::render_graph::AccessKind::shader_sample_read,
+        });
 
     const auto compiled = builder.Compile();
     const std::string dot = compiled.BuildDotGraph();
@@ -439,9 +556,12 @@ VR_TEST_CASE(RenderGraphBuilder_exports_dot_and_json,
     VR_CHECK(dot.find("digraph RenderGraph") != std::string::npos);
     VR_CHECK(dot.find("main_scene_pass") != std::string::npos);
     VR_CHECK(dot.find("present_to_swapchain") != std::string::npos);
+    VR_CHECK(dot.find("color_attachment_write") != std::string::npos);
     VR_CHECK(json.find("\"passes\"") != std::string::npos);
     VR_CHECK(json.find("\"livenessRanges\"") != std::string::npos);
     VR_CHECK(json.find("scene_color#v1") != std::string::npos);
+    VR_CHECK(json.find("\"queue\": \"graphics\"") != std::string::npos);
+    VR_CHECK(json.find("\"access\": \"shader_sample_read\"") != std::string::npos);
 }
 
 } // namespace

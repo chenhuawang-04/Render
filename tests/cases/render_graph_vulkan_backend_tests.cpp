@@ -1,6 +1,7 @@
 #include "support/test_framework.hpp"
 #include "vr/render/render_runtime_host.hpp"
 #include "vr/render_graph/frame_snapshot.hpp"
+#include "vr/render_graph/vulkan_barrier_plan.hpp"
 #include "vr/render_graph/vulkan_resource_table.hpp"
 #include "vr/runtime/services/render_graph_runtime_service.hpp"
 
@@ -138,6 +139,299 @@ VR_TEST_CASE(RenderGraphVulkanBackend_builds_vulkan_create_infos_from_graph_desc
     VR_CHECK((buffer_create_info.usage & VK_BUFFER_USAGE_TRANSFER_DST_BIT) != 0U);
     VR_CHECK((buffer_create_info.memory_properties & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0U);
     VR_CHECK(buffer_create_info.persistently_mapped);
+}
+
+VR_TEST_CASE(RenderGraphVulkanBackend_maps_access_kinds_to_sync2_metadata,
+             "unit;core;render_graph;vulkan") {
+    const vr::render_graph::CompiledResource color_resource{
+        .handle = {.index = 0U, .generation = 1U},
+        .debug_name = "scene_color",
+        .kind = vr::render_graph::ResourceKind::texture,
+        .lifetime = vr::render_graph::ResourceLifetime::transient,
+        .texture = {
+            .format = vr::render_graph::TextureFormat::r16g16b16a16_sfloat,
+            .extent = {.width = 64U, .height = 64U, .depth = 1U},
+            .usage = vr::render_graph::texture_usage_color_attachment_flag |
+                     vr::render_graph::texture_usage_sampled_flag,
+        },
+    };
+    const auto color_write = vr::render_graph::DescribeVulkanAccess(
+        color_resource,
+        vr::render_graph::AccessKind::color_attachment_write);
+    const auto sampled_read = vr::render_graph::DescribeVulkanAccess(
+        color_resource,
+        vr::render_graph::AccessKind::shader_sample_read);
+
+    VR_CHECK(color_write.image_layout == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+    VR_CHECK((color_write.stage_mask & VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT) != 0U);
+    VR_CHECK((color_write.access_mask & VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT) != 0U);
+    VR_CHECK(sampled_read.image_layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    VR_CHECK((sampled_read.access_mask & VK_ACCESS_2_SHADER_SAMPLED_READ_BIT) != 0U);
+
+    const vr::render_graph::CompiledResource depth_resource{
+        .handle = {.index = 1U, .generation = 1U},
+        .debug_name = "scene_depth",
+        .kind = vr::render_graph::ResourceKind::texture,
+        .lifetime = vr::render_graph::ResourceLifetime::transient,
+        .texture = {
+            .format = vr::render_graph::TextureFormat::d32_sfloat,
+            .extent = {.width = 64U, .height = 64U, .depth = 1U},
+            .usage = vr::render_graph::texture_usage_depth_stencil_attachment_flag |
+                     vr::render_graph::texture_usage_sampled_flag,
+        },
+    };
+    const auto depth_sampled = vr::render_graph::DescribeVulkanAccess(
+        depth_resource,
+        vr::render_graph::AccessKind::shader_sample_read);
+    VR_CHECK(depth_sampled.image_layout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
+
+    const vr::render_graph::CompiledResource buffer_resource{
+        .handle = {.index = 2U, .generation = 1U},
+        .debug_name = "scene_constants",
+        .kind = vr::render_graph::ResourceKind::buffer,
+        .lifetime = vr::render_graph::ResourceLifetime::persistent,
+        .buffer = {
+            .size_bytes = 1024U,
+            .usage = vr::render_graph::buffer_usage_uniform_flag |
+                     vr::render_graph::buffer_usage_transfer_dst_flag,
+        },
+    };
+    const auto transfer_write = vr::render_graph::DescribeVulkanAccess(
+        buffer_resource,
+        vr::render_graph::AccessKind::transfer_write);
+    const auto uniform_read = vr::render_graph::DescribeVulkanAccess(
+        buffer_resource,
+        vr::render_graph::AccessKind::uniform_read);
+    VR_CHECK((transfer_write.stage_mask & VK_PIPELINE_STAGE_2_TRANSFER_BIT) != 0U);
+    VR_CHECK((transfer_write.access_mask & VK_ACCESS_2_TRANSFER_WRITE_BIT) != 0U);
+    VR_CHECK((uniform_read.access_mask & VK_ACCESS_2_UNIFORM_READ_BIT) != 0U);
+}
+
+VR_TEST_CASE(RenderGraphVulkanBackend_lowers_logical_barriers_and_exports_dump,
+             "unit;core;render_graph;vulkan") {
+    vr::render_graph::RenderGraphBuilder builder{};
+    const auto scene_constants = builder.CreateBuffer(
+        "scene_constants",
+        vr::render_graph::BufferDesc{
+            .size_bytes = 2048U,
+            .usage = vr::render_graph::buffer_usage_uniform_flag |
+                     vr::render_graph::buffer_usage_transfer_dst_flag,
+        });
+    const auto scene_color = builder.CreateTexture(
+        "scene_color",
+        vr::render_graph::TextureDesc{
+            .format = vr::render_graph::TextureFormat::r16g16b16a16_sfloat,
+            .extent = {.width = 128U, .height = 72U, .depth = 1U},
+            .usage = vr::render_graph::texture_usage_color_attachment_flag |
+                     vr::render_graph::texture_usage_sampled_flag,
+        });
+    const auto present_target = builder.CreateTexture(
+        "present_target",
+        vr::render_graph::TextureDesc{
+            .format = vr::render_graph::TextureFormat::unknown,
+            .extent = {.width = 128U, .height = 72U, .depth = 1U},
+            .usage = vr::render_graph::texture_usage_color_attachment_flag |
+                     vr::render_graph::texture_usage_present_flag,
+        },
+        vr::render_graph::ResourceLifetime::imported);
+
+    const auto upload = builder.AddPass("upload_constants", false, vr::render_graph::QueueClass::transfer);
+    const auto shade = builder.AddPass("main_scene_pass", false, vr::render_graph::QueueClass::graphics);
+    const auto present = builder.AddPass("present_to_swapchain", true, vr::render_graph::QueueClass::graphics);
+
+    const auto uploaded = builder.Write(
+        upload,
+        scene_constants,
+        vr::render_graph::AccessDesc{
+            .access = vr::render_graph::AccessKind::transfer_write,
+            .buffer_range = {.offset_bytes = 64U, .size_bytes = 512U},
+        });
+    (void)builder.Read(
+        shade,
+        uploaded,
+        vr::render_graph::AccessDesc{
+            .access = vr::render_graph::AccessKind::uniform_read,
+            .buffer_range = {.offset_bytes = 64U, .size_bytes = 512U},
+        });
+    const auto shaded = builder.Write(
+        shade,
+        scene_color,
+        vr::render_graph::AccessDesc{
+            .access = vr::render_graph::AccessKind::color_attachment_write,
+            .subresource_range = {.base_mip_level = 0U, .level_count = 1U, .base_array_layer = 0U, .layer_count = 1U},
+        });
+    (void)builder.Read(
+        present,
+        shaded,
+        vr::render_graph::AccessDesc{
+            .access = vr::render_graph::AccessKind::shader_sample_read,
+            .subresource_range = {.base_mip_level = 0U, .level_count = 1U, .base_array_layer = 0U, .layer_count = 1U},
+        });
+    (void)builder.Write(
+        present,
+        present_target,
+        vr::render_graph::AccessDesc{.access = vr::render_graph::AccessKind::present});
+
+    const auto compiled = builder.Compile();
+
+    vr::QueueFamilyIndices queue_families{};
+    queue_families.graphics = 2U;
+    queue_families.compute = 5U;
+    queue_families.transfer = 7U;
+    const auto lowered = vr::render_graph::LowerToVulkanBarrierPlan(compiled, queue_families);
+    const std::string logical_json = compiled.PlannedBarriers().BuildJson();
+    const std::string lowered_json = lowered.BuildJson();
+    const std::string compiled_json = compiled.BuildJson();
+
+    VR_REQUIRE(lowered.barrier_batches.size() == 2U);
+    VR_REQUIRE(lowered.barrier_batches[0].barriers.size() == 1U);
+    VR_REQUIRE(lowered.barrier_batches[1].barriers.size() == 1U);
+
+    const auto& transfer_barrier = lowered.barrier_batches[0].barriers[0];
+    VR_CHECK(transfer_barrier.queue_transfer);
+    VR_CHECK(transfer_barrier.src_queue_family_index == 7U);
+    VR_CHECK(transfer_barrier.dst_queue_family_index == 2U);
+    VR_CHECK((transfer_barrier.src_stage_mask & VK_PIPELINE_STAGE_2_TRANSFER_BIT) != 0U);
+    VR_CHECK((transfer_barrier.dst_access_mask & VK_ACCESS_2_UNIFORM_READ_BIT) != 0U);
+
+    const auto& image_barrier = lowered.barrier_batches[1].barriers[0];
+    VR_CHECK(!image_barrier.queue_transfer);
+    VR_CHECK(image_barrier.old_layout == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+    VR_CHECK(image_barrier.new_layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    VR_CHECK(image_barrier.src_queue_family_index == VK_QUEUE_FAMILY_IGNORED);
+    VR_CHECK(image_barrier.dst_queue_family_index == VK_QUEUE_FAMILY_IGNORED);
+
+    VR_CHECK(logical_json.find("\"queueTransfer\": true") != std::string::npos);
+    VR_CHECK(logical_json.find("\"barrierBatches\"") != std::string::npos);
+    VR_CHECK(lowered_json.find("\"oldLayout\": \"color_attachment_optimal\"") != std::string::npos);
+    VR_CHECK(lowered_json.find("\"newLayout\": \"shader_read_only_optimal\"") != std::string::npos);
+    VR_CHECK(lowered_json.find("\"srcQueueFamilyIndex\": 7") != std::string::npos);
+    VR_CHECK(compiled_json.find("\"barrierPlan\"") != std::string::npos);
+}
+
+VR_TEST_CASE(RenderGraphVulkanBackend_builds_command_ready_barrier_batches_from_physical_resources,
+             "integration;render_graph;vulkan") {
+    Host host{};
+    try {
+        host.Initialize(MakeMinimalRenderTargetRuntimeCreateInfo());
+    } catch (const std::exception& exception_) {
+        if (IsEnvironmentSkipError(exception_.what())) {
+            VR_SKIP(exception_.what());
+        }
+        throw;
+    }
+
+    host.EnsureSwapchainTargetsForFrame(0U, 0U);
+    const auto imported_present = host.SwapchainTargets().Get(0U);
+    VR_REQUIRE(vr::render::IsValidRenderTargetHandle(imported_present));
+
+    vr::render_graph::RenderGraphBuilder builder{};
+    const auto scene_constants = builder.CreateBuffer(
+        "scene_constants",
+        vr::render_graph::BufferDesc{
+            .size_bytes = 2048U,
+            .usage = vr::render_graph::buffer_usage_uniform_flag |
+                     vr::render_graph::buffer_usage_transfer_dst_flag,
+        });
+    const auto scene_color = builder.CreateTexture(
+        "scene_color",
+        vr::render_graph::TextureDesc{
+            .format = vr::render_graph::TextureFormat::r16g16b16a16_sfloat,
+            .extent = {.width = 128U, .height = 72U, .depth = 1U},
+            .usage = vr::render_graph::texture_usage_color_attachment_flag |
+                     vr::render_graph::texture_usage_sampled_flag,
+        });
+    const auto present_target = builder.CreateTexture(
+        "present_target",
+        vr::render_graph::TextureDesc{
+            .format = vr::render_graph::TextureFormat::unknown,
+            .extent = {.width = 128U, .height = 72U, .depth = 1U},
+            .usage = vr::render_graph::texture_usage_color_attachment_flag |
+                     vr::render_graph::texture_usage_present_flag,
+        },
+        vr::render_graph::ResourceLifetime::imported);
+
+    const auto upload = builder.AddPass("upload_constants", false, vr::render_graph::QueueClass::transfer);
+    const auto shade = builder.AddPass("main_scene_pass", false, vr::render_graph::QueueClass::graphics);
+    const auto present = builder.AddPass("present_to_swapchain", true, vr::render_graph::QueueClass::graphics);
+
+    const auto uploaded = builder.Write(
+        upload,
+        scene_constants,
+        vr::render_graph::AccessDesc{
+            .access = vr::render_graph::AccessKind::transfer_write,
+            .buffer_range = {.offset_bytes = 64U, .size_bytes = 512U},
+        });
+    const auto shaded = builder.Write(
+        shade,
+        scene_color,
+        vr::render_graph::AccessDesc{
+            .access = vr::render_graph::AccessKind::color_attachment_write,
+            .subresource_range = {.base_mip_level = 0U, .level_count = 1U, .base_array_layer = 0U, .layer_count = 1U},
+        });
+    (void)builder.Read(
+        shade,
+        uploaded,
+        vr::render_graph::AccessDesc{
+            .access = vr::render_graph::AccessKind::uniform_read,
+            .buffer_range = {.offset_bytes = 64U, .size_bytes = 512U},
+        });
+    (void)builder.Read(
+        present,
+        shaded,
+        vr::render_graph::AccessDesc{
+            .access = vr::render_graph::AccessKind::shader_sample_read,
+            .subresource_range = {.base_mip_level = 0U, .level_count = 1U, .base_array_layer = 0U, .layer_count = 1U},
+        });
+    (void)builder.Write(
+        present,
+        present_target,
+        vr::render_graph::AccessDesc{.access = vr::render_graph::AccessKind::present});
+
+    const auto compiled = builder.Compile();
+    vr::QueueFamilyIndices queue_families{};
+    queue_families.graphics = 2U;
+    queue_families.compute = 5U;
+    queue_families.transfer = 7U;
+    const auto lowered = vr::render_graph::LowerToVulkanBarrierPlan(compiled, queue_families);
+
+    vr::render_graph::VulkanResourceTable table{};
+    table.BeginFrame(host.Context(), host.RenderTarget(), 0U, 0U);
+    table.RegisterImportedTexture(present_target, imported_present);
+    table.Resolve(host.Context(), host.GpuMemory(), host.RenderTarget(), compiled, 0U, 0U);
+
+    const auto command_ready = vr::render_graph::BuildCommandReadyVulkanBarrierPlan(
+        lowered,
+        table,
+        host.RenderTarget());
+    const std::string command_json = command_ready.BuildJson();
+
+    VR_REQUIRE(command_ready.command_batches.size() == 1U);
+    VR_REQUIRE(command_ready.queue_transfer_batches.size() == 1U);
+    const auto command_dependency = command_ready.command_batches[0].dependency.BuildVkDependencyInfo();
+    VR_CHECK(command_dependency.imageMemoryBarrierCount == 1U);
+    VR_CHECK(command_dependency.bufferMemoryBarrierCount == 0U);
+    const auto& image_barrier = command_ready.command_batches[0].dependency.image_barriers[0];
+    VR_CHECK(image_barrier.image != VK_NULL_HANDLE);
+    VR_CHECK(image_barrier.oldLayout == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+    VR_CHECK(image_barrier.newLayout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+
+    const auto& transfer_batch = command_ready.queue_transfer_batches[0];
+    const auto release_dependency = transfer_batch.release_dependency.BuildVkDependencyInfo();
+    const auto acquire_dependency = transfer_batch.acquire_dependency.BuildVkDependencyInfo();
+    VR_CHECK(release_dependency.bufferMemoryBarrierCount == 1U);
+    VR_CHECK(acquire_dependency.bufferMemoryBarrierCount == 1U);
+    VR_REQUIRE(!transfer_batch.release_dependency.buffer_barriers.empty());
+    VR_REQUIRE(!transfer_batch.acquire_dependency.buffer_barriers.empty());
+    VR_CHECK(transfer_batch.release_dependency.buffer_barriers[0].buffer != VK_NULL_HANDLE);
+    VR_CHECK(transfer_batch.release_dependency.buffer_barriers[0].srcQueueFamilyIndex == 7U);
+    VR_CHECK(transfer_batch.release_dependency.buffer_barriers[0].dstQueueFamilyIndex == 2U);
+    VR_CHECK((transfer_batch.release_dependency.buffer_barriers[0].srcAccessMask & VK_ACCESS_2_TRANSFER_WRITE_BIT) != 0U);
+    VR_CHECK((transfer_batch.acquire_dependency.buffer_barriers[0].dstAccessMask & VK_ACCESS_2_UNIFORM_READ_BIT) != 0U);
+    VR_CHECK(command_json.find("\"queueTransferBatches\"") != std::string::npos);
+    VR_CHECK(command_json.find("\"bufferBarrierCount\": 1") != std::string::npos);
+
+    table.Shutdown(host.Context(), host.RenderTarget(), 0U, 0U);
 }
 
 VR_TEST_CASE(RenderGraphVulkanBackend_resolves_imported_and_owned_resources,
@@ -305,6 +599,10 @@ VR_TEST_CASE(RenderGraphVulkanBackend_runtime_service_resolves_physical_resource
     const auto* present_physical = service.PhysicalResources().FindTexture(present_resource->handle);
     const auto* scene_color_physical = service.PhysicalResources().FindTexture(scene_color_resource->handle);
     const auto* scene_depth_physical = service.PhysicalResources().FindTexture(scene_depth_resource->handle);
+    const auto& lowered_barriers = service.PlannedVulkanBarriers();
+    const auto& command_ready_barriers = service.PlannedCommandReadyVulkanBarriers();
+    const std::string lowered_json = lowered_barriers.BuildJson();
+    const std::string command_ready_json = command_ready_barriers.BuildJson();
 
     VR_REQUIRE(present_physical != nullptr);
     VR_REQUIRE(scene_color_physical != nullptr);
@@ -313,6 +611,11 @@ VR_TEST_CASE(RenderGraphVulkanBackend_runtime_service_resolves_physical_resource
     VR_CHECK(vr::render::IsValidRenderTargetHandle(present_physical->render_target));
     VR_CHECK(vr::render::IsValidRenderTargetHandle(scene_color_physical->render_target));
     VR_CHECK(vr::render::IsValidRenderTargetHandle(scene_depth_physical->render_target));
+    VR_REQUIRE(!lowered_barriers.barrier_batches.empty());
+    VR_REQUIRE(!command_ready_barriers.command_batches.empty());
+    VR_CHECK(lowered_json.find("\"barrierBatches\"") != std::string::npos);
+    VR_CHECK(lowered_json.find("\"oldLayout\": \"color_attachment_optimal\"") != std::string::npos);
+    VR_CHECK(command_ready_json.find("\"commandBatches\"") != std::string::npos);
 }
 
 VR_TEST_CASE(RenderGraphVulkanBackend_resolves_imported_buffers,

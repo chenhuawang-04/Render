@@ -40,6 +40,66 @@ namespace {
     return "unknown";
 }
 
+[[nodiscard]] const char* QueueClassToString(const QueueClass queue_) noexcept {
+    switch (queue_) {
+    case QueueClass::graphics:
+        return "graphics";
+    case QueueClass::compute:
+        return "compute";
+    case QueueClass::transfer:
+        return "transfer";
+    default:
+        break;
+    }
+    return "unknown";
+}
+
+[[nodiscard]] const char* AccessKindToString(const AccessKind access_) noexcept {
+    switch (access_) {
+    case AccessKind::none:
+        return "none";
+    case AccessKind::color_attachment_read:
+        return "color_attachment_read";
+    case AccessKind::color_attachment_write:
+        return "color_attachment_write";
+    case AccessKind::depth_stencil_read:
+        return "depth_stencil_read";
+    case AccessKind::depth_stencil_write:
+        return "depth_stencil_write";
+    case AccessKind::depth_stencil_read_write:
+        return "depth_stencil_read_write";
+    case AccessKind::shader_sample_read:
+        return "shader_sample_read";
+    case AccessKind::shader_storage_read:
+        return "shader_storage_read";
+    case AccessKind::shader_storage_write:
+        return "shader_storage_write";
+    case AccessKind::shader_storage_read_write:
+        return "shader_storage_read_write";
+    case AccessKind::uniform_read:
+        return "uniform_read";
+    case AccessKind::vertex_buffer_read:
+        return "vertex_buffer_read";
+    case AccessKind::index_buffer_read:
+        return "index_buffer_read";
+    case AccessKind::indirect_command_read:
+        return "indirect_command_read";
+    case AccessKind::transfer_read:
+        return "transfer_read";
+    case AccessKind::transfer_write:
+        return "transfer_write";
+    case AccessKind::present:
+        return "present";
+    case AccessKind::host_read:
+        return "host_read";
+    case AccessKind::host_write:
+        return "host_write";
+    default:
+        break;
+    }
+    return "unknown";
+}
+
 [[nodiscard]] std::string EscapeJsonString(const std::string& value_) {
     std::ostringstream oss{};
     for (const char character_ : value_) {
@@ -94,7 +154,7 @@ namespace {
     return oss.str();
 }
 
-const CompiledResourceVersionLiveness* FindLivenessRange(
+[[nodiscard]] const CompiledResourceVersionLiveness* FindLivenessRange(
     const std::vector<CompiledResourceVersionLiveness>& liveness_ranges_,
     const ResourceVersionHandle version_) {
     for (const auto& range_ : liveness_ranges_) {
@@ -104,6 +164,64 @@ const CompiledResourceVersionLiveness* FindLivenessRange(
         }
     }
     return nullptr;
+}
+
+[[nodiscard]] constexpr bool HasExplicitSubresourceRange(const SubresourceRange& range_) noexcept {
+    return range_.level_count != 0U || range_.layer_count != 0U;
+}
+
+[[nodiscard]] constexpr bool HasExplicitBufferRange(const BufferRange& range_) noexcept {
+    return range_.offset_bytes != 0U || range_.size_bytes != 0U;
+}
+
+[[nodiscard]] AccessDesc BindAccessDesc(const ResourceVersionHandle version_,
+                                        const ResourceKind kind_,
+                                        const AccessDesc& access_) noexcept {
+    AccessDesc bound = access_;
+    bound.resource = version_;
+    if (kind_ == ResourceKind::texture) {
+        bound.buffer_range = {};
+    } else {
+        bound.subresource_range = {};
+    }
+    return bound;
+}
+
+void AppendJsonAccessDesc(std::ostringstream& oss_,
+                          const AccessDesc& access_,
+                          const ResourceKind kind_) {
+    oss_ << "{\"resourceIndex\": " << access_.resource.resource_index
+         << ", \"version\": " << access_.resource.version
+         << ", \"access\": \"" << AccessKindToString(access_.access) << "\"";
+    if (kind_ == ResourceKind::texture) {
+        oss_ << ", \"subresourceRange\": {"
+             << "\"baseMipLevel\": " << access_.subresource_range.base_mip_level
+             << ", \"levelCount\": " << access_.subresource_range.level_count
+             << ", \"baseArrayLayer\": " << access_.subresource_range.base_array_layer
+             << ", \"layerCount\": " << access_.subresource_range.layer_count << "}";
+    } else {
+        oss_ << ", \"bufferRange\": {"
+             << "\"offsetBytes\": " << access_.buffer_range.offset_bytes
+             << ", \"sizeBytes\": " << access_.buffer_range.size_bytes << "}";
+    }
+    oss_ << '}';
+}
+
+[[nodiscard]] std::string BuildAccessDotLabel(const AccessDesc& access_,
+                                              const ResourceKind kind_) {
+    std::ostringstream oss{};
+    oss << AccessKindToString(access_.access);
+    if (kind_ == ResourceKind::texture && HasExplicitSubresourceRange(access_.subresource_range)) {
+        oss << "\\nmip=" << access_.subresource_range.base_mip_level
+            << "+" << access_.subresource_range.level_count
+            << " layer=" << access_.subresource_range.base_array_layer
+            << "+" << access_.subresource_range.layer_count;
+    }
+    if (kind_ == ResourceKind::buffer && HasExplicitBufferRange(access_.buffer_range)) {
+        oss << "\\noffset=" << access_.buffer_range.offset_bytes
+            << " size=" << access_.buffer_range.size_bytes;
+    }
+    return oss.str();
 }
 
 } // namespace
@@ -135,6 +253,7 @@ std::string CompiledRenderGraph::BuildDebugString() const {
         if (pass_.side_effect) {
             oss << " side_effect";
         }
+        oss << " queue=" << QueueClassToString(pass_.queue);
         oss << " deps=";
         for (std::size_t dep_index = 0; dep_index < pass_.dependencies.size(); ++dep_index) {
             if (dep_index != 0U) {
@@ -153,6 +272,7 @@ std::string CompiledRenderGraph::BuildDebugString() const {
             << " last=" << range_.last_pass_order << '\n';
     }
 
+    oss << barrier_plan.BuildDebugString();
     return oss.str();
 }
 
@@ -168,6 +288,7 @@ std::string CompiledRenderGraph::BuildDotGraph() const {
         if (pass_.side_effect) {
             oss << "\\nside_effect";
         }
+        oss << "\\nqueue=" << QueueClassToString(pass_.queue);
         oss << "\"];\n";
     }
 
@@ -186,16 +307,18 @@ std::string CompiledRenderGraph::BuildDotGraph() const {
             oss << "  pass_" << dependency_.index << " -> pass_" << pass_.handle.index
                 << " [style=dashed,label=\"dep\"];\n";
         }
-        for (const auto read_ : pass_.reads) {
-            if (FindLivenessRange(liveness_ranges, read_) != nullptr) {
-                oss << "  " << MakeResourceNodeId(read_) << " -> pass_" << pass_.handle.index
-                    << " [label=\"read\"];\n";
+        for (const auto& read_ : pass_.reads) {
+            if (const auto* liveness_ = FindLivenessRange(liveness_ranges, read_.resource);
+                liveness_ != nullptr) {
+                oss << "  " << MakeResourceNodeId(read_.resource) << " -> pass_" << pass_.handle.index
+                    << " [label=\"" << BuildAccessDotLabel(read_, liveness_->kind) << "\"];\n";
             }
         }
-        for (const auto write_ : pass_.writes) {
-            if (FindLivenessRange(liveness_ranges, write_) != nullptr) {
-                oss << "  pass_" << pass_.handle.index << " -> " << MakeResourceNodeId(write_)
-                    << " [label=\"write\"];\n";
+        for (const auto& write_ : pass_.writes) {
+            if (const auto* liveness_ = FindLivenessRange(liveness_ranges, write_.resource);
+                liveness_ != nullptr) {
+                oss << "  pass_" << pass_.handle.index << " -> " << MakeResourceNodeId(write_.resource)
+                    << " [label=\"" << BuildAccessDotLabel(write_, liveness_->kind) << "\"];\n";
             }
         }
     }
@@ -239,6 +362,7 @@ std::string CompiledRenderGraph::BuildJson() const {
         oss << "      \"index\": " << pass_.handle.index << ",\n";
         oss << "      \"name\": \"" << EscapeJsonString(pass_.debug_name) << "\",\n";
         oss << "      \"sideEffect\": " << (pass_.side_effect ? "true" : "false") << ",\n";
+        oss << "      \"queue\": \"" << QueueClassToString(pass_.queue) << "\",\n";
 
         oss << "      \"dependencies\": [";
         for (std::size_t dep_index = 0; dep_index < pass_.dependencies.size(); ++dep_index) {
@@ -251,23 +375,31 @@ std::string CompiledRenderGraph::BuildJson() const {
 
         oss << "      \"reads\": [";
         for (std::size_t read_index = 0; read_index < pass_.reads.size(); ++read_index) {
-            const auto read_ = pass_.reads[read_index];
+            const auto& read_ = pass_.reads[read_index];
             if (read_index != 0U) {
                 oss << ", ";
             }
-            oss << "{\"resourceIndex\": " << read_.resource_index
-                << ", \"version\": " << read_.version << "}";
+            const auto* resource_ = FindResource(ResourceHandle{
+                .index = read_.resource.resource_index,
+                .generation = 1U,
+            });
+            const ResourceKind kind = (resource_ != nullptr) ? resource_->kind : ResourceKind::buffer;
+            AppendJsonAccessDesc(oss, read_, kind);
         }
         oss << "],\n";
 
         oss << "      \"writes\": [";
         for (std::size_t write_index = 0; write_index < pass_.writes.size(); ++write_index) {
-            const auto write_ = pass_.writes[write_index];
+            const auto& write_ = pass_.writes[write_index];
             if (write_index != 0U) {
                 oss << ", ";
             }
-            oss << "{\"resourceIndex\": " << write_.resource_index
-                << ", \"version\": " << write_.version << "}";
+            const auto* resource_ = FindResource(ResourceHandle{
+                .index = write_.resource.resource_index,
+                .generation = 1U,
+            });
+            const ResourceKind kind = (resource_ != nullptr) ? resource_->kind : ResourceKind::buffer;
+            AppendJsonAccessDesc(oss, write_, kind);
         }
         oss << "]\n";
         oss << "    }";
@@ -295,7 +427,8 @@ std::string CompiledRenderGraph::BuildJson() const {
         }
         oss << '\n';
     }
-    oss << "  ]\n";
+    oss << "  ],\n";
+    oss << "  \"barrierPlan\": " << barrier_plan.BuildJson() << "\n";
     oss << "}\n";
     return oss.str();
 }
@@ -333,46 +466,76 @@ ResourceHandle RenderGraphBuilder::CreateBuffer(std::string_view debug_name_,
 }
 
 PassHandle RenderGraphBuilder::AddPass(std::string_view debug_name_,
-                                       const bool side_effect_) {
+                                       const bool side_effect_,
+                                       const QueueClass queue_) {
     PassNode pass{};
     pass.handle = PassHandle{.index = static_cast<std::uint32_t>(passes.size())};
     pass.debug_name = std::string(debug_name_);
     pass.side_effect = side_effect_;
+    pass.queue = queue_;
     passes.push_back(std::move(pass));
     return passes.back().handle;
 }
 
 ResourceVersionHandle RenderGraphBuilder::Read(const PassHandle pass_,
                                                const ResourceHandle resource_) {
+    return Read(pass_, resource_, AccessDesc{});
+}
+
+ResourceVersionHandle RenderGraphBuilder::Read(const PassHandle pass_,
+                                               const ResourceHandle resource_,
+                                               const AccessDesc& access_) {
     const ResourceNode& resource = RequireResource(resource_);
-    return Read(pass_, ResourceVersionHandle{
-        .resource_index = resource_.index,
-        .version = resource.latest_version,
-    });
+    return Read(pass_,
+                ResourceVersionHandle{
+                    .resource_index = resource_.index,
+                    .version = resource.latest_version,
+                },
+                access_);
 }
 
 ResourceVersionHandle RenderGraphBuilder::Read(const PassHandle pass_,
                                                const ResourceVersionHandle version_) {
+    return Read(pass_, version_, AccessDesc{});
+}
+
+ResourceVersionHandle RenderGraphBuilder::Read(const PassHandle pass_,
+                                               const ResourceVersionHandle version_,
+                                               const AccessDesc& access_) {
     PassNode& pass = RequirePass(pass_);
-    (void)RequireVersion(version_);
+    const ResourceNode& resource = RequireVersion(version_);
 
     auto& version_node = resources[version_.resource_index].versions[version_.version];
     AppendUnique(version_node.consumers, pass_);
-    AppendUnique(pass.reads, version_);
+    AppendUnique(pass.reads, BindAccessDesc(version_, resource.kind, access_));
     return version_;
 }
 
 ResourceVersionHandle RenderGraphBuilder::Write(const PassHandle pass_,
                                                 const ResourceHandle resource_) {
+    return Write(pass_, resource_, AccessDesc{});
+}
+
+ResourceVersionHandle RenderGraphBuilder::Write(const PassHandle pass_,
+                                                const ResourceHandle resource_,
+                                                const AccessDesc& access_) {
     const ResourceNode& resource = RequireResource(resource_);
-    return Write(pass_, ResourceVersionHandle{
-        .resource_index = resource_.index,
-        .version = resource.latest_version,
-    });
+    return Write(pass_,
+                 ResourceVersionHandle{
+                     .resource_index = resource_.index,
+                     .version = resource.latest_version,
+                 },
+                 access_);
 }
 
 ResourceVersionHandle RenderGraphBuilder::Write(const PassHandle pass_,
                                                 const ResourceVersionHandle version_) {
+    return Write(pass_, version_, AccessDesc{});
+}
+
+ResourceVersionHandle RenderGraphBuilder::Write(const PassHandle pass_,
+                                                const ResourceVersionHandle version_,
+                                                const AccessDesc& access_) {
     PassNode& pass = RequirePass(pass_);
     (void)RequireVersion(version_);
 
@@ -382,7 +545,8 @@ ResourceVersionHandle RenderGraphBuilder::Write(const PassHandle pass_,
             "RenderGraphBuilder::Write currently requires the latest resource version");
     }
 
-    (void)Read(pass_, version_);
+    auto& input_version = resource.versions[version_.version];
+    AppendUnique(input_version.consumers, pass_);
 
     const ResourceVersionHandle output_version{
         .resource_index = version_.resource_index,
@@ -393,6 +557,7 @@ ResourceVersionHandle RenderGraphBuilder::Write(const PassHandle pass_,
     pass.writes.push_back(WriteRecord{
         .input = version_,
         .output = output_version,
+        .access = BindAccessDesc(output_version, resource.kind, access_),
     });
     return output_version;
 }
@@ -406,8 +571,8 @@ CompiledRenderGraph RenderGraphBuilder::Compile() const {
     std::vector<std::vector<PassHandle>> dependencies(passes.size());
     for (const auto& pass_ : passes) {
         auto& pass_dependencies = dependencies[pass_.handle.index];
-        for (const auto read_ : pass_.reads) {
-            const auto& version_node = resources[read_.resource_index].versions[read_.version];
+        for (const auto& read_ : pass_.reads) {
+            const auto& version_node = resources[read_.resource.resource_index].versions[read_.resource.version];
             if (IsValidPassHandle(version_node.producer) &&
                 version_node.producer.index != pass_.handle.index) {
                 AppendUnique(pass_dependencies, version_node.producer);
@@ -519,6 +684,7 @@ CompiledRenderGraph RenderGraphBuilder::Compile() const {
         compiled_pass.handle = handle_;
         compiled_pass.debug_name = pass_.debug_name;
         compiled_pass.side_effect = pass_.side_effect;
+        compiled_pass.queue = pass_.queue;
         compiled_pass.reads = pass_.reads;
         for (const auto dependency_ : dependencies[handle_.index]) {
             if (active[dependency_.index]) {
@@ -526,7 +692,7 @@ CompiledRenderGraph RenderGraphBuilder::Compile() const {
             }
         }
         for (const auto& write_ : pass_.writes) {
-            compiled_pass.writes.push_back(write_.output);
+            compiled_pass.writes.push_back(write_.access);
         }
         compiled.passes.push_back(std::move(compiled_pass));
     }
@@ -592,6 +758,7 @@ CompiledRenderGraph RenderGraphBuilder::Compile() const {
         }
     }
 
+    compiled.barrier_plan = BuildBarrierPlan(compiled);
     return compiled;
 }
 
@@ -656,13 +823,20 @@ void RenderGraphBuilder::AppendUnique(std::vector<PassHandle>& values_,
     }
 }
 
-void RenderGraphBuilder::AppendUnique(std::vector<ResourceVersionHandle>& values_,
-                                      const ResourceVersionHandle value_) {
+void RenderGraphBuilder::AppendUnique(std::vector<AccessDesc>& values_,
+                                      const AccessDesc& value_) {
     const auto existing = std::find_if(values_.begin(),
                                        values_.end(),
-                                       [&](const ResourceVersionHandle current_) {
-                                           return current_.resource_index == value_.resource_index &&
-                                                  current_.version == value_.version;
+                                       [&](const AccessDesc& current_) {
+                                           return current_.resource.resource_index == value_.resource.resource_index &&
+                                                  current_.resource.version == value_.resource.version &&
+                                                  current_.access == value_.access &&
+                                                  current_.subresource_range.base_mip_level == value_.subresource_range.base_mip_level &&
+                                                  current_.subresource_range.level_count == value_.subresource_range.level_count &&
+                                                  current_.subresource_range.base_array_layer == value_.subresource_range.base_array_layer &&
+                                                  current_.subresource_range.layer_count == value_.subresource_range.layer_count &&
+                                                  current_.buffer_range.offset_bytes == value_.buffer_range.offset_bytes &&
+                                                  current_.buffer_range.size_bytes == value_.buffer_range.size_bytes;
                                        });
     if (existing == values_.end()) {
         values_.push_back(value_);

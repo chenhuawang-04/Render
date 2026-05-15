@@ -1,5 +1,6 @@
 #pragma once
 
+#include "vr/render_graph/barrier_plan.hpp"
 #include "vr/render_graph/render_graph_types.hpp"
 
 #include <string>
@@ -11,9 +12,10 @@ struct CompiledPass final {
     PassHandle handle{};
     std::string debug_name{};
     bool side_effect = false;
+    QueueClass queue = QueueClass::graphics;
     std::vector<PassHandle> dependencies{};
-    std::vector<ResourceVersionHandle> reads{};
-    std::vector<ResourceVersionHandle> writes{};
+    std::vector<AccessDesc> reads{};
+    std::vector<AccessDesc> writes{};
 };
 
 struct CompiledResource final {
@@ -56,6 +58,10 @@ public:
         return liveness_ranges;
     }
 
+    [[nodiscard]] const BarrierPlan& PlannedBarriers() const noexcept {
+        return barrier_plan;
+    }
+
     [[nodiscard]] const CompiledPass* FindPass(PassHandle handle_) const noexcept;
     [[nodiscard]] const CompiledResource* FindResource(ResourceHandle handle_) const noexcept;
     [[nodiscard]] std::string BuildDebugString() const;
@@ -69,6 +75,7 @@ private:
     std::vector<CompiledResource> resources{};
     std::vector<PassHandle> execution_order{};
     std::vector<CompiledResourceVersionLiveness> liveness_ranges{};
+    BarrierPlan barrier_plan{};
 };
 
 } // namespace vr::render_graph

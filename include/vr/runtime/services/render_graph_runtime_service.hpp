@@ -3,6 +3,7 @@
 #include "vr/render_graph/frame_graph_build.hpp"
 #include "vr/render_graph/frame_snapshot.hpp"
 #include "vr/render_graph/render_graph_builder.hpp"
+#include "vr/render_graph/vulkan_barrier_plan.hpp"
 #include "vr/render_graph/vulkan_resource_table.hpp"
 #include "vr/runtime/runtime_service.hpp"
 #include "vr/runtime/service_dependency.hpp"
@@ -40,6 +41,8 @@ public:
         frame_index = frame_index_;
         builder.Reset();
         compiled_graph = {};
+        lowered_vulkan_barriers = {};
+        command_ready_vulkan_barriers = {};
         has_compiled_graph = false;
         frame_snapshot = std::monostate{};
     }
@@ -51,6 +54,8 @@ public:
     void PreRecord(ContextT& context_) {
         builder.Reset();
         compiled_graph = {};
+        lowered_vulkan_barriers = {};
+        command_ready_vulkan_barriers = {};
         has_compiled_graph = false;
 
         if (const auto* snapshot_2d = TryGetFrameSnapshot<ecs::Dim2>();
@@ -64,6 +69,14 @@ public:
         if (builder.PassCount() != 0U) {
             SetCompiledGraph(builder.Compile());
             ResolvePhysicalResources(context_);
+            lowered_vulkan_barriers = render_graph::LowerToVulkanBarrierPlan(
+                compiled_graph,
+                vr::runtime::detail::ResolveDevice(context_).QueueFamilies());
+            auto& services = vr::runtime::detail::ResolveServices(context_);
+            command_ready_vulkan_barriers = render_graph::BuildCommandReadyVulkanBarrierPlan(
+                lowered_vulkan_barriers,
+                physical_resources,
+                services.template Get<RenderTargetService>().Host());
         }
     }
 
@@ -113,6 +126,14 @@ public:
         return physical_resources;
     }
 
+    [[nodiscard]] const render_graph::VulkanBarrierPlan& PlannedVulkanBarriers() const noexcept {
+        return lowered_vulkan_barriers;
+    }
+
+    [[nodiscard]] const render_graph::VulkanCommandReadyPlan& PlannedCommandReadyVulkanBarriers() const noexcept {
+        return command_ready_vulkan_barriers;
+    }
+
 private:
     template<typename ContextT>
     void ResolvePhysicalResources(ContextT& context_) {
@@ -157,6 +178,8 @@ private:
     std::uint32_t frame_index = invalid_frame_index;
     render_graph::RenderGraphBuilder builder{};
     render_graph::CompiledRenderGraph compiled_graph{};
+    render_graph::VulkanBarrierPlan lowered_vulkan_barriers{};
+    render_graph::VulkanCommandReadyPlan command_ready_vulkan_barriers{};
     render_graph::VulkanResourceTable physical_resources{};
     bool has_compiled_graph = false;
     FrameSnapshotVariant frame_snapshot{};

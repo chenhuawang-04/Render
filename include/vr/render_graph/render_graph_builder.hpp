@@ -22,13 +22,26 @@ public:
                                                   ResourceLifetime::transient);
 
     [[nodiscard]] PassHandle AddPass(std::string_view debug_name_,
-                                     bool side_effect_ = false);
+                                     bool side_effect_ = false,
+                                     QueueClass queue_ = QueueClass::graphics);
 
     [[nodiscard]] ResourceVersionHandle Read(PassHandle pass_, ResourceHandle resource_);
+    [[nodiscard]] ResourceVersionHandle Read(PassHandle pass_,
+                                             ResourceHandle resource_,
+                                             const AccessDesc& access_);
     [[nodiscard]] ResourceVersionHandle Read(PassHandle pass_, ResourceVersionHandle version_);
+    [[nodiscard]] ResourceVersionHandle Read(PassHandle pass_,
+                                             ResourceVersionHandle version_,
+                                             const AccessDesc& access_);
 
     [[nodiscard]] ResourceVersionHandle Write(PassHandle pass_, ResourceHandle resource_);
+    [[nodiscard]] ResourceVersionHandle Write(PassHandle pass_,
+                                              ResourceHandle resource_,
+                                              const AccessDesc& access_);
     [[nodiscard]] ResourceVersionHandle Write(PassHandle pass_, ResourceVersionHandle version_);
+    [[nodiscard]] ResourceVersionHandle Write(PassHandle pass_,
+                                              ResourceVersionHandle version_,
+                                              const AccessDesc& access_);
 
     [[nodiscard]] CompiledRenderGraph Compile() const;
 
@@ -61,13 +74,15 @@ private:
     struct WriteRecord final {
         ResourceVersionHandle input{};
         ResourceVersionHandle output{};
+        AccessDesc access{};
     };
 
     struct PassNode final {
         PassHandle handle{};
         std::string debug_name{};
         bool side_effect = false;
-        std::vector<ResourceVersionHandle> reads{};
+        QueueClass queue = QueueClass::graphics;
+        std::vector<AccessDesc> reads{};
         std::vector<WriteRecord> writes{};
     };
 
@@ -78,8 +93,7 @@ private:
     [[nodiscard]] const PassNode& RequirePass(PassHandle handle_) const;
 
     static void AppendUnique(std::vector<PassHandle>& values_, PassHandle value_);
-    static void AppendUnique(std::vector<ResourceVersionHandle>& values_,
-                             ResourceVersionHandle value_);
+    static void AppendUnique(std::vector<AccessDesc>& values_, const AccessDesc& value_);
 
 private:
     std::vector<ResourceNode> resources{};
