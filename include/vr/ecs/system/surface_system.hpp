@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "vr/ecs/component/surface_component.hpp"
 #include "vr/ecs/system/transparency_render_policy.hpp"
@@ -98,20 +98,14 @@ public:
     }
 
     static void SetDefaultRuntime(SurfaceType& component_) noexcept {
-        component_.runtime.route.sort_key = 0U;
+        InitializeVisualRuntimeRouteCommon(
+            component_.runtime.route,
+            std::same_as<DimensionT, Dim2> ? SurfaceRenderPassHint::overlay
+                                           : SurfaceRenderPassHint::opaque,
+            surface_dirty_source_flag |
+                surface_dirty_style_flag |
+                surface_dirty_runtime_flag);
         component_.runtime.route.surface_id = 0U;
-        component_.runtime.route.visual_resource_id = 0U;
-        component_.runtime.route.batch_tag = 0U;
-        component_.runtime.route.user_data = 0U;
-        ClearAppearanceRuntimeRoute(component_.runtime.route);
-        component_.runtime.route.depth_bin = 0U;
-        component_.runtime.route.visible = 1U;
-        component_.runtime.route.pass_hint = std::same_as<DimensionT, Dim2>
-            ? SurfaceRenderPassHint::overlay
-            : SurfaceRenderPassHint::opaque;
-        component_.runtime.route.dirty_flags = surface_dirty_source_flag |
-                                               surface_dirty_style_flag |
-                                               surface_dirty_runtime_flag;
 
         if constexpr (std::same_as<DimensionT, Dim2>) {
             component_.runtime.source.surface_id = 0U;
@@ -121,7 +115,8 @@ public:
             component_.runtime.source.reserved1 = 0U;
             component_.runtime.source_revision = 0U;
             component_.runtime.reserved0 = 0U;
-            StoreAppearanceRuntimeBridge2D(component_.runtime, MakeAppearanceRuntimeBridge2D(nullptr));
+            (void)WriteAppearanceRuntimeBridgeState(component_.runtime,
+                                                    MakeAppearanceRuntimeBridge2D(nullptr));
             component_.runtime.size = Float2{.x = 0.0F, .y = 0.0F};
             component_.runtime.pivot = Float2{.x = 0.5F, .y = 0.5F};
         } else {
@@ -130,57 +125,55 @@ public:
             component_.runtime.source.uv_set = 0U;
             component_.runtime.source.flags = 0U;
             component_.runtime.source_revision = 0U;
-            StoreAppearanceRuntimeBridge3D(component_.runtime, MakeAppearanceRuntimeBridge3D(nullptr));
+            (void)WriteAppearanceRuntimeBridgeState(component_.runtime,
+                                                    MakeAppearanceRuntimeBridge3D(nullptr));
         }
     }
 
     [[nodiscard]] static std::uint32_t DirtyFlags(const SurfaceType& component_) noexcept {
-        return component_.runtime.route.dirty_flags;
+        return VisualRuntimeRouteDirtyFlags(component_.runtime.route);
     }
 
     [[nodiscard]] static bool HasDirtyFlags(const SurfaceType& component_,
                                             std::uint32_t dirty_mask_) noexcept {
-        return (component_.runtime.route.dirty_flags & dirty_mask_) != 0U;
+        return HasVisualRuntimeRouteDirtyFlags(component_.runtime.route, dirty_mask_);
     }
 
     static void MarkDirty(SurfaceType& component_, std::uint32_t dirty_mask_) noexcept {
-        component_.runtime.route.dirty_flags |= dirty_mask_;
+        MarkVisualRuntimeRouteDirty(component_.runtime.route, dirty_mask_);
     }
 
     static void ClearDirtyFlags(SurfaceType& component_, std::uint32_t clear_mask_) noexcept {
-        component_.runtime.route.dirty_flags &= ~clear_mask_;
+        ClearVisualRuntimeRouteDirtyFlags(component_.runtime.route, clear_mask_);
     }
 
     static void SetVisible(SurfaceType& component_, bool visible_) noexcept {
-        const std::uint8_t visible_value = visible_ ? 1U : 0U;
-        if (component_.runtime.route.visible == visible_value) {
+        if (!SetVisualRuntimeRouteVisible(component_.runtime.route, visible_)) {
             return;
         }
-        component_.runtime.route.visible = visible_value;
         MarkDirty(component_, surface_dirty_runtime_flag);
     }
 
     static void SetRenderPassHint(SurfaceType& component_,
                                   SurfaceRenderPassHint pass_hint_) noexcept {
-        if (component_.runtime.route.pass_hint == pass_hint_) {
+        if (!SetVisualRuntimeRoutePassHint(component_.runtime.route, pass_hint_)) {
             return;
         }
-        component_.runtime.route.pass_hint = pass_hint_;
         MarkDirty(component_, surface_dirty_runtime_flag);
         RebuildSortKey(component_);
     }
 
     static void SetRuntimeRoute(SurfaceType& component_,
                                 std::uint32_t surface_id_,
-                                std::uint32_t visual_resource_id_,
+                                std::uint32_t authoring_visual_resource_id_,
                                 std::uint32_t batch_tag_) noexcept {
         if (component_.runtime.route.surface_id == surface_id_ &&
-            component_.runtime.route.visual_resource_id == visual_resource_id_ &&
+            component_.runtime.route.authoring_visual_resource_id == authoring_visual_resource_id_ &&
             component_.runtime.route.batch_tag == batch_tag_) {
             return;
         }
         component_.runtime.route.surface_id = surface_id_;
-        component_.runtime.route.visual_resource_id = visual_resource_id_;
+        component_.runtime.route.authoring_visual_resource_id = authoring_visual_resource_id_;
         component_.runtime.route.batch_tag = batch_tag_;
         MarkDirty(component_, surface_dirty_runtime_flag);
         RebuildSortKey(component_);
@@ -195,40 +188,37 @@ public:
         RebuildSortKey(component_);
     }
 
-    static void SetVisualResourceId(SurfaceType& component_,
-                                    std::uint32_t visual_resource_id_) noexcept {
-        if (component_.runtime.route.visual_resource_id == visual_resource_id_) {
+    static void SetAuthoringVisualResourceId(SurfaceType& component_,
+                                             std::uint32_t authoring_visual_resource_id_) noexcept {
+        if (!SetVisualRuntimeRouteAuthoringVisualResourceId(component_.runtime.route,
+                                                            authoring_visual_resource_id_)) {
             return;
         }
-        component_.runtime.route.visual_resource_id = visual_resource_id_;
         MarkDirty(component_, surface_dirty_runtime_flag);
         RebuildSortKey(component_);
     }
 
     static void SetBatchTag(SurfaceType& component_, std::uint32_t batch_tag_) noexcept {
-        if (component_.runtime.route.batch_tag == batch_tag_) {
+        if (!SetVisualRuntimeRouteBatchTag(component_.runtime.route, batch_tag_)) {
             return;
         }
-        component_.runtime.route.batch_tag = batch_tag_;
         MarkDirty(component_, surface_dirty_runtime_flag);
         RebuildSortKey(component_);
     }
 
     static void SetUserData(SurfaceType& component_, std::uint32_t user_data_) noexcept {
-        if (component_.runtime.route.user_data == user_data_) {
+        if (!SetVisualRuntimeRouteUserData(component_.runtime.route, user_data_)) {
             return;
         }
-        component_.runtime.route.user_data = user_data_;
         MarkDirty(component_, surface_dirty_runtime_flag);
     }
 
     static void SetAppearanceHandle(SurfaceType& component_,
                                     AppearanceHandle appearance_handle_) noexcept {
-        if (component_.runtime.route.appearance_handle.index == appearance_handle_.index &&
-            component_.runtime.route.appearance_handle.generation == appearance_handle_.generation) {
+        if (!SetVisualRuntimeRouteAppearanceHandle(component_.runtime.route,
+                                                   appearance_handle_)) {
             return;
         }
-        component_.runtime.route.appearance_handle = appearance_handle_;
         BumpAppearanceHandleMutationSerial();
         MarkDirty(component_, surface_dirty_runtime_flag);
     }
@@ -239,9 +229,11 @@ public:
         }
         ClearAppearanceRuntimeRoute(component_.runtime.route);
         if constexpr (std::same_as<DimensionT, Dim2>) {
-            StoreAppearanceRuntimeBridge2D(component_.runtime, MakeAppearanceRuntimeBridge2D(nullptr));
+            (void)WriteAppearanceRuntimeBridgeState(component_.runtime,
+                                                    MakeAppearanceRuntimeBridge2D(nullptr));
         } else {
-            StoreAppearanceRuntimeBridge3D(component_.runtime, MakeAppearanceRuntimeBridge3D(nullptr));
+            (void)WriteAppearanceRuntimeBridgeState(component_.runtime,
+                                                    MakeAppearanceRuntimeBridge3D(nullptr));
         }
         BumpAppearanceHandleMutationSerial();
         MarkDirty(component_, surface_dirty_runtime_flag);
@@ -254,23 +246,16 @@ public:
                                                        std::uint64_t appearance_pipeline_key_,
                                                        std::uint64_t appearance_resource_key_) noexcept {
         (void)appearance_sort_key_;
-        const std::uint32_t pipeline_bucket = static_cast<std::uint32_t>(appearance_pipeline_key_);
-        const std::uint32_t resource_bucket = static_cast<std::uint32_t>(appearance_resource_key_);
-        const bool changed = vr::ecs::HasAppearanceRuntimeRouteChanged(component_.runtime.route,
-                                                                       appearance_handle_,
-                                                                       pipeline_bucket,
-                                                                       resource_bucket);
-        if (!changed) {
+        const VisualRuntimeRouteLinkMutation link_mutation =
+            UpdateVisualRuntimeRouteLink(component_.runtime.route,
+                                         appearance_handle_,
+                                         appearance_pipeline_key_,
+                                         appearance_resource_key_);
+        if (!link_mutation.route_changed) {
             return false;
         }
 
-        const bool handle_changed =
-            vr::ecs::HasAppearanceHandleChanged(component_.runtime.route, appearance_handle_);
-        vr::ecs::StoreAppearanceRuntimeRoute(component_.runtime.route,
-                                             appearance_handle_,
-                                             pipeline_bucket,
-                                             resource_bucket);
-        if (handle_changed) {
+        if (link_mutation.handle_changed) {
             BumpAppearanceHandleMutationSerial();
         }
         MarkDirty(component_, surface_dirty_runtime_flag);
@@ -287,25 +272,18 @@ public:
     requires std::same_as<DimensionT, Dim2>
     {
         (void)appearance_sort_key_;
-        const std::uint32_t pipeline_bucket = static_cast<std::uint32_t>(appearance_pipeline_key_);
-        const std::uint32_t resource_bucket = static_cast<std::uint32_t>(appearance_resource_key_);
-        const bool route_changed = vr::ecs::HasAppearanceRuntimeRouteChanged(component_.runtime.route,
-                                                                             appearance_handle_,
-                                                                             pipeline_bucket,
-                                                                             resource_bucket);
+        const VisualRuntimeRouteLinkMutation link_mutation =
+            UpdateVisualRuntimeRouteLink(component_.runtime.route,
+                                         appearance_handle_,
+                                         appearance_pipeline_key_,
+                                         appearance_resource_key_);
         const bool appearance_state_changed =
-            WriteAppearanceRuntimeState(component_.runtime, appearance_style_);
-        if (!route_changed && !appearance_state_changed) {
+            WriteAppearanceRuntimeBridgeState(component_.runtime, appearance_style_);
+        if (!link_mutation.route_changed && !appearance_state_changed) {
             return false;
         }
 
-        const bool handle_changed =
-            vr::ecs::HasAppearanceHandleChanged(component_.runtime.route, appearance_handle_);
-        vr::ecs::StoreAppearanceRuntimeRoute(component_.runtime.route,
-                                             appearance_handle_,
-                                             pipeline_bucket,
-                                             resource_bucket);
-        if (handle_changed) {
+        if (link_mutation.handle_changed) {
             BumpAppearanceHandleMutationSerial();
         }
         MarkDirty(component_, surface_dirty_runtime_flag);
@@ -322,25 +300,18 @@ public:
     requires std::same_as<DimensionT, Dim3>
     {
         (void)appearance_sort_key_;
-        const std::uint32_t pipeline_bucket = static_cast<std::uint32_t>(appearance_pipeline_key_);
-        const std::uint32_t resource_bucket = static_cast<std::uint32_t>(appearance_resource_key_);
-        const bool route_changed = vr::ecs::HasAppearanceRuntimeRouteChanged(component_.runtime.route,
-                                                                             appearance_handle_,
-                                                                             pipeline_bucket,
-                                                                             resource_bucket);
+        const VisualRuntimeRouteLinkMutation link_mutation =
+            UpdateVisualRuntimeRouteLink(component_.runtime.route,
+                                         appearance_handle_,
+                                         appearance_pipeline_key_,
+                                         appearance_resource_key_);
         const bool appearance_state_changed =
-            WriteAppearanceRuntimeState(component_.runtime, appearance_style_);
-        if (!route_changed && !appearance_state_changed) {
+            WriteAppearanceRuntimeBridgeState(component_.runtime, appearance_style_);
+        if (!link_mutation.route_changed && !appearance_state_changed) {
             return false;
         }
 
-        const bool handle_changed =
-            vr::ecs::HasAppearanceHandleChanged(component_.runtime.route, appearance_handle_);
-        vr::ecs::StoreAppearanceRuntimeRoute(component_.runtime.route,
-                                             appearance_handle_,
-                                             pipeline_bucket,
-                                             resource_bucket);
-        if (handle_changed) {
+        if (link_mutation.handle_changed) {
             BumpAppearanceHandleMutationSerial();
         }
         MarkDirty(component_, surface_dirty_runtime_flag);
@@ -359,7 +330,7 @@ public:
                                                           const AppearanceStyle2D* appearance_style_) noexcept
     requires std::same_as<DimensionT, Dim2>
     {
-        const bool changed = WriteAppearanceRuntimeState(component_.runtime, appearance_style_);
+        const bool changed = WriteAppearanceRuntimeBridgeState(component_.runtime, appearance_style_);
         if (!changed) {
             return false;
         }
@@ -379,7 +350,7 @@ public:
                                                           const AppearanceStyle3D* appearance_style_) noexcept
     requires std::same_as<DimensionT, Dim3>
     {
-        const bool changed = WriteAppearanceRuntimeState(component_.runtime, appearance_style_);
+        const bool changed = WriteAppearanceRuntimeBridgeState(component_.runtime, appearance_style_);
         if (!changed) {
             return false;
         }
@@ -393,10 +364,9 @@ public:
         const AppearanceRuntimeBridge2D& appearance_bridge_) noexcept
     requires std::same_as<DimensionT, Dim2>
     {
-        if (HasSameAppearanceRuntimeBridge2D(component_.runtime, appearance_bridge_)) {
+        if (!WriteAppearanceRuntimeBridgeState(component_.runtime, appearance_bridge_)) {
             return false;
         }
-        StoreAppearanceRuntimeBridge2D(component_.runtime, appearance_bridge_);
         MarkDirty(component_, surface_dirty_runtime_flag);
         RebuildSortKey(component_);
         return true;
@@ -407,10 +377,9 @@ public:
         const AppearanceRuntimeBridge3D& appearance_bridge_) noexcept
     requires std::same_as<DimensionT, Dim3>
     {
-        if (HasSameAppearanceRuntimeBridge3D(component_.runtime, appearance_bridge_)) {
+        if (!WriteAppearanceRuntimeBridgeState(component_.runtime, appearance_bridge_)) {
             return false;
         }
-        StoreAppearanceRuntimeBridge3D(component_.runtime, appearance_bridge_);
         MarkDirty(component_, surface_dirty_runtime_flag);
         RebuildSortKey(component_);
         return true;
@@ -419,10 +388,9 @@ public:
     static void SetDepthBin(SurfaceType& component_, std::uint16_t depth_bin_) noexcept
     requires std::same_as<DimensionT, Dim3>
     {
-        if (component_.runtime.route.depth_bin == depth_bin_) {
+        if (!SetVisualRuntimeRouteDepthBin(component_.runtime.route, depth_bin_)) {
             return;
         }
-        component_.runtime.route.depth_bin = depth_bin_;
         MarkDirty(component_, surface_dirty_runtime_flag);
         RebuildSortKey(component_);
     }
@@ -728,30 +696,6 @@ private:
         }
     }
 
-    [[nodiscard]] static bool WriteAppearanceRuntimeState(SurfaceRuntime2D& runtime_,
-                                                          const AppearanceStyle2D* appearance_style_) noexcept
-    requires std::same_as<DimensionT, Dim2>
-    {
-        const AppearanceRuntimeBridge2D bridge = MakeAppearanceRuntimeBridge2D(appearance_style_);
-        if (HasSameAppearanceRuntimeBridge2D(runtime_, bridge)) {
-            return false;
-        }
-        StoreAppearanceRuntimeBridge2D(runtime_, bridge);
-        return true;
-    }
-
-    [[nodiscard]] static bool WriteAppearanceRuntimeState(SurfaceRuntime3D& runtime_,
-                                                          const AppearanceStyle3D* appearance_style_) noexcept
-    requires std::same_as<DimensionT, Dim3>
-    {
-        const AppearanceRuntimeBridge3D bridge = MakeAppearanceRuntimeBridge3D(appearance_style_);
-        if (HasSameAppearanceRuntimeBridge3D(runtime_, bridge)) {
-            return false;
-        }
-        StoreAppearanceRuntimeBridge3D(runtime_, bridge);
-        return true;
-    }
-
     static void BumpAppearanceHandleMutationSerial() noexcept {
         (void)appearance_handle_mutation_serial.fetch_add(1U, std::memory_order_relaxed);
     }
@@ -760,4 +704,3 @@ private:
 };
 
 } // namespace vr::ecs
-

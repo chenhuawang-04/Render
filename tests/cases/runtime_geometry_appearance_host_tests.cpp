@@ -1,4 +1,4 @@
-#include "support/test_framework.hpp"
+﻿#include "support/test_framework.hpp"
 #include "vr/geometry/geometry_appearance_host.hpp"
 
 #include <cstdint>
@@ -15,7 +15,7 @@ VR_TEST_CASE(RuntimeGeometryAppearanceHost_upsert_lookup_remove, "unit;runtime;g
 
     vr::geometry::GeometryAppearanceDesc appearance_a{};
     appearance_a.appearance_id = 30U;
-    appearance_a.image_id = 300U;
+    appearance_a.sampled_surface_binding.base_color_surface.surface_id = 300U;
     appearance_a.flags = 0x1U;
     appearance_a.uv_scale_u = 1.0F;
     appearance_a.uv_scale_v = 1.0F;
@@ -26,7 +26,15 @@ VR_TEST_CASE(RuntimeGeometryAppearanceHost_upsert_lookup_remove, "unit;runtime;g
 
     vr::geometry::GeometryAppearanceDesc appearance_b{};
     appearance_b.appearance_id = 10U;
-    appearance_b.image_id = 100U;
+    appearance_b.sampled_surface_binding.base_color_surface.surface_id = 100U;
+    appearance_b.sampled_surface_binding.base_color_surface.domain = vr::render::AppearanceSampledSurfaceDomain::asset_texture;
+    appearance_b.sampled_surface_binding.normal_surface = vr::render::MakeAppearanceSampledSurfaceHandle(
+        501U,
+        vr::render::AppearanceSampledSurfaceDomain::asset_texture);
+    appearance_b.sampled_surface_binding.metal_rough_surface = vr::render::MakeAppearanceSampledSurfaceHandle(
+        601U,
+        vr::render::AppearanceSampledSurfaceDomain::surface_image);
+    appearance_b.sampled_surface_binding.surface_sampler_id = 7U;
     appearance_b.flags = 0x2U;
     appearance_b.uv_scale_u = 2.0F;
     appearance_b.uv_scale_v = 2.0F;
@@ -39,7 +47,7 @@ VR_TEST_CASE(RuntimeGeometryAppearanceHost_upsert_lookup_remove, "unit;runtime;g
 
     vr::geometry::GeometryAppearanceDesc appearance_c{};
     appearance_c.appearance_id = 20U;
-    appearance_c.image_id = 200U;
+    appearance_c.sampled_surface_binding.base_color_surface.surface_id = 200U;
     appearance_c.flags = 0x4U;
     appearance_c.uv_scale_u = 0.5F;
     appearance_c.uv_scale_v = 0.5F;
@@ -60,17 +68,30 @@ VR_TEST_CASE(RuntimeGeometryAppearanceHost_upsert_lookup_remove, "unit;runtime;g
     VR_REQUIRE(record_c != nullptr);
     VR_REQUIRE(record_a != nullptr);
 
-    VR_CHECK(record_b->desc.image_id == 100U);
+    VR_CHECK(record_b->desc.sampled_surface_binding.base_color_surface.surface_id == 100U);
+    VR_CHECK(record_b->desc.sampled_surface_binding.base_color_surface.domain ==
+             vr::render::AppearanceSampledSurfaceDomain::asset_texture);
+    VR_CHECK(record_b->desc.sampled_surface_binding.normal_surface.surface_id == 501U);
+    VR_CHECK(record_b->desc.sampled_surface_binding.normal_surface.domain ==
+             vr::render::AppearanceSampledSurfaceDomain::asset_texture);
+    VR_CHECK(record_b->desc.sampled_surface_binding.metal_rough_surface.surface_id == 601U);
+    VR_CHECK(record_b->desc.sampled_surface_binding.metal_rough_surface.domain ==
+             vr::render::AppearanceSampledSurfaceDomain::surface_image);
+    VR_CHECK(record_b->desc.sampled_surface_binding.surface_sampler_id == 7U);
     VR_CHECK(record_b->desc.alpha_cutoff == 0.35F);
     VR_CHECK(record_b->desc.metallic_factor == 0.65F);
     VR_CHECK(record_b->desc.roughness_factor == 0.28F);
     VR_CHECK(record_b->desc.normal_scale == 2.5F);
     VR_CHECK(record_b->desc.occlusion_strength == 0.55F);
-    VR_CHECK(record_c->desc.image_id == 200U);
-    VR_CHECK(record_a->desc.image_id == 300U);
+    VR_CHECK(record_c->desc.sampled_surface_binding.base_color_surface.surface_id == 200U);
+    VR_CHECK(record_a->desc.sampled_surface_binding.base_color_surface.surface_id == 300U);
     VR_CHECK(record_b->revision == 1U);
 
-    appearance_b.image_id = 101U;
+    appearance_b.sampled_surface_binding.base_color_surface.surface_id = 101U;
+    appearance_b.sampled_surface_binding.base_color_surface.domain = vr::render::AppearanceSampledSurfaceDomain::surface_image;
+    appearance_b.sampled_surface_binding.emissive_surface = vr::render::MakeAppearanceSampledSurfaceHandle(
+        701U,
+        vr::render::AppearanceSampledSurfaceDomain::geometry_image);
     appearance_b.uv_bias_v = 0.5F;
     appearance_b.alpha_cutoff = 0.6F;
     appearance_b.metallic_factor = 0.42F;
@@ -81,7 +102,12 @@ VR_TEST_CASE(RuntimeGeometryAppearanceHost_upsert_lookup_remove, "unit;runtime;g
 
     record_b = host.FindAppearance(10U);
     VR_REQUIRE(record_b != nullptr);
-    VR_CHECK(record_b->desc.image_id == 101U);
+    VR_CHECK(record_b->desc.sampled_surface_binding.base_color_surface.surface_id == 101U);
+    VR_CHECK(record_b->desc.sampled_surface_binding.base_color_surface.domain ==
+             vr::render::AppearanceSampledSurfaceDomain::surface_image);
+    VR_CHECK(record_b->desc.sampled_surface_binding.emissive_surface.surface_id == 701U);
+    VR_CHECK(record_b->desc.sampled_surface_binding.emissive_surface.domain ==
+             vr::render::AppearanceSampledSurfaceDomain::geometry_image);
     VR_CHECK(record_b->desc.alpha_cutoff == 0.6F);
     VR_CHECK(record_b->desc.metallic_factor == 0.42F);
     VR_CHECK(record_b->desc.roughness_factor == 0.84F);
@@ -139,6 +165,8 @@ VR_TEST_CASE(RuntimeGeometryAppearanceHost_clamps_minimal_pbr_factors, "unit;run
     host.UpsertAppearance(desc);
     const auto* record = host.FindAppearance(77U);
     VR_REQUIRE(record != nullptr);
+    VR_CHECK(record->desc.sampled_surface_binding.base_color_surface.domain ==
+             vr::render::AppearanceSampledSurfaceDomain::geometry_image);
     VR_CHECK(record->desc.metallic_factor == 1.0F);
     VR_CHECK(record->desc.roughness_factor == 0.04F);
     VR_CHECK(record->desc.normal_scale == 4.0F);
@@ -151,4 +179,5 @@ VR_TEST_CASE(RuntimeGeometryAppearanceHost_clamps_minimal_pbr_factors, "unit;run
 }
 
 } // namespace
+
 

@@ -23,10 +23,9 @@ VR_TEST_CASE(RenderAppearanceFrameCoordinator_dim3_prepare_once_reuse_in_same_fr
     appearance_components.resize(component_count);
     for (std::uint32_t i = 0U; i < component_count; ++i) {
         AppearanceSystem3D::Initialize(appearance_components[i]);
-        AppearanceSystem3D::SetTextureBaseColorId(appearance_components[i], 100U + i);
-        AppearanceSystem3D::SetTextureNormalId(appearance_components[i], 200U + i);
-        AppearanceSystem3D::SetBindingLayoutId(appearance_components[i], 5U);
-        AppearanceSystem3D::SetSamplerStateId(appearance_components[i], 2U);
+        AppearanceSystem3D::SetBaseColorSurface(appearance_components[i], vr::render::MakeAppearanceSampledSurfaceHandle(100U + i));
+        AppearanceSystem3D::SetNormalSurface(appearance_components[i], vr::render::MakeAppearanceSampledSurfaceHandle(200U + i));
+        AppearanceSystem3D::SetSurfaceSamplerId(appearance_components[i], 2U);
     }
 
     Coordinator3D coordinator{};
@@ -59,9 +58,8 @@ VR_TEST_CASE(RenderAppearanceFrameCoordinator_dim3_prepare_reuse_across_frames_w
     appearance_components.resize(component_count);
     for (std::uint32_t i = 0U; i < component_count; ++i) {
         AppearanceSystem3D::Initialize(appearance_components[i]);
-        AppearanceSystem3D::SetTextureBaseColorId(appearance_components[i], 5000U + i);
-        AppearanceSystem3D::SetTextureNormalId(appearance_components[i], 6000U + i);
-        AppearanceSystem3D::SetBindingLayoutId(appearance_components[i], 6U);
+        AppearanceSystem3D::SetBaseColorSurface(appearance_components[i], vr::render::MakeAppearanceSampledSurfaceHandle(5000U + i));
+        AppearanceSystem3D::SetNormalSurface(appearance_components[i], vr::render::MakeAppearanceSampledSurfaceHandle(6000U + i));
     }
 
     Coordinator3D coordinator{};
@@ -101,10 +99,9 @@ VR_TEST_CASE(RenderAppearanceFrameCoordinator_dim3_link_geometry_and_surface,
 
     for (std::uint32_t i = 0U; i < component_count; ++i) {
         AppearanceSystem3D::Initialize(appearance_components[i]);
-        AppearanceSystem3D::SetTextureBaseColorId(appearance_components[i], 300U + i);
-        AppearanceSystem3D::SetTextureNormalId(appearance_components[i], 400U + i);
-        AppearanceSystem3D::SetBindingLayoutId(appearance_components[i], 7U);
-        AppearanceSystem3D::SetSamplerStateId(appearance_components[i], 3U);
+        AppearanceSystem3D::SetBaseColorSurface(appearance_components[i], vr::render::MakeAppearanceSampledSurfaceHandle(300U + i));
+        AppearanceSystem3D::SetNormalSurface(appearance_components[i], vr::render::MakeAppearanceSampledSurfaceHandle(400U + i));
+        AppearanceSystem3D::SetSurfaceSamplerId(appearance_components[i], 3U);
 
         GeometrySystem3D::Initialize(geometry_components[i]);
         GeometrySystem3D::SetGeometryId(geometry_components[i], 500U + i);
@@ -166,7 +163,7 @@ VR_TEST_CASE(RenderAppearanceFrameCoordinator_dim3_incremental_link_skips_when_n
 
     for (std::uint32_t i = 0U; i < component_count; ++i) {
         AppearanceSystem3D::Initialize(appearance_components[i]);
-        AppearanceSystem3D::SetTextureBaseColorId(appearance_components[i], 900U + i);
+        AppearanceSystem3D::SetBaseColorSurface(appearance_components[i], vr::render::MakeAppearanceSampledSurfaceHandle(900U + i));
         GeometrySystem3D::Initialize(geometry_components[i]);
     }
 
@@ -204,7 +201,7 @@ VR_TEST_CASE(RenderAppearanceFrameCoordinator_dim3_incremental_link_updates_only
 
     for (std::uint32_t i = 0U; i < component_count; ++i) {
         AppearanceSystem3D::Initialize(appearance_components[i]);
-        AppearanceSystem3D::SetTextureBaseColorId(appearance_components[i], 100U + i);
+        AppearanceSystem3D::SetBaseColorSurface(appearance_components[i], vr::render::MakeAppearanceSampledSurfaceHandle(100U + i));
         GeometrySystem3D::Initialize(geometry_components[i]);
     }
 
@@ -247,10 +244,9 @@ VR_TEST_CASE(RenderAppearanceFrameCoordinator_dim3_incremental_link_detects_geom
 
     for (std::uint32_t i = 0U; i < appearance_count; ++i) {
         AppearanceSystem3D::Initialize(appearance_components[i]);
-        AppearanceSystem3D::SetTextureBaseColorId(appearance_components[i], 1200U + i);
-        AppearanceSystem3D::SetTextureNormalId(appearance_components[i], 2400U + i);
-        AppearanceSystem3D::SetBindingLayoutId(appearance_components[i], 3U + (i & 1U));
-        AppearanceSystem3D::SetSamplerStateId(appearance_components[i], 2U + (i & 1U));
+        AppearanceSystem3D::SetBaseColorSurface(appearance_components[i], vr::render::MakeAppearanceSampledSurfaceHandle(1200U + i));
+        AppearanceSystem3D::SetNormalSurface(appearance_components[i], vr::render::MakeAppearanceSampledSurfaceHandle(2400U + i));
+        AppearanceSystem3D::SetSurfaceSamplerId(appearance_components[i], 2U + (i & 1U));
         AppearanceSystem3D::SetLayer(appearance_components[i], static_cast<std::int16_t>(i));
     }
     for (std::uint32_t i = 0U; i < geometry_count; ++i) {
@@ -293,10 +289,9 @@ VR_TEST_CASE(RenderAppearanceFrameCoordinator_dim3_accumulate_dirty_hints_before
 
     for (std::uint32_t i = 0U; i < component_count; ++i) {
         AppearanceSystem3D::Initialize(appearance_components[i]);
-        AppearanceSystem3D::SetTextureBaseColorId(appearance_components[i], 32U + i);
-        AppearanceSystem3D::SetTextureNormalId(appearance_components[i], 64U + i);
-        AppearanceSystem3D::SetBindingLayoutId(appearance_components[i], 4U);
-        AppearanceSystem3D::SetSamplerStateId(appearance_components[i], 2U);
+        AppearanceSystem3D::SetBaseColorSurface(appearance_components[i], vr::render::MakeAppearanceSampledSurfaceHandle(32U + i));
+        AppearanceSystem3D::SetNormalSurface(appearance_components[i], vr::render::MakeAppearanceSampledSurfaceHandle(64U + i));
+        AppearanceSystem3D::SetSurfaceSamplerId(appearance_components[i], 2U);
     }
 
     Coordinator3D coordinator{};
@@ -329,8 +324,7 @@ VR_TEST_CASE(RenderAppearanceFrameCoordinator_dim3_dirty_hint_after_prepare_same
     appearance_components.resize(component_count);
     for (std::uint32_t i = 0U; i < component_count; ++i) {
         AppearanceSystem3D::Initialize(appearance_components[i]);
-        AppearanceSystem3D::SetTextureBaseColorId(appearance_components[i], 100U + i);
-        AppearanceSystem3D::SetBindingLayoutId(appearance_components[i], 5U);
+        AppearanceSystem3D::SetBaseColorSurface(appearance_components[i], vr::render::MakeAppearanceSampledSurfaceHandle(100U + i));
     }
 
     Coordinator3D coordinator{};
@@ -376,10 +370,9 @@ VR_TEST_CASE(RenderAppearancePrepareBridge_dim3_dual_renderer_duplicate_dirty_hi
 
     for (std::uint32_t i = 0U; i < component_count; ++i) {
         AppearanceSystem3D::Initialize(appearance_components[i]);
-        AppearanceSystem3D::SetTextureBaseColorId(appearance_components[i], 1000U + i);
-        AppearanceSystem3D::SetTextureNormalId(appearance_components[i], 2000U + i);
-        AppearanceSystem3D::SetBindingLayoutId(appearance_components[i], 9U);
-        AppearanceSystem3D::SetSamplerStateId(appearance_components[i], 1U);
+        AppearanceSystem3D::SetBaseColorSurface(appearance_components[i], vr::render::MakeAppearanceSampledSurfaceHandle(1000U + i));
+        AppearanceSystem3D::SetNormalSurface(appearance_components[i], vr::render::MakeAppearanceSampledSurfaceHandle(2000U + i));
+        AppearanceSystem3D::SetSurfaceSamplerId(appearance_components[i], 1U);
 
         GeometrySystem3D::Initialize(geometry_components[i]);
         GeometrySystem3D::SetGeometryId(geometry_components[i], 3000U + i);
@@ -435,7 +428,7 @@ VR_TEST_CASE(RenderAppearanceFrameCoordinator_dim3_dirty_normalization_dedup_and
     appearance_components.resize(component_count);
     for (std::uint32_t i = 0U; i < component_count; ++i) {
         AppearanceSystem3D::Initialize(appearance_components[i]);
-        AppearanceSystem3D::SetTextureBaseColorId(appearance_components[i], 700U + i);
+        AppearanceSystem3D::SetBaseColorSurface(appearance_components[i], vr::render::MakeAppearanceSampledSurfaceHandle(700U + i));
     }
 
     Coordinator3D coordinator{};
@@ -461,4 +454,5 @@ VR_TEST_CASE(RenderAppearanceFrameCoordinator_dim3_dirty_normalization_dedup_and
 }
 
 } // namespace
+
 

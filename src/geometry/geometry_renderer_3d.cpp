@@ -34,6 +34,17 @@ void HashCombine64(std::uint64_t& hash_, std::uint64_t value_) noexcept {
     hash_ *= k_hash_prime;
 }
 
+[[nodiscard]] render::AppearanceSampledSurfaceBinding3D
+MakeGeometryAppearanceSampledSurfaceBinding(
+    const GeometryAppearanceDesc* appearance_desc_) noexcept {
+    if (appearance_desc_ != nullptr) {
+        return appearance_desc_->sampled_surface_binding;
+    }
+
+    return render::MakeAppearanceSampledSurfaceBinding3D(
+        render::AppearanceSampledSurfaceDomain::geometry_image);
+}
+
 } // namespace
 
 bool GeometryRenderer3D::IsDepthFormatSupported(VulkanContext& context_, VkFormat format_) noexcept {
@@ -133,7 +144,8 @@ std::uint64_t GeometryRenderer3D::ApplyAppearanceStateOverrides() {
     const bool has_appearance_host = geometry_appearance_host != nullptr &&
                                    geometry_appearance_host->IsInitialized();
     const GeometryAppearanceHost::AppearanceRecord* cached_appearance_record = nullptr;
-    std::uint32_t cached_visual_resource_id = std::numeric_limits<std::uint32_t>::max();
+    std::uint32_t cached_appearance_lookup_visual_resource_id =
+        std::numeric_limits<std::uint32_t>::max();
     std::uint64_t appearance_override_signature = 14695981039346656037ULL;
 
     for (auto& instance : runtime_scratch.instances) {
@@ -144,13 +156,17 @@ std::uint64_t GeometryRenderer3D::ApplyAppearanceStateOverrides() {
             appearance_bridge = ecs::ReadAppearanceRuntimeBridge3D(component->runtime);
         }
 
-        const std::uint32_t authoring_visual_resource_id =
-            component != nullptr ? component->runtime.route.visual_resource_id : instance.visual_resource_id;
+        const std::uint32_t appearance_lookup_visual_resource_id =
+            component != nullptr
+                ? component->runtime.route.authoring_visual_resource_id
+                : instance.effective_visual_resource_id;
         const GeometryAppearanceDesc* appearance_desc = nullptr;
-        if (has_appearance_host && authoring_visual_resource_id != 0U) {
-            if (authoring_visual_resource_id != cached_visual_resource_id) {
-                cached_appearance_record = geometry_appearance_host->FindAppearance(authoring_visual_resource_id);
-                cached_visual_resource_id = authoring_visual_resource_id;
+        if (has_appearance_host && appearance_lookup_visual_resource_id != 0U) {
+            if (appearance_lookup_visual_resource_id != cached_appearance_lookup_visual_resource_id) {
+                cached_appearance_record =
+                    geometry_appearance_host->FindAppearance(appearance_lookup_visual_resource_id);
+                cached_appearance_lookup_visual_resource_id =
+                    appearance_lookup_visual_resource_id;
             }
             appearance_desc = cached_appearance_record != nullptr ? &cached_appearance_record->desc : nullptr;
         }
@@ -165,17 +181,13 @@ std::uint64_t GeometryRenderer3D::ApplyAppearanceStateOverrides() {
             ecs::AppearanceGpuRecord<ecs::Dim3> synthesized_record{};
             render::BuildAppearanceGpuRecord3DFromRuntimeBridge(
                 appearance_bridge,
-                {
-                    .base_color_texture_id = appearance_desc != nullptr ? appearance_desc->image_id : 0U,
-                    .sampler_state_id = appearance_desc != nullptr ? appearance_desc->sampler_id.value : 0U,
-                    .texture_source = render::AppearanceTextureSource3D::geometry_image
-                },
+                MakeGeometryAppearanceSampledSurfaceBinding(appearance_desc),
                 synthesized_record);
 
             const GeometryAppearanceResolvedState resolved_state =
-                ResolveGeometryAppearanceStateFromRuntimeBridge(&appearance_bridge,
-                                                                appearance_desc,
-                                                                nullptr);
+                ResolveFinalGeometryAppearanceStateFromRuntimeBridge(&appearance_bridge,
+                                                                     appearance_desc,
+                                                                     nullptr);
             synthesized_record.appearance_params = {
                 resolved_state.metallic,
                 resolved_state.roughness,
@@ -1083,8 +1095,10 @@ void GeometryRenderer3D::RecordInternal(const render::FrameRecordContext& record
     render::GraphicsPipelineId active_pipeline_id{};
     VkBuffer active_vertex_buffer = VK_NULL_HANDLE;
     VkBuffer active_index_buffer = VK_NULL_HANDLE;
-    std::uint32_t active_visual_resource_id = std::numeric_limits<std::uint32_t>::max();
-    std::uint32_t cached_visual_resource_id = std::numeric_limits<std::uint32_t>::max();
+    std::uint32_t active_effective_visual_resource_id =
+        std::numeric_limits<std::uint32_t>::max();
+    std::uint32_t cached_effective_visual_resource_id =
+        std::numeric_limits<std::uint32_t>::max();
     AppearancePushConstants cached_sampling_push_constants{};
     std::uint32_t cached_geometry_id = 0U;
     const GeometryResourceHost::MeshRecord* cached_mesh = nullptr;
@@ -1164,13 +1178,14 @@ void GeometryRenderer3D::RecordInternal(const render::FrameRecordContext& record
             }
 
             AppearancePushConstants sampling_push_constants{};
-            if (batch.visual_resource_id == cached_visual_resource_id) {
+            if (batch.effective_visual_resource_id == cached_effective_visual_resource_id) {
                 sampling_push_constants = cached_sampling_push_constants;
-            } else if (!ResolveAppearancePushConstants(batch.visual_resource_id, sampling_push_constants)) {
+            } else if (!ResolveAppearancePushConstants(batch.effective_visual_resource_id,
+                                                       sampling_push_constants)) {
                 ++stats.skipped_batch_count;
                 continue;
             } else {
-                cached_visual_resource_id = batch.visual_resource_id;
+                cached_effective_visual_resource_id = batch.effective_visual_resource_id;
                 cached_sampling_push_constants = sampling_push_constants;
             }
 
@@ -1204,14 +1219,15 @@ void GeometryRenderer3D::RecordInternal(const render::FrameRecordContext& record
                 ++stats.ibl_descriptor_set_bind_count;
             }
 
-            if (pipeline_layout != VK_NULL_HANDLE && active_visual_resource_id != batch.visual_resource_id) {
+            if (pipeline_layout != VK_NULL_HANDLE &&
+                active_effective_visual_resource_id != batch.effective_visual_resource_id) {
                 vkCmdPushConstants(record_context_.command_buffer,
                                    pipeline_layout,
                                    VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                                    static_cast<std::uint32_t>(offsetof(PushConstants, appearance)),
                                    sizeof(AppearancePushConstants),
                                    &sampling_push_constants);
-                active_visual_resource_id = batch.visual_resource_id;
+                active_effective_visual_resource_id = batch.effective_visual_resource_id;
                 ++stats.appearance_push_constant_update_count;
             }
 
@@ -1774,7 +1790,7 @@ void GeometryRenderer3D::EnsureLightingResourcesForFrame(
     const VkDeviceSize appearance_record_bytes =
         static_cast<VkDeviceSize>(appearance_upload_count) *
         sizeof(ecs::AppearanceGpuRecord<ecs::Dim3>);
-    auto mix_texture_source_revision = [](std::uint32_t accumulator_,
+    auto mix_surface_source_revision = [](std::uint32_t accumulator_,
                                           std::uint32_t revision_) noexcept {
         accumulator_ ^= revision_ + 0x9e3779b9U + (accumulator_ << 6U) + (accumulator_ >> 2U);
         return accumulator_;
@@ -1782,10 +1798,10 @@ void GeometryRenderer3D::EnsureLightingResourcesForFrame(
     std::uint32_t texture_host_revision = 0U;
     if (texture_host != nullptr && texture_host->IsInitialized()) {
         texture_host_revision =
-            mix_texture_source_revision(texture_host_revision, texture_host->Stats().revision);
+            mix_surface_source_revision(texture_host_revision, texture_host->Stats().revision);
     }
     if (geometry_image_host != nullptr && geometry_image_host->IsInitialized()) {
-        texture_host_revision = mix_texture_source_revision(texture_host_revision,
+        texture_host_revision = mix_surface_source_revision(texture_host_revision,
                                                             geometry_image_host->Stats().revision);
     }
 
@@ -1816,15 +1832,18 @@ void GeometryRenderer3D::EnsureLightingResourcesForFrame(
     VkDeviceSize partial_appearance_upload_bytes = 0U;
     std::uint32_t current_range_begin = 0U;
     std::uint32_t current_range_count = 0U;
+    const render::AppearanceSampledSurfaceResolver3D sampled_surface_resolver{
+        .bindless_resources = bindless_resources,
+        .texture_host = texture_host,
+        .surface_image_host = nullptr,
+        .geometry_image_host = geometry_image_host
+    };
     for (std::uint32_t index = 0U; index < appearance_upload_count; ++index) {
         ecs::AppearanceGpuRecord<ecs::Dim3> encoded_record{};
         if (index < appearance_record_count) {
             render::EncodeAppearanceGpuRecord3DForSampling(
                 appearance_source_record_scratch[index],
-                bindless_resources,
-                texture_host,
-                nullptr,
-                geometry_image_host,
+                sampled_surface_resolver,
                 encoded_record);
         }
 
@@ -2754,4 +2773,3 @@ void GeometryRenderer3D::RecordDepthTransitionToAttachment(VkCommandBuffer comma
 }
 
 } // namespace vr::geometry
-

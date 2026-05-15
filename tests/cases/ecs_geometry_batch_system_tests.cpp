@@ -1,4 +1,4 @@
-﻿#include "support/test_framework.hpp"
+#include "support/test_framework.hpp"
 #include "vr/ecs/system/appearance_system.hpp"
 #include "vr/ecs/system/geometry_batch_system.hpp"
 #include "vr/ecs/system/geometry_mesh_system.hpp"
@@ -105,7 +105,7 @@ VR_TEST_CASE(EcsGeometryBatchSystem_dim3_depth_bin_affects_binding, "unit;core;e
     for (auto& component : components) {
         MeshSystem::Initialize(component);
         MeshSystem::SetMeshRoute(component, 12U, 0U, 0U);
-        GeometrySystem3D::SetVisualResourceId(component, 8U);
+        GeometrySystem3D::SetAuthoringVisualResourceId(component, 8U);
     }
 
     GeometrySystem3D::SetDepthBin(components[0U], 0U);
@@ -157,7 +157,7 @@ VR_TEST_CASE(EcsGeometryBatchSystem_dim3_candidate_scan_preserves_candidate_orde
     for (std::uint32_t i = 0U; i < components.size(); ++i) {
         MeshSystem::Initialize(components[i]);
         MeshSystem::SetMeshRoute(components[i], 12U, 0U, 0U);
-        GeometrySystem3D::SetVisualResourceId(components[i], 10U + i);
+        GeometrySystem3D::SetAuthoringVisualResourceId(components[i], 10U + i);
     }
     GeometrySystem3D::SetVisible(components[2U], false);
 
@@ -189,4 +189,3 @@ VR_TEST_CASE(EcsGeometryBatchSystem_dim3_candidate_scan_preserves_candidate_orde
 }
 
 } // namespace
-

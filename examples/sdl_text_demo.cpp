@@ -380,7 +380,7 @@ int main(int argc_, char** argv_) {
                                 vr::ecs::TextVerticalAlign::top,
                                 1.15F,
                                 0.0F,
-                                "\n\nmaterial/font route + batch/depth bins\nruntime text update each frame");
+                                "\n\nappearance/font route + batch/depth bins\nruntime text update each frame");
 
         for (std::uint32_t i = 0U; i < components.size(); ++i) {
             const bool visible = component_pages[i] == k_page_any || component_pages[i] == 0U;

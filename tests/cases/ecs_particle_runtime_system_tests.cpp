@@ -1,4 +1,4 @@
-﻿#include "support/test_framework.hpp"
+#include "support/test_framework.hpp"
 #include "vr/ecs/system/particle_emitter_system.hpp"
 #include "vr/ecs/system/particle_runtime_system.hpp"
 #include "vr/ecs/system/transform_system.hpp"
@@ -141,7 +141,7 @@ VR_TEST_CASE(EcsParticleRuntimeSystem_dim3_linked_appearance_uses_effective_visu
     TransformSystem3D::Initialize(transform);
     TransformSystem3D::UpdateHierarchy(&transform, 1U);
 
-    ParticleSystem3D::SetVisualResourceId(particle, 19U);
+    ParticleSystem3D::SetAuthoringVisualResourceId(particle, 19U);
     (void)ParticleSystem3D::SetAppearanceRuntimeLink(particle,
                                                      vr::ecs::AppearanceHandle{.index = 3U, .generation = 1U},
                                                      0ULL,
@@ -176,8 +176,8 @@ VR_TEST_CASE(EcsParticleRuntimeSystem_dim3_linked_appearance_uses_effective_visu
 
     VR_REQUIRE(stats.emitted_instance_count == 1U);
     VR_REQUIRE(scratch.draw_batches.size() == 1U);
-    VR_CHECK(particle.runtime.route.visual_resource_id == 19U);
-    VR_CHECK(scratch.draw_batches[0U].visual_resource_id == 650U);
+    VR_CHECK(particle.runtime.route.authoring_visual_resource_id == 19U);
+    VR_CHECK(scratch.draw_batches[0U].effective_visual_resource_id == 650U);
 }
 
 VR_TEST_CASE(EcsParticleRuntimeSystem_dim2_batch_split_on_blend_state, "unit;core;ecs;particle;runtime") {
@@ -226,4 +226,3 @@ VR_TEST_CASE(EcsParticleRuntimeSystem_dim2_batch_split_on_blend_state, "unit;cor
 }
 
 } // namespace
-

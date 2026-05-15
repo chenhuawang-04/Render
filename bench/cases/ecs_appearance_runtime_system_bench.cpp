@@ -23,10 +23,9 @@ VR_BENCHMARK_CASE(EcsAppearanceRuntimeSystem_dim2_build_1k_full_rebuild,
     for (std::uint32_t i = 0U; i < component_count; ++i) {
         AppearanceSystem2D::Initialize(components[i]);
         AppearanceSystem2D::SetLayer(components[i], static_cast<std::int16_t>((i % 256U) - 128));
-        AppearanceSystem2D::SetTextureBaseId(components[i], 1U + (i % 64U));
-        AppearanceSystem2D::SetTextureMaskId(components[i], 11U + (i % 16U));
-        AppearanceSystem2D::SetBindingLayoutId(components[i], 2U);
-        AppearanceSystem2D::SetSamplerStateId(components[i], 3U);
+        AppearanceSystem2D::SetPatternSurface(components[i], 1U + (i % 64U));
+        AppearanceSystem2D::SetMaskSurface(components[i], 11U + (i % 16U));
+        AppearanceSystem2D::SetSurfaceSamplerId(components[i], 3U);
     }
 
     vr::ecs::AppearanceRuntimeScratch<vr::ecs::Dim2> scratch{};
@@ -64,13 +63,12 @@ VR_BENCHMARK_CASE(EcsAppearanceRuntimeSystem_dim3_build_1k_dirty_hint,
 
     for (std::uint32_t i = 0U; i < component_count; ++i) {
         AppearanceSystem3D::Initialize(components[i]);
-        AppearanceSystem3D::SetTextureBaseColorId(components[i], 100U + (i % 128U));
-        AppearanceSystem3D::SetTextureNormalId(components[i], 200U + (i % 128U));
-        AppearanceSystem3D::SetTextureMetalRoughId(components[i], 300U + (i % 128U));
-        AppearanceSystem3D::SetTextureOcclusionId(components[i], 400U + (i % 128U));
-        AppearanceSystem3D::SetTextureEmissiveId(components[i], 500U + (i % 128U));
-        AppearanceSystem3D::SetBindingLayoutId(components[i], 6U);
-        AppearanceSystem3D::SetSamplerStateId(components[i], 4U);
+        AppearanceSystem3D::SetBaseColorSurface(components[i], vr::render::MakeAppearanceSampledSurfaceHandle(100U + (i % 128U)));
+        AppearanceSystem3D::SetNormalSurface(components[i], vr::render::MakeAppearanceSampledSurfaceHandle(200U + (i % 128U)));
+        AppearanceSystem3D::SetMetalRoughSurface(components[i], vr::render::MakeAppearanceSampledSurfaceHandle(300U + (i % 128U)));
+        AppearanceSystem3D::SetOcclusionSurface(components[i], vr::render::MakeAppearanceSampledSurfaceHandle(400U + (i % 128U)));
+        AppearanceSystem3D::SetEmissiveSurface(components[i], vr::render::MakeAppearanceSampledSurfaceHandle(500U + (i % 128U)));
+        AppearanceSystem3D::SetSurfaceSamplerId(components[i], 4U);
     }
 
     vr::ecs::AppearanceRuntimeScratch<vr::ecs::Dim3> scratch{};
@@ -116,10 +114,9 @@ VR_BENCHMARK_CASE(EcsAppearanceLinkSystem_dim3_geometry_1k_dirty_hint,
     appearance_components.resize(component_count);
     for (std::uint32_t i = 0U; i < component_count; ++i) {
         AppearanceSystem3D::Initialize(appearance_components[i]);
-        AppearanceSystem3D::SetTextureBaseColorId(appearance_components[i], 100U + (i % 128U));
-        AppearanceSystem3D::SetTextureNormalId(appearance_components[i], 200U + (i % 128U));
-        AppearanceSystem3D::SetBindingLayoutId(appearance_components[i], 3U);
-        AppearanceSystem3D::SetSamplerStateId(appearance_components[i], 2U);
+        AppearanceSystem3D::SetBaseColorSurface(appearance_components[i], vr::render::MakeAppearanceSampledSurfaceHandle(100U + (i % 128U)));
+        AppearanceSystem3D::SetNormalSurface(appearance_components[i], vr::render::MakeAppearanceSampledSurfaceHandle(200U + (i % 128U)));
+        AppearanceSystem3D::SetSurfaceSamplerId(appearance_components[i], 2U);
     }
 
     vr::ecs::AppearanceRuntimeScratch<vr::ecs::Dim3> appearance_scratch{};
@@ -189,11 +186,10 @@ VR_BENCHMARK_CASE(EcsAppearancePrepareStage_dim3_dual_renderer_duplicate_build_1
 
     for (std::uint32_t i = 0U; i < component_count; ++i) {
         AppearanceSystem3D::Initialize(appearance_components[i]);
-        AppearanceSystem3D::SetTextureBaseColorId(appearance_components[i], 100U + (i % 128U));
-        AppearanceSystem3D::SetTextureNormalId(appearance_components[i], 200U + (i % 128U));
-        AppearanceSystem3D::SetTextureMetalRoughId(appearance_components[i], 300U + (i % 64U));
-        AppearanceSystem3D::SetBindingLayoutId(appearance_components[i], 5U);
-        AppearanceSystem3D::SetSamplerStateId(appearance_components[i], 3U);
+        AppearanceSystem3D::SetBaseColorSurface(appearance_components[i], vr::render::MakeAppearanceSampledSurfaceHandle(100U + (i % 128U)));
+        AppearanceSystem3D::SetNormalSurface(appearance_components[i], vr::render::MakeAppearanceSampledSurfaceHandle(200U + (i % 128U)));
+        AppearanceSystem3D::SetMetalRoughSurface(appearance_components[i], vr::render::MakeAppearanceSampledSurfaceHandle(300U + (i % 64U)));
+        AppearanceSystem3D::SetSurfaceSamplerId(appearance_components[i], 3U);
 
         GeometrySystem3D::Initialize(geometry_components[i]);
         GeometrySystem3D::SetGeometryId(geometry_components[i], 1U + i);
@@ -266,11 +262,10 @@ VR_BENCHMARK_CASE(EcsAppearanceFrameCoordinator_dim3_dual_renderer_shared_build_
 
     for (std::uint32_t i = 0U; i < component_count; ++i) {
         AppearanceSystem3D::Initialize(appearance_components[i]);
-        AppearanceSystem3D::SetTextureBaseColorId(appearance_components[i], 100U + (i % 128U));
-        AppearanceSystem3D::SetTextureNormalId(appearance_components[i], 200U + (i % 128U));
-        AppearanceSystem3D::SetTextureMetalRoughId(appearance_components[i], 300U + (i % 64U));
-        AppearanceSystem3D::SetBindingLayoutId(appearance_components[i], 5U);
-        AppearanceSystem3D::SetSamplerStateId(appearance_components[i], 3U);
+        AppearanceSystem3D::SetBaseColorSurface(appearance_components[i], vr::render::MakeAppearanceSampledSurfaceHandle(100U + (i % 128U)));
+        AppearanceSystem3D::SetNormalSurface(appearance_components[i], vr::render::MakeAppearanceSampledSurfaceHandle(200U + (i % 128U)));
+        AppearanceSystem3D::SetMetalRoughSurface(appearance_components[i], vr::render::MakeAppearanceSampledSurfaceHandle(300U + (i % 64U)));
+        AppearanceSystem3D::SetSurfaceSamplerId(appearance_components[i], 3U);
 
         GeometrySystem3D::Initialize(geometry_components[i]);
         GeometrySystem3D::SetGeometryId(geometry_components[i], 1U + i);
@@ -332,10 +327,9 @@ VR_BENCHMARK_CASE(EcsAppearanceFrameCoordinator_dim3_link_incremental_sparse_1k,
 
     for (std::uint32_t i = 0U; i < appearance_count; ++i) {
         AppearanceSystem3D::Initialize(appearance_components[i]);
-        AppearanceSystem3D::SetTextureBaseColorId(appearance_components[i], 100U + i);
-        AppearanceSystem3D::SetTextureNormalId(appearance_components[i], 400U + i);
-        AppearanceSystem3D::SetBindingLayoutId(appearance_components[i], 5U);
-        AppearanceSystem3D::SetSamplerStateId(appearance_components[i], 3U);
+        AppearanceSystem3D::SetBaseColorSurface(appearance_components[i], vr::render::MakeAppearanceSampledSurfaceHandle(100U + i));
+        AppearanceSystem3D::SetNormalSurface(appearance_components[i], vr::render::MakeAppearanceSampledSurfaceHandle(400U + i));
+        AppearanceSystem3D::SetSurfaceSamplerId(appearance_components[i], 3U);
     }
 
     for (std::uint32_t i = 0U; i < geometry_count; ++i) {
@@ -389,10 +383,9 @@ VR_BENCHMARK_CASE(EcsAppearanceFrameCoordinator_dim3_link_incremental_idle_1k,
 
     for (std::uint32_t i = 0U; i < component_count; ++i) {
         AppearanceSystem3D::Initialize(appearance_components[i]);
-        AppearanceSystem3D::SetTextureBaseColorId(appearance_components[i], 100U + i);
-        AppearanceSystem3D::SetTextureNormalId(appearance_components[i], 1100U + i);
-        AppearanceSystem3D::SetBindingLayoutId(appearance_components[i], 6U);
-        AppearanceSystem3D::SetSamplerStateId(appearance_components[i], 3U);
+        AppearanceSystem3D::SetBaseColorSurface(appearance_components[i], vr::render::MakeAppearanceSampledSurfaceHandle(100U + i));
+        AppearanceSystem3D::SetNormalSurface(appearance_components[i], vr::render::MakeAppearanceSampledSurfaceHandle(1100U + i));
+        AppearanceSystem3D::SetSurfaceSamplerId(appearance_components[i], 3U);
 
         GeometrySystem3D::Initialize(geometry_components[i]);
         GeometrySystem3D::SetGeometryId(geometry_components[i], 8000U + i);
@@ -434,10 +427,9 @@ VR_BENCHMARK_CASE(EcsAppearanceFrameCoordinator_dim3_dirty_normalize_duplicate_p
     appearance_components.resize(component_count);
     for (std::uint32_t i = 0U; i < component_count; ++i) {
         AppearanceSystem3D::Initialize(appearance_components[i]);
-        AppearanceSystem3D::SetTextureBaseColorId(appearance_components[i], 100U + (i % 128U));
-        AppearanceSystem3D::SetTextureNormalId(appearance_components[i], 200U + (i % 128U));
-        AppearanceSystem3D::SetBindingLayoutId(appearance_components[i], 5U);
-        AppearanceSystem3D::SetSamplerStateId(appearance_components[i], 3U);
+        AppearanceSystem3D::SetBaseColorSurface(appearance_components[i], vr::render::MakeAppearanceSampledSurfaceHandle(100U + (i % 128U)));
+        AppearanceSystem3D::SetNormalSurface(appearance_components[i], vr::render::MakeAppearanceSampledSurfaceHandle(200U + (i % 128U)));
+        AppearanceSystem3D::SetSurfaceSamplerId(appearance_components[i], 3U);
     }
 
     Coordinator3D coordinator{};
@@ -469,4 +461,5 @@ VR_BENCHMARK_CASE(EcsAppearanceFrameCoordinator_dim3_dirty_normalize_duplicate_p
 }
 
 } // namespace
+
 

@@ -1,4 +1,4 @@
-﻿#include "vr/ecs/system/bounds_system.hpp"
+#include "vr/ecs/system/bounds_system.hpp"
 #include "vr/ecs/system/appearance_system.hpp"
 #include "vr/ecs/system/camera_system.hpp"
 #include "vr/ecs/system/surface_system.hpp"
@@ -180,7 +180,7 @@ void InitializeSurface3DComponent(Surface3D& component_,
                                                     MakeStaticAppearanceHandle(appearance_index_),
                                                     0ULL,
                                                     0ULL,
-                                                    component_.runtime.route.visual_resource_id,
+                                                    component_.runtime.route.authoring_visual_resource_id,
                                                     &appearance_.style);
 }
 
@@ -608,4 +608,3 @@ int main(int argc_,
 
     return 0;
 }
-

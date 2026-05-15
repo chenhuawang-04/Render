@@ -1,4 +1,4 @@
-﻿#include "support/test_framework.hpp"
+#include "support/test_framework.hpp"
 #include "vr/ecs/component/particle_component.hpp"
 #include "vr/ecs/component/particle_emitter_component.hpp"
 #include "vr/ecs/system/particle_emitter_system.hpp"
@@ -52,7 +52,7 @@ VR_TEST_CASE(EcsParticleSystem_dim2_defaults_and_emitter_setters_mark_dirty, "un
     ParticleEmitterSystem2D::SetLifetimeRange(component, emitter, 0.25F, 1.25F);
     ParticleSystem2D::SetCapacity(component, 512U, 32U);
     ParticleSystem2D::SetLayer(component, 42);
-    ParticleSystem2D::SetTextureId(component, 77U);
+    ParticleSystem2D::SetSurfaceId(component, 77U);
 
     VR_CHECK(emitter.config.spawn_rate == 128.0F);
     VR_CHECK(emitter.config.lifetime_min_s == 0.25F);
@@ -60,7 +60,7 @@ VR_TEST_CASE(EcsParticleSystem_dim2_defaults_and_emitter_setters_mark_dirty, "un
     VR_CHECK(component.style.max_particles == 512U);
     VR_CHECK(component.style.max_alive_per_frame == 32U);
     VR_CHECK(component.style.layer == 42);
-    VR_CHECK(component.runtime.route.texture_id == 77U);
+    VR_CHECK(component.runtime.route.surface_id == 77U);
     VR_CHECK(component.runtime.revision_authoring > authoring_revision_before);
     VR_CHECK(ParticleSystem2D::HasDirtyFlags(
         component,
@@ -74,8 +74,8 @@ VR_TEST_CASE(EcsParticleSystem_dim3_sort_key_and_shadow_flags, "unit;core;ecs;pa
     ParticleSystem3D::Initialize(component);
     ParticleSystem3D::ClearDirtyFlags(component, 0xFFFFFFFFU);
 
-    ParticleSystem3D::SetVisualResourceId(component, 9U);
-    ParticleSystem3D::SetTextureId(component, 17U);
+    ParticleSystem3D::SetAuthoringVisualResourceId(component, 9U);
+    ParticleSystem3D::SetSurfaceId(component, 17U);
     ParticleSystem3D::SetBatchTag(component, 3U);
     ParticleSystem3D::SetDepthBin(component, 100U);
     ParticleSystem3D::SetShadowFlags(component, true, true);
@@ -85,8 +85,7 @@ VR_TEST_CASE(EcsParticleSystem_dim3_sort_key_and_shadow_flags, "unit;core;ecs;pa
     VR_CHECK(component.runtime.route.cast_shadow == 1U);
     VR_CHECK(component.runtime.route.sort_key != 0U);
     VR_CHECK(ParticleSystem3D::ExtractVisualResourceBucket(component.runtime.route.sort_key) == 9U);
-    VR_CHECK(ParticleSystem3D::ExtractTextureBucket(component.runtime.route.sort_key) == 17U);
+    VR_CHECK(ParticleSystem3D::ExtractSurfaceBucket(component.runtime.route.sort_key) == 17U);
 }
 
 } // namespace
-

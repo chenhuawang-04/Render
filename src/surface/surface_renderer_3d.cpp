@@ -141,8 +141,9 @@ void SurfaceRenderer3D::BuildAppearanceRecordsAndAssignIndices() {
     for (auto& instance : runtime_scratch.instances) {
         ecs::AppearanceGpuRecord<ecs::Dim3> synthesized_record{};
         ecs::AppearanceRuntimeBridge3D appearance_bridge = ecs::MakeAppearanceRuntimeBridge3D(nullptr);
-        render::AppearanceTextureBindingIds3D binding{};
-        binding.texture_source = render::AppearanceTextureSource3D::surface_image;
+        render::AppearanceSampledSurfaceBinding3D binding =
+            render::MakeAppearanceSampledSurfaceBinding3D(
+                render::AppearanceSampledSurfaceDomain::surface_image);
 
         if (surface_components != nullptr && instance.component_index < component_count) {
             const ecs::Surface<ecs::Dim3>& component = surface_components[instance.component_index];
@@ -155,8 +156,8 @@ void SurfaceRenderer3D::BuildAppearanceRecordsAndAssignIndices() {
             }
 
             appearance_bridge = ecs::ReadAppearanceRuntimeBridge3D(component.runtime);
-            binding.base_color_texture_id = component.runtime.source.surface_id;
-            binding.sampler_state_id = component.runtime.source.sampler_id;
+            binding.base_color_surface.surface_id = component.runtime.source.surface_id;
+            binding.surface_sampler_id = component.runtime.source.sampler_id;
         }
 
         render::BuildAppearanceGpuRecord3DFromRuntimeBridge(
@@ -1266,7 +1267,7 @@ void SurfaceRenderer3D::EnsureAppearanceResourcesForFrame(std::uint64_t bindless
     const VkDeviceSize appearance_record_bytes =
         static_cast<VkDeviceSize>(appearance_upload_count) *
         sizeof(ecs::AppearanceGpuRecord<ecs::Dim3>);
-    auto mix_texture_source_revision = [](std::uint32_t accumulator_,
+    auto mix_surface_source_revision = [](std::uint32_t accumulator_,
                                           std::uint32_t revision_) noexcept {
         accumulator_ ^= revision_ + 0x9e3779b9U + (accumulator_ << 6U) + (accumulator_ >> 2U);
         return accumulator_;
@@ -1274,10 +1275,10 @@ void SurfaceRenderer3D::EnsureAppearanceResourcesForFrame(std::uint64_t bindless
     std::uint32_t texture_host_revision = 0U;
     if (texture_host != nullptr && texture_host->IsInitialized()) {
         texture_host_revision =
-            mix_texture_source_revision(texture_host_revision, texture_host->Stats().revision);
+            mix_surface_source_revision(texture_host_revision, texture_host->Stats().revision);
     }
     if (surface_image_host != nullptr && surface_image_host->IsInitialized()) {
-        texture_host_revision = mix_texture_source_revision(texture_host_revision,
+        texture_host_revision = mix_surface_source_revision(texture_host_revision,
                                                             surface_image_host->Stats().revision);
     }
 
@@ -1308,15 +1309,18 @@ void SurfaceRenderer3D::EnsureAppearanceResourcesForFrame(std::uint64_t bindless
     VkDeviceSize partial_upload_bytes = 0U;
     std::uint32_t current_range_begin = 0U;
     std::uint32_t current_range_count = 0U;
+    const render::AppearanceSampledSurfaceResolver3D sampled_surface_resolver{
+        .bindless_resources = bindless_resources,
+        .texture_host = texture_host,
+        .surface_image_host = surface_image_host,
+        .geometry_image_host = nullptr
+    };
     for (std::uint32_t index = 0U; index < appearance_upload_count; ++index) {
         ecs::AppearanceGpuRecord<ecs::Dim3> encoded_record{};
         if (index < appearance_record_count) {
             render::EncodeAppearanceGpuRecord3DForSampling(
                 appearance_source_record_scratch[index],
-                bindless_resources,
-                texture_host,
-                surface_image_host,
-                nullptr,
+                sampled_surface_resolver,
                 encoded_record);
         }
 

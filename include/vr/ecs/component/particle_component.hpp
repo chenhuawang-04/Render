@@ -1,9 +1,10 @@
-﻿#pragma once
+#pragma once
 
 #include "vr/ecs/component/appearance_component.hpp"
 #include "vr/ecs/component/spatial_types.hpp"
 #include "vr/ecs/component/text_component.hpp"
 #include "vr/ecs/concept/dimension.hpp"
+#include "vr/ecs/system/visual_runtime_route_common.hpp"
 
 #include <cstdint>
 #include <limits>
@@ -79,19 +80,12 @@ enum class ParticleBlendMode : std::uint8_t {
 };
 
 struct ParticleRuntimeRoute final {
-    std::uint64_t sort_key;
-    std::uint32_t visual_resource_id;
-    std::uint32_t texture_id;
-    std::uint32_t batch_tag;
-    std::uint32_t user_data;
-    AppearanceHandle appearance_handle;
-    std::uint32_t appearance_pipeline_bucket;
-    std::uint32_t appearance_visual_resource_id;
-    std::uint16_t depth_bin;
-    std::uint8_t visible;
+    VR_ECS_VISUAL_RUNTIME_ROUTE_SORT_KEY_FIELD();
+    std::uint32_t surface_id;
+    VR_ECS_VISUAL_RUNTIME_ROUTE_TRAILING_FIELDS(ParticleRenderPassHint);
     std::uint8_t cast_shadow;
-    ParticleRenderPassHint pass_hint;
-    std::uint32_t dirty_flags;
+    std::uint8_t reserved0;
+    std::uint16_t reserved1;
 };
 
 struct ParticleStyle2D final {
@@ -206,4 +200,3 @@ static_assert(PurePodParticleComponent<Particle<Dim3>>);
 static_assert(sizeof(ParticleRuntimeRoute) <= 64U);
 
 } // namespace vr::ecs
-

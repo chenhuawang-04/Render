@@ -1,4 +1,4 @@
-﻿#include "Center/Memory/Container/Vector/McVector.hpp"
+#include "Center/Memory/Container/Vector/McVector.hpp"
 #include "support/bench_framework.hpp"
 #include "vr/ecs/system/appearance_system.hpp"
 #include "vr/ecs/system/surface_runtime_system.hpp"
@@ -36,7 +36,7 @@ void InitializeScene(SurfaceBenchMcVector<Surface3D>& components_,
                 .sampler_id = 1U + (i % 16U),
                 .uv_set = static_cast<std::uint16_t>(i % 2U),
                 .flags = static_cast<std::uint16_t>(i % 8U)});
-        SurfaceSystem3D::SetVisualResourceId(components_[i], 1U + (i % 64U));
+        SurfaceSystem3D::SetAuthoringVisualResourceId(components_[i], 1U + (i % 64U));
         SurfaceSystem3D::SetDepthBin(components_[i], static_cast<std::uint16_t>(i % 1024U));
         Appearance3D appearance{};
         AppearanceSystem3D::Initialize(appearance);
@@ -84,7 +84,7 @@ VR_BENCHMARK_CASE(EcsSurfaceRuntimeSystem_dim3_build_1k_full_rebuild, "core;ecs;
     const std::uint64_t iterations = bench_context_.Iterations();
     for (std::uint64_t i = 0U; i < iterations; ++i) {
         const std::uint32_t hot_index = static_cast<std::uint32_t>(i) & (k_component_count - 1U);
-        SurfaceSystem3D::SetVisualResourceId(components[hot_index], 1U + ((hot_index + static_cast<std::uint32_t>(i)) & 63U));
+        SurfaceSystem3D::SetAuthoringVisualResourceId(components[hot_index], 1U + ((hot_index + static_cast<std::uint32_t>(i)) & 63U));
         SurfaceSystem3D::SetDepthBin(components[hot_index], static_cast<std::uint16_t>((hot_index + i) & 1023U));
 
         TransformSystem3D::SetLocalPosition(transforms[hot_index],
@@ -205,7 +205,7 @@ VR_BENCHMARK_CASE(EcsSurfaceRuntimeSystem_dim3_build_1k_candidate_visibility_hal
         const std::uint32_t hot_slot = static_cast<std::uint32_t>(i) & (candidate_count - 1U);
         const std::uint32_t hot_index = visible_candidates[hot_slot];
 
-        SurfaceSystem3D::SetVisualResourceId(components[hot_index],
+        SurfaceSystem3D::SetAuthoringVisualResourceId(components[hot_index],
                                        1U + ((hot_index + static_cast<std::uint32_t>(i)) & 63U));
         SurfaceSystem3D::SetDepthBin(components[hot_index],
                                      static_cast<std::uint16_t>((hot_index + i) & 1023U));
@@ -238,4 +238,3 @@ VR_BENCHMARK_CASE(EcsSurfaceRuntimeSystem_dim3_build_1k_candidate_visibility_hal
 }
 
 } // namespace
-

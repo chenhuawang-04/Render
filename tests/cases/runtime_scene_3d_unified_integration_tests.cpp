@@ -1,4 +1,4 @@
-#include "support/test_framework.hpp"
+﻿#include "support/test_framework.hpp"
 #include "vr/asset/texture_host.hpp"
 #include "vr/ecs/system/animation_evaluation_context.hpp"
 #include "vr/ecs/system/appearance_system.hpp"
@@ -356,7 +356,7 @@ void UploadHdrEnvironmentTexture(Runtime& runtime_,
 void InitializeGeometryComponent(Geometry3D& component_,
                                  std::uint32_t geometry_id_,
                                  std::uint32_t appearance_id_,
-                                 vr::ecs::Rgba8 albedo_) {
+                                 vr::ecs::Rgba8 base_color_) {
     GeometrySystem3D::Initialize(component_);
     GeometrySystem3D::SetRuntimeRoute(component_, geometry_id_, appearance_id_, 0U);
     GeometrySystem3D::SetBounds(component_,
@@ -368,8 +368,8 @@ void InitializeGeometryComponent(Geometry3D& component_,
 
     Appearance3D appearance{};
     AppearanceSystem3D::Initialize(appearance);
-    AppearanceSystem3D::SetBaseColor(appearance, albedo_);
-    AppearanceSystem3D::SetOpacity(appearance, static_cast<float>(albedo_.a) / 255.0F);
+    AppearanceSystem3D::SetBaseColor(appearance, base_color_);
+    AppearanceSystem3D::SetOpacity(appearance, static_cast<float>(base_color_.a) / 255.0F);
     AppearanceSystem3D::SetDepthTest(appearance, true);
     AppearanceSystem3D::SetDepthWrite(appearance, true);
     AppearanceSystem3D::SetCastShadow(appearance, true);
@@ -664,7 +664,7 @@ VR_TEST_CASE(RuntimeIntegration_unified_scene_3d_bloom_post_stack_smoke,
 
         vr::geometry::GeometryAppearanceDesc geometry_appearance_desc{};
         geometry_appearance_desc.appearance_id = 11U;
-        geometry_appearance_desc.image_id = 101U;
+        geometry_appearance_desc.sampled_surface_binding.base_color_surface.surface_id = 101U;
         geometry_appearance_desc.uv_scale_u = 1.0F;
         geometry_appearance_desc.uv_scale_v = 1.0F;
         geometry_appearance_host.UpsertAppearance(geometry_appearance_desc);
@@ -1268,4 +1268,5 @@ VR_TEST_CASE(RuntimeIntegration_unified_scene_3d_bloom_post_stack_smoke,
 }
 
 } // namespace
+
 

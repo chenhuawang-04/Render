@@ -54,12 +54,7 @@ const uint k_appearance_texture_presence_metal_rough = 1u << 2u;
 const uint k_appearance_texture_presence_occlusion = 1u << 3u;
 const uint k_appearance_texture_presence_emissive = 1u << 4u;
 
-struct DecodedSurfaceAppearance {
-    MaterialSample material;
-    bool alpha_test_enabled;
-    float alpha_cutoff;
-    bool unlit;
-};
+#include "vr/render/appearance_decode_3d.glsl"
 
 vec3 rotate_environment_direction(vec3 direction_) {
     float sin_y = ibl_params.ibl_rotation_max_lod_flags.x;
@@ -99,119 +94,36 @@ vec3 evaluate_sh9_irradiance(vec3 normal_) {
     return max(irradiance, vec3(0.0));
 }
 
-bool appearance_texture_present(uint presence_mask_, uint flag_) {
-    return (presence_mask_ & flag_) != 0u;
-}
-
-uint appearance_alpha_mode(AppearanceGpuRecord record_) {
-    return (record_.flags_u32.x >> k_appearance_alpha_mode_shift) & 0x3u;
-}
-
-uint appearance_shading_model(AppearanceGpuRecord record_) {
-    return (record_.flags_u32.x >> k_appearance_shading_model_shift) & 0x3u;
-}
-
-bool has_valid_tangent_basis() {
-    return dot(in_tangent_world, in_tangent_world) > 1e-6 &&
-           dot(in_bitangent_world, in_bitangent_world) > 1e-6;
-}
-
-DecodedSurfaceAppearance decode_surface_material(vec3 normal_world_) {
-    DecodedSurfaceAppearance decoded;
+DecodedAppearance3D decode_surface_appearance(vec3 normal_world_) {
     AppearanceGpuRecord appearance_record = appearance_records[in_appearance_record_index];
-    uint presence_mask = appearance_record.textures1_u32.w;
-    uint sampler_slot = appearance_record.textures1_u32.y;
-    vec4 base_factor = appearance_record.base_rgba;
-    vec4 emissive_factor = appearance_record.emissive_rgba;
-    vec4 appearance_params = appearance_record.appearance_params;
-    vec4 extras = appearance_record.extras;
-    float occlusion_strength = clamp(appearance_params.w, 0.0, 1.0);
-
-    vec4 base_sample = vec4(1.0);
-    if (appearance_texture_present(presence_mask, k_appearance_texture_presence_base_color)) {
-        base_sample = SampleTexture2D(appearance_record.textures0_u32.x,
-                                      sampler_slot,
-                                      in_uv);
-    }
-
-    decoded.material.base_color = base_sample.rgb * base_factor.rgb;
-    decoded.material.alpha = base_sample.a * base_factor.a * clamp(extras.z, 0.0, 1.0);
-    decoded.material.metallic = clamp(appearance_params.x, 0.0, 1.0);
-    decoded.material.roughness = clamp(appearance_params.y, 0.04, 1.0);
-    decoded.material.normal_scale = max(appearance_params.z, 0.0);
-    decoded.material.occlusion = occlusion_strength;
-    decoded.material.normal_world = normalize(normal_world_);
-
-    vec3 orm_sample = vec3(1.0);
-    if (appearance_texture_present(presence_mask, k_appearance_texture_presence_metal_rough)) {
-        orm_sample = SampleTexture2D(appearance_record.textures0_u32.z,
-                                     sampler_slot,
-                                     in_uv).rgb;
-        decoded.material.roughness = clamp(orm_sample.g * decoded.material.roughness, 0.04, 1.0);
-        decoded.material.metallic = clamp(orm_sample.b * decoded.material.metallic, 0.0, 1.0);
-    }
-
-    float occlusion_value = 1.0;
-    if (appearance_texture_present(presence_mask, k_appearance_texture_presence_occlusion)) {
-        occlusion_value = SampleTexture2D(appearance_record.textures0_u32.w,
-                                          sampler_slot,
-                                          in_uv).r;
-    } else if (appearance_texture_present(presence_mask, k_appearance_texture_presence_metal_rough)) {
-        occlusion_value = orm_sample.r;
-    }
-    decoded.material.occlusion = mix(1.0, occlusion_value, occlusion_strength);
-
-    if (appearance_texture_present(presence_mask, k_appearance_texture_presence_normal) &&
-        has_valid_tangent_basis()) {
-        vec3 tangent_normal =
-            SampleTexture2D(appearance_record.textures0_u32.y,
-                            sampler_slot,
-                            in_uv).xyz * 2.0 - 1.0;
-        tangent_normal.xy *= decoded.material.normal_scale;
-        tangent_normal = normalize(tangent_normal);
-
-        vec3 tangent_world = normalize(in_tangent_world);
-        vec3 bitangent_world = normalize(in_bitangent_world);
-        mat3 tbn = mat3(tangent_world, bitangent_world, normalize(normal_world_));
-        decoded.material.normal_world = normalize(tbn * tangent_normal);
-    }
-
-    vec3 emissive_sample = vec3(1.0);
-    if (appearance_texture_present(presence_mask, k_appearance_texture_presence_emissive)) {
-        emissive_sample =
-            SampleTexture2D(appearance_record.textures1_u32.x,
-                            sampler_slot,
-                            in_uv).rgb;
-    }
-    decoded.material.emissive = emissive_sample * emissive_factor.rgb * max(extras.x, 0.0);
-    decoded.alpha_test_enabled =
-        appearance_alpha_mode(appearance_record) == k_appearance_alpha_mode_masked;
-    decoded.alpha_cutoff = clamp(extras.y, 0.0, 1.0);
-    decoded.unlit = appearance_shading_model(appearance_record) == k_appearance_shading_model_unlit;
-    return decoded;
+    return decode_appearance_record_3d(appearance_record,
+                                       in_uv,
+                                       normal_world_,
+                                       in_tangent_world,
+                                       in_bitangent_world);
 }
 
-vec3 evaluate_surface_ibl(MaterialSample material_,
+vec3 evaluate_surface_ibl(AppearanceSample3D appearance_,
                           vec3 view_dir_) {
     float ibl_intensity = max(ibl_params.ibl_tint_intensity.w, 0.0);
     if (ibl_intensity <= 1e-6) {
         return vec3(0.0);
     }
 
-    vec3 diffuse_irradiance = evaluate_sh9_irradiance(material_.normal_world);
+    vec3 diffuse_irradiance = evaluate_sh9_irradiance(appearance_.normal_world);
     vec3 reflection_dir = rotate_environment_direction(reflect(-normalize(view_dir_),
-                                                               normalize(material_.normal_world)));
+                                                               normalize(appearance_.normal_world)));
     float max_specular_lod = max(ibl_params.ibl_rotation_max_lod_flags.z, 0.0);
     vec3 prefiltered_specular =
         SampleTextureCubeLod(pc.ibl_specular_texture_slot,
                              pc.ibl_sampler_slot,
                              reflection_dir,
-                             material_.roughness * max_specular_lod).rgb;
-    float n_dot_v = max(dot(normalize(material_.normal_world), normalize(view_dir_)), 0.0);
+                             appearance_.roughness * max_specular_lod).rgb;
+    float n_dot_v = max(dot(normalize(appearance_.normal_world), normalize(view_dir_)), 0.0);
     vec2 brdf = SampleTexture2D(pc.ibl_brdf_lut_texture_slot,
                                 pc.ibl_sampler_slot,
-                                vec2(n_dot_v, material_.roughness)).rg;
-    return EvaluatePbrIblFromTerms(material_,
+                                vec2(n_dot_v, appearance_.roughness)).rg;
+    return EvaluatePbrIblFromTerms(appearance_,
                                    view_dir_,
                                    diffuse_irradiance,
                                    prefiltered_specular,
@@ -221,23 +133,23 @@ vec3 evaluate_surface_ibl(MaterialSample material_,
 }
 
 void main() {
-    DecodedSurfaceAppearance surface_state = decode_surface_material(in_normal_world);
-    MaterialSample material = surface_state.material;
-    if (surface_state.alpha_test_enabled && material.alpha < surface_state.alpha_cutoff) {
+    DecodedAppearance3D appearance_state = decode_surface_appearance(in_normal_world);
+    AppearanceSample3D appearance = appearance_state.appearance;
+    if (appearance_state.alpha_test_enabled && appearance.alpha < appearance_state.alpha_cutoff) {
         discard;
     }
-    if (material.alpha <= 1e-5) {
+    if (appearance.alpha <= 1e-5) {
         discard;
     }
 
-    if (surface_state.unlit) {
-        out_color = vec4(material.base_color + material.emissive, material.alpha);
+    if (appearance_state.unlit) {
+        out_color = vec4(appearance.base_color + appearance.emissive, appearance.alpha);
         return;
     }
 
     vec3 camera_position = pc.camera_position.xyz;
     vec3 view_dir = normalize(camera_position - in_world_position);
-    vec3 ibl_lighting = evaluate_surface_ibl(material, view_dir);
-    vec3 shaded_rgb = ibl_lighting * material.occlusion + material.emissive;
-    out_color = vec4(shaded_rgb, material.alpha);
+    vec3 ibl_lighting = evaluate_surface_ibl(appearance, view_dir);
+    vec3 shaded_rgb = ibl_lighting * appearance.occlusion + appearance.emissive;
+    out_color = vec4(shaded_rgb, appearance.alpha);
 }

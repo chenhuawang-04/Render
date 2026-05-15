@@ -163,42 +163,6 @@ void BuildGpuStateRecords(const ParticleT* particles_,
         return;
     }
 
-    auto encode_pipeline_state = [](const auto& component_) noexcept {
-        using ComponentT = std::remove_cvref_t<decltype(component_)>;
-        const ecs::RuntimeBlendPreset blend_preset = ecs::ResolveRuntimeBlendPreset(
-            component_.style.blend_mode,
-            component_.style.premultiplied_alpha != 0U);
-        std::uint32_t state =
-            (static_cast<std::uint32_t>(blend_preset) & ecs::particle_pipeline_state_blend_mask)
-            << ecs::particle_pipeline_state_blend_shift;
-        state |= (static_cast<std::uint32_t>(component_.style.facing_mode) &
-                  ecs::particle_pipeline_state_facing_mode_mask)
-                 << ecs::particle_pipeline_state_facing_mode_shift;
-        state |= (static_cast<std::uint32_t>(component_.style.render_mode) &
-                  ecs::particle_pipeline_state_render_mode_mask)
-                 << ecs::particle_pipeline_state_render_mode_shift;
-        state |= (static_cast<std::uint32_t>(component_.style.lighting_mode) &
-                  ecs::particle_pipeline_state_lighting_mode_mask)
-                 << ecs::particle_pipeline_state_lighting_mode_shift;
-        if constexpr (std::same_as<ComponentT, ecs::Particle<ecs::Dim3>>) {
-            state |= static_cast<std::uint32_t>(component_.style.depth_test != 0U)
-                     << ecs::particle_pipeline_state_depth_test_shift;
-            state |= static_cast<std::uint32_t>(component_.style.depth_write != 0U)
-                     << ecs::particle_pipeline_state_depth_write_shift;
-            state |= static_cast<std::uint32_t>(component_.style.double_sided != 0U)
-                     << ecs::particle_pipeline_state_double_sided_shift;
-        }
-        return state;
-    };
-
-    std::uint64_t current_sort_key = 0U;
-    std::uint32_t current_visual_resource_id = 0U;
-    std::uint32_t current_texture_id = 0U;
-    std::uint32_t current_batch_tag = 0U;
-    std::uint32_t current_pipeline_state = 0U;
-    bool batch_valid = false;
-    std::uint32_t current_batch_index = 0U;
-
     for (std::uint32_t component_index : runtime_scratch_.build_component_indices) {
         if (out_records_.size() >= target_count) {
             break;
@@ -210,9 +174,6 @@ void BuildGpuStateRecords(const ParticleT* particles_,
         if (component.runtime.route.visible == 0U || emitter_state.active_count == 0U) {
             continue;
         }
-
-        const std::uint64_t sort_key = ecs::ParticleSystem<typename ParticleT::StyleType::DimensionTag>::SortKey(component);
-        (void)sort_key;
 
         for (std::uint32_t particle_index = 0U;
              particle_index < emitter_state.active_count && out_records_.size() < target_count;
@@ -247,7 +208,7 @@ void BuildGpuStateRecords(const ParticleT* particles_,
             record.angular_velocity_radians = emitter_state.particles.angular_velocity_radians[particle_index];
             record.start_color_rgba8 = emitter_state.particles.start_color_rgba8[particle_index];
             record.end_color_rgba8 = emitter_state.particles.end_color_rgba8[particle_index];
-            record.texture_id = component.runtime.route.texture_id;
+            record.texture_id = component.runtime.route.surface_id;
             record.sampler_slot = 0U;
             record.component_index = component_index;
             record.user_data = component.runtime.route.user_data;
@@ -430,7 +391,7 @@ template<typename ParticleT, typename EmitterT>
     record.angular_velocity_radians = emitter_.config.angular_velocity_min;
     record.start_color_rgba8 = pack_rgba8(component_.style.start_color);
     record.end_color_rgba8 = pack_rgba8(component_.style.end_color);
-    record.texture_id = component_.runtime.route.texture_id;
+    record.texture_id = component_.runtime.route.surface_id;
     record.sampler_slot = 0U;
     record.component_index = component_index_;
     record.user_data = component_.runtime.route.user_data;
@@ -481,8 +442,8 @@ void BuildGpuStateRecords(const ParticleT* particles_,
     std::uint32_t current_batch_index = 0U;
     std::uint32_t current_batch_instance_end = 0U;
     std::uint64_t current_sort_key = 0U;
-    std::uint32_t current_visual_resource_id = 0U;
-    std::uint32_t current_texture_id = 0U;
+    std::uint32_t current_effective_visual_resource_id = 0U;
+    std::uint32_t current_surface_id = 0U;
     std::uint32_t current_batch_tag = 0U;
     std::uint32_t current_pipeline_state = 0U;
     bool batch_valid = false;
@@ -505,24 +466,24 @@ void BuildGpuStateRecords(const ParticleT* particles_,
         }
 
         const std::uint64_t sort_key = ComputeParticleSortKey(component);
-        const std::uint32_t visual_resource_id =
+        const std::uint32_t effective_visual_resource_id =
             ecs::ResolveEffectiveVisualResourceId(component.runtime.route);
-        const std::uint32_t texture_id = component.runtime.route.texture_id;
+        const std::uint32_t surface_id = component.runtime.route.surface_id;
         const std::uint32_t batch_tag = component.runtime.route.batch_tag;
         const std::uint32_t pipeline_state = EncodeParticlePipelineState(component);
         const std::uint32_t instance_begin = visible_instance_cursor;
 
         if (!batch_valid ||
             current_sort_key != sort_key ||
-            current_visual_resource_id != visual_resource_id ||
-            current_texture_id != texture_id ||
+            current_effective_visual_resource_id != effective_visual_resource_id ||
+            current_surface_id != surface_id ||
             current_batch_tag != batch_tag ||
             current_pipeline_state != pipeline_state ||
             current_batch_instance_end != instance_begin) {
             current_batch_index = batch_valid ? (current_batch_index + 1U) : 0U;
             current_sort_key = sort_key;
-            current_visual_resource_id = visual_resource_id;
-            current_texture_id = texture_id;
+            current_effective_visual_resource_id = effective_visual_resource_id;
+            current_surface_id = surface_id;
             current_batch_tag = batch_tag;
             current_pipeline_state = pipeline_state;
             batch_valid = true;

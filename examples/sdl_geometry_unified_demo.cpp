@@ -1,4 +1,4 @@
-#include "vr/ecs/system/camera_system.hpp"
+﻿#include "vr/ecs/system/camera_system.hpp"
 #include "vr/ecs/system/appearance_system.hpp"
 #include "vr/ecs/system/geometry_mesh_system.hpp"
 #include "vr/ecs/system/geometry_path_system.hpp"
@@ -79,12 +79,12 @@ void InitializeGeometry3DComponent(Geometry3D& component_,
                                    std::uint32_t appearance_index_,
                                    std::uint32_t geometry_id_,
                                    std::uint32_t appearance_id_,
-                                   vr::ecs::Rgba8 albedo_color_,
+                                   vr::ecs::Rgba8 base_color_,
                                    bool depth_write_,
                                    bool double_sided_) {
     GeometryMeshSystem::Initialize(component_);
     GeometryMeshSystem::SetMeshRoute(component_, geometry_id_, 0U, 0U);
-    GeometrySystem3D::SetVisualResourceId(component_, appearance_id_);
+    GeometrySystem3D::SetAuthoringVisualResourceId(component_, appearance_id_);
     GeometrySystem3D::SetDepthBin(component_, 32U);
     GeometryMeshSystem::SetTopology(component_, vr::ecs::Geometry3DTopology::triangles);
     GeometryMeshSystem::SetBounds(component_,
@@ -92,13 +92,13 @@ void InitializeGeometry3DComponent(Geometry3D& component_,
                                   vr::ecs::Float3{.x = 0.5F, .y = 0.5F, .z = 0.05F});
 
     AppearanceSystem3D::Initialize(appearance_);
-    AppearanceSystem3D::SetBaseColor(appearance_, albedo_color_);
+    AppearanceSystem3D::SetBaseColor(appearance_, base_color_);
     AppearanceSystem3D::SetDepthTest(appearance_, true);
     AppearanceSystem3D::SetDepthWrite(appearance_, depth_write_);
     AppearanceSystem3D::SetDoubleSided(appearance_, double_sided_);
     AppearanceSystem3D::SetCastShadow(appearance_, true);
     AppearanceSystem3D::SetReceiveShadow(appearance_, true);
-    if (albedo_color_.a < 255U || !depth_write_) {
+    if (base_color_.a < 255U || !depth_write_) {
         AppearanceSystem3D::SetBlendMode(appearance_, vr::ecs::AppearanceBlendMode::alpha);
         AppearanceSystem3D::SetAlphaMode(appearance_, vr::ecs::AppearanceAlphaMode::blend);
     }
@@ -361,14 +361,14 @@ int main(int argc_,
 
         vr::geometry::GeometryAppearanceDesc appearance_a{};
         appearance_a.appearance_id = 11U;
-        appearance_a.image_id = 1001U;
+        appearance_a.sampled_surface_binding.base_color_surface.surface_id = 1001U;
         appearance_a.uv_scale_u = 1.0F;
         appearance_a.uv_scale_v = 1.0F;
         geometry_appearance_host.UpsertAppearance(appearance_a);
 
         vr::geometry::GeometryAppearanceDesc appearance_b{};
         appearance_b.appearance_id = 22U;
-        appearance_b.image_id = 1002U;
+        appearance_b.sampled_surface_binding.base_color_surface.surface_id = 1002U;
         appearance_b.uv_scale_u = 1.35F;
         appearance_b.uv_scale_v = 1.35F;
         appearance_b.uv_bias_u = -0.15F;

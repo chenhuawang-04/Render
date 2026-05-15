@@ -1,4 +1,4 @@
-﻿#include "Center/Memory/Container/Vector/McVector.hpp"
+#include "Center/Memory/Container/Vector/McVector.hpp"
 #include "support/bench_framework.hpp"
 #include "vr/ecs/system/appearance_system.hpp"
 #include "vr/ecs/system/geometry_mesh_system.hpp"
@@ -35,7 +35,7 @@ void InitializeScene(GeometryBenchMcVector<Geometry3D>& components_,
                                          1U + (i % 64U),
                                          i % 3U,
                                          static_cast<std::uint16_t>(i % 2U));
-        GeometrySystem3D::SetVisualResourceId(components_[i], 1U + (i % 256U));
+        GeometrySystem3D::SetAuthoringVisualResourceId(components_[i], 1U + (i % 256U));
         GeometrySystem3D::SetDepthBin(components_[i], static_cast<std::uint16_t>(i % 1024U));
         GeometryMeshSystem::SetTopology(components_[i], vr::ecs::Geometry3DTopology::triangles);
         Appearance3D appearance{};
@@ -79,7 +79,7 @@ VR_BENCHMARK_CASE(EcsGeometryRuntimeSystem_dim3_build_1k_full_rebuild, "core;ecs
     const std::uint64_t iterations = bench_context_.Iterations();
     for (std::uint64_t i = 0U; i < iterations; ++i) {
         const std::uint32_t hot_index = static_cast<std::uint32_t>(i) & (k_component_count - 1U);
-        GeometrySystem3D::SetVisualResourceId(components[hot_index], 1U + ((hot_index + static_cast<std::uint32_t>(i)) & 255U));
+        GeometrySystem3D::SetAuthoringVisualResourceId(components[hot_index], 1U + ((hot_index + static_cast<std::uint32_t>(i)) & 255U));
         GeometrySystem3D::SetDepthBin(components[hot_index], static_cast<std::uint16_t>((hot_index + i) & 1023U));
 
         TransformSystem3D::SetLocalPosition(transforms[hot_index],
@@ -290,4 +290,3 @@ VR_BENCHMARK_CASE(EcsGeometryRuntimeSystem_dim3_build_1k_candidate_visibility_ha
 }
 
 } // namespace
-

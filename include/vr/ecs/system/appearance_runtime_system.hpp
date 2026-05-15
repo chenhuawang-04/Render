@@ -557,24 +557,27 @@ private:
     [[nodiscard]] static std::uint64_t ComposeResourceKey(const AppearanceBinding2D& binding_) noexcept {
         std::uint64_t hash = k_hash_offset_basis;
         HashCombine(hash, static_cast<std::uint64_t>(SceneDimension::dim2));
-        HashCombine(hash, static_cast<std::uint64_t>(binding_.texture_base_id));
-        HashCombine(hash, static_cast<std::uint64_t>(binding_.texture_mask_id));
-        HashCombine(hash, static_cast<std::uint64_t>(binding_.texture_lut_id));
-        HashCombine(hash, static_cast<std::uint64_t>(binding_.sampler_state_id));
-        HashCombine(hash, static_cast<std::uint64_t>(binding_.binding_layout_id));
+        HashCombine(hash, static_cast<std::uint64_t>(binding_.pattern_surface));
+        HashCombine(hash, static_cast<std::uint64_t>(binding_.mask_surface));
+        HashCombine(hash, static_cast<std::uint64_t>(binding_.lut_surface));
+        HashCombine(hash, static_cast<std::uint64_t>(binding_.surface_sampler_id));
         return hash;
     }
 
     [[nodiscard]] static std::uint64_t ComposeResourceKey(const AppearanceBinding3D& binding_) noexcept {
         std::uint64_t hash = k_hash_offset_basis;
         HashCombine(hash, static_cast<std::uint64_t>(SceneDimension::dim3));
-        HashCombine(hash, static_cast<std::uint64_t>(binding_.texture_base_color_id));
-        HashCombine(hash, static_cast<std::uint64_t>(binding_.texture_normal_id));
-        HashCombine(hash, static_cast<std::uint64_t>(binding_.texture_metal_rough_id));
-        HashCombine(hash, static_cast<std::uint64_t>(binding_.texture_occlusion_id));
-        HashCombine(hash, static_cast<std::uint64_t>(binding_.texture_emissive_id));
-        HashCombine(hash, static_cast<std::uint64_t>(binding_.sampler_state_id));
-        HashCombine(hash, static_cast<std::uint64_t>(binding_.binding_layout_id));
+        HashCombine(hash, static_cast<std::uint64_t>(binding_.base_color_surface.surface_id));
+        HashCombine(hash, static_cast<std::uint64_t>(binding_.base_color_surface.domain));
+        HashCombine(hash, static_cast<std::uint64_t>(binding_.normal_surface.surface_id));
+        HashCombine(hash, static_cast<std::uint64_t>(binding_.normal_surface.domain));
+        HashCombine(hash, static_cast<std::uint64_t>(binding_.metal_rough_surface.surface_id));
+        HashCombine(hash, static_cast<std::uint64_t>(binding_.metal_rough_surface.domain));
+        HashCombine(hash, static_cast<std::uint64_t>(binding_.occlusion_surface.surface_id));
+        HashCombine(hash, static_cast<std::uint64_t>(binding_.occlusion_surface.domain));
+        HashCombine(hash, static_cast<std::uint64_t>(binding_.emissive_surface.surface_id));
+        HashCombine(hash, static_cast<std::uint64_t>(binding_.emissive_surface.domain));
+        HashCombine(hash, static_cast<std::uint64_t>(binding_.surface_sampler_id));
         return hash;
     }
 
@@ -675,10 +678,10 @@ private:
             static_cast<std::uint32_t>(component_.runtime.resource_key & 0xFFFFFFFFULL)
         };
         out_record_.textures_u32 = {
-            component_.binding.texture_base_id,
-            component_.binding.texture_mask_id,
-            component_.binding.texture_lut_id,
-            component_.binding.sampler_state_id
+            component_.binding.pattern_surface,
+            component_.binding.mask_surface,
+            component_.binding.lut_surface,
+            component_.binding.surface_sampler_id
         };
     }
 
@@ -714,18 +717,18 @@ private:
             PackStyleFlags(component_.style),
             static_cast<std::uint32_t>(static_cast<std::int32_t>(component_.style.layer)),
             static_cast<std::uint32_t>(component_.runtime.pipeline_key & 0xFFFFFFFFULL),
-            static_cast<std::uint32_t>(component_.runtime.resource_key & 0xFFFFFFFFULL)
+            vr::render::PackAppearanceSampledSurfaceDomains3D(component_.binding)
         };
         out_record_.textures0_u32 = {
-            component_.binding.texture_base_color_id,
-            component_.binding.texture_normal_id,
-            component_.binding.texture_metal_rough_id,
-            component_.binding.texture_occlusion_id
+            component_.binding.base_color_surface.surface_id,
+            component_.binding.normal_surface.surface_id,
+            component_.binding.metal_rough_surface.surface_id,
+            component_.binding.occlusion_surface.surface_id
         };
         out_record_.textures1_u32 = {
-            component_.binding.texture_emissive_id,
-            component_.binding.sampler_state_id,
-            component_.binding.binding_layout_id,
+            component_.binding.emissive_surface.surface_id,
+            component_.binding.surface_sampler_id,
+            0U,
             0U
         };
     }

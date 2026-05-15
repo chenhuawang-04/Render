@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "vr/ecs/component/particle_component.hpp"
 #include "vr/ecs/system/transparency_render_policy.hpp"
@@ -23,27 +23,27 @@ public:
         return appearance_handle_mutation_serial.load(std::memory_order_relaxed);
     }
 
-    // [pass:2][visual_resource:16][texture:16][minor:16][batch:14]
+    // [pass:2][visual_resource:16][surface:16][minor:16][batch:14]
     static constexpr std::uint32_t sort_key_batch_bits = 14U;
     static constexpr std::uint32_t sort_key_minor_bits = 16U;
-    static constexpr std::uint32_t sort_key_texture_bits = 16U;
+    static constexpr std::uint32_t sort_key_surface_bits = 16U;
     static constexpr std::uint32_t sort_key_visual_resource_bits = 16U;
     static constexpr std::uint32_t sort_key_pass_bits = 2U;
 
     static constexpr std::uint32_t sort_key_batch_shift = 0U;
     static constexpr std::uint32_t sort_key_minor_shift = sort_key_batch_shift + sort_key_batch_bits;
-    static constexpr std::uint32_t sort_key_texture_shift = sort_key_minor_shift + sort_key_minor_bits;
-    static constexpr std::uint32_t sort_key_visual_resource_shift = sort_key_texture_shift + sort_key_texture_bits;
+    static constexpr std::uint32_t sort_key_surface_shift = sort_key_minor_shift + sort_key_minor_bits;
+    static constexpr std::uint32_t sort_key_visual_resource_shift = sort_key_surface_shift + sort_key_surface_bits;
     static constexpr std::uint32_t sort_key_pass_shift = sort_key_visual_resource_shift + sort_key_visual_resource_bits;
-    static constexpr std::uint32_t sort_key_binding_shift = sort_key_texture_shift;
+    static constexpr std::uint32_t sort_key_binding_shift = sort_key_surface_shift;
 
     static constexpr std::uint64_t sort_key_batch_mask = (std::uint64_t{1U} << sort_key_batch_bits) - 1U;
     static constexpr std::uint64_t sort_key_minor_mask = (std::uint64_t{1U} << sort_key_minor_bits) - 1U;
-    static constexpr std::uint64_t sort_key_texture_mask = (std::uint64_t{1U} << sort_key_texture_bits) - 1U;
+    static constexpr std::uint64_t sort_key_surface_mask = (std::uint64_t{1U} << sort_key_surface_bits) - 1U;
     static constexpr std::uint64_t sort_key_visual_resource_mask = (std::uint64_t{1U} << sort_key_visual_resource_bits) - 1U;
     static constexpr std::uint64_t sort_key_pass_mask = (std::uint64_t{1U} << sort_key_pass_bits) - 1U;
 
-    static_assert(sort_key_pass_bits + sort_key_visual_resource_bits + sort_key_texture_bits +
+    static_assert(sort_key_pass_bits + sort_key_visual_resource_bits + sort_key_surface_bits +
                       sort_key_minor_bits + sort_key_batch_bits == 64U,
                   "ParticleSystem sort-key bit layout must be exactly 64 bits");
 
@@ -93,20 +93,16 @@ public:
     }
 
     static void SetDefaultRuntime(ParticleType& component_) noexcept {
-        component_.runtime.route.sort_key = 0U;
-        component_.runtime.route.visual_resource_id = 0U;
-        component_.runtime.route.texture_id = 0U;
-        component_.runtime.route.batch_tag = 0U;
-        component_.runtime.route.user_data = 0U;
-        ClearAppearanceRuntimeRoute(component_.runtime.route);
-        component_.runtime.route.depth_bin = 0U;
-        component_.runtime.route.visible = 1U;
-        component_.runtime.route.cast_shadow = 0U;
-        component_.runtime.route.pass_hint = ParticleRenderPassHint::transparent;
-        component_.runtime.route.dirty_flags = particle_dirty_style_flag |
+        InitializeVisualRuntimeRouteCommon(component_.runtime.route,
+                                           ParticleRenderPassHint::transparent,
+                                           particle_dirty_style_flag |
                                                particle_dirty_emitter_flag |
                                                particle_dirty_runtime_flag |
-                                               particle_dirty_simulation_flag;
+                                               particle_dirty_simulation_flag);
+        component_.runtime.route.surface_id = 0U;
+        component_.runtime.route.cast_shadow = 0U;
+        component_.runtime.route.reserved0 = 0U;
+        component_.runtime.route.reserved1 = 0U;
         component_.runtime.emitter_handle = invalid_particle_emitter_handle;
         component_.runtime.pool_handle = invalid_particle_pool_handle;
         component_.runtime.active_count = 0U;
@@ -118,90 +114,84 @@ public:
     }
 
     [[nodiscard]] static std::uint32_t DirtyFlags(const ParticleType& component_) noexcept {
-        return component_.runtime.route.dirty_flags;
+        return VisualRuntimeRouteDirtyFlags(component_.runtime.route);
     }
 
     [[nodiscard]] static bool HasDirtyFlags(const ParticleType& component_,
                                             std::uint32_t dirty_mask_) noexcept {
-        return (component_.runtime.route.dirty_flags & dirty_mask_) != 0U;
+        return HasVisualRuntimeRouteDirtyFlags(component_.runtime.route, dirty_mask_);
     }
 
     static void MarkDirty(ParticleType& component_, std::uint32_t dirty_mask_) noexcept {
-        component_.runtime.route.dirty_flags |= dirty_mask_;
+        MarkVisualRuntimeRouteDirty(component_.runtime.route, dirty_mask_);
     }
 
     static void ClearDirtyFlags(ParticleType& component_, std::uint32_t clear_mask_) noexcept {
-        component_.runtime.route.dirty_flags &= ~clear_mask_;
+        ClearVisualRuntimeRouteDirtyFlags(component_.runtime.route, clear_mask_);
     }
 
     static void SetVisible(ParticleType& component_, bool visible_) noexcept {
-        const std::uint8_t visible_value = visible_ ? 1U : 0U;
-        if (component_.runtime.route.visible == visible_value) {
+        if (!SetVisualRuntimeRouteVisible(component_.runtime.route, visible_)) {
             return;
         }
-        component_.runtime.route.visible = visible_value;
         MarkDirty(component_, particle_dirty_runtime_flag);
         BumpAuthoringRevision(component_);
     }
 
     static void SetRenderPassHint(ParticleType& component_,
                                   ParticleRenderPassHint pass_hint_) noexcept {
-        if (component_.runtime.route.pass_hint == pass_hint_) {
+        if (!SetVisualRuntimeRoutePassHint(component_.runtime.route, pass_hint_)) {
             return;
         }
-        component_.runtime.route.pass_hint = pass_hint_;
         MarkDirty(component_, particle_dirty_runtime_flag);
         BumpAuthoringRevision(component_);
         RebuildSortKey(component_);
     }
 
-    static void SetVisualResourceId(ParticleType& component_,
-                                    std::uint32_t visual_resource_id_) noexcept {
-        if (component_.runtime.route.visual_resource_id == visual_resource_id_) {
+    static void SetAuthoringVisualResourceId(ParticleType& component_,
+                                             std::uint32_t authoring_visual_resource_id_) noexcept {
+        if (!SetVisualRuntimeRouteAuthoringVisualResourceId(component_.runtime.route,
+                                                            authoring_visual_resource_id_)) {
             return;
         }
-        component_.runtime.route.visual_resource_id = visual_resource_id_;
         MarkDirty(component_, particle_dirty_runtime_flag);
         BumpAuthoringRevision(component_);
         RebuildSortKey(component_);
     }
 
-    static void SetTextureId(ParticleType& component_, std::uint32_t texture_id_) noexcept {
-        if (component_.runtime.route.texture_id == texture_id_) {
+    static void SetSurfaceId(ParticleType& component_, std::uint32_t surface_id_) noexcept {
+        if (component_.runtime.route.surface_id == surface_id_) {
             return;
         }
-        component_.runtime.route.texture_id = texture_id_;
+        component_.runtime.route.surface_id = surface_id_;
         MarkDirty(component_, particle_dirty_runtime_flag);
         BumpAuthoringRevision(component_);
         RebuildSortKey(component_);
     }
 
     static void SetBatchTag(ParticleType& component_, std::uint32_t batch_tag_) noexcept {
-        if (component_.runtime.route.batch_tag == batch_tag_) {
+        if (!SetVisualRuntimeRouteBatchTag(component_.runtime.route, batch_tag_)) {
             return;
         }
-        component_.runtime.route.batch_tag = batch_tag_;
         MarkDirty(component_, particle_dirty_runtime_flag);
         BumpAuthoringRevision(component_);
         RebuildSortKey(component_);
     }
 
     static void SetUserData(ParticleType& component_, std::uint32_t user_data_) noexcept {
-        if (component_.runtime.route.user_data == user_data_) {
+        if (!SetVisualRuntimeRouteUserData(component_.runtime.route, user_data_)) {
             return;
         }
-        component_.runtime.route.user_data = user_data_;
         MarkDirty(component_, particle_dirty_runtime_flag);
         BumpAuthoringRevision(component_);
     }
 
     static void SetAppearanceHandle(ParticleType& component_,
                                     AppearanceHandle appearance_handle_) noexcept {
-        if (component_.runtime.route.appearance_handle.index == appearance_handle_.index &&
-            component_.runtime.route.appearance_handle.generation == appearance_handle_.generation) {
+        if (!SetVisualRuntimeRouteAppearanceHandle(component_.runtime.route,
+                                                   appearance_handle_)) {
             return;
         }
-        component_.runtime.route.appearance_handle = appearance_handle_;
         BumpAppearanceHandleMutationSerial();
         MarkDirty(component_, particle_dirty_runtime_flag);
         BumpAuthoringRevision(component_);
@@ -224,23 +214,16 @@ public:
                                                        std::uint64_t appearance_pipeline_key_,
                                                        std::uint64_t appearance_resource_key_) noexcept {
         (void)appearance_sort_key_;
-        const std::uint32_t pipeline_bucket = static_cast<std::uint32_t>(appearance_pipeline_key_);
-        const std::uint32_t resource_bucket = static_cast<std::uint32_t>(appearance_resource_key_);
-        const bool changed = HasAppearanceRuntimeRouteChanged(component_.runtime.route,
-                                                              appearance_handle_,
-                                                              pipeline_bucket,
-                                                              resource_bucket);
-        if (!changed) {
+        const VisualRuntimeRouteLinkMutation link_mutation =
+            UpdateVisualRuntimeRouteLink(component_.runtime.route,
+                                         appearance_handle_,
+                                         appearance_pipeline_key_,
+                                         appearance_resource_key_);
+        if (!link_mutation.route_changed) {
             return false;
         }
 
-        const bool handle_changed =
-            HasAppearanceHandleChanged(component_.runtime.route, appearance_handle_);
-        StoreAppearanceRuntimeRoute(component_.runtime.route,
-                                    appearance_handle_,
-                                    pipeline_bucket,
-                                    resource_bucket);
-        if (handle_changed) {
+        if (link_mutation.handle_changed) {
             BumpAppearanceHandleMutationSerial();
         }
         MarkDirty(component_, particle_dirty_runtime_flag);
@@ -252,10 +235,9 @@ public:
     static void SetDepthBin(ParticleType& component_, std::uint16_t depth_bin_) noexcept
     requires std::same_as<DimensionT, Dim3>
     {
-        if (component_.runtime.route.depth_bin == depth_bin_) {
+        if (!SetVisualRuntimeRouteDepthBin(component_.runtime.route, depth_bin_)) {
             return;
         }
-        component_.runtime.route.depth_bin = depth_bin_;
         MarkDirty(component_, particle_dirty_runtime_flag);
         BumpAuthoringRevision(component_);
         RebuildSortKey(component_);
@@ -454,8 +436,8 @@ public:
         const std::uint64_t visual_resource_bits =
             static_cast<std::uint64_t>(ResolveEffectiveVisualResourceId(component_.runtime.route)) &
             sort_key_visual_resource_mask;
-        const std::uint64_t texture_bits =
-            static_cast<std::uint64_t>(component_.runtime.route.texture_id) & sort_key_texture_mask;
+        const std::uint64_t surface_bits =
+            static_cast<std::uint64_t>(component_.runtime.route.surface_id) & sort_key_surface_mask;
         const std::uint64_t batch_bits =
             static_cast<std::uint64_t>(component_.runtime.route.batch_tag) & sort_key_batch_mask;
 
@@ -474,7 +456,7 @@ public:
         std::uint64_t key = 0U;
         key |= (pass_bits << sort_key_pass_shift);
         key |= (visual_resource_bits << sort_key_visual_resource_shift);
-        key |= (texture_bits << sort_key_texture_shift);
+        key |= (surface_bits << sort_key_surface_shift);
         key |= (minor_bits << sort_key_minor_shift);
         key |= (batch_bits << sort_key_batch_shift);
         return key;
@@ -505,8 +487,8 @@ public:
         return static_cast<std::uint32_t>((sort_key_ >> sort_key_visual_resource_shift) & sort_key_visual_resource_mask);
     }
 
-    [[nodiscard]] static std::uint32_t ExtractTextureBucket(std::uint64_t sort_key_) noexcept {
-        return static_cast<std::uint32_t>((sort_key_ >> sort_key_texture_shift) & sort_key_texture_mask);
+    [[nodiscard]] static std::uint32_t ExtractSurfaceBucket(std::uint64_t sort_key_) noexcept {
+        return static_cast<std::uint32_t>((sort_key_ >> sort_key_surface_shift) & sort_key_surface_mask);
     }
 
     [[nodiscard]] static std::uint32_t ExtractMinorBucket(std::uint64_t sort_key_) noexcept {
@@ -556,4 +538,3 @@ private:
 };
 
 } // namespace vr::ecs
-

@@ -54,7 +54,7 @@ VR_TEST_CASE(PbrAppearanceContract_geometry_appearance_host_canonicalizes_minima
     host.Shutdown();
 }
 
-VR_TEST_CASE(PbrAppearanceContract_resolver_defaults_to_appearance_style_when_no_overrides_are_present,
+VR_TEST_CASE(PbrAppearanceContract_authored_appearance_defaults_to_style_when_no_overrides_are_present,
              "unit;pbr;appearance;contract") {
     vr::ecs::AppearanceStyle3D style{};
     style.base_color = vr::ecs::Rgba8{24U, 48U, 96U, 200U};
@@ -65,12 +65,12 @@ VR_TEST_CASE(PbrAppearanceContract_resolver_defaults_to_appearance_style_when_no
     style.occlusion_strength = 1.0F;
 
     const vr::geometry::GeometryAppearanceResolvedState resolved =
-        vr::geometry::ResolveGeometryFallbackAppearanceState(&style);
+        vr::geometry::ResolveGeometryAuthoredAppearanceState(&style);
 
-    VR_CHECK(resolved.albedo_color.r == 24U);
-    VR_CHECK(resolved.albedo_color.g == 48U);
-    VR_CHECK(resolved.albedo_color.b == 96U);
-    VR_CHECK(resolved.albedo_color.a == 200U);
+    VR_CHECK(resolved.base_color.r == 24U);
+    VR_CHECK(resolved.base_color.g == 48U);
+    VR_CHECK(resolved.base_color.b == 96U);
+    VR_CHECK(resolved.base_color.a == 200U);
     VR_CHECK(resolved.metallic == 0.33F);
     VR_CHECK(resolved.roughness == 0.61F);
     VR_CHECK(resolved.normal_scale == 1.25F);
@@ -78,7 +78,7 @@ VR_TEST_CASE(PbrAppearanceContract_resolver_defaults_to_appearance_style_when_no
     VR_CHECK(!resolved.unlit);
 }
 
-VR_TEST_CASE(PbrAppearanceContract_resolver_applies_geometry_appearance_over_style_defaults,
+VR_TEST_CASE(PbrAppearanceContract_authored_appearance_applies_geometry_over_style_defaults,
              "unit;pbr;appearance;contract") {
     vr::ecs::AppearanceStyle3D style{};
     style.base_color = vr::ecs::Rgba8{255U, 255U, 255U, 255U};
@@ -94,7 +94,7 @@ VR_TEST_CASE(PbrAppearanceContract_resolver_applies_geometry_appearance_over_sty
     desc.occlusion_strength = 0.45F;
 
     const vr::geometry::GeometryAppearanceResolvedState resolved =
-        vr::geometry::ResolveGeometryFallbackAppearanceState(&style, &desc);
+        vr::geometry::ResolveGeometryAuthoredAppearanceState(&style, &desc);
 
     VR_CHECK(resolved.metallic == 0.72F);
     VR_CHECK(resolved.roughness == 0.18F);
@@ -103,7 +103,7 @@ VR_TEST_CASE(PbrAppearanceContract_resolver_applies_geometry_appearance_over_sty
     VR_CHECK(resolved.unlit);
 }
 
-VR_TEST_CASE(PbrAppearanceContract_appearance_overlay_preserves_layered_resolution_order,
+VR_TEST_CASE(PbrAppearanceContract_linked_appearance_overlay_preserves_layered_resolution_order,
              "unit;pbr;appearance;contract") {
     vr::ecs::AppearanceStyle3D style{};
     style.base_color = vr::ecs::Rgba8{18U, 27U, 36U, 255U};
@@ -126,13 +126,13 @@ VR_TEST_CASE(PbrAppearanceContract_appearance_overlay_preserves_layered_resoluti
         (static_cast<std::uint32_t>(vr::ecs::AppearanceShadingModel3D::unlit) & 0x3U) << 5U;
 
     vr::geometry::GeometryAppearanceResolvedState resolved =
-        vr::geometry::ResolveGeometryFallbackAppearanceState(&style, &desc);
-    resolved = vr::geometry::ApplyAppearanceRecordState(resolved, appearance);
+        vr::geometry::ResolveGeometryAuthoredAppearanceState(&style, &desc);
+    resolved = vr::geometry::OverlayLinkedAppearanceRecordState(resolved, appearance);
 
-    VR_CHECK(resolved.albedo_color.r == 51U);
-    VR_CHECK(resolved.albedo_color.g == 102U);
-    VR_CHECK(resolved.albedo_color.b == 230U);
-    VR_CHECK(resolved.albedo_color.a == 96U);
+    VR_CHECK(resolved.base_color.r == 51U);
+    VR_CHECK(resolved.base_color.g == 102U);
+    VR_CHECK(resolved.base_color.b == 230U);
+    VR_CHECK(resolved.base_color.a == 96U);
     VR_CHECK(resolved.metallic == 0.88F);
     VR_CHECK(resolved.roughness == 0.27F);
     VR_CHECK(resolved.normal_scale == 2.75F);
@@ -140,7 +140,7 @@ VR_TEST_CASE(PbrAppearanceContract_appearance_overlay_preserves_layered_resoluti
     VR_CHECK(resolved.unlit);
 }
 
-VR_TEST_CASE(PbrAppearanceContract_resolver_lets_linked_appearance_override_geometry_and_appearance_defaults,
+VR_TEST_CASE(PbrAppearanceContract_final_resolved_appearance_lets_linked_overlay_override_authored_defaults,
              "unit;pbr;appearance;contract") {
     vr::ecs::AppearanceStyle3D style{};
     style.base_color = vr::ecs::Rgba8{255U, 255U, 255U, 255U};
@@ -163,12 +163,12 @@ VR_TEST_CASE(PbrAppearanceContract_resolver_lets_linked_appearance_override_geom
         (static_cast<std::uint32_t>(vr::ecs::AppearanceShadingModel3D::unlit) & 0x3U) << 5U;
 
     const vr::geometry::GeometryAppearanceResolvedState resolved =
-        vr::geometry::ResolveGeometryAppearanceState(&style, &desc, &appearance);
+        vr::geometry::ResolveFinalGeometryAppearanceState(&style, &desc, &appearance);
 
-    VR_CHECK(resolved.albedo_color.r == 51U);
-    VR_CHECK(resolved.albedo_color.g == 102U);
-    VR_CHECK(resolved.albedo_color.b == 230U);
-    VR_CHECK(resolved.albedo_color.a == 96U);
+    VR_CHECK(resolved.base_color.r == 51U);
+    VR_CHECK(resolved.base_color.g == 102U);
+    VR_CHECK(resolved.base_color.b == 230U);
+    VR_CHECK(resolved.base_color.a == 96U);
     VR_CHECK(resolved.metallic == 0.88F);
     VR_CHECK(resolved.roughness == 0.27F);
     VR_CHECK(resolved.normal_scale == 2.75F);
@@ -176,7 +176,7 @@ VR_TEST_CASE(PbrAppearanceContract_resolver_lets_linked_appearance_override_geom
     VR_CHECK(resolved.unlit);
 }
 
-VR_TEST_CASE(PbrAppearanceContract_runtime_bridge_record_encodes_texture_source_and_alpha_mode_helpers,
+VR_TEST_CASE(PbrAppearanceContract_runtime_bridge_record_encodes_surface_domains_and_alpha_mode_helpers,
              "unit;pbr;appearance;contract") {
     const vr::ecs::AppearanceRuntimeBridge3D bridge =
         vr::ecs::MakeAppearanceRuntimeBridge3D(nullptr);
@@ -185,25 +185,33 @@ VR_TEST_CASE(PbrAppearanceContract_runtime_bridge_record_encodes_texture_source_
     vr::render::BuildAppearanceGpuRecord3DFromRuntimeBridge(
         bridge,
         {
-            .base_color_texture_id = 6101U,
-            .sampler_state_id = 7U,
-            .texture_source = vr::render::AppearanceTextureSource3D::surface_image
+            .base_color_surface = {
+                .surface_id = 6101U,
+                .domain = vr::render::AppearanceSampledSurfaceDomain::surface_image
+            },
+            .surface_sampler_id = 7U,
         },
         surface_record);
-    VR_CHECK(vr::render::ResolveAppearanceTextureSource3D(surface_record) ==
-             vr::render::AppearanceTextureSource3D::surface_image);
+    VR_CHECK(vr::render::ResolveAppearanceSampledSurfaceDomain3D(
+                 surface_record,
+                 vr::render::AppearanceSampledSurfaceSlot3D::base_color) ==
+             vr::render::AppearanceSampledSurfaceDomain::surface_image);
 
     vr::ecs::AppearanceGpuRecord<vr::ecs::Dim3> geometry_record{};
     vr::render::BuildAppearanceGpuRecord3DFromRuntimeBridge(
         bridge,
         {
-            .base_color_texture_id = 101U,
-            .sampler_state_id = 3U,
-            .texture_source = vr::render::AppearanceTextureSource3D::geometry_image
+            .base_color_surface = {
+                .surface_id = 101U,
+                .domain = vr::render::AppearanceSampledSurfaceDomain::geometry_image
+            },
+            .surface_sampler_id = 3U,
         },
         geometry_record);
-    VR_CHECK(vr::render::ResolveAppearanceTextureSource3D(geometry_record) ==
-             vr::render::AppearanceTextureSource3D::geometry_image);
+    VR_CHECK(vr::render::ResolveAppearanceSampledSurfaceDomain3D(
+                 geometry_record,
+                 vr::render::AppearanceSampledSurfaceSlot3D::base_color) ==
+             vr::render::AppearanceSampledSurfaceDomain::geometry_image);
 
     vr::render::SetAppearanceGpuRecord3DAlphaMode(
         geometry_record,
@@ -211,6 +219,40 @@ VR_TEST_CASE(PbrAppearanceContract_runtime_bridge_record_encodes_texture_source_
     constexpr std::uint32_t alpha_mode_shift = 3U;
     VR_CHECK(((geometry_record.flags_u32[0U] >> alpha_mode_shift) & 0x3U) ==
              static_cast<std::uint32_t>(vr::ecs::AppearanceAlphaMode::mask));
+}
+
+VR_TEST_CASE(PbrAppearanceContract_appearance_binding3d_preserves_sampled_surface_semantics,
+             "unit;pbr;appearance;contract") {
+    vr::ecs::AppearanceBinding3D binding{};
+
+    VR_CHECK(vr::ecs::SetAppearanceBinding3DSampledSurface(
+        binding,
+        vr::render::AppearanceSampledSurfaceSlot3D::base_color,
+        {
+            .surface_id = 42U,
+            .domain = vr::render::AppearanceSampledSurfaceDomain::surface_image,
+        }));
+    VR_CHECK(vr::ecs::SetAppearanceBinding3DSampledSurface(
+        binding,
+        vr::render::AppearanceSampledSurfaceSlot3D::normal,
+        {
+            .surface_id = 77U,
+            .domain = vr::render::AppearanceSampledSurfaceDomain::geometry_image,
+        }));
+
+    const auto base_color =
+        vr::ecs::ResolveAppearanceBinding3DSampledSurface(
+            binding,
+            vr::render::AppearanceSampledSurfaceSlot3D::base_color);
+    const auto normal =
+        vr::ecs::ResolveAppearanceBinding3DSampledSurface(
+            binding,
+            vr::render::AppearanceSampledSurfaceSlot3D::normal);
+
+    VR_CHECK(base_color.surface_id == 42U);
+    VR_CHECK(base_color.domain == vr::render::AppearanceSampledSurfaceDomain::surface_image);
+    VR_CHECK(normal.surface_id == 77U);
+    VR_CHECK(normal.domain == vr::render::AppearanceSampledSurfaceDomain::geometry_image);
 }
 
 } // namespace

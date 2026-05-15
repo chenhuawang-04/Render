@@ -1,4 +1,4 @@
-#include "support/test_framework.hpp"
+﻿#include "support/test_framework.hpp"
 #include "vr/ecs/system/appearance_runtime_system.hpp"
 #include "vr/ecs/system/appearance_system.hpp"
 #include "vr/ecs/system/bounds_system.hpp"
@@ -52,18 +52,18 @@ void ApplyGeometryAppearanceBridge(Geometry3D& component_,
                                    bool cast_shadow_,
                                    bool receive_shadow_,
                                    vr::ecs::AppearanceShadingModel3D shading_model_,
-                                   vr::ecs::Rgba8 albedo_) {
+                                   vr::ecs::Rgba8 base_color_) {
     Appearance3D appearance{};
     AppearanceSystem3D::Initialize(appearance);
-    AppearanceSystem3D::SetBaseColor(appearance, albedo_);
-    AppearanceSystem3D::SetOpacity(appearance, static_cast<float>(albedo_.a) / 255.0F);
+    AppearanceSystem3D::SetBaseColor(appearance, base_color_);
+    AppearanceSystem3D::SetOpacity(appearance, static_cast<float>(base_color_.a) / 255.0F);
     AppearanceSystem3D::SetShadingModel(appearance, shading_model_);
     AppearanceSystem3D::SetDepthTest(appearance, depth_test_);
     AppearanceSystem3D::SetDepthWrite(appearance, depth_write_);
     AppearanceSystem3D::SetDoubleSided(appearance, double_sided_);
     AppearanceSystem3D::SetCastShadow(appearance, cast_shadow_);
     AppearanceSystem3D::SetReceiveShadow(appearance, receive_shadow_);
-    if (albedo_.a < 255U || !depth_write_) {
+    if (base_color_.a < 255U || !depth_write_) {
         AppearanceSystem3D::SetBlendMode(appearance, vr::ecs::AppearanceBlendMode::alpha);
         AppearanceSystem3D::SetAlphaMode(appearance, vr::ecs::AppearanceAlphaMode::blend);
     }
@@ -133,7 +133,7 @@ void InitializeGeometryComponent(Geometry3D& component_,
                                  bool cast_shadow_,
                                  bool receive_shadow_,
                                  vr::ecs::AppearanceShadingModel3D shading_model_,
-                                 vr::ecs::Rgba8 albedo_) {
+                                 vr::ecs::Rgba8 base_color_) {
     GeometrySystem3D::Initialize(component_);
     GeometrySystem3D::SetRuntimeRoute(component_, geometry_id_, appearance_id_, 0U);
     GeometrySystem3D::SetBounds(component_, bounds_min_, bounds_max_);
@@ -147,7 +147,7 @@ void InitializeGeometryComponent(Geometry3D& component_,
                                   cast_shadow_,
                                   receive_shadow_,
                                   shading_model_,
-                                  albedo_);
+                                  base_color_);
 }
 
 void InitializeLightComponent(Light3D& component_) {
@@ -409,7 +409,7 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_end_to_end_smoke, "integrat
 
         vr::geometry::GeometryAppearanceDesc appearance_11{};
         appearance_11.appearance_id = 11U;
-        appearance_11.image_id = 101U;
+        appearance_11.sampled_surface_binding.base_color_surface.surface_id = 101U;
         appearance_11.uv_scale_u = 1.0F;
         appearance_11.uv_scale_v = 1.0F;
         appearance_11.metallic_factor = 0.15F;
@@ -420,7 +420,7 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_end_to_end_smoke, "integrat
 
         vr::geometry::GeometryAppearanceDesc appearance_22{};
         appearance_22.appearance_id = 22U;
-        appearance_22.image_id = 202U;
+        appearance_22.sampled_surface_binding.base_color_surface.surface_id = 202U;
         appearance_22.uv_scale_u = 1.25F;
         appearance_22.uv_scale_v = 1.25F;
         appearance_22.uv_bias_u = -0.12F;
@@ -599,7 +599,7 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_end_to_end_smoke, "integrat
     }
 }
 
-VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_appearance_material_updates_reuse_descriptor_set,
+VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_appearance_updates_reuse_descriptor_set,
              "integration;gpu;sdl;runtime;geometry;appearance") {
     using Appearance3D = vr::ecs::Appearance<vr::ecs::Dim3>;
     using AppearanceRuntimeSystem3D = vr::ecs::AppearanceRuntimeSystem<vr::ecs::Dim3>;
@@ -1051,7 +1051,7 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_bloom_post_stack_smoke,
 
         vr::geometry::GeometryAppearanceDesc appearance_11{};
         appearance_11.appearance_id = 11U;
-        appearance_11.image_id = 101U;
+        appearance_11.sampled_surface_binding.base_color_surface.surface_id = 101U;
         appearance_11.uv_scale_u = 1.0F;
         appearance_11.uv_scale_v = 1.0F;
         appearance_11.metallic_factor = 0.15F;
@@ -1062,7 +1062,7 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_bloom_post_stack_smoke,
 
         vr::geometry::GeometryAppearanceDesc appearance_22{};
         appearance_22.appearance_id = 22U;
-        appearance_22.image_id = 202U;
+        appearance_22.sampled_surface_binding.base_color_surface.surface_id = 202U;
         appearance_22.uv_scale_u = 1.25F;
         appearance_22.uv_scale_v = 1.25F;
         appearance_22.uv_bias_u = -0.12F;
@@ -1331,4 +1331,5 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_bloom_post_stack_smoke,
 }
 
 } // namespace
+
 

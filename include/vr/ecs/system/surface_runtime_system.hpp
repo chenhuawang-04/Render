@@ -73,7 +73,7 @@ struct Surface2DDrawBatch final {
     std::uint32_t instance_begin;
     std::uint32_t instance_count;
     std::uint32_t surface_id;
-    std::uint32_t visual_resource_id;
+    std::uint32_t effective_visual_resource_id;
     std::uint32_t atlas_page_id;
     std::uint32_t first_component_index;
     std::uint32_t params;
@@ -172,7 +172,7 @@ struct Surface3DGpuInstance final {
     float uv_bias_v;
 
     std::uint32_t params;
-    std::uint32_t visual_resource_id;
+    std::uint32_t effective_visual_resource_id;
     std::uint32_t appearance_record_index;
     std::uint32_t component_index;
 };
@@ -181,7 +181,7 @@ struct Surface3DDrawBatch final {
     std::uint64_t sort_key;
     std::uint32_t instance_begin;
     std::uint32_t instance_count;
-    std::uint32_t visual_resource_id;
+    std::uint32_t effective_visual_resource_id;
     std::uint32_t first_component_index;
     std::uint32_t params;
 };
@@ -1034,7 +1034,7 @@ private:
             Surface2DDrawBatch& last = scratch_.draw_batches.back();
             if (last.sort_key == sort_key_ &&
                 last.surface_id == component_.runtime.route.surface_id &&
-                last.visual_resource_id == effective_visual_resource_id &&
+                last.effective_visual_resource_id == effective_visual_resource_id &&
                 last.atlas_page_id == component_.runtime.source.atlas_page_id &&
                 last.params == params &&
                 last.instance_begin + last.instance_count == instance_index_) {
@@ -1048,7 +1048,7 @@ private:
         batch.instance_begin = instance_index_;
         batch.instance_count = 1U;
         batch.surface_id = component_.runtime.route.surface_id;
-        batch.visual_resource_id = effective_visual_resource_id;
+        batch.effective_visual_resource_id = effective_visual_resource_id;
         batch.atlas_page_id = component_.runtime.source.atlas_page_id;
         batch.first_component_index = component_index_;
         batch.params = params;
@@ -1277,7 +1277,8 @@ public:
             instance.uv_bias_u = component.style.uv_bias_u;
             instance.uv_bias_v = component.style.uv_bias_v;
             instance.params = PackParams(component);
-            instance.visual_resource_id = ResolveEffectiveVisualResourceId(component.runtime.route);
+            instance.effective_visual_resource_id =
+                ResolveEffectiveVisualResourceId(component.runtime.route);
             instance.appearance_record_index = invalid_appearance_handle.index;
             instance.component_index = item.component_index;
             scratch_.instances[i] = instance;
@@ -1829,7 +1830,7 @@ private:
         if (!scratch_.draw_batches.empty()) {
             Surface3DDrawBatch& last = scratch_.draw_batches.back();
             if (last.sort_key == sort_key_ &&
-                last.visual_resource_id == effective_visual_resource_id &&
+                last.effective_visual_resource_id == effective_visual_resource_id &&
                 last.params == params &&
                 last.instance_begin + last.instance_count == instance_index_) {
                 ++last.instance_count;
@@ -1841,7 +1842,7 @@ private:
         batch.sort_key = sort_key_;
         batch.instance_begin = instance_index_;
         batch.instance_count = 1U;
-        batch.visual_resource_id = effective_visual_resource_id;
+        batch.effective_visual_resource_id = effective_visual_resource_id;
         batch.first_component_index = component_index_;
         batch.params = params;
         scratch_.draw_batches.push_back(batch);

@@ -70,21 +70,13 @@ public:
 
     static void SetDefaultBinding(AppearanceType& component_) noexcept {
         if constexpr (std::same_as<DimensionT, Dim2>) {
-            component_.binding.texture_base_id = 0U;
-            component_.binding.texture_mask_id = 0U;
-            component_.binding.texture_lut_id = 0U;
-            component_.binding.sampler_state_id = 0U;
-            component_.binding.binding_layout_id = 0U;
+            component_.binding.pattern_surface = 0U;
+            component_.binding.mask_surface = 0U;
+            component_.binding.lut_surface = 0U;
+            component_.binding.surface_sampler_id = 0U;
             component_.binding.reserved0 = 0U;
         } else {
-            component_.binding.texture_base_color_id = 0U;
-            component_.binding.texture_normal_id = 0U;
-            component_.binding.texture_metal_rough_id = 0U;
-            component_.binding.texture_occlusion_id = 0U;
-            component_.binding.texture_emissive_id = 0U;
-            component_.binding.sampler_state_id = 0U;
-            component_.binding.binding_layout_id = 0U;
-            component_.binding.reserved0 = 0U;
+            component_.binding = {};
         }
     }
 
@@ -143,7 +135,7 @@ public:
         }
         if constexpr (std::same_as<DimensionT, Dim2>) {
             if (component_.style.paint_mode == AppearancePaintMode::pattern) {
-                return component_.binding.texture_base_id != 0U;
+                return component_.binding.pattern_surface != 0U;
             }
         }
         return true;
@@ -227,19 +219,11 @@ public:
         MarkStyleRevisionDirty(component_);
     }
 
-    static void SetBindingLayoutId(AppearanceType& component_, std::uint32_t binding_layout_id_) noexcept {
-        if (component_.binding.binding_layout_id == binding_layout_id_) {
+    static void SetSurfaceSamplerId(AppearanceType& component_, std::uint32_t surface_sampler_id_) noexcept {
+        if (component_.binding.surface_sampler_id == surface_sampler_id_) {
             return;
         }
-        component_.binding.binding_layout_id = binding_layout_id_;
-        MarkBindingRevisionDirty(component_);
-    }
-
-    static void SetSamplerStateId(AppearanceType& component_, std::uint32_t sampler_state_id_) noexcept {
-        if (component_.binding.sampler_state_id == sampler_state_id_) {
-            return;
-        }
-        component_.binding.sampler_state_id = sampler_state_id_;
+        component_.binding.surface_sampler_id = surface_sampler_id_;
         MarkBindingRevisionDirty(component_);
     }
 
@@ -326,33 +310,33 @@ public:
         MarkStyleRevisionDirty(component_);
     }
 
-    static void SetTextureBaseId(AppearanceType& component_, std::uint32_t texture_base_id_) noexcept
+    static void SetPatternSurface(AppearanceType& component_, std::uint32_t pattern_surface_) noexcept
     requires std::same_as<DimensionT, Dim2>
     {
-        if (component_.binding.texture_base_id == texture_base_id_) {
+        if (component_.binding.pattern_surface == pattern_surface_) {
             return;
         }
-        component_.binding.texture_base_id = texture_base_id_;
+        component_.binding.pattern_surface = pattern_surface_;
         MarkBindingRevisionDirty(component_);
     }
 
-    static void SetTextureMaskId(AppearanceType& component_, std::uint32_t texture_mask_id_) noexcept
+    static void SetMaskSurface(AppearanceType& component_, std::uint32_t mask_surface_) noexcept
     requires std::same_as<DimensionT, Dim2>
     {
-        if (component_.binding.texture_mask_id == texture_mask_id_) {
+        if (component_.binding.mask_surface == mask_surface_) {
             return;
         }
-        component_.binding.texture_mask_id = texture_mask_id_;
+        component_.binding.mask_surface = mask_surface_;
         MarkBindingRevisionDirty(component_);
     }
 
-    static void SetTextureLutId(AppearanceType& component_, std::uint32_t texture_lut_id_) noexcept
+    static void SetLutSurface(AppearanceType& component_, std::uint32_t lut_surface_) noexcept
     requires std::same_as<DimensionT, Dim2>
     {
-        if (component_.binding.texture_lut_id == texture_lut_id_) {
+        if (component_.binding.lut_surface == lut_surface_) {
             return;
         }
-        component_.binding.texture_lut_id = texture_lut_id_;
+        component_.binding.lut_surface = lut_surface_;
         MarkBindingRevisionDirty(component_);
     }
 
@@ -508,54 +492,94 @@ public:
         MarkStyleRevisionDirty(component_);
     }
 
-    static void SetTextureBaseColorId(AppearanceType& component_, std::uint32_t texture_base_color_id_) noexcept
+    static void SetBaseColorSurface(
+        AppearanceType& component_,
+        const vr::render::AppearanceSampledSurfaceHandle& surface_) noexcept
     requires std::same_as<DimensionT, Dim3>
     {
-        if (component_.binding.texture_base_color_id == texture_base_color_id_) {
-            return;
-        }
-        component_.binding.texture_base_color_id = texture_base_color_id_;
-        MarkBindingRevisionDirty(component_);
+        SetSampledSurfaceBinding(component_,
+                                 vr::render::AppearanceSampledSurfaceSlot3D::base_color,
+                                 surface_);
     }
 
-    static void SetTextureNormalId(AppearanceType& component_, std::uint32_t texture_normal_id_) noexcept
+    static void SetBaseColorSurface(AppearanceType& component_, std::uint32_t surface_id_) noexcept
     requires std::same_as<DimensionT, Dim3>
     {
-        if (component_.binding.texture_normal_id == texture_normal_id_) {
-            return;
-        }
-        component_.binding.texture_normal_id = texture_normal_id_;
-        MarkBindingRevisionDirty(component_);
+        SetSampledSurfaceIdBinding(component_,
+                                   vr::render::AppearanceSampledSurfaceSlot3D::base_color,
+                                   surface_id_);
     }
 
-    static void SetTextureMetalRoughId(AppearanceType& component_, std::uint32_t texture_metal_rough_id_) noexcept
+    static void SetNormalSurface(
+        AppearanceType& component_,
+        const vr::render::AppearanceSampledSurfaceHandle& surface_) noexcept
     requires std::same_as<DimensionT, Dim3>
     {
-        if (component_.binding.texture_metal_rough_id == texture_metal_rough_id_) {
-            return;
-        }
-        component_.binding.texture_metal_rough_id = texture_metal_rough_id_;
-        MarkBindingRevisionDirty(component_);
+        SetSampledSurfaceBinding(component_,
+                                 vr::render::AppearanceSampledSurfaceSlot3D::normal,
+                                 surface_);
     }
 
-    static void SetTextureOcclusionId(AppearanceType& component_, std::uint32_t texture_occlusion_id_) noexcept
+    static void SetNormalSurface(AppearanceType& component_, std::uint32_t surface_id_) noexcept
     requires std::same_as<DimensionT, Dim3>
     {
-        if (component_.binding.texture_occlusion_id == texture_occlusion_id_) {
-            return;
-        }
-        component_.binding.texture_occlusion_id = texture_occlusion_id_;
-        MarkBindingRevisionDirty(component_);
+        SetSampledSurfaceIdBinding(component_,
+                                   vr::render::AppearanceSampledSurfaceSlot3D::normal,
+                                   surface_id_);
     }
 
-    static void SetTextureEmissiveId(AppearanceType& component_, std::uint32_t texture_emissive_id_) noexcept
+    static void SetMetalRoughSurface(
+        AppearanceType& component_,
+        const vr::render::AppearanceSampledSurfaceHandle& surface_) noexcept
     requires std::same_as<DimensionT, Dim3>
     {
-        if (component_.binding.texture_emissive_id == texture_emissive_id_) {
-            return;
-        }
-        component_.binding.texture_emissive_id = texture_emissive_id_;
-        MarkBindingRevisionDirty(component_);
+        SetSampledSurfaceBinding(component_,
+                                 vr::render::AppearanceSampledSurfaceSlot3D::metal_rough,
+                                 surface_);
+    }
+
+    static void SetMetalRoughSurface(AppearanceType& component_, std::uint32_t surface_id_) noexcept
+    requires std::same_as<DimensionT, Dim3>
+    {
+        SetSampledSurfaceIdBinding(component_,
+                                   vr::render::AppearanceSampledSurfaceSlot3D::metal_rough,
+                                   surface_id_);
+    }
+
+    static void SetOcclusionSurface(
+        AppearanceType& component_,
+        const vr::render::AppearanceSampledSurfaceHandle& surface_) noexcept
+    requires std::same_as<DimensionT, Dim3>
+    {
+        SetSampledSurfaceBinding(component_,
+                                 vr::render::AppearanceSampledSurfaceSlot3D::occlusion,
+                                 surface_);
+    }
+
+    static void SetOcclusionSurface(AppearanceType& component_, std::uint32_t surface_id_) noexcept
+    requires std::same_as<DimensionT, Dim3>
+    {
+        SetSampledSurfaceIdBinding(component_,
+                                   vr::render::AppearanceSampledSurfaceSlot3D::occlusion,
+                                   surface_id_);
+    }
+
+    static void SetEmissiveSurface(
+        AppearanceType& component_,
+        const vr::render::AppearanceSampledSurfaceHandle& surface_) noexcept
+    requires std::same_as<DimensionT, Dim3>
+    {
+        SetSampledSurfaceBinding(component_,
+                                 vr::render::AppearanceSampledSurfaceSlot3D::emissive,
+                                 surface_);
+    }
+
+    static void SetEmissiveSurface(AppearanceType& component_, std::uint32_t surface_id_) noexcept
+    requires std::same_as<DimensionT, Dim3>
+    {
+        SetSampledSurfaceIdBinding(component_,
+                                   vr::render::AppearanceSampledSurfaceSlot3D::emissive,
+                                   surface_id_);
     }
 
 private:
@@ -575,7 +599,35 @@ private:
         component_.runtime.revision_binding = NextAppearanceRevision(component_.runtime.revision_binding);
         MarkDirty(component_, appearance_dirty_binding_flag);
     }
+
+    static void SetSampledSurfaceBinding(
+        AppearanceType& component_,
+        vr::render::AppearanceSampledSurfaceSlot3D slot_,
+        const vr::render::AppearanceSampledSurfaceHandle& surface_) noexcept
+    requires std::same_as<DimensionT, Dim3>
+    {
+        if (!SetAppearanceBinding3DSampledSurface(component_.binding, slot_, surface_)) {
+            return;
+        }
+        MarkBindingRevisionDirty(component_);
+    }
+
+    static void SetSampledSurfaceIdBinding(
+        AppearanceType& component_,
+        vr::render::AppearanceSampledSurfaceSlot3D slot_,
+        std::uint32_t surface_id_) noexcept
+    requires std::same_as<DimensionT, Dim3>
+    {
+        SetSampledSurfaceBinding(
+            component_,
+            slot_,
+            vr::render::AppearanceSampledSurfaceHandle{
+                .surface_id = surface_id_,
+                .domain = ResolveAppearanceBinding3DSurfaceDomain(component_.binding, slot_),
+            });
+    }
 };
 
 } // namespace vr::ecs
+
 

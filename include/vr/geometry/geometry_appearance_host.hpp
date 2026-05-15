@@ -1,6 +1,7 @@
 ﻿#pragma once
 
 #include "Center/Memory/Container/Vector/McVector.hpp"
+#include "vr/render/appearance_sampled_surface.hpp"
 #include "vr/resource/sampler_host.hpp"
 
 #include <cstdint>
@@ -20,8 +21,9 @@ enum GeometryAppearanceFlags : std::uint32_t {
 
 struct GeometryAppearanceDesc {
     std::uint32_t appearance_id = 0U;
-    std::uint32_t image_id = 0U;
-    resource::SamplerId sampler_id{};
+    render::AppearanceSampledSurfaceBinding3D sampled_surface_binding =
+        render::MakeAppearanceSampledSurfaceBinding3D(
+            render::AppearanceSampledSurfaceDomain::geometry_image);
     std::uint32_t flags = 0U;
     float uv_scale_u = 1.0F;
     float uv_scale_v = 1.0F;

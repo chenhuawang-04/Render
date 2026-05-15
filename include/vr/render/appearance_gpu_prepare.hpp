@@ -1,5 +1,6 @@
 #pragma once
 
+#include "vr/render/appearance_sampled_surface.hpp"
 #include "vr/asset/texture_host.hpp"
 #include "vr/ecs/system/appearance_runtime_system.hpp"
 #include "vr/geometry/geometry_image_host.hpp"
@@ -15,12 +16,12 @@
 
 namespace vr::render {
 
-enum AppearanceTexturePresenceFlags3D : std::uint32_t {
-    appearance_texture_presence_base_color = 1U << 0U,
-    appearance_texture_presence_normal = 1U << 1U,
-    appearance_texture_presence_metal_rough = 1U << 2U,
-    appearance_texture_presence_occlusion = 1U << 3U,
-    appearance_texture_presence_emissive = 1U << 4U,
+enum AppearanceSampledSurfacePresenceFlags3D : std::uint32_t {
+    appearance_sampled_surface_presence_base_color = 1U << 0U,
+    appearance_sampled_surface_presence_normal = 1U << 1U,
+    appearance_sampled_surface_presence_metal_rough = 1U << 2U,
+    appearance_sampled_surface_presence_occlusion = 1U << 3U,
+    appearance_sampled_surface_presence_emissive = 1U << 4U,
 };
 
 struct LinkedAppearanceRecord3D final {
@@ -28,21 +29,11 @@ struct LinkedAppearanceRecord3D final {
     std::uint32_t record_index = ecs::invalid_appearance_index;
 };
 
-enum class AppearanceTextureSource3D : std::uint32_t {
-    asset_texture = 0U,
-    surface_image = 1U,
-    geometry_image = 2U,
-};
-
-struct AppearanceTextureBindingIds3D final {
-    std::uint32_t base_color_texture_id = 0U;
-    std::uint32_t normal_texture_id = 0U;
-    std::uint32_t metal_rough_texture_id = 0U;
-    std::uint32_t occlusion_texture_id = 0U;
-    std::uint32_t emissive_texture_id = 0U;
-    std::uint32_t sampler_state_id = 0U;
-    std::uint32_t binding_layout_id = 0U;
-    AppearanceTextureSource3D texture_source = AppearanceTextureSource3D::asset_texture;
+struct AppearanceSampledSurfaceResolver3D final {
+    const BindlessResourceSystem* bindless_resources = nullptr;
+    const asset::TextureHost* texture_host = nullptr;
+    const surface::SurfaceImageHost* surface_image_host = nullptr;
+    const geometry::GeometryImageHost* geometry_image_host = nullptr;
 };
 
 [[nodiscard]] inline LinkedAppearanceRecord3D ResolveLinkedAppearanceRecord(
@@ -83,23 +74,39 @@ struct AppearanceTextureBindingIds3D final {
     return flags;
 }
 
-[[nodiscard]] inline std::uint32_t PackAppearanceTextureSource3D(
-    AppearanceTextureSource3D source_) noexcept {
-    return static_cast<std::uint32_t>(source_) & 0x3U;
+[[nodiscard]] inline AppearanceSampledSurfaceDomain ResolveAppearanceSampledSurfaceDomain3D(
+    const ecs::AppearanceGpuRecord<ecs::Dim3>& record_,
+    AppearanceSampledSurfaceSlot3D slot_) noexcept {
+    return UnpackAppearanceSampledSurfaceDomain3D(record_.flags_u32[3U], slot_);
 }
 
-[[nodiscard]] inline AppearanceTextureSource3D ResolveAppearanceTextureSource3D(
-    const ecs::AppearanceGpuRecord<ecs::Dim3>& record_) noexcept {
-    switch (record_.flags_u32[1U] & 0x3U) {
-    case 1U:
-        return AppearanceTextureSource3D::surface_image;
-    case 2U:
-        return AppearanceTextureSource3D::geometry_image;
-    case 0U:
+[[nodiscard]] inline std::uint32_t ResolveAppearanceSampledSurfaceId3D(
+    const ecs::AppearanceGpuRecord<ecs::Dim3>& record_,
+    AppearanceSampledSurfaceSlot3D slot_) noexcept {
+    switch (slot_) {
+    case AppearanceSampledSurfaceSlot3D::base_color:
+        return record_.textures0_u32[0U];
+    case AppearanceSampledSurfaceSlot3D::normal:
+        return record_.textures0_u32[1U];
+    case AppearanceSampledSurfaceSlot3D::metal_rough:
+        return record_.textures0_u32[2U];
+    case AppearanceSampledSurfaceSlot3D::occlusion:
+        return record_.textures0_u32[3U];
+    case AppearanceSampledSurfaceSlot3D::emissive:
+        return record_.textures1_u32[0U];
     default:
         break;
     }
-    return AppearanceTextureSource3D::asset_texture;
+    return 0U;
+}
+
+[[nodiscard]] inline AppearanceSampledSurfaceHandle ResolveAppearanceSampledSurfaceHandle3D(
+    const ecs::AppearanceGpuRecord<ecs::Dim3>& record_,
+    AppearanceSampledSurfaceSlot3D slot_) noexcept {
+    return {
+        .surface_id = ResolveAppearanceSampledSurfaceId3D(record_, slot_),
+        .domain = ResolveAppearanceSampledSurfaceDomain3D(record_, slot_)
+    };
 }
 
 inline void SetAppearanceGpuRecord3DAlphaMode(
@@ -114,7 +121,7 @@ inline void SetAppearanceGpuRecord3DAlphaMode(
 
 inline void BuildAppearanceGpuRecord3DFromRuntimeBridge(
     const ecs::AppearanceRuntimeBridge3D& bridge_,
-    const AppearanceTextureBindingIds3D& binding_,
+    const AppearanceSampledSurfaceBinding3D& binding_,
     ecs::AppearanceGpuRecord<ecs::Dim3>& out_record_) noexcept {
     out_record_.base_rgba = {
         AppearanceColorChannelToFloat(bridge_.base_color.r),
@@ -142,56 +149,53 @@ inline void BuildAppearanceGpuRecord3DFromRuntimeBridge(
     };
     out_record_.flags_u32 = {
         PackAppearanceRuntimeBridgeStyleFlags3D(bridge_),
-        PackAppearanceTextureSource3D(binding_.texture_source),
         0U,
-        0U
+        0U,
+        PackAppearanceSampledSurfaceDomains3D(binding_)
     };
     out_record_.textures0_u32 = {
-        binding_.base_color_texture_id,
-        binding_.normal_texture_id,
-        binding_.metal_rough_texture_id,
-        binding_.occlusion_texture_id
+        binding_.base_color_surface.surface_id,
+        binding_.normal_surface.surface_id,
+        binding_.metal_rough_surface.surface_id,
+        binding_.occlusion_surface.surface_id
     };
     out_record_.textures1_u32 = {
-        binding_.emissive_texture_id,
-        binding_.sampler_state_id,
-        binding_.binding_layout_id,
+        binding_.emissive_surface.surface_id,
+        binding_.surface_sampler_id,
+        0U,
         0U
     };
 }
 
-struct ResolvedAppearanceTextureBinding3D final {
+struct ResolvedAppearanceSampledSurfaceBinding3D final {
     std::uint32_t slot = 0U;
     bool present = false;
 };
 
-[[nodiscard]] inline ResolvedAppearanceTextureBinding3D ResolveAppearanceTextureBinding3D(
-    const BindlessResourceSystem* bindless_resources_,
-    const asset::TextureHost* texture_host_,
-    const surface::SurfaceImageHost* surface_image_host_,
-    const geometry::GeometryImageHost* geometry_image_host_,
-    std::uint32_t texture_id_,
-    AppearanceTextureSource3D texture_source_) noexcept {
-    ResolvedAppearanceTextureBinding3D resolved{};
-    if (bindless_resources_ == nullptr || !bindless_resources_->IsInitialized()) {
+[[nodiscard]] inline ResolvedAppearanceSampledSurfaceBinding3D ResolveAppearanceSampledSurfaceBinding3D(
+    const AppearanceSampledSurfaceResolver3D& resolver_,
+    const AppearanceSampledSurfaceHandle& handle_) noexcept {
+    ResolvedAppearanceSampledSurfaceBinding3D resolved{};
+    if (resolver_.bindless_resources == nullptr || !resolver_.bindless_resources->IsInitialized()) {
         return resolved;
     }
 
-    resolved.slot = bindless_resources_->PlaceholderImageSlot().index;
-    if (texture_id_ == 0U) {
+    resolved.slot = resolver_.bindless_resources->PlaceholderImageSlot().index;
+    if (!handle_.IsBound()) {
         return resolved;
     }
 
-    switch (texture_source_) {
-    case AppearanceTextureSource3D::surface_image:
-        if (surface_image_host_ == nullptr || !surface_image_host_->IsInitialized()) {
+    switch (handle_.domain) {
+    case AppearanceSampledSurfaceDomain::surface_image:
+        if (resolver_.surface_image_host == nullptr || !resolver_.surface_image_host->IsInitialized()) {
             return resolved;
         }
-        if (surface_image_host_->FindImage(texture_id_) == nullptr) {
+        if (resolver_.surface_image_host->FindImage(handle_.surface_id) == nullptr) {
             return resolved;
         }
         {
-            const BindlessSlot slot = surface_image_host_->ResolveBindlessImageSlot(texture_id_);
+            const BindlessSlot slot =
+                resolver_.surface_image_host->ResolveBindlessImageSlot(handle_.surface_id);
             if (!slot.IsValid()) {
                 return resolved;
             }
@@ -199,15 +203,16 @@ struct ResolvedAppearanceTextureBinding3D final {
             resolved.present = true;
             return resolved;
         }
-    case AppearanceTextureSource3D::geometry_image:
-        if (geometry_image_host_ == nullptr || !geometry_image_host_->IsInitialized()) {
+    case AppearanceSampledSurfaceDomain::geometry_image:
+        if (resolver_.geometry_image_host == nullptr || !resolver_.geometry_image_host->IsInitialized()) {
             return resolved;
         }
-        if (geometry_image_host_->FindImage(texture_id_) == nullptr) {
+        if (resolver_.geometry_image_host->FindImage(handle_.surface_id) == nullptr) {
             return resolved;
         }
         {
-            const BindlessSlot slot = geometry_image_host_->ResolveBindlessImageSlot(texture_id_);
+            const BindlessSlot slot =
+                resolver_.geometry_image_host->ResolveBindlessImageSlot(handle_.surface_id);
             if (!slot.IsValid()) {
                 return resolved;
             }
@@ -215,126 +220,112 @@ struct ResolvedAppearanceTextureBinding3D final {
             resolved.present = true;
             return resolved;
         }
-    case AppearanceTextureSource3D::asset_texture:
+    case AppearanceSampledSurfaceDomain::asset_texture:
     default:
         break;
     }
 
-    if (texture_host_ == nullptr || !texture_host_->IsInitialized()) {
+    if (resolver_.texture_host == nullptr || !resolver_.texture_host->IsInitialized()) {
         return resolved;
     }
 
-    const asset::TextureId texture_id{texture_id_};
-    if (texture_host_->FindTexture(texture_id) == nullptr) {
+    const asset::TextureId texture_id{handle_.surface_id};
+    if (resolver_.texture_host->FindTexture(texture_id) == nullptr) {
         return resolved;
     }
 
-    resolved.slot = bindless_resources_->ResolveTextureImageSlot(*texture_host_, texture_id).index;
+    resolved.slot =
+        resolver_.bindless_resources->ResolveTextureImageSlot(*resolver_.texture_host, texture_id).index;
     resolved.present = true;
     return resolved;
 }
 
-[[nodiscard]] inline std::uint32_t ResolveAppearanceSamplerSlot3D(
-    const BindlessResourceSystem* bindless_resources_,
-    const asset::TextureHost* texture_host_,
-    AppearanceTextureSource3D texture_source_,
-    std::uint32_t sampler_state_id_,
-    std::uint32_t fallback_texture_id_) noexcept {
-    if (bindless_resources_ == nullptr || !bindless_resources_->IsInitialized()) {
+[[nodiscard]] inline std::uint32_t ResolveAppearanceSurfaceSamplerSlot3D(
+    const AppearanceSampledSurfaceResolver3D& resolver_,
+    std::uint32_t surface_sampler_id_,
+    const AppearanceSampledSurfaceHandle& fallback_surface_) noexcept {
+    if (resolver_.bindless_resources == nullptr || !resolver_.bindless_resources->IsInitialized()) {
         return 0U;
     }
-    if (sampler_state_id_ != 0U) {
-        return bindless_resources_
-            ->ResolveRegisteredSamplerSlot(resource::SamplerId{sampler_state_id_}).index;
+    if (surface_sampler_id_ != 0U) {
+        return resolver_.bindless_resources
+            ->ResolveRegisteredSamplerSlot(resource::SamplerId{surface_sampler_id_}).index;
     }
-    if (texture_source_ == AppearanceTextureSource3D::asset_texture &&
-        fallback_texture_id_ != 0U &&
-        texture_host_ != nullptr &&
-        texture_host_->IsInitialized()) {
-        const asset::TextureId texture_id{fallback_texture_id_};
-        if (texture_host_->FindTexture(texture_id) != nullptr) {
-            return bindless_resources_->ResolveTextureSamplerSlot(*texture_host_, texture_id).index;
+    if (fallback_surface_.domain == AppearanceSampledSurfaceDomain::asset_texture &&
+        fallback_surface_.IsBound() &&
+        resolver_.texture_host != nullptr &&
+        resolver_.texture_host->IsInitialized()) {
+        const asset::TextureId texture_id{fallback_surface_.surface_id};
+        if (resolver_.texture_host->FindTexture(texture_id) != nullptr) {
+            return resolver_.bindless_resources
+                ->ResolveTextureSamplerSlot(*resolver_.texture_host, texture_id)
+                .index;
         }
     }
-    return bindless_resources_->DefaultSamplerSlot().index;
+    return resolver_.bindless_resources->DefaultSamplerSlot().index;
 }
 
 inline void EncodeAppearanceGpuRecord3DForSampling(
     const ecs::AppearanceGpuRecord<ecs::Dim3>& source_record_,
-    const BindlessResourceSystem* bindless_resources_,
-    const asset::TextureHost* texture_host_,
-    const surface::SurfaceImageHost* surface_image_host_,
-    const geometry::GeometryImageHost* geometry_image_host_,
+    const AppearanceSampledSurfaceResolver3D& resolver_,
     ecs::AppearanceGpuRecord<ecs::Dim3>& out_record_) noexcept {
     out_record_ = source_record_;
-    const AppearanceTextureSource3D texture_source =
-        ResolveAppearanceTextureSource3D(source_record_);
+    const AppearanceSampledSurfaceHandle base_color_handle =
+        ResolveAppearanceSampledSurfaceHandle3D(source_record_,
+                                               AppearanceSampledSurfaceSlot3D::base_color);
+    const AppearanceSampledSurfaceHandle normal_handle =
+        ResolveAppearanceSampledSurfaceHandle3D(source_record_,
+                                               AppearanceSampledSurfaceSlot3D::normal);
+    const AppearanceSampledSurfaceHandle metal_rough_handle =
+        ResolveAppearanceSampledSurfaceHandle3D(source_record_,
+                                               AppearanceSampledSurfaceSlot3D::metal_rough);
+    const AppearanceSampledSurfaceHandle occlusion_handle =
+        ResolveAppearanceSampledSurfaceHandle3D(source_record_,
+                                               AppearanceSampledSurfaceSlot3D::occlusion);
+    const AppearanceSampledSurfaceHandle emissive_handle =
+        ResolveAppearanceSampledSurfaceHandle3D(source_record_,
+                                               AppearanceSampledSurfaceSlot3D::emissive);
 
-    const ResolvedAppearanceTextureBinding3D base_color =
-        ResolveAppearanceTextureBinding3D(bindless_resources_,
-                                         texture_host_,
-                                         surface_image_host_,
-                                         geometry_image_host_,
-                                         source_record_.textures0_u32[0U],
-                                         texture_source);
-    const ResolvedAppearanceTextureBinding3D normal =
-        ResolveAppearanceTextureBinding3D(bindless_resources_,
-                                         texture_host_,
-                                         surface_image_host_,
-                                         geometry_image_host_,
-                                         source_record_.textures0_u32[1U],
-                                         texture_source);
-    const ResolvedAppearanceTextureBinding3D metal_rough =
-        ResolveAppearanceTextureBinding3D(bindless_resources_,
-                                         texture_host_,
-                                         surface_image_host_,
-                                         geometry_image_host_,
-                                         source_record_.textures0_u32[2U],
-                                         texture_source);
-    const ResolvedAppearanceTextureBinding3D occlusion =
-        ResolveAppearanceTextureBinding3D(bindless_resources_,
-                                         texture_host_,
-                                         surface_image_host_,
-                                         geometry_image_host_,
-                                         source_record_.textures0_u32[3U],
-                                         texture_source);
-    const ResolvedAppearanceTextureBinding3D emissive =
-        ResolveAppearanceTextureBinding3D(bindless_resources_,
-                                         texture_host_,
-                                         surface_image_host_,
-                                         geometry_image_host_,
-                                         source_record_.textures1_u32[0U],
-                                         texture_source);
+    const ResolvedAppearanceSampledSurfaceBinding3D base_color =
+        ResolveAppearanceSampledSurfaceBinding3D(resolver_, base_color_handle);
+    const ResolvedAppearanceSampledSurfaceBinding3D normal =
+        ResolveAppearanceSampledSurfaceBinding3D(resolver_, normal_handle);
+    const ResolvedAppearanceSampledSurfaceBinding3D metal_rough =
+        ResolveAppearanceSampledSurfaceBinding3D(resolver_, metal_rough_handle);
+    const ResolvedAppearanceSampledSurfaceBinding3D occlusion =
+        ResolveAppearanceSampledSurfaceBinding3D(resolver_, occlusion_handle);
+    const ResolvedAppearanceSampledSurfaceBinding3D emissive =
+        ResolveAppearanceSampledSurfaceBinding3D(resolver_, emissive_handle);
 
-    std::uint32_t sampler_fallback_texture_id = source_record_.textures0_u32[0U];
-    if (sampler_fallback_texture_id == 0U) {
-        sampler_fallback_texture_id = source_record_.textures0_u32[2U];
+    AppearanceSampledSurfaceHandle sampler_fallback_surface = base_color_handle;
+    if (!sampler_fallback_surface.IsBound()) {
+        sampler_fallback_surface = metal_rough_handle;
     }
-    if (sampler_fallback_texture_id == 0U) {
-        sampler_fallback_texture_id = source_record_.textures0_u32[3U];
+    if (!sampler_fallback_surface.IsBound()) {
+        sampler_fallback_surface = occlusion_handle;
     }
-    if (sampler_fallback_texture_id == 0U) {
-        sampler_fallback_texture_id = source_record_.textures1_u32[0U];
+    if (!sampler_fallback_surface.IsBound()) {
+        sampler_fallback_surface = emissive_handle;
     }
-    if (sampler_fallback_texture_id == 0U) {
-        sampler_fallback_texture_id = source_record_.textures0_u32[1U];
+    if (!sampler_fallback_surface.IsBound()) {
+        sampler_fallback_surface = normal_handle;
     }
 
     std::uint32_t presence_mask = 0U;
     if (base_color.present) {
-        presence_mask |= appearance_texture_presence_base_color;
+        presence_mask |= appearance_sampled_surface_presence_base_color;
     }
     if (normal.present) {
-        presence_mask |= appearance_texture_presence_normal;
+        presence_mask |= appearance_sampled_surface_presence_normal;
     }
     if (metal_rough.present) {
-        presence_mask |= appearance_texture_presence_metal_rough;
+        presence_mask |= appearance_sampled_surface_presence_metal_rough;
     }
     if (occlusion.present) {
-        presence_mask |= appearance_texture_presence_occlusion;
+        presence_mask |= appearance_sampled_surface_presence_occlusion;
     }
     if (emissive.present) {
-        presence_mask |= appearance_texture_presence_emissive;
+        presence_mask |= appearance_sampled_surface_presence_emissive;
     }
 
     out_record_.textures0_u32 = {
@@ -345,11 +336,9 @@ inline void EncodeAppearanceGpuRecord3DForSampling(
     };
     out_record_.textures1_u32 = {
         emissive.slot,
-        ResolveAppearanceSamplerSlot3D(bindless_resources_,
-                                       texture_host_,
-                                       texture_source,
-                                       source_record_.textures1_u32[1U],
-                                       sampler_fallback_texture_id),
+        ResolveAppearanceSurfaceSamplerSlot3D(resolver_,
+                                              source_record_.textures1_u32[1U],
+                                              sampler_fallback_surface),
         source_record_.textures1_u32[2U],
         presence_mask
     };

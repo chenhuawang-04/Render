@@ -11,7 +11,7 @@
 namespace vr::geometry {
 
 struct GeometryAppearanceResolvedState final {
-    ecs::Rgba8 albedo_color{255U, 255U, 255U, 255U};
+    ecs::Rgba8 base_color{255U, 255U, 255U, 255U};
     float metallic = 0.0F;
     float roughness = 1.0F;
     float normal_scale = 1.0F;
@@ -32,12 +32,12 @@ namespace detail {
 
 } // namespace detail
 
-[[nodiscard]] inline GeometryAppearanceResolvedState ResolveGeometryFallbackAppearanceState(
+[[nodiscard]] inline GeometryAppearanceResolvedState ResolveGeometryAuthoredAppearanceState(
     const ecs::AppearanceStyle3D* appearance_style_ = nullptr,
     const GeometryAppearanceDesc* appearance_desc_ = nullptr) noexcept {
     GeometryAppearanceResolvedState resolved{};
     if (appearance_style_ != nullptr) {
-        resolved.albedo_color = appearance_style_->base_color;
+        resolved.base_color = appearance_style_->base_color;
         resolved.metallic =
             std::clamp(detail::FiniteOr(appearance_style_->metallic, 0.0F), 0.0F, 1.0F);
         resolved.roughness =
@@ -61,12 +61,12 @@ namespace detail {
     return resolved;
 }
 
-[[nodiscard]] inline GeometryAppearanceResolvedState ResolveGeometryFallbackAppearanceStateFromRuntimeBridge(
+[[nodiscard]] inline GeometryAppearanceResolvedState ResolveGeometryAuthoredAppearanceStateFromRuntimeBridge(
     const ecs::AppearanceRuntimeBridge3D* appearance_bridge_ = nullptr,
     const GeometryAppearanceDesc* appearance_desc_ = nullptr) noexcept {
     GeometryAppearanceResolvedState resolved{};
     if (appearance_bridge_ != nullptr) {
-        resolved.albedo_color = ecs::ResolveAppearanceRuntimeBridge3DBaseColor(*appearance_bridge_);
+        resolved.base_color = ecs::ResolveAppearanceRuntimeBridge3DBaseColor(*appearance_bridge_);
         resolved.metallic =
             std::clamp(detail::FiniteOr(appearance_bridge_->metallic, 0.0F), 0.0F, 1.0F);
         resolved.roughness =
@@ -92,10 +92,10 @@ namespace detail {
     return resolved;
 }
 
-[[nodiscard]] inline GeometryAppearanceResolvedState ApplyAppearanceRecordState(
+[[nodiscard]] inline GeometryAppearanceResolvedState OverlayLinkedAppearanceRecordState(
     GeometryAppearanceResolvedState resolved_,
     const ecs::AppearanceGpuRecord<ecs::Dim3>& appearance_record_) noexcept {
-    resolved_.albedo_color = ecs::Rgba8{
+    resolved_.base_color = ecs::Rgba8{
         detail::Float01ToByte(appearance_record_.base_rgba[0U]),
         detail::Float01ToByte(appearance_record_.base_rgba[1U]),
         detail::Float01ToByte(appearance_record_.base_rgba[2U]),
@@ -119,26 +119,26 @@ namespace detail {
     return resolved_;
 }
 
-[[nodiscard]] inline GeometryAppearanceResolvedState ResolveGeometryAppearanceState(
+[[nodiscard]] inline GeometryAppearanceResolvedState ResolveFinalGeometryAppearanceState(
     const ecs::AppearanceStyle3D* appearance_style_ = nullptr,
     const GeometryAppearanceDesc* appearance_desc_ = nullptr,
     const ecs::AppearanceGpuRecord<ecs::Dim3>* appearance_record_ = nullptr) noexcept {
     GeometryAppearanceResolvedState resolved =
-        ResolveGeometryFallbackAppearanceState(appearance_style_, appearance_desc_);
+        ResolveGeometryAuthoredAppearanceState(appearance_style_, appearance_desc_);
     if (appearance_record_ != nullptr) {
-        resolved = ApplyAppearanceRecordState(resolved, *appearance_record_);
+        resolved = OverlayLinkedAppearanceRecordState(resolved, *appearance_record_);
     }
     return resolved;
 }
 
-[[nodiscard]] inline GeometryAppearanceResolvedState ResolveGeometryAppearanceStateFromRuntimeBridge(
+[[nodiscard]] inline GeometryAppearanceResolvedState ResolveFinalGeometryAppearanceStateFromRuntimeBridge(
     const ecs::AppearanceRuntimeBridge3D* appearance_bridge_ = nullptr,
     const GeometryAppearanceDesc* appearance_desc_ = nullptr,
     const ecs::AppearanceGpuRecord<ecs::Dim3>* appearance_record_ = nullptr) noexcept {
     GeometryAppearanceResolvedState resolved =
-        ResolveGeometryFallbackAppearanceStateFromRuntimeBridge(appearance_bridge_, appearance_desc_);
+        ResolveGeometryAuthoredAppearanceStateFromRuntimeBridge(appearance_bridge_, appearance_desc_);
     if (appearance_record_ != nullptr) {
-        resolved = ApplyAppearanceRecordState(resolved, *appearance_record_);
+        resolved = OverlayLinkedAppearanceRecordState(resolved, *appearance_record_);
     }
     return resolved;
 }

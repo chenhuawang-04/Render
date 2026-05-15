@@ -64,7 +64,7 @@ struct Geometry2DDrawBatch final {
     std::uint32_t primitive_begin;
     std::uint32_t primitive_count;
     std::uint32_t geometry_id;
-    std::uint32_t visual_resource_id;
+    std::uint32_t effective_visual_resource_id;
     std::uint32_t first_component_index;
     std::uint32_t params;
 };
@@ -142,7 +142,7 @@ struct Geometry3DGpuInstance final {
 
     std::uint32_t params;
     std::uint32_t geometry_id;
-    std::uint32_t visual_resource_id;
+    std::uint32_t effective_visual_resource_id;
 
     std::uint32_t submesh_index;
     std::uint32_t appearance_record_index;
@@ -170,7 +170,7 @@ struct Geometry3DDrawBatch final {
     std::uint32_t instance_begin;
     std::uint32_t instance_count;
     std::uint32_t geometry_id;
-    std::uint32_t visual_resource_id;
+    std::uint32_t effective_visual_resource_id;
     std::uint32_t submesh_index;
     std::uint32_t first_component_index;
     std::uint32_t params;
@@ -800,7 +800,7 @@ private:
             Geometry2DDrawBatch& last = scratch_.draw_batches.back();
             if (last.sort_key == sort_key_ &&
                 last.geometry_id == component_.runtime.route.geometry_id &&
-                last.visual_resource_id == effective_visual_resource_id &&
+                last.effective_visual_resource_id == effective_visual_resource_id &&
                 last.params == params &&
                 last.primitive_begin + last.primitive_count == primitive_begin_) {
                 last.primitive_count += primitive_count_;
@@ -813,7 +813,7 @@ private:
         batch.primitive_begin = primitive_begin_;
         batch.primitive_count = primitive_count_;
         batch.geometry_id = component_.runtime.route.geometry_id;
-        batch.visual_resource_id = effective_visual_resource_id;
+        batch.effective_visual_resource_id = effective_visual_resource_id;
         batch.first_component_index = component_index_;
         batch.params = params;
         scratch_.draw_batches.push_back(batch);
@@ -1143,7 +1143,8 @@ public:
             WriteWorldMatrixToInstance(instance, world_matrix);
             instance.params = PackParams(component);
             instance.geometry_id = component.runtime.route.geometry_id;
-            instance.visual_resource_id = ResolveEffectiveVisualResourceId(component.runtime.route);
+            instance.effective_visual_resource_id =
+                ResolveEffectiveVisualResourceId(component.runtime.route);
             instance.submesh_index = ResolveAnimatedSubmeshIndex(component,
                                                                  item.component_index,
                                                                  build_hint_.frame_sequence_outputs,
@@ -1258,8 +1259,8 @@ private:
         GeometryRuntimeCacheMissReason miss_reason = GeometryRuntimeCacheMissReason::none;
     };
 
-    struct FallbackAppearanceState final {
-        Rgba8 albedo_color{255U, 255U, 255U, 255U};
+    struct AuthoredAppearanceState final {
+        Rgba8 base_color{255U, 255U, 255U, 255U};
         float metallic = 0.0F;
         float roughness = 1.0F;
         float normal_scale = 1.0F;
@@ -1340,15 +1341,15 @@ private:
                component_.runtime.route.appearance_handle.generation != 0U;
     }
 
-    [[nodiscard]] static FallbackAppearanceState ResolveFallbackAppearanceState(
+    [[nodiscard]] static AuthoredAppearanceState ResolveAuthoredAppearanceState(
         const GeometryType& component_) noexcept {
         if (HasLinkedAppearancePath(component_)) {
-            return FallbackAppearanceState{};
+            return AuthoredAppearanceState{};
         }
         const AppearanceRuntimeBridge3D appearance_bridge =
             ReadAppearanceRuntimeBridge3D(component_.runtime);
-        return FallbackAppearanceState{
-            .albedo_color = ResolveAppearanceRuntimeBridge3DBaseColor(appearance_bridge),
+        return AuthoredAppearanceState{
+            .base_color = ResolveAppearanceRuntimeBridge3DBaseColor(appearance_bridge),
             .metallic = appearance_bridge.metallic,
             .roughness = appearance_bridge.roughness,
             .normal_scale = appearance_bridge.normal_scale,
@@ -1364,8 +1365,8 @@ private:
         if (HasLinkedAppearancePath(component_)) {
             blend_preset = ResolveRuntimeBlendPreset(component_.runtime.route.appearance_pipeline_bucket);
         }
-        const FallbackAppearanceState fallback_appearance =
-            ResolveFallbackAppearanceState(component_);
+        const AuthoredAppearanceState authored_appearance =
+            ResolveAuthoredAppearanceState(component_);
         const bool depth_write_enabled =
             IsAppearanceRuntimeBridge3DDepthWriteEnabled(appearance_bridge) &&
             !IsTransparentBlendPreset(blend_preset);
@@ -1384,7 +1385,7 @@ private:
             ? 0x10U
             : 0U;
         params |= (static_cast<std::uint32_t>(component_.style.topology) & 0x3U) << 5U;
-        params |= (!fallback_appearance.unlit ? 1U : 0U) << 7U;
+        params |= (!authored_appearance.unlit ? 1U : 0U) << 7U;
         params |= (static_cast<std::uint32_t>(component_.mesh.lod_index) & 0xFFFFU) << 8U;
         params |= EncodeRuntimeBlendPresetBits(blend_preset, geometry_runtime_blend_shift);
         return params;
@@ -1499,8 +1500,8 @@ private:
         if (component_.runtime.route.visible == 0U) {
             return;
         }
-        const FallbackAppearanceState fallback_appearance =
-            ResolveFallbackAppearanceState(component_);
+        const AuthoredAppearanceState authored_appearance =
+            ResolveAuthoredAppearanceState(component_);
 
         HashCombine(hash_, component_.runtime.route.sort_key);
         HashCombine(hash_, static_cast<std::uint64_t>(component_.runtime.route.geometry_id));
@@ -1511,12 +1512,12 @@ private:
         HashCombine(hash_, static_cast<std::uint64_t>(component_.mesh.lod_index));
         HashCombine(hash_, static_cast<std::uint64_t>(component_.mesh.flags));
         HashCombine(hash_, static_cast<std::uint64_t>(component_.runtime.mesh_revision));
-        HashCombine(hash_, static_cast<std::uint64_t>(PackRgba8(fallback_appearance.albedo_color)));
+        HashCombine(hash_, static_cast<std::uint64_t>(PackRgba8(authored_appearance.base_color)));
         HashCombine(hash_, static_cast<std::uint64_t>(PackParams(component_)));
-        HashCombine(hash_, static_cast<std::uint64_t>(FloatBits(fallback_appearance.metallic)));
-        HashCombine(hash_, static_cast<std::uint64_t>(FloatBits(fallback_appearance.roughness)));
-        HashCombine(hash_, static_cast<std::uint64_t>(FloatBits(fallback_appearance.normal_scale)));
-        HashCombine(hash_, static_cast<std::uint64_t>(FloatBits(fallback_appearance.occlusion_strength)));
+        HashCombine(hash_, static_cast<std::uint64_t>(FloatBits(authored_appearance.metallic)));
+        HashCombine(hash_, static_cast<std::uint64_t>(FloatBits(authored_appearance.roughness)));
+        HashCombine(hash_, static_cast<std::uint64_t>(FloatBits(authored_appearance.normal_scale)));
+        HashCombine(hash_, static_cast<std::uint64_t>(FloatBits(authored_appearance.occlusion_strength)));
         HashCombine(hash_, static_cast<std::uint64_t>(FloatBits(component_.style.line_width)));
         HashCombine(hash_, static_cast<std::uint64_t>(FloatBits(component_.runtime.bounds_min.x)));
         HashCombine(hash_, static_cast<std::uint64_t>(FloatBits(component_.runtime.bounds_min.y)));
@@ -2301,7 +2302,7 @@ private:
             Geometry3DDrawBatch& last = scratch_.draw_batches.back();
             if (last.sort_key == sort_key_ &&
                 last.geometry_id == component_.runtime.route.geometry_id &&
-                last.visual_resource_id == effective_visual_resource_id &&
+                last.effective_visual_resource_id == effective_visual_resource_id &&
                 last.submesh_index == animated_submesh_index &&
                 last.params == params &&
                 last.instance_begin + last.instance_count == instance_index_) {
@@ -2315,7 +2316,7 @@ private:
         batch.instance_begin = instance_index_;
         batch.instance_count = 1U;
         batch.geometry_id = component_.runtime.route.geometry_id;
-        batch.visual_resource_id = effective_visual_resource_id;
+        batch.effective_visual_resource_id = effective_visual_resource_id;
         batch.submesh_index = animated_submesh_index;
         batch.first_component_index = component_index_;
         batch.params = params;

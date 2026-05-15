@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "vr/ecs/component/appearance_component.hpp"
 #include "vr/ecs/component/geometry_component.hpp"
@@ -210,11 +210,11 @@ inline constexpr std::uint32_t surface3d_runtime_blend_shift = 11U;
 
 template<typename RouteT>
 [[nodiscard]] constexpr std::uint32_t ResolveEffectiveVisualResourceId(const RouteT& route_) noexcept {
-    // Keep the authoring/base visual resource route intact and layer linked appearance resources on
-    // top. This lets clear/unlink fall back to the original resource without restoration state.
+    // Keep the authoring visual resource route intact and layer linked appearance resources on top.
+    // This lets clear/unlink fall back to the authored resource without restoration state.
     return HasLinkedAppearanceHandle(route_)
-        ? route_.appearance_visual_resource_id
-        : route_.visual_resource_id;
+        ? route_.linked_visual_resource_id
+        : route_.authoring_visual_resource_id;
 }
 
 [[nodiscard]] constexpr bool AppearanceUsesTransparency(
@@ -327,4 +327,3 @@ template<typename StyleT>
 }
 
 } // namespace vr::ecs
-

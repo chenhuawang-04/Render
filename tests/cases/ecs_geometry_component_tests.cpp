@@ -1,4 +1,4 @@
-﻿#include "support/test_framework.hpp"
+#include "support/test_framework.hpp"
 #include "vr/ecs/system/appearance_system.hpp"
 #include "vr/ecs/component/geometry_component.hpp"
 #include "vr/ecs/system/geometry_mesh_system.hpp"
@@ -131,7 +131,7 @@ VR_TEST_CASE(EcsGeometryMeshSystem_route_style_and_bounds, "unit;core;ecs;geomet
     Appearance3D appearance{};
     AppearanceSystem3D::Initialize(appearance);
 
-    GeometrySystem3D::SetVisualResourceId(geometry, 12U);
+    GeometrySystem3D::SetAuthoringVisualResourceId(geometry, 12U);
     GeometrySystem3D::SetDepthBin(geometry, 33U);
     MeshSystem::SetMeshRoute(geometry, 301U, 2U, 1U);
     MeshSystem::SetTopology(geometry, vr::ecs::Geometry3DTopology::lines);
@@ -176,7 +176,7 @@ VR_TEST_CASE(EcsGeometrySystem_dim3_unlinked_appearance_bridge_promotes_transpar
     Geometry3D geometry{};
     GeometrySystem3D::Initialize(geometry);
     GeometrySystem3D::SetGeometryId(geometry, 6U);
-    GeometrySystem3D::SetVisualResourceId(geometry, 10U);
+    GeometrySystem3D::SetAuthoringVisualResourceId(geometry, 10U);
     GeometrySystem3D::SetDepthBin(geometry, 21U);
 
     Appearance3D appearance{};
@@ -201,7 +201,7 @@ VR_TEST_CASE(EcsGeometrySystem_dim3_transparent_sort_reverses_depth_minor_bucket
     Geometry3D geometry{};
     GeometrySystem3D::Initialize(geometry);
     GeometrySystem3D::SetGeometryId(geometry, 5U);
-    GeometrySystem3D::SetVisualResourceId(geometry, 9U);
+    GeometrySystem3D::SetAuthoringVisualResourceId(geometry, 9U);
     GeometrySystem3D::SetDepthBin(geometry, 33U);
     GeometrySystem3D::SetRenderPassHint(geometry, vr::ecs::GeometryRenderPassHint::transparent);
 
@@ -260,7 +260,7 @@ VR_TEST_CASE(EcsGeometrySystem_appearance_link_preserves_base_visual_resource_an
     Geometry3D geometry{};
     GeometrySystem3D::Initialize(geometry);
     GeometrySystem3D::SetGeometryId(geometry, 41U);
-    GeometrySystem3D::SetVisualResourceId(geometry, 77U);
+    GeometrySystem3D::SetAuthoringVisualResourceId(geometry, 77U);
     GeometrySystem3D::SetDepthBin(geometry, 3U);
 
     const vr::ecs::AppearanceHandle handle{.index = 8U, .generation = 2U};
@@ -270,22 +270,21 @@ VR_TEST_CASE(EcsGeometrySystem_appearance_link_preserves_base_visual_resource_an
                                                                    0x02000000ULL,
                                                                    1234ULL);
     VR_CHECK(linked);
-    VR_CHECK(geometry.runtime.route.visual_resource_id == 77U);
-    VR_CHECK(geometry.runtime.route.appearance_visual_resource_id == 1234U);
+    VR_CHECK(geometry.runtime.route.authoring_visual_resource_id == 77U);
+    VR_CHECK(geometry.runtime.route.linked_visual_resource_id == 1234U);
     VR_CHECK(vr::ecs::ResolveEffectiveVisualResourceId(geometry.runtime.route) == 1234U);
     VR_CHECK(GeometrySystem3D::ExtractVisualResourceBucket(geometry.runtime.route.sort_key) == (1234U & 0xFFFFU));
 
-    GeometrySystem3D::SetVisualResourceId(geometry, 91U);
-    VR_CHECK(geometry.runtime.route.visual_resource_id == 91U);
+    GeometrySystem3D::SetAuthoringVisualResourceId(geometry, 91U);
+    VR_CHECK(geometry.runtime.route.authoring_visual_resource_id == 91U);
     VR_CHECK(vr::ecs::ResolveEffectiveVisualResourceId(geometry.runtime.route) == 1234U);
     VR_CHECK(GeometrySystem3D::ExtractVisualResourceBucket(geometry.runtime.route.sort_key) == (1234U & 0xFFFFU));
 
     GeometrySystem3D::ClearAppearanceHandle(geometry);
-    VR_CHECK(geometry.runtime.route.visual_resource_id == 91U);
-    VR_CHECK(geometry.runtime.route.appearance_visual_resource_id == 0U);
+    VR_CHECK(geometry.runtime.route.authoring_visual_resource_id == 91U);
+    VR_CHECK(geometry.runtime.route.linked_visual_resource_id == 0U);
     VR_CHECK(vr::ecs::ResolveEffectiveVisualResourceId(geometry.runtime.route) == 91U);
     VR_CHECK(GeometrySystem3D::ExtractVisualResourceBucket(geometry.runtime.route.sort_key) == 91U);
 }
 
 } // namespace
-

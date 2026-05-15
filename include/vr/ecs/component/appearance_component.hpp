@@ -2,6 +2,7 @@
 
 #include "vr/ecs/component/text_component.hpp"
 #include "vr/ecs/concept/dimension.hpp"
+#include "vr/render/appearance_sampled_surface.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -425,24 +426,51 @@ struct AppearanceRuntimeBridge3D final {
 }
 
 struct AppearanceBinding2D final {
-    std::uint32_t texture_base_id;
-    std::uint32_t texture_mask_id;
-    std::uint32_t texture_lut_id;
-    std::uint32_t sampler_state_id;
-    std::uint32_t binding_layout_id;
+    std::uint32_t pattern_surface;
+    std::uint32_t mask_surface;
+    std::uint32_t lut_surface;
+    std::uint32_t surface_sampler_id;
     std::uint32_t reserved0;
 };
 
-struct AppearanceBinding3D final {
-    std::uint32_t texture_base_color_id;
-    std::uint32_t texture_normal_id;
-    std::uint32_t texture_metal_rough_id;
-    std::uint32_t texture_occlusion_id;
-    std::uint32_t texture_emissive_id;
-    std::uint32_t sampler_state_id;
-    std::uint32_t binding_layout_id;
-    std::uint32_t reserved0;
-};
+using AppearanceBinding3D = vr::render::AppearanceSampledSurfaceBinding3D;
+
+[[nodiscard]] constexpr vr::render::AppearanceSampledSurfaceHandle* ResolveAppearanceBinding3DSurfaceStorage(
+    AppearanceBinding3D& binding_,
+    vr::render::AppearanceSampledSurfaceSlot3D slot_) noexcept {
+    return vr::render::ResolveAppearanceSampledSurfaceStorage3D(binding_, slot_);
+}
+
+[[nodiscard]] constexpr const vr::render::AppearanceSampledSurfaceHandle* ResolveAppearanceBinding3DSurfaceStorage(
+    const AppearanceBinding3D& binding_,
+    vr::render::AppearanceSampledSurfaceSlot3D slot_) noexcept {
+    return vr::render::ResolveAppearanceSampledSurfaceStorage3D(binding_, slot_);
+}
+
+[[nodiscard]] constexpr std::uint32_t ResolveAppearanceBinding3DSurfaceId(
+    const AppearanceBinding3D& binding_,
+    vr::render::AppearanceSampledSurfaceSlot3D slot_) noexcept {
+    return ResolveAppearanceBinding3DSurfaceStorage(binding_, slot_)->surface_id;
+}
+
+[[nodiscard]] constexpr vr::render::AppearanceSampledSurfaceDomain ResolveAppearanceBinding3DSurfaceDomain(
+    const AppearanceBinding3D& binding_,
+    vr::render::AppearanceSampledSurfaceSlot3D slot_) noexcept {
+    return ResolveAppearanceBinding3DSurfaceStorage(binding_, slot_)->domain;
+}
+
+[[nodiscard]] constexpr vr::render::AppearanceSampledSurfaceHandle ResolveAppearanceBinding3DSampledSurface(
+    const AppearanceBinding3D& binding_,
+    vr::render::AppearanceSampledSurfaceSlot3D slot_) noexcept {
+    return *ResolveAppearanceBinding3DSurfaceStorage(binding_, slot_);
+}
+
+constexpr bool SetAppearanceBinding3DSampledSurface(
+    AppearanceBinding3D& binding_,
+    vr::render::AppearanceSampledSurfaceSlot3D slot_,
+    const vr::render::AppearanceSampledSurfaceHandle& handle_) noexcept {
+    return vr::render::SetAppearanceSampledSurface3D(binding_, slot_, handle_);
+}
 
 template<DimensionTag DimensionT>
 struct AppearanceComponent;
@@ -487,4 +515,5 @@ static_assert(PurePodAppearanceComponent<Appearance<Dim3>>);
 static_assert(sizeof(AppearanceRuntimeCommon) <= 64U);
 
 } // namespace vr::ecs
+
 

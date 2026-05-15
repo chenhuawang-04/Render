@@ -1,4 +1,4 @@
-#include "vr/asset/texture_host.hpp"
+﻿#include "vr/asset/texture_host.hpp"
 #include "vr/ecs/system/animation_evaluation_context.hpp"
 #include "vr/ecs/system/appearance_system.hpp"
 #include "vr/ecs/system/bounds_system.hpp"
@@ -372,7 +372,7 @@ void InitializeSurfaceComponent(Surface3D& component_,
                                                     MakeStaticAppearanceHandle(1U),
                                                     0ULL,
                                                     0ULL,
-                                                    component_.runtime.route.visual_resource_id,
+                                                    component_.runtime.route.authoring_visual_resource_id,
                                                     &appearance_.style);
 }
 
@@ -649,7 +649,7 @@ int main(int argc_,
 
         vr::geometry::GeometryAppearanceDesc geometry_appearance_desc{};
         geometry_appearance_desc.appearance_id = k_geometry_appearance_id;
-        geometry_appearance_desc.image_id = k_geometry_image_id;
+        geometry_appearance_desc.sampled_surface_binding.base_color_surface.surface_id = k_geometry_image_id;
         geometry_appearance_desc.uv_scale_u = 1.0F;
         geometry_appearance_desc.uv_scale_v = 1.0F;
         geometry_appearance_host.UpsertAppearance(geometry_appearance_desc);

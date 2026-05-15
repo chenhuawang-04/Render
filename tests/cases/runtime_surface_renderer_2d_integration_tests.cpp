@@ -1,4 +1,4 @@
-﻿#include "support/test_framework.hpp"
+#include "support/test_framework.hpp"
 #include "vr/ecs/system/appearance_system.hpp"
 #include "vr/ecs/system/surface_system.hpp"
 #include "vr/ecs/system/transform_system.hpp"
@@ -150,7 +150,7 @@ void InitializeSurfaceComponent(Surface2D& component_,
                                 std::int16_t layer_) {
     SurfaceSystem2D::Initialize(component_);
     SurfaceSystem2D::SetSource(component_, vr::ecs::SurfaceImageSourceDesc{.surface_id = image_id_, .atlas_page_id = 0U});
-    SurfaceSystem2D::SetVisualResourceId(component_, 1U);
+    SurfaceSystem2D::SetAuthoringVisualResourceId(component_, 1U);
     SurfaceSystem2D::SetBatchTag(component_, 0U);
     SurfaceSystem2D::SetRenderPassHint(component_, vr::ecs::SurfaceRenderPassHint::transparent);
     SurfaceSystem2D::SetSize(component_, size_);
@@ -398,4 +398,3 @@ VR_TEST_CASE(RuntimeIntegration_surface_renderer_2d_bindless_scene_packet_smoke,
 }
 
 } // namespace
-

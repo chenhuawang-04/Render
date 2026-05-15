@@ -59,8 +59,8 @@ struct ParticleDrawBatch final {
     std::uint64_t sort_key;
     std::uint32_t instance_begin;
     std::uint32_t instance_count;
-    std::uint32_t visual_resource_id;
-    std::uint32_t texture_id;
+    std::uint32_t effective_visual_resource_id;
+    std::uint32_t surface_id;
     std::uint32_t first_component_index;
     std::uint32_t batch_tag;
     std::uint32_t pipeline_state;
@@ -383,8 +383,9 @@ public:
                 ResolveEffectiveVisualResourceId(component.runtime.route);
             if (!scratch_.draw_batches.empty() &&
                 scratch_.draw_batches.back().sort_key == sort_key &&
-                scratch_.draw_batches.back().visual_resource_id == effective_visual_resource_id &&
-                scratch_.draw_batches.back().texture_id == component.runtime.route.texture_id &&
+                scratch_.draw_batches.back().effective_visual_resource_id ==
+                    effective_visual_resource_id &&
+                scratch_.draw_batches.back().surface_id == component.runtime.route.surface_id &&
                 scratch_.draw_batches.back().batch_tag == component.runtime.route.batch_tag &&
                 scratch_.draw_batches.back().pipeline_state == pipeline_state &&
                 scratch_.draw_batches.back().instance_begin +
@@ -396,8 +397,8 @@ public:
                 batch.sort_key = sort_key;
                 batch.instance_begin = instance_begin;
                 batch.instance_count = emitted_from_component;
-                batch.visual_resource_id = effective_visual_resource_id;
-                batch.texture_id = component.runtime.route.texture_id;
+                batch.effective_visual_resource_id = effective_visual_resource_id;
+                batch.surface_id = component.runtime.route.surface_id;
                 batch.first_component_index = component_index;
                 batch.batch_tag = component.runtime.route.batch_tag;
                 batch.pipeline_state = pipeline_state;
@@ -943,7 +944,7 @@ private:
             instance.rotation_radians = emitter_state_.particles.rotation_radians[particle_index_];
             instance.normalized_age = normalized_age;
             instance.color_rgba8 = color_rgba8;
-            instance.texture_slot = component_.runtime.route.texture_id;
+            instance.texture_slot = component_.runtime.route.surface_id;
             instance.sampler_slot = 0U;
             instance.component_index = component_index_;
             instance.user_data = component_.runtime.route.user_data;
@@ -961,7 +962,7 @@ private:
                 std::sqrt(velocity.x * velocity.x + velocity.y * velocity.y + velocity.z * velocity.z) *
                     component_.style.stretch_velocity_scale;
             instance.color_rgba8 = color_rgba8;
-            instance.texture_slot = component_.runtime.route.texture_id;
+            instance.texture_slot = component_.runtime.route.surface_id;
             instance.sampler_slot = 0U;
             instance.component_index = component_index_;
             instance.user_data = component_.runtime.route.user_data;

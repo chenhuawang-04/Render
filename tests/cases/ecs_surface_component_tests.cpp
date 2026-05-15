@@ -1,4 +1,4 @@
-﻿#include "support/test_framework.hpp"
+#include "support/test_framework.hpp"
 #include "vr/ecs/component/surface_component.hpp"
 #include "vr/ecs/system/appearance_system.hpp"
 #include "vr/ecs/system/surface_system.hpp"
@@ -38,7 +38,7 @@ VR_TEST_CASE(EcsSurfaceSystem_dim2_image_sprite_route_and_sort_key, "unit;core;e
     SurfaceSystem2D::ClearDirtyFlags(surface, 0xFFFFFFFFU);
 
     SurfaceSystem2D::SetSource(surface, vr::ecs::SurfaceImageSourceDesc{.surface_id = 77U, .atlas_page_id = 3U});
-    SurfaceSystem2D::SetVisualResourceId(surface, 19U);
+    SurfaceSystem2D::SetAuthoringVisualResourceId(surface, 19U);
     SurfaceSystem2D::SetBatchTag(surface, 11U);
     ApplySurface2DAppearanceLayer(surface, -5);
     SurfaceSystem2D::SetRenderPassHint(surface, vr::ecs::SurfaceRenderPassHint::transparent);
@@ -81,7 +81,7 @@ VR_TEST_CASE(EcsSurfaceSystem_dim3_runtime_bridge_apply_updates_transparency_sor
     Surface3D surface{};
     SurfaceSystem3D::Initialize(surface);
     SurfaceSystem3D::SetSource(surface, vr::ecs::SurfaceSampledSource3DDesc{.surface_id = 400U, .sampler_id = 5U, .uv_set = 0U, .flags = 0U});
-    SurfaceSystem3D::SetVisualResourceId(surface, 27U);
+    SurfaceSystem3D::SetAuthoringVisualResourceId(surface, 27U);
     SurfaceSystem3D::SetDepthBin(surface, 12U);
     SurfaceSystem3D::ClearDirtyFlags(surface, 0xFFFFFFFFU);
 
@@ -114,7 +114,7 @@ VR_TEST_CASE(EcsSurfaceSystem_dim3_texture_route_style_and_visibility, "unit;cor
     AppearanceSystem3D::Initialize(appearance);
 
     SurfaceSystem3D::SetSource(surface, vr::ecs::SurfaceSampledSource3DDesc{.surface_id = 301U, .sampler_id = 7U, .uv_set = 2U, .flags = 9U});
-    SurfaceSystem3D::SetVisualResourceId(surface, 88U);
+    SurfaceSystem3D::SetAuthoringVisualResourceId(surface, 88U);
     SurfaceSystem3D::SetDepthBin(surface, 17U);
     SurfaceSystem3D::SetUvTransform(surface, 2.0F, 0.5F, 0.1F, -0.2F);
     AppearanceSystem3D::SetDepthTest(appearance, false);
@@ -166,7 +166,7 @@ VR_TEST_CASE(EcsSurfaceSystem_dim3_transparent_sort_reverses_depth_minor_bucket,
     Surface3D surface{};
     SurfaceSystem3D::Initialize(surface);
     SurfaceSystem3D::SetSource(surface, vr::ecs::SurfaceSampledSource3DDesc{.surface_id = 301U, .sampler_id = 7U, .uv_set = 2U, .flags = 9U});
-    SurfaceSystem3D::SetVisualResourceId(surface, 88U);
+    SurfaceSystem3D::SetAuthoringVisualResourceId(surface, 88U);
     SurfaceSystem3D::SetDepthBin(surface, 17U);
     SurfaceSystem3D::SetRenderPassHint(surface, vr::ecs::SurfaceRenderPassHint::transparent);
 
@@ -185,7 +185,7 @@ VR_TEST_CASE(EcsSurfaceSystem_dim3_unlinked_appearance_bridge_promotes_transpare
     Surface3D surface{};
     SurfaceSystem3D::Initialize(surface);
     SurfaceSystem3D::SetSource(surface, vr::ecs::SurfaceSampledSource3DDesc{.surface_id = 302U, .sampler_id = 8U, .uv_set = 0U, .flags = 0U});
-    SurfaceSystem3D::SetVisualResourceId(surface, 89U);
+    SurfaceSystem3D::SetAuthoringVisualResourceId(surface, 89U);
     SurfaceSystem3D::SetDepthBin(surface, 19U);
 
     Appearance3D appearance{};
@@ -267,7 +267,7 @@ VR_TEST_CASE(EcsSurfaceSystem_appearance_link_preserves_base_visual_resource_and
     Surface3D surface{};
     SurfaceSystem3D::Initialize(surface);
     SurfaceSystem3D::SetSource(surface, vr::ecs::SurfaceSampledSource3DDesc{.surface_id = 301U, .sampler_id = 4U, .uv_set = 0U, .flags = 0U});
-    SurfaceSystem3D::SetVisualResourceId(surface, 55U);
+    SurfaceSystem3D::SetAuthoringVisualResourceId(surface, 55U);
     SurfaceSystem3D::SetDepthBin(surface, 9U);
 
     const vr::ecs::AppearanceHandle handle{.index = 6U, .generation = 1U};
@@ -277,21 +277,21 @@ VR_TEST_CASE(EcsSurfaceSystem_appearance_link_preserves_base_visual_resource_and
                                                                   0x02000000ULL,
                                                                   900ULL);
     VR_CHECK(linked);
-    VR_CHECK(surface.runtime.route.visual_resource_id == 55U);
-    VR_CHECK(surface.runtime.route.appearance_visual_resource_id == 900U);
+    VR_CHECK(surface.runtime.route.authoring_visual_resource_id == 55U);
+    VR_CHECK(surface.runtime.route.linked_visual_resource_id == 900U);
     VR_CHECK(vr::ecs::ResolveEffectiveVisualResourceId(surface.runtime.route) == 900U);
     VR_CHECK(SurfaceSystem3D::ExtractVisualResourceBucket(surface.runtime.route.sort_key) == 900U);
     VR_CHECK(SurfaceSystem3D::ExtractSurfaceBucket(surface.runtime.route.sort_key) == 0U);
 
-    SurfaceSystem3D::SetVisualResourceId(surface, 61U);
-    VR_CHECK(surface.runtime.route.visual_resource_id == 61U);
+    SurfaceSystem3D::SetAuthoringVisualResourceId(surface, 61U);
+    VR_CHECK(surface.runtime.route.authoring_visual_resource_id == 61U);
     VR_CHECK(vr::ecs::ResolveEffectiveVisualResourceId(surface.runtime.route) == 900U);
     VR_CHECK(SurfaceSystem3D::ExtractVisualResourceBucket(surface.runtime.route.sort_key) == 900U);
     VR_CHECK(SurfaceSystem3D::ExtractSurfaceBucket(surface.runtime.route.sort_key) == 0U);
 
     SurfaceSystem3D::ClearAppearanceHandle(surface);
-    VR_CHECK(surface.runtime.route.visual_resource_id == 61U);
-    VR_CHECK(surface.runtime.route.appearance_visual_resource_id == 0U);
+    VR_CHECK(surface.runtime.route.authoring_visual_resource_id == 61U);
+    VR_CHECK(surface.runtime.route.linked_visual_resource_id == 0U);
     VR_CHECK(vr::ecs::ResolveEffectiveVisualResourceId(surface.runtime.route) == 61U);
     VR_CHECK(SurfaceSystem3D::ExtractVisualResourceBucket(surface.runtime.route.sort_key) == 61U);
     VR_CHECK(SurfaceSystem3D::ExtractSurfaceBucket(surface.runtime.route.sort_key) == 301U);
@@ -304,7 +304,7 @@ VR_TEST_CASE(EcsSurfaceSystem_dim3_linked_appearance_is_visible_without_legacy_t
 
     Surface3D surface{};
     SurfaceSystem3D::Initialize(surface);
-    SurfaceSystem3D::SetVisualResourceId(surface, 44U);
+    SurfaceSystem3D::SetAuthoringVisualResourceId(surface, 44U);
 
     const bool linked = SurfaceSystem3D::SetAppearanceRuntimeLink(surface,
                                                                   vr::ecs::AppearanceHandle{.index = 7U, .generation = 1U},
@@ -317,4 +317,3 @@ VR_TEST_CASE(EcsSurfaceSystem_dim3_linked_appearance_is_visible_without_legacy_t
 }
 
 } // namespace
-
