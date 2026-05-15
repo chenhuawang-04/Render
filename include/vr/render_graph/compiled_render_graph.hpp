@@ -1,0 +1,57 @@
+#pragma once
+
+#include "vr/render_graph/render_graph_types.hpp"
+
+#include <string>
+#include <vector>
+
+namespace vr::render_graph {
+
+struct CompiledPass final {
+    PassHandle handle{};
+    std::string debug_name{};
+    bool side_effect = false;
+    std::vector<PassHandle> dependencies{};
+    std::vector<ResourceVersionHandle> reads{};
+    std::vector<ResourceVersionHandle> writes{};
+};
+
+struct CompiledResourceVersionLiveness final {
+    ResourceVersionHandle version{};
+    std::string debug_name{};
+    ResourceKind kind = ResourceKind::buffer;
+    ResourceLifetime lifetime = ResourceLifetime::transient;
+    std::uint32_t first_pass_order = invalid_render_graph_index;
+    std::uint32_t last_pass_order = invalid_render_graph_index;
+};
+
+class CompiledRenderGraph final {
+public:
+    [[nodiscard]] bool Empty() const noexcept {
+        return execution_order.empty();
+    }
+
+    [[nodiscard]] const std::vector<CompiledPass>& Passes() const noexcept {
+        return passes;
+    }
+
+    [[nodiscard]] const std::vector<PassHandle>& ExecutionOrder() const noexcept {
+        return execution_order;
+    }
+
+    [[nodiscard]] const std::vector<CompiledResourceVersionLiveness>& LivenessRanges() const noexcept {
+        return liveness_ranges;
+    }
+
+    [[nodiscard]] const CompiledPass* FindPass(PassHandle handle_) const noexcept;
+    [[nodiscard]] std::string BuildDebugString() const;
+
+private:
+    friend class RenderGraphBuilder;
+
+    std::vector<CompiledPass> passes{};
+    std::vector<PassHandle> execution_order{};
+    std::vector<CompiledResourceVersionLiveness> liveness_ranges{};
+};
+
+} // namespace vr::render_graph

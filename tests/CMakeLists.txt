@@ -47,6 +47,7 @@ add_executable(${VR_TEST_TARGET}
     cases/render_shadow_atlas_binding_coordinator_tests.cpp
     cases/render_shadow_frame_coordinator_tests.cpp
     cases/render_target_types_tests.cpp
+    cases/render_graph_builder_tests.cpp
     cases/ecs_bounds_system_tests.cpp
     cases/ecs_culling_system_tests.cpp
     cases/ecs_surface_batch_runtime_system_tests.cpp

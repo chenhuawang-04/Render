@@ -25,6 +25,7 @@
 #include "vr/runtime/services/particle_simulation_service.hpp"
 #include "vr/runtime/services/particle_upload_service.hpp"
 #include "vr/runtime/services/pipeline_service.hpp"
+#include "vr/runtime/services/render_graph_runtime_service.hpp"
 #include "vr/runtime/services/render_target_pool_service.hpp"
 #include "vr/runtime/services/render_target_service.hpp"
 #include "vr/runtime/services/sampler_service.hpp"
@@ -1581,6 +1582,7 @@ private:
         services_ref.Bind(command_service_ref,
                           gpu_memory_service_ref,
                           upload_service_ref,
+                          render_graph_runtime_service_ref,
                           descriptor_service_ref,
                           pipeline_service_ref,
                           sampler_service_ref,
@@ -2286,6 +2288,7 @@ private:
     runtime::services::GpuMemoryService gpu_memory_service_ref{};
     runtime::services::TextureService texture_service_ref{};
     runtime::services::UploadService upload_service_ref{};
+    runtime::services::RenderGraphRuntimeService render_graph_runtime_service_ref{};
     runtime::services::DescriptorService descriptor_service_ref{};
     runtime::services::PipelineService pipeline_service_ref{};
     runtime::services::RenderTargetService render_target_service_ref{};
