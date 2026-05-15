@@ -117,3 +117,11 @@ set_tests_properties(vr_tests.integration PROPERTIES
     SKIP_RETURN_CODE 125
     LABELS "integration;gpu"
 )
+
+add_test(
+    NAME vr_demo.pbr_material_grid_smoke
+    COMMAND $<TARGET_FILE:sdl_pbr_material_grid_demo> --frames 4
+)
+set_tests_properties(vr_demo.pbr_material_grid_smoke PROPERTIES
+    LABELS "demo;smoke;gpu;scene3d;pbr"
+)

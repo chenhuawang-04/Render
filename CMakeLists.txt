@@ -720,6 +720,15 @@ target_link_libraries(sdl_scene_3d_unified_demo
         vulkan_platform_sdl
 )
 
+add_executable(sdl_pbr_material_grid_demo
+    examples/sdl_pbr_material_grid_demo.cpp
+)
+
+target_link_libraries(sdl_pbr_material_grid_demo
+    PRIVATE
+        vulkan_platform_sdl
+)
+
 add_executable(sdl_offscreen_postprocess_demo
     examples/sdl_offscreen_postprocess_demo.cpp
 )
