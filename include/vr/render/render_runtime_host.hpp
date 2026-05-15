@@ -1649,6 +1649,16 @@ private:
                 .frame = frame,
                 .progress = progress,
             });
+            if constexpr (requires(RecorderT& recorder_ref_) {
+                              recorder_ref_.FramePacket();
+                          }) {
+                if (const auto* frame_packet = recorder_.FramePacket();
+                    frame_packet != nullptr) {
+                    services_ref.template Get<runtime::services::RenderGraphRuntimeService>()
+                        .template SetFrameSnapshot<ecs::Dim3>(
+                            render_graph::MakeFrameSnapshot(*frame_packet, frame.frame_index));
+                }
+            }
         } else if constexpr (requires(RecorderT& recorder_ref_,
                                       const SceneRecorder2DPrepareView& prepare_view_) {
                                  recorder_ref_.PrepareFrame(prepare_view_);
@@ -1675,6 +1685,16 @@ private:
                 .frame = frame,
                 .progress = progress,
             });
+            if constexpr (requires(RecorderT& recorder_ref_) {
+                              recorder_ref_.FramePacket();
+                          }) {
+                if (const auto* frame_packet = recorder_.FramePacket();
+                    frame_packet != nullptr) {
+                    services_ref.template Get<runtime::services::RenderGraphRuntimeService>()
+                        .template SetFrameSnapshot<ecs::Dim2>(
+                            render_graph::MakeFrameSnapshot(*frame_packet, frame.frame_index));
+                }
+            }
         } else if constexpr (requires(RecorderT& recorder_ref_,
                                       const FrameComposerPrepareView& prepare_view_) {
                                  recorder_ref_.PrepareFrame(prepare_view_);
