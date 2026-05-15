@@ -1,0 +1,467 @@
+#include "support/test_framework.hpp"
+#include "vr/render/render_runtime_host.hpp"
+#include "vr/render_graph/frame_snapshot.hpp"
+#include "vr/render_graph/vulkan_resource_table.hpp"
+#include "vr/runtime/services/render_graph_runtime_service.hpp"
+
+#include <SDL3/SDL.h>
+
+#include <algorithm>
+#include <array>
+#include <cctype>
+#include <cstdint>
+#include <string>
+#include <string_view>
+
+namespace {
+
+using Host = vr::render::RenderRuntimeHost<vr::platform::ActiveBackendTag, 2U>;
+using RenderGraphRuntimeService = vr::runtime::services::RenderGraphRuntimeService;
+
+[[nodiscard]] std::string ToLower(std::string_view value_) {
+    std::string lowered{};
+    lowered.reserve(value_.size());
+    for (const unsigned char ch : value_) {
+        lowered.push_back(static_cast<char>(std::tolower(ch)));
+    }
+    return lowered;
+}
+
+[[nodiscard]] bool ContainsCaseInsensitive(std::string_view text_,
+                                           std::string_view needle_) {
+    const std::string lowered_text = ToLower(text_);
+    const std::string lowered_needle = ToLower(needle_);
+    return lowered_text.find(lowered_needle) != std::string::npos;
+}
+
+[[nodiscard]] bool IsEnvironmentSkipError(std::string_view message_) {
+    constexpr std::array<std::string_view, 15U> patterns{
+        "sdl_initsubsystem",
+        "sdl_createwindow",
+        "sdl_vulkan_getinstanceextensions",
+        "sdl_vulkan_createsurface",
+        "vkcreateinstance",
+        "vkenumeratephysicaldevices",
+        "no vulkan physical devices found",
+        "no suitable vulkan physical device found",
+        "missing required instance extension",
+        "vkcreatedevice",
+        "vkgetphysicaldevicesurfacesupportkhr",
+        "vkgetphysicaldevicesurfaceformatskhr",
+        "vkgetphysicaldevicesurfacepresentmodeskhr",
+        "dynamicrendering",
+        "synchronization2"
+    };
+
+    for (const auto pattern : patterns) {
+        if (ContainsCaseInsensitive(message_, pattern)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+[[nodiscard]] Host::CreateInfo MakeMinimalRenderTargetRuntimeCreateInfo() {
+    Host::CreateInfo create_info{};
+    create_info.modules.enable_texture_host = false;
+    create_info.modules.enable_frame_composer_host = false;
+    create_info.modules.enable_ibl_host = false;
+    create_info.modules.enable_ibl_bake_host = false;
+    create_info.modules.enable_sky_environment_gpu_host = false;
+    create_info.modules.enable_upload_host = false;
+    create_info.modules.enable_descriptor_host = false;
+    create_info.modules.enable_pipeline_host = false;
+    create_info.modules.enable_render_target_host = true;
+    create_info.modules.enable_render_target_pool = false;
+    create_info.modules.enable_sampler_host = false;
+    create_info.modules.enable_freetype_host = false;
+    create_info.modules.enable_glyph_atlas_host = false;
+    create_info.modules.enable_glyph_upload_host = false;
+    create_info.modules.enable_particle_upload_host = false;
+    create_info.modules.enable_particle_simulation_host = false;
+    return create_info;
+}
+
+[[nodiscard]] const vr::render_graph::CompiledResource* FindResourceByName(
+    const vr::render_graph::CompiledRenderGraph& compiled_graph_,
+    std::string_view debug_name_) {
+    for (const auto& resource_ : compiled_graph_.Resources()) {
+        if (resource_.debug_name == debug_name_) {
+            return &resource_;
+        }
+    }
+    return nullptr;
+}
+
+VR_TEST_CASE(RenderGraphVulkanBackend_builds_vulkan_create_infos_from_graph_descs,
+             "unit;core;render_graph;vulkan") {
+    const vr::render_graph::TextureDesc texture_desc{
+        .dimension = vr::render_graph::TextureDimension::image_2d,
+        .format = vr::render_graph::TextureFormat::r16g16b16a16_sfloat,
+        .extent = {.width = 320U, .height = 180U, .depth = 1U},
+        .usage = vr::render_graph::texture_usage_sampled_flag |
+                 vr::render_graph::texture_usage_color_attachment_flag |
+                 vr::render_graph::texture_usage_transfer_dst_flag,
+        .mip_level_count = 1U,
+        .array_layer_count = 1U,
+        .sample_count = vr::render_graph::SampleCount::x1,
+    };
+    const auto target_desc = vr::render_graph::VulkanResourceTable::BuildRenderTargetDesc(texture_desc);
+    const auto image_create_info = vr::render_graph::VulkanResourceTable::BuildImageCreateInfo(texture_desc);
+
+    VR_CHECK(target_desc.width == 320U);
+    VR_CHECK(target_desc.height == 180U);
+    VR_CHECK(target_desc.format == VK_FORMAT_R16G16B16A16_SFLOAT);
+    VR_CHECK((target_desc.usage & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT) != 0U);
+    VR_CHECK((target_desc.usage & VK_IMAGE_USAGE_SAMPLED_BIT) != 0U);
+    VR_CHECK((target_desc.usage & VK_IMAGE_USAGE_TRANSFER_DST_BIT) != 0U);
+    VR_CHECK(target_desc.aspect == VK_IMAGE_ASPECT_COLOR_BIT);
+
+    VR_CHECK(image_create_info.extent.width == 320U);
+    VR_CHECK(image_create_info.extent.height == 180U);
+    VR_CHECK(image_create_info.format == VK_FORMAT_R16G16B16A16_SFLOAT);
+    VR_CHECK((image_create_info.usage & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT) != 0U);
+    VR_CHECK((image_create_info.usage & VK_IMAGE_USAGE_SAMPLED_BIT) != 0U);
+    VR_CHECK(image_create_info.default_view_aspect == VK_IMAGE_ASPECT_COLOR_BIT);
+
+    const vr::render_graph::BufferDesc buffer_desc{
+        .size_bytes = 4096U,
+        .usage = vr::render_graph::buffer_usage_storage_flag |
+                 vr::render_graph::buffer_usage_transfer_dst_flag,
+        .host_visible = true,
+        .persistently_mapped = true,
+    };
+    const auto buffer_create_info = vr::render_graph::VulkanResourceTable::BuildBufferCreateInfo(buffer_desc);
+
+    VR_CHECK(buffer_create_info.size == 4096U);
+    VR_CHECK((buffer_create_info.usage & VK_BUFFER_USAGE_STORAGE_BUFFER_BIT) != 0U);
+    VR_CHECK((buffer_create_info.usage & VK_BUFFER_USAGE_TRANSFER_DST_BIT) != 0U);
+    VR_CHECK((buffer_create_info.memory_properties & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0U);
+    VR_CHECK(buffer_create_info.persistently_mapped);
+}
+
+VR_TEST_CASE(RenderGraphVulkanBackend_resolves_imported_and_owned_resources,
+             "integration;render_graph;vulkan") {
+    Host host{};
+    try {
+        host.Initialize(MakeMinimalRenderTargetRuntimeCreateInfo());
+    } catch (const std::exception& exception_) {
+        if (IsEnvironmentSkipError(exception_.what())) {
+            VR_SKIP(exception_.what());
+        }
+        throw;
+    }
+
+    host.EnsureSwapchainTargetsForFrame(0U, 0U);
+    const vr::render::RenderTargetHandle imported_present = host.SwapchainTargets().Get(0U);
+    VR_REQUIRE(vr::render::IsValidRenderTargetHandle(imported_present));
+
+    vr::render_graph::RenderGraphBuilder builder{};
+    const auto present_target = builder.CreateTexture(
+        "present_target",
+        vr::render_graph::TextureDesc{
+            .format = vr::render_graph::TextureFormat::unknown,
+            .extent = {.width = 128U, .height = 128U, .depth = 1U},
+            .usage = vr::render_graph::texture_usage_color_attachment_flag |
+                     vr::render_graph::texture_usage_present_flag,
+        },
+        vr::render_graph::ResourceLifetime::imported);
+    const auto scene_color = builder.CreateTexture(
+        "scene_color",
+        vr::render_graph::TextureDesc{
+            .format = vr::render_graph::TextureFormat::r16g16b16a16_sfloat,
+            .extent = {.width = 128U, .height = 128U, .depth = 1U},
+            .usage = vr::render_graph::texture_usage_color_attachment_flag |
+                     vr::render_graph::texture_usage_sampled_flag,
+        },
+        vr::render_graph::ResourceLifetime::transient);
+    const auto scene_depth = builder.CreateTexture(
+        "scene_depth",
+        vr::render_graph::TextureDesc{
+            .format = vr::render_graph::TextureFormat::d32_sfloat,
+            .extent = {.width = 128U, .height = 128U, .depth = 1U},
+            .usage = vr::render_graph::texture_usage_depth_stencil_attachment_flag,
+        },
+        vr::render_graph::ResourceLifetime::transient);
+    const auto scene_constants = builder.CreateBuffer(
+        "scene_constants",
+        vr::render_graph::BufferDesc{
+            .size_bytes = 4096U,
+            .usage = vr::render_graph::buffer_usage_storage_flag |
+                     vr::render_graph::buffer_usage_transfer_dst_flag,
+        },
+        vr::render_graph::ResourceLifetime::persistent);
+
+    const auto scene_pass = builder.AddPass("main_scene_pass");
+    const auto present_pass = builder.AddPass("present_to_swapchain", true);
+    const auto scene_color_v1 = builder.Write(scene_pass, scene_color);
+    (void)builder.Write(scene_pass, scene_depth);
+    (void)builder.Write(scene_pass, scene_constants);
+    (void)builder.Read(present_pass, scene_color_v1);
+    (void)builder.Write(present_pass, present_target);
+
+    const auto compiled = builder.Compile();
+
+    vr::render_graph::VulkanResourceTable table{};
+    table.BeginFrame(host.Context(), host.RenderTarget(), 0U, 0U);
+    table.RegisterImportedTexture(present_target, imported_present);
+    table.Resolve(host.Context(), host.GpuMemory(), host.RenderTarget(), compiled, 0U, 0U);
+
+    const auto* imported_record = table.FindTexture(present_target);
+    const auto* color_record = table.FindTexture(scene_color);
+    const auto* depth_record = table.FindTexture(scene_depth);
+    const auto* buffer_record = table.FindBuffer(scene_constants);
+
+    VR_REQUIRE(imported_record != nullptr);
+    VR_REQUIRE(color_record != nullptr);
+    VR_REQUIRE(depth_record != nullptr);
+    VR_REQUIRE(buffer_record != nullptr);
+    VR_CHECK(imported_record->imported);
+    VR_CHECK(imported_record->render_target.index == imported_present.index);
+    VR_CHECK(vr::render::IsValidRenderTargetHandle(color_record->render_target));
+    VR_CHECK(vr::render::IsValidRenderTargetHandle(depth_record->render_target));
+    VR_CHECK(buffer_record->owned_resource.buffer != VK_NULL_HANDLE);
+    VR_CHECK(buffer_record->owned_resource.size == 4096U);
+
+    const auto* color_target = host.RenderTarget().Resolve(color_record->render_target);
+    const auto* depth_target = host.RenderTarget().Resolve(depth_record->render_target);
+    VR_REQUIRE(color_target != nullptr);
+    VR_REQUIRE(depth_target != nullptr);
+    VR_CHECK(color_target->format == VK_FORMAT_R16G16B16A16_SFLOAT);
+    VR_CHECK(depth_target->format == VK_FORMAT_D32_SFLOAT);
+
+    table.Shutdown(host.Context(), host.RenderTarget(), 0U, 0U);
+    VR_CHECK(table.Textures().empty());
+    VR_CHECK(table.Buffers().empty());
+}
+
+VR_TEST_CASE(RenderGraphVulkanBackend_runtime_service_resolves_physical_resources_in_pre_record,
+             "integration;render_graph;runtime;vulkan") {
+    Host host{};
+    try {
+        host.Initialize(MakeMinimalRenderTargetRuntimeCreateInfo());
+    } catch (const std::exception& exception_) {
+        if (IsEnvironmentSkipError(exception_.what())) {
+            VR_SKIP(exception_.what());
+        }
+        throw;
+    }
+
+    host.EnsureSwapchainTargetsForFrame(0U, 0U);
+
+    vr::ecs::Camera<vr::ecs::Dim3> camera{};
+    camera.style.viewport = {.origin_x = 0.0F, .origin_y = 0.0F, .width = 256.0F, .height = 144.0F};
+    camera.runtime.revision = 1U;
+    camera.runtime.culling_mask = 0xFFU;
+    auto view = vr::render::MakeRenderViewFromCamera(
+        camera,
+        static_cast<const vr::ecs::Transform<vr::ecs::Dim3>*>(nullptr),
+        vr::render::RenderViewKind::world,
+        0U);
+    auto packet = vr::render::MakeSingleViewScenePacket(view, 77U);
+    const auto snapshot = vr::render_graph::MakeFrameSnapshot(packet, 3U);
+
+    struct MockPhaseContext final {
+        struct FrameContext final {
+            vr::VulkanContext& device;
+            Host::RuntimeServicesType& services;
+            struct FrameInfo final {
+                std::uint32_t frame_index = 0U;
+                std::uint32_t image_index = 0U;
+            } frame{};
+            struct ProgressInfo final {
+                std::uint64_t graphics_submitted = 0U;
+                std::uint64_t graphics_completed = 0U;
+            } progress{};
+            vr::render::SwapchainTargetSet* swapchain_targets = nullptr;
+        } frame_context;
+    };
+
+    auto& service = host.Services().Get<RenderGraphRuntimeService>();
+    MockPhaseContext context{
+        .frame_context = {
+            .device = host.Context(),
+            .services = host.Services(),
+            .frame = {.frame_index = 3U, .image_index = 0U},
+            .progress = {.graphics_submitted = 0U, .graphics_completed = 0U},
+            .swapchain_targets = &host.SwapchainTargets(),
+        },
+    };
+
+    service.BeginFrame(context);
+    service.SetFrameSnapshot<vr::ecs::Dim3>(snapshot);
+    service.PreRecord(context);
+
+    const auto* compiled = service.TryGetCompiledGraph();
+    VR_REQUIRE(compiled != nullptr);
+
+    const auto* present_resource = FindResourceByName(*compiled, "present_target");
+    const auto* scene_color_resource = FindResourceByName(*compiled, "scene_color");
+    const auto* scene_depth_resource = FindResourceByName(*compiled, "scene_depth");
+    VR_REQUIRE(present_resource != nullptr);
+    VR_REQUIRE(scene_color_resource != nullptr);
+    VR_REQUIRE(scene_depth_resource != nullptr);
+
+    const auto* present_physical = service.PhysicalResources().FindTexture(present_resource->handle);
+    const auto* scene_color_physical = service.PhysicalResources().FindTexture(scene_color_resource->handle);
+    const auto* scene_depth_physical = service.PhysicalResources().FindTexture(scene_depth_resource->handle);
+
+    VR_REQUIRE(present_physical != nullptr);
+    VR_REQUIRE(scene_color_physical != nullptr);
+    VR_REQUIRE(scene_depth_physical != nullptr);
+    VR_CHECK(present_physical->imported);
+    VR_CHECK(vr::render::IsValidRenderTargetHandle(present_physical->render_target));
+    VR_CHECK(vr::render::IsValidRenderTargetHandle(scene_color_physical->render_target));
+    VR_CHECK(vr::render::IsValidRenderTargetHandle(scene_depth_physical->render_target));
+}
+
+VR_TEST_CASE(RenderGraphVulkanBackend_resolves_imported_buffers,
+             "integration;render_graph;vulkan") {
+    Host host{};
+    try {
+        host.Initialize(MakeMinimalRenderTargetRuntimeCreateInfo());
+    } catch (const std::exception& exception_) {
+        if (IsEnvironmentSkipError(exception_.what())) {
+            VR_SKIP(exception_.what());
+        }
+        throw;
+    }
+
+    const auto buffer_create_info = vr::render_graph::VulkanResourceTable::BuildBufferCreateInfo(
+        vr::render_graph::BufferDesc{
+            .size_bytes = 2048U,
+            .usage = vr::render_graph::buffer_usage_storage_flag |
+                     vr::render_graph::buffer_usage_transfer_dst_flag,
+        });
+    auto imported_buffer = host.CreateBuffer(buffer_create_info);
+
+    vr::render_graph::RenderGraphBuilder builder{};
+    const auto imported_constants = builder.CreateBuffer(
+        "imported_constants",
+        vr::render_graph::BufferDesc{
+            .size_bytes = 2048U,
+            .usage = vr::render_graph::buffer_usage_storage_flag |
+                     vr::render_graph::buffer_usage_transfer_dst_flag,
+        },
+        vr::render_graph::ResourceLifetime::imported);
+    const auto upload_pass = builder.AddPass("upload_constants", true);
+    (void)builder.Write(upload_pass, imported_constants);
+    const auto compiled = builder.Compile();
+
+    vr::render_graph::VulkanResourceTable table{};
+    table.BeginFrame(host.Context(), host.RenderTarget(), 0U, 0U);
+    table.RegisterImportedBuffer(imported_constants,
+                                 vr::render_graph::ImportedBufferBinding{
+                                     .buffer = imported_buffer.buffer,
+                                     .size_bytes = imported_buffer.size,
+                                     .usage = imported_buffer.usage,
+                                 });
+    table.Resolve(host.Context(), host.GpuMemory(), host.RenderTarget(), compiled, 0U, 0U);
+
+    const auto* imported_record = table.FindBuffer(imported_constants);
+    VR_REQUIRE(imported_record != nullptr);
+    VR_CHECK(imported_record->imported);
+    VR_CHECK(imported_record->imported_buffer.buffer == imported_buffer.buffer);
+    VR_CHECK(imported_record->imported_buffer.size_bytes == imported_buffer.size);
+    VR_CHECK(imported_record->owned_resource.buffer == VK_NULL_HANDLE);
+
+    table.Shutdown(host.Context(), host.RenderTarget(), 0U, 0U);
+    host.DestroyBuffer(imported_buffer);
+}
+
+VR_TEST_CASE(RenderGraphVulkanBackend_reuses_persistent_textures_across_resolves,
+             "integration;render_graph;vulkan") {
+    Host host{};
+    try {
+        host.Initialize(MakeMinimalRenderTargetRuntimeCreateInfo());
+    } catch (const std::exception& exception_) {
+        if (IsEnvironmentSkipError(exception_.what())) {
+            VR_SKIP(exception_.what());
+        }
+        throw;
+    }
+
+    vr::render_graph::RenderGraphBuilder builder{};
+    const auto history_color = builder.CreateTexture(
+        "history_color",
+        vr::render_graph::TextureDesc{
+            .format = vr::render_graph::TextureFormat::r8g8b8a8_unorm,
+            .extent = {.width = 96U, .height = 64U, .depth = 1U},
+            .usage = vr::render_graph::texture_usage_color_attachment_flag |
+                     vr::render_graph::texture_usage_sampled_flag,
+        },
+        vr::render_graph::ResourceLifetime::persistent);
+    const auto history_pass = builder.AddPass("history_update", true);
+    (void)builder.Write(history_pass, history_color);
+    const auto compiled = builder.Compile();
+
+    vr::render_graph::VulkanResourceTable table{};
+    table.BeginFrame(host.Context(), host.RenderTarget(), 0U, 0U);
+    table.Resolve(host.Context(), host.GpuMemory(), host.RenderTarget(), compiled, 0U, 0U);
+    const auto* first_record = table.FindTexture(history_color);
+    VR_REQUIRE(first_record != nullptr);
+    const auto first_handle = first_record->render_target;
+
+    table.BeginFrame(host.Context(), host.RenderTarget(), 0U, 0U);
+    table.Resolve(host.Context(), host.GpuMemory(), host.RenderTarget(), compiled, 0U, 0U);
+    const auto* second_record = table.FindTexture(history_color);
+    VR_REQUIRE(second_record != nullptr);
+    const auto second_handle = second_record->render_target;
+
+    VR_CHECK(first_handle.index == second_handle.index);
+    VR_CHECK(first_handle.generation == second_handle.generation);
+
+    table.Shutdown(host.Context(), host.RenderTarget(), 0U, 0U);
+}
+
+VR_TEST_CASE(RenderGraphVulkanBackend_repeated_shutdown_clears_owned_resources,
+             "integration;render_graph;vulkan") {
+    Host host{};
+    try {
+        host.Initialize(MakeMinimalRenderTargetRuntimeCreateInfo());
+    } catch (const std::exception& exception_) {
+        if (IsEnvironmentSkipError(exception_.what())) {
+            VR_SKIP(exception_.what());
+        }
+        throw;
+    }
+
+    vr::render_graph::RenderGraphBuilder builder{};
+    const auto transient_color = builder.CreateTexture(
+        "transient_color",
+        vr::render_graph::TextureDesc{
+            .format = vr::render_graph::TextureFormat::r8g8b8a8_unorm,
+            .extent = {.width = 80U, .height = 48U, .depth = 1U},
+            .usage = vr::render_graph::texture_usage_color_attachment_flag,
+        },
+        vr::render_graph::ResourceLifetime::transient);
+    const auto persistent_buffer = builder.CreateBuffer(
+        "persistent_buffer",
+        vr::render_graph::BufferDesc{
+            .size_bytes = 1024U,
+            .usage = vr::render_graph::buffer_usage_storage_flag,
+        },
+        vr::render_graph::ResourceLifetime::persistent);
+    const auto pass = builder.AddPass("write_resources", true);
+    (void)builder.Write(pass, transient_color);
+    (void)builder.Write(pass, persistent_buffer);
+    const auto compiled = builder.Compile();
+
+    vr::render_graph::VulkanResourceTable table{};
+    for (std::uint32_t iteration = 0U; iteration < 3U; ++iteration) {
+        table.BeginFrame(host.Context(), host.RenderTarget(), 0U, 0U);
+        table.Resolve(host.Context(), host.GpuMemory(), host.RenderTarget(), compiled, 0U, 0U);
+        VR_CHECK(!table.Textures().empty());
+        VR_CHECK(!table.Buffers().empty());
+
+        table.Shutdown(host.Context(), host.RenderTarget(), 0U, 0U);
+        host.RenderTarget().BeginFrame(host.Context(), 0U);
+        VR_CHECK(table.Textures().empty());
+        VR_CHECK(table.Buffers().empty());
+        VR_CHECK(host.RenderTarget().Stats().target_count == 0U);
+        VR_CHECK(host.RenderTarget().Stats().owned_target_count == 0U);
+        VR_CHECK(host.RenderTarget().Stats().retired_target_count == 0U);
+    }
+}
+
+} // namespace

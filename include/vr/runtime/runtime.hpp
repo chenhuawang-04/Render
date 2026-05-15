@@ -278,9 +278,15 @@ public:
     }
 
     [[nodiscard]] FrameContext BuildFrameContext() {
+        const auto frame = kernel.BuildFrameStaticContext();
+        const auto progress = kernel.BuildFrameGpuProgressContext();
+        if (host.HasRenderTargetHost()) {
+            host.EnsureSwapchainTargetsForFrame(progress.graphics_submitted,
+                                                progress.graphics_completed);
+        }
         return FrameContext{
-            .frame = kernel.BuildFrameStaticContext(),
-            .progress = kernel.BuildFrameGpuProgressContext(),
+            .frame = frame,
+            .progress = progress,
             .timelines = kernel.BuildQueueTimelines(),
             .services = host.Services(),
             .kernel = kernel,
@@ -290,9 +296,15 @@ public:
     }
 
     [[nodiscard]] FrameContext BuildFrameContext(const RuntimeFrameType& frame_) {
+        const auto frame = kernel.BuildFrameStaticContext(frame_);
+        const auto progress = kernel.BuildFrameGpuProgressContext();
+        if (host.HasRenderTargetHost()) {
+            host.EnsureSwapchainTargetsForFrame(progress.graphics_submitted,
+                                                progress.graphics_completed);
+        }
         return FrameContext{
-            .frame = kernel.BuildFrameStaticContext(frame_),
-            .progress = kernel.BuildFrameGpuProgressContext(),
+            .frame = frame,
+            .progress = progress,
             .timelines = kernel.BuildQueueTimelines(),
             .services = host.Services(),
             .kernel = kernel,

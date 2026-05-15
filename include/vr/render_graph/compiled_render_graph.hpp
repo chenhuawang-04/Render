@@ -16,6 +16,15 @@ struct CompiledPass final {
     std::vector<ResourceVersionHandle> writes{};
 };
 
+struct CompiledResource final {
+    ResourceHandle handle{};
+    std::string debug_name{};
+    ResourceKind kind = ResourceKind::buffer;
+    ResourceLifetime lifetime = ResourceLifetime::transient;
+    TextureDesc texture{};
+    BufferDesc buffer{};
+};
+
 struct CompiledResourceVersionLiveness final {
     ResourceVersionHandle version{};
     std::string debug_name{};
@@ -35,6 +44,10 @@ public:
         return passes;
     }
 
+    [[nodiscard]] const std::vector<CompiledResource>& Resources() const noexcept {
+        return resources;
+    }
+
     [[nodiscard]] const std::vector<PassHandle>& ExecutionOrder() const noexcept {
         return execution_order;
     }
@@ -44,6 +57,7 @@ public:
     }
 
     [[nodiscard]] const CompiledPass* FindPass(PassHandle handle_) const noexcept;
+    [[nodiscard]] const CompiledResource* FindResource(ResourceHandle handle_) const noexcept;
     [[nodiscard]] std::string BuildDebugString() const;
     [[nodiscard]] std::string BuildDotGraph() const;
     [[nodiscard]] std::string BuildJson() const;
@@ -52,6 +66,7 @@ private:
     friend class RenderGraphBuilder;
 
     std::vector<CompiledPass> passes{};
+    std::vector<CompiledResource> resources{};
     std::vector<PassHandle> execution_order{};
     std::vector<CompiledResourceVersionLiveness> liveness_ranges{};
 };

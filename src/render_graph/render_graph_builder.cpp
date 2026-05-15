@@ -117,6 +117,15 @@ const CompiledPass* CompiledRenderGraph::FindPass(const PassHandle handle_) cons
     return nullptr;
 }
 
+const CompiledResource* CompiledRenderGraph::FindResource(const ResourceHandle handle_) const noexcept {
+    for (const auto& resource_ : resources) {
+        if (resource_.handle.index == handle_.index) {
+            return &resource_;
+        }
+    }
+    return nullptr;
+}
+
 std::string CompiledRenderGraph::BuildDebugString() const {
     std::ostringstream oss{};
     oss << "execution_order=" << execution_order.size() << '\n';
@@ -206,6 +215,22 @@ std::string CompiledRenderGraph::BuildJson() const {
         oss << execution_order[index].index;
     }
     oss << "],\n";
+
+    oss << "  \"resources\": [\n";
+    for (std::size_t index = 0; index < resources.size(); ++index) {
+        const auto& resource_ = resources[index];
+        oss << "    {\n";
+        oss << "      \"index\": " << resource_.handle.index << ",\n";
+        oss << "      \"name\": \"" << EscapeJsonString(resource_.debug_name) << "\",\n";
+        oss << "      \"kind\": \"" << ResourceKindToString(resource_.kind) << "\",\n";
+        oss << "      \"lifetime\": \"" << ResourceLifetimeToString(resource_.lifetime) << "\"\n";
+        oss << "    }";
+        if (index + 1U != resources.size()) {
+            oss << ',';
+        }
+        oss << '\n';
+    }
+    oss << "  ],\n";
 
     oss << "  \"passes\": [\n";
     for (std::size_t index = 0; index < passes.size(); ++index) {
@@ -510,6 +535,7 @@ CompiledRenderGraph RenderGraphBuilder::Compile() const {
          resource_index < static_cast<std::uint32_t>(resources.size());
          ++resource_index) {
         const auto& resource = resources[resource_index];
+        bool resource_has_active_use = false;
         for (std::uint32_t version_index = 0U;
              version_index < static_cast<std::uint32_t>(resource.versions.size());
              ++version_index) {
@@ -536,6 +562,7 @@ CompiledRenderGraph RenderGraphBuilder::Compile() const {
             if (!has_active_use) {
                 continue;
             }
+            resource_has_active_use = true;
 
             compiled.liveness_ranges.push_back(CompiledResourceVersionLiveness{
                 .version = ResourceVersionHandle{
@@ -547,6 +574,20 @@ CompiledRenderGraph RenderGraphBuilder::Compile() const {
                 .lifetime = resource.lifetime,
                 .first_pass_order = first_order,
                 .last_pass_order = last_order,
+            });
+        }
+
+        if (resource_has_active_use) {
+            compiled.resources.push_back(CompiledResource{
+                .handle = ResourceHandle{
+                    .index = resource_index,
+                    .generation = 1U,
+                },
+                .debug_name = resource.debug_name,
+                .kind = resource.kind,
+                .lifetime = resource.lifetime,
+                .texture = resource.texture,
+                .buffer = resource.buffer,
             });
         }
     }

@@ -1051,6 +1051,11 @@ public:
         return swapchain_targets;
     }
 
+    void EnsureSwapchainTargetsForFrame(std::uint64_t last_submitted_value_,
+                                        std::uint64_t completed_submit_value_) {
+        EnsureSwapchainTargets(last_submitted_value_, completed_submit_value_);
+    }
+
     [[nodiscard]] PlatformHostType& PlatformHost() noexcept {
         return platform_host;
     }
@@ -1337,6 +1342,7 @@ private:
     struct ServicePhaseFrameContext final {
         struct FrameInfo final {
             std::uint32_t frame_index = 0U;
+            std::uint32_t image_index = 0U;
         };
 
         struct ProgressInfo final {
@@ -1348,6 +1354,7 @@ private:
         RuntimeServicesType& services;
         FrameInfo frame{};
         ProgressInfo progress{};
+        SwapchainTargetSet* swapchain_targets = nullptr;
     };
 
     struct ServicePhaseContext final {
@@ -1582,12 +1589,12 @@ private:
         services_ref.Bind(command_service_ref,
                           gpu_memory_service_ref,
                           upload_service_ref,
-                          render_graph_runtime_service_ref,
                           descriptor_service_ref,
                           pipeline_service_ref,
                           sampler_service_ref,
                           texture_service_ref,
                           render_target_service_ref,
+                          render_graph_runtime_service_ref,
                           render_target_pool_service_ref,
                           frame_composer_service_ref,
                           ibl_service_ref,
@@ -2137,17 +2144,20 @@ private:
     [[nodiscard]] ServicePhaseFrameContext BuildServicePhaseFrameContext(
         const std::uint32_t frame_index_,
         const std::uint64_t graphics_submitted_,
-        const std::uint64_t graphics_completed_) noexcept {
+        const std::uint64_t graphics_completed_) {
+        EnsureSwapchainTargets(graphics_submitted_, graphics_completed_);
         return ServicePhaseFrameContext{
             .device = platform_host.Context(),
             .services = services_ref,
             .frame = {
                 .frame_index = frame_index_,
+                .image_index = last_tick_image_index,
             },
             .progress = {
                 .graphics_submitted = graphics_submitted_,
                 .graphics_completed = graphics_completed_,
             },
+            .swapchain_targets = render_target_initialized ? &swapchain_targets : nullptr,
         };
     }
 

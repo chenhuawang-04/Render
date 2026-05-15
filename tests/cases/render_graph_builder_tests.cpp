@@ -268,12 +268,6 @@ VR_TEST_CASE(FrameSnapshot3D_signature_ignores_pointer_identity,
 
 VR_TEST_CASE(RenderGraphRuntimeService_resets_frame_local_state_on_begin_frame,
              "unit;core;render_graph;runtime") {
-    struct MockContext final {
-        struct FrameState final {
-            std::uint32_t frame_index = 0U;
-        } frame{};
-    };
-
     vr::runtime::services::RenderGraphRuntimeService service{};
     const auto scratch = service.Builder().CreateBuffer(
         "scratch",
@@ -290,9 +284,7 @@ VR_TEST_CASE(RenderGraphRuntimeService_resets_frame_local_state_on_begin_frame,
     VR_REQUIRE(service.TryGetCompiledGraph() != nullptr);
     VR_REQUIRE(service.TryGetFrameSnapshot<vr::ecs::Dim3>() != nullptr);
 
-    MockContext context{};
-    context.frame.frame_index = 7U;
-    service.BeginFrame(context);
+    service.BeginFrame(7U);
 
     VR_CHECK(service.FrameIndex() == 7U);
     VR_CHECK(service.Builder().ResourceCount() == 0U);
@@ -424,35 +416,6 @@ VR_TEST_CASE(RenderGraphBuilder_builds_minimal_scene_overlay_present_chain,
     VR_CHECK(compiled.Passes()[0].debug_name == "main_scene_pass");
     VR_CHECK(compiled.Passes()[1].debug_name == "overlay_pass");
     VR_CHECK(compiled.Passes()[2].debug_name == "present_to_swapchain");
-}
-
-VR_TEST_CASE(RenderGraphRuntimeService_pre_record_builds_compiled_graph,
-             "unit;core;render_graph;runtime") {
-    struct MockContext final {};
-
-    vr::ecs::Camera<vr::ecs::Dim2> camera{};
-    camera.style.viewport = {.origin_x = 0.0F, .origin_y = 0.0F, .width = 320.0F, .height = 180.0F};
-    camera.runtime.revision = 3U;
-
-    auto world_view = vr::render::MakeRenderViewFromCamera(
-        camera,
-        static_cast<const vr::ecs::Transform<vr::ecs::Dim2>*>(nullptr),
-        vr::render::RenderViewKind::world,
-        0U);
-    auto packet = vr::render::MakeSingleViewScenePacket(world_view, 555U);
-    const auto snapshot = vr::render_graph::MakeFrameSnapshot(packet, 11U);
-
-    vr::runtime::services::RenderGraphRuntimeService service{};
-    service.SetFrameSnapshot<vr::ecs::Dim2>(snapshot);
-
-    MockContext context{};
-    service.PreRecord(context);
-
-    const auto* compiled = service.TryGetCompiledGraph();
-    VR_REQUIRE(compiled != nullptr);
-    VR_REQUIRE(compiled->ExecutionOrder().size() == 2U);
-    VR_CHECK(compiled->Passes()[0].debug_name == "main_scene_pass");
-    VR_CHECK(compiled->Passes()[1].debug_name == "present_to_swapchain");
 }
 
 VR_TEST_CASE(RenderGraphBuilder_exports_dot_and_json,
