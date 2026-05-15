@@ -1,8 +1,12 @@
 #include "support/test_framework.hpp"
+#include "vr/render_graph/frame_graph_build.hpp"
 #include "vr/render_graph/frame_snapshot.hpp"
 #include "vr/render_graph/render_graph_builder.hpp"
 #include "vr/runtime/runtime.hpp"
 #include "vr/runtime/services/render_graph_runtime_service.hpp"
+
+#include <array>
+#include <string_view>
 
 namespace {
 
@@ -133,12 +137,20 @@ VR_TEST_CASE(FrameSnapshot3D_copies_packet_metadata_and_stable_view_state,
     packet.extra.ibl_environment_id = 5U;
     vr::render::RefreshRenderScenePacketSignature(packet);
 
-    const auto snapshot = vr::render_graph::MakeFrameSnapshot(packet, 17U);
+    const auto snapshot = vr::render_graph::MakeFrameSnapshot(
+        packet,
+        17U,
+        vr::render_graph::Extent3D{.width = 1920U, .height = 1080U, .depth = 1U});
     const auto* active_view = snapshot.ActiveView();
 
     VR_REQUIRE(active_view != nullptr);
     VR_CHECK(snapshot.frame_index == 17U);
+    VR_CHECK(snapshot.reference_extent.width == 1920U);
+    VR_CHECK(snapshot.reference_extent.height == 1080U);
     VR_CHECK(snapshot.kind == vr::render::RenderScenePacketKind::world);
+    VR_CHECK(snapshot.selection.active_view_index == 0U);
+    VR_CHECK(snapshot.selection.scene_view_index == 0U);
+    VR_CHECK(snapshot.selection.overlay_view_index == vr::render::invalid_scene_view_index);
     VR_CHECK(snapshot.submission_id == 99U);
     VR_CHECK(snapshot.ViewCount() == 1U);
     VR_CHECK(snapshot.debug_flags == vr::render::render_view_debug_wireframe_flag);
@@ -148,11 +160,55 @@ VR_TEST_CASE(FrameSnapshot3D_copies_packet_metadata_and_stable_view_state,
     VR_CHECK(active_view->view_index == 3U);
     VR_CHECK(active_view->has_camera == 1U);
     VR_CHECK(active_view->has_camera_transform == 1U);
-    VR_CHECK(active_view->camera_culling_mask == 0x1234U);
-    VR_CHECK(active_view->camera_revision == 7U);
+    VR_CHECK(active_view->camera.runtime.culling_mask == 0x1234U);
+    VR_CHECK(active_view->camera.runtime.revision == 7U);
     VR_CHECK(active_view->camera_transform_world_revision == 11U);
     VR_CHECK(active_view->targets.color_final_state == vr::render::RenderTargetStateKind::present_src);
     VR_CHECK(active_view->background_override.gpu.index == 9U);
+}
+
+VR_TEST_CASE(FrameSnapshot2D_resolves_scene_and_overlay_view_selection,
+             "unit;core;render_graph;snapshot") {
+    vr::ecs::Camera<vr::ecs::Dim2> world_camera{};
+    world_camera.style.viewport = {.origin_x = 0.0F, .origin_y = 0.0F, .width = 800.0F, .height = 600.0F};
+    world_camera.runtime.culling_mask = 0x1U;
+    world_camera.runtime.revision = 5U;
+
+    vr::ecs::Camera<vr::ecs::Dim2> ui_camera = world_camera;
+    ui_camera.runtime.revision = 6U;
+
+    auto world_view = vr::render::MakeRenderViewFromCamera(
+        world_camera,
+        static_cast<const vr::ecs::Transform<vr::ecs::Dim2>*>(nullptr),
+        vr::render::RenderViewKind::world,
+        0U);
+    auto ui_view = vr::render::MakeRenderViewFromCamera(
+        ui_camera,
+        static_cast<const vr::ecs::Transform<vr::ecs::Dim2>*>(nullptr),
+        vr::render::RenderViewKind::ui,
+        1U);
+
+    const std::array views{world_view, ui_view};
+    auto packet = vr::render::MakeScenePacketFromViewRange(
+        views.data(),
+        static_cast<std::uint32_t>(views.size()),
+        1U,
+        123U,
+        vr::render::RenderScenePacketKind::mixed);
+    const auto snapshot = vr::render_graph::MakeFrameSnapshot(
+        packet,
+        88U,
+        vr::render_graph::Extent3D{.width = 800U, .height = 600U, .depth = 1U});
+
+    VR_CHECK(snapshot.selection.active_view_index == 1U);
+    VR_CHECK(snapshot.selection.scene_view_index == 0U);
+    VR_CHECK(snapshot.selection.overlay_view_index == 1U);
+    VR_REQUIRE(snapshot.SceneView() != nullptr);
+    VR_REQUIRE(snapshot.OverlayView() != nullptr);
+    VR_CHECK(snapshot.SceneView()->kind == vr::render::RenderViewKind::world);
+    VR_CHECK(snapshot.OverlayView()->kind == vr::render::RenderViewKind::ui);
+    VR_CHECK(snapshot.reference_extent.width == 800U);
+    VR_CHECK(snapshot.reference_extent.height == 600U);
 }
 
 VR_TEST_CASE(FrameSnapshot3D_signature_ignores_pointer_identity,
@@ -315,12 +371,114 @@ VR_TEST_CASE(RenderGraphRuntimeService_captures_snapshot_during_prepare_tick_fra
     const auto* snapshot = service.TryGetFrameSnapshot<vr::ecs::Dim3>();
     VR_REQUIRE(snapshot != nullptr);
     VR_CHECK(snapshot->frame_index == 5U);
+    VR_CHECK(snapshot->reference_extent.width == 128U);
+    VR_CHECK(snapshot->reference_extent.height == 72U);
     VR_CHECK(snapshot->submission_id == 333U);
     VR_CHECK(snapshot->ViewCount() == 1U);
     VR_CHECK(snapshot->extra.ibl_environment_id == 7U);
     VR_REQUIRE(snapshot->ActiveView() != nullptr);
-    VR_CHECK(snapshot->ActiveView()->camera_revision == 12U);
+    VR_CHECK(snapshot->ActiveView()->camera.runtime.revision == 12U);
     VR_CHECK(snapshot->ActiveView()->camera_transform_world_revision == 34U);
+}
+
+VR_TEST_CASE(RenderGraphBuilder_builds_minimal_scene_overlay_present_chain,
+             "unit;core;render_graph;runtime") {
+    vr::ecs::Camera<vr::ecs::Dim3> world_camera{};
+    world_camera.style.viewport = {.origin_x = 0.0F, .origin_y = 0.0F, .width = 640.0F, .height = 360.0F};
+    world_camera.runtime.revision = 1U;
+    world_camera.runtime.culling_mask = 0x10U;
+
+    vr::ecs::Camera<vr::ecs::Dim3> overlay_camera = world_camera;
+    overlay_camera.runtime.revision = 2U;
+
+    auto world_view = vr::render::MakeRenderViewFromCamera(
+        world_camera,
+        static_cast<const vr::ecs::Transform<vr::ecs::Dim3>*>(nullptr),
+        vr::render::RenderViewKind::world,
+        0U);
+    auto overlay_view = vr::render::MakeRenderViewFromCamera(
+        overlay_camera,
+        static_cast<const vr::ecs::Transform<vr::ecs::Dim3>*>(nullptr),
+        vr::render::RenderViewKind::ui,
+        1U);
+
+    const std::array views{world_view, overlay_view};
+    auto packet = vr::render::MakeScenePacketFromViewRange(
+        views.data(),
+        static_cast<std::uint32_t>(views.size()),
+        0U,
+        444U,
+        vr::render::RenderScenePacketKind::mixed);
+    const auto snapshot = vr::render_graph::MakeFrameSnapshot(packet, 9U);
+
+    vr::render_graph::RenderGraphBuilder builder{};
+    const auto build_result = vr::render_graph::BuildMinimalFrameGraph(builder, snapshot);
+    const auto compiled = builder.Compile();
+
+    VR_CHECK(build_result.built);
+    VR_CHECK(build_result.has_scene_pass);
+    VR_CHECK(build_result.has_overlay_pass);
+    VR_CHECK(build_result.has_depth);
+    VR_REQUIRE(compiled.ExecutionOrder().size() == 3U);
+    VR_REQUIRE(compiled.Passes().size() == 3U);
+    VR_CHECK(compiled.Passes()[0].debug_name == "main_scene_pass");
+    VR_CHECK(compiled.Passes()[1].debug_name == "overlay_pass");
+    VR_CHECK(compiled.Passes()[2].debug_name == "present_to_swapchain");
+}
+
+VR_TEST_CASE(RenderGraphRuntimeService_pre_record_builds_compiled_graph,
+             "unit;core;render_graph;runtime") {
+    struct MockContext final {};
+
+    vr::ecs::Camera<vr::ecs::Dim2> camera{};
+    camera.style.viewport = {.origin_x = 0.0F, .origin_y = 0.0F, .width = 320.0F, .height = 180.0F};
+    camera.runtime.revision = 3U;
+
+    auto world_view = vr::render::MakeRenderViewFromCamera(
+        camera,
+        static_cast<const vr::ecs::Transform<vr::ecs::Dim2>*>(nullptr),
+        vr::render::RenderViewKind::world,
+        0U);
+    auto packet = vr::render::MakeSingleViewScenePacket(world_view, 555U);
+    const auto snapshot = vr::render_graph::MakeFrameSnapshot(packet, 11U);
+
+    vr::runtime::services::RenderGraphRuntimeService service{};
+    service.SetFrameSnapshot<vr::ecs::Dim2>(snapshot);
+
+    MockContext context{};
+    service.PreRecord(context);
+
+    const auto* compiled = service.TryGetCompiledGraph();
+    VR_REQUIRE(compiled != nullptr);
+    VR_REQUIRE(compiled->ExecutionOrder().size() == 2U);
+    VR_CHECK(compiled->Passes()[0].debug_name == "main_scene_pass");
+    VR_CHECK(compiled->Passes()[1].debug_name == "present_to_swapchain");
+}
+
+VR_TEST_CASE(RenderGraphBuilder_exports_dot_and_json,
+             "unit;core;render_graph;debug") {
+    vr::render_graph::RenderGraphBuilder builder{};
+    const auto color = builder.CreateTexture(
+        "scene_color",
+        vr::render_graph::TextureDesc{
+            .format = vr::render_graph::TextureFormat::r16g16b16a16_sfloat,
+            .extent = {.width = 256U, .height = 256U, .depth = 1U},
+        });
+    const auto main_pass = builder.AddPass("main_scene_pass");
+    const auto present_pass = builder.AddPass("present_to_swapchain", true);
+    const auto color_version = builder.Write(main_pass, color);
+    (void)builder.Read(present_pass, color_version);
+
+    const auto compiled = builder.Compile();
+    const std::string dot = compiled.BuildDotGraph();
+    const std::string json = compiled.BuildJson();
+
+    VR_CHECK(dot.find("digraph RenderGraph") != std::string::npos);
+    VR_CHECK(dot.find("main_scene_pass") != std::string::npos);
+    VR_CHECK(dot.find("present_to_swapchain") != std::string::npos);
+    VR_CHECK(json.find("\"passes\"") != std::string::npos);
+    VR_CHECK(json.find("\"livenessRanges\"") != std::string::npos);
+    VR_CHECK(json.find("scene_color#v1") != std::string::npos);
 }
 
 } // namespace

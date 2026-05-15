@@ -1656,7 +1656,14 @@ private:
                     frame_packet != nullptr) {
                     services_ref.template Get<runtime::services::RenderGraphRuntimeService>()
                         .template SetFrameSnapshot<ecs::Dim3>(
-                            render_graph::MakeFrameSnapshot(*frame_packet, frame.frame_index));
+                            render_graph::MakeFrameSnapshot(
+                                *frame_packet,
+                                frame.frame_index,
+                                render_graph::Extent3D{
+                                    .width = frame.swapchain_extent.width,
+                                    .height = frame.swapchain_extent.height,
+                                    .depth = 1U,
+                                }));
                 }
             }
         } else if constexpr (requires(RecorderT& recorder_ref_,
@@ -1692,7 +1699,14 @@ private:
                     frame_packet != nullptr) {
                     services_ref.template Get<runtime::services::RenderGraphRuntimeService>()
                         .template SetFrameSnapshot<ecs::Dim2>(
-                            render_graph::MakeFrameSnapshot(*frame_packet, frame.frame_index));
+                            render_graph::MakeFrameSnapshot(
+                                *frame_packet,
+                                frame.frame_index,
+                                render_graph::Extent3D{
+                                    .width = frame.swapchain_extent.width,
+                                    .height = frame.swapchain_extent.height,
+                                    .depth = 1U,
+                                }));
                 }
             }
         } else if constexpr (requires(RecorderT& recorder_ref_,

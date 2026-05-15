@@ -1,5 +1,6 @@
 #pragma once
 
+#include "vr/render_graph/frame_graph_build.hpp"
 #include "vr/render_graph/frame_snapshot.hpp"
 #include "vr/render_graph/render_graph_builder.hpp"
 #include "vr/runtime/runtime_service.hpp"
@@ -39,7 +40,23 @@ public:
     void PrepareFrame(ContextT&) noexcept {}
 
     template<typename ContextT>
-    void PreRecord(ContextT&) noexcept {}
+    void PreRecord(ContextT&) {
+        builder.Reset();
+        compiled_graph = {};
+        has_compiled_graph = false;
+
+        if (const auto* snapshot_2d = TryGetFrameSnapshot<ecs::Dim2>();
+            snapshot_2d != nullptr) {
+            (void)render_graph::BuildMinimalFrameGraph(builder, *snapshot_2d);
+        } else if (const auto* snapshot_3d = TryGetFrameSnapshot<ecs::Dim3>();
+                   snapshot_3d != nullptr) {
+            (void)render_graph::BuildMinimalFrameGraph(builder, *snapshot_3d);
+        }
+
+        if (builder.PassCount() != 0U) {
+            SetCompiledGraph(builder.Compile());
+        }
+    }
 
     template<typename ContextT>
     void Retire(ContextT&) noexcept {}

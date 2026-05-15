@@ -14,6 +14,98 @@ namespace {
     return oss.str();
 }
 
+[[nodiscard]] const char* ResourceKindToString(const ResourceKind kind_) noexcept {
+    switch (kind_) {
+    case ResourceKind::texture:
+        return "texture";
+    case ResourceKind::buffer:
+        return "buffer";
+    default:
+        break;
+    }
+    return "unknown";
+}
+
+[[nodiscard]] const char* ResourceLifetimeToString(const ResourceLifetime lifetime_) noexcept {
+    switch (lifetime_) {
+    case ResourceLifetime::imported:
+        return "imported";
+    case ResourceLifetime::persistent:
+        return "persistent";
+    case ResourceLifetime::transient:
+        return "transient";
+    default:
+        break;
+    }
+    return "unknown";
+}
+
+[[nodiscard]] std::string EscapeJsonString(const std::string& value_) {
+    std::ostringstream oss{};
+    for (const char character_ : value_) {
+        switch (character_) {
+        case '\\':
+            oss << "\\\\";
+            break;
+        case '"':
+            oss << "\\\"";
+            break;
+        case '\n':
+            oss << "\\n";
+            break;
+        case '\r':
+            oss << "\\r";
+            break;
+        case '\t':
+            oss << "\\t";
+            break;
+        default:
+            oss << character_;
+            break;
+        }
+    }
+    return oss.str();
+}
+
+[[nodiscard]] std::string EscapeDotLabel(const std::string& value_) {
+    std::ostringstream oss{};
+    for (const char character_ : value_) {
+        switch (character_) {
+        case '\\':
+            oss << "\\\\";
+            break;
+        case '"':
+            oss << "\\\"";
+            break;
+        case '\n':
+            oss << "\\n";
+            break;
+        default:
+            oss << character_;
+            break;
+        }
+    }
+    return oss.str();
+}
+
+[[nodiscard]] std::string MakeResourceNodeId(const ResourceVersionHandle version_) {
+    std::ostringstream oss{};
+    oss << "resource_" << version_.resource_index << "_v" << version_.version;
+    return oss.str();
+}
+
+const CompiledResourceVersionLiveness* FindLivenessRange(
+    const std::vector<CompiledResourceVersionLiveness>& liveness_ranges_,
+    const ResourceVersionHandle version_) {
+    for (const auto& range_ : liveness_ranges_) {
+        if (range_.version.resource_index == version_.resource_index &&
+            range_.version.version == version_.version) {
+            return &range_;
+        }
+    }
+    return nullptr;
+}
+
 } // namespace
 
 const CompiledPass* CompiledRenderGraph::FindPass(const PassHandle handle_) const noexcept {
@@ -52,6 +144,134 @@ std::string CompiledRenderGraph::BuildDebugString() const {
             << " last=" << range_.last_pass_order << '\n';
     }
 
+    return oss.str();
+}
+
+std::string CompiledRenderGraph::BuildDotGraph() const {
+    std::ostringstream oss{};
+    oss << "digraph RenderGraph {\n";
+    oss << "  rankdir=LR;\n";
+    oss << "  node [fontsize=10];\n";
+
+    for (const auto& pass_ : passes) {
+        oss << "  pass_" << pass_.handle.index << " [shape=box,label=\""
+            << EscapeDotLabel(pass_.debug_name);
+        if (pass_.side_effect) {
+            oss << "\\nside_effect";
+        }
+        oss << "\"];\n";
+    }
+
+    for (const auto& range_ : liveness_ranges) {
+        oss << "  " << MakeResourceNodeId(range_.version)
+            << " [shape=ellipse,label=\""
+            << EscapeDotLabel(range_.debug_name)
+            << "\\n" << ResourceKindToString(range_.kind)
+            << " " << ResourceLifetimeToString(range_.lifetime)
+            << "\\n" << range_.first_pass_order << "->" << range_.last_pass_order
+            << "\"];\n";
+    }
+
+    for (const auto& pass_ : passes) {
+        for (const auto dependency_ : pass_.dependencies) {
+            oss << "  pass_" << dependency_.index << " -> pass_" << pass_.handle.index
+                << " [style=dashed,label=\"dep\"];\n";
+        }
+        for (const auto read_ : pass_.reads) {
+            if (FindLivenessRange(liveness_ranges, read_) != nullptr) {
+                oss << "  " << MakeResourceNodeId(read_) << " -> pass_" << pass_.handle.index
+                    << " [label=\"read\"];\n";
+            }
+        }
+        for (const auto write_ : pass_.writes) {
+            if (FindLivenessRange(liveness_ranges, write_) != nullptr) {
+                oss << "  pass_" << pass_.handle.index << " -> " << MakeResourceNodeId(write_)
+                    << " [label=\"write\"];\n";
+            }
+        }
+    }
+
+    oss << "}\n";
+    return oss.str();
+}
+
+std::string CompiledRenderGraph::BuildJson() const {
+    std::ostringstream oss{};
+    oss << "{\n";
+    oss << "  \"executionOrder\": [";
+    for (std::size_t index = 0; index < execution_order.size(); ++index) {
+        if (index != 0U) {
+            oss << ", ";
+        }
+        oss << execution_order[index].index;
+    }
+    oss << "],\n";
+
+    oss << "  \"passes\": [\n";
+    for (std::size_t index = 0; index < passes.size(); ++index) {
+        const auto& pass_ = passes[index];
+        oss << "    {\n";
+        oss << "      \"index\": " << pass_.handle.index << ",\n";
+        oss << "      \"name\": \"" << EscapeJsonString(pass_.debug_name) << "\",\n";
+        oss << "      \"sideEffect\": " << (pass_.side_effect ? "true" : "false") << ",\n";
+
+        oss << "      \"dependencies\": [";
+        for (std::size_t dep_index = 0; dep_index < pass_.dependencies.size(); ++dep_index) {
+            if (dep_index != 0U) {
+                oss << ", ";
+            }
+            oss << pass_.dependencies[dep_index].index;
+        }
+        oss << "],\n";
+
+        oss << "      \"reads\": [";
+        for (std::size_t read_index = 0; read_index < pass_.reads.size(); ++read_index) {
+            const auto read_ = pass_.reads[read_index];
+            if (read_index != 0U) {
+                oss << ", ";
+            }
+            oss << "{\"resourceIndex\": " << read_.resource_index
+                << ", \"version\": " << read_.version << "}";
+        }
+        oss << "],\n";
+
+        oss << "      \"writes\": [";
+        for (std::size_t write_index = 0; write_index < pass_.writes.size(); ++write_index) {
+            const auto write_ = pass_.writes[write_index];
+            if (write_index != 0U) {
+                oss << ", ";
+            }
+            oss << "{\"resourceIndex\": " << write_.resource_index
+                << ", \"version\": " << write_.version << "}";
+        }
+        oss << "]\n";
+        oss << "    }";
+        if (index + 1U != passes.size()) {
+            oss << ',';
+        }
+        oss << '\n';
+    }
+    oss << "  ],\n";
+
+    oss << "  \"livenessRanges\": [\n";
+    for (std::size_t index = 0; index < liveness_ranges.size(); ++index) {
+        const auto& range_ = liveness_ranges[index];
+        oss << "    {\n";
+        oss << "      \"resourceIndex\": " << range_.version.resource_index << ",\n";
+        oss << "      \"version\": " << range_.version.version << ",\n";
+        oss << "      \"name\": \"" << EscapeJsonString(range_.debug_name) << "\",\n";
+        oss << "      \"kind\": \"" << ResourceKindToString(range_.kind) << "\",\n";
+        oss << "      \"lifetime\": \"" << ResourceLifetimeToString(range_.lifetime) << "\",\n";
+        oss << "      \"firstPassOrder\": " << range_.first_pass_order << ",\n";
+        oss << "      \"lastPassOrder\": " << range_.last_pass_order << '\n';
+        oss << "    }";
+        if (index + 1U != liveness_ranges.size()) {
+            oss << ',';
+        }
+        oss << '\n';
+    }
+    oss << "  ]\n";
+    oss << "}\n";
     return oss.str();
 }
 

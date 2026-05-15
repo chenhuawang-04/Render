@@ -45,6 +45,8 @@ public:
 
     [[nodiscard]] const CompiledPass* FindPass(PassHandle handle_) const noexcept;
     [[nodiscard]] std::string BuildDebugString() const;
+    [[nodiscard]] std::string BuildDotGraph() const;
+    [[nodiscard]] std::string BuildJson() const;
 
 private:
     friend class RenderGraphBuilder;
