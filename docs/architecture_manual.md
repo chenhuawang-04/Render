@@ -7,7 +7,7 @@
 **构建系统**: CMake 3.21+
 **API 目标**: Vulkan 1.3
 **主要平台**: Windows (SDL3 后端)
-**调试工具**: CrashTracer (Benchmark 崩溃回溯，日志输出至 `crash_reports/`)
+**调试工具**: CrashTracer (Runtime 级崩溃回溯，通过 `InstallProcessCrashTracer` 应用程序入口安装，日志输出至 `crash_reports/`)
 
 项目是一个基于 Vulkan 1.3 的实时 2D/3D 图形渲染框架，由以下核心层次组成。
 
@@ -110,7 +110,7 @@
 | **MemoryCenter** | GPU 内存分配 (Buddy Allocator) + mimalloc | `MemoryCenterNew/` |
 | **McVector** | 自定义 STL 兼容容器 (基于 mimalloc) | `Vector_New/` |
 | **fast_math** | SIMD 优化的矩阵/向量数学库 | `Math/fast_math/` |
-| **CrashTracer** | 崩溃追踪与堆栈回溯 (Bench 可选) | `CrashTracer/` |
+| **CrashTracer** | 崩溃追踪与堆栈回溯 (Runtime 集成 + Bench) | `CrashTracer/` |
 | **glslangValidator** | GLSL 编译 → SPIR-V | Vulkan SDK Bin 目录 |
 
 ---
@@ -160,7 +160,8 @@
 
 | 组件 | 说明 |
 |------|------|
-| `DescriptorHost` | 描述符池管理 + DescriptorSetLayout 缓存 (哈希去重)。支持 buffer/image/texel buffer writes。每帧独立池，可选验证。 |
+| `DescriptorHost` | 描述符池管理 + DescriptorSetLayout 缓存 (哈希去重)。支持 buffer/image/texel buffer writes、Bindless Table (VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_EXT + VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT_EXT)。每帧独立池，可选验证。 |
+| `BindlessResourceSystem` | Bindless 资源系统。统一管理全帧描述符索引纹理/采样器访问：2 个全局 Descriptor Table (Set 0=SampledImage[8192], Set 1=Sampler[256])。Configure 方法为各子系统 (Texture/Surface/Geometry/Shadow/RenderTarget/Glyph) 分配 bindless slot。占位符 Image/Sampler 防止未绑定访问。 |
 | `PipelineHost` | ShaderModule + PipelineLayout + Graphics/Compute Pipeline 缓存 + 延迟编译队列。支持 VkPipelineCache 持久化。可配置 Pipeline 预热。 |
 | `UploadHost` | Staging Buffer 上传：Allocate/Write/RecordCopy。支持 Transfer Queue 异步上传 (带 Semaphore 跨队列同步)。支持 Synchronization2 barrier。 |
 | `RuntimePrepareContext` | 帧准备上下文结构体，聚合所有运行时子系统指针，传递至 `PrepareFrame` 回调。包含 VulkanContext、帧索引、提交值、GpuMemoryHost、UploadHost、DescriptorHost、PipelineHost、SamplerHost、FreeTypeHost、GlyphAtlasHost、GlyphUploadHost。 |
@@ -242,6 +243,61 @@
 |------|------|
 | `AnimationFrameCoordinator<Dim>` | 动画帧协调。统一协调 AnimationClock、Evaluation、Host 的每帧更新，将动画输出注入 SceneRecorder 和渲染管线。 |
 
+#### 3.3.10 Appearance GPU 准备与 PBR 语义
+
+| 组件 | 说明 |
+|------|------|
+| `AppearanceGpuPrepare3D` | Appearance GPU 准备器。聚合所有 Appearance 记录 (Geometry + Surface)、解析 `AppearanceSampledSurfaceBinding3D` (5 纹理通道) 到 bindless slot index、生成 GPU-bound material parameter buffer (base_color/metallic/roughness/occlusion/emissive/normal_scale/unlit)。`AppearanceSampledSurfacePresenceFlags3D` 位掩码指示通道绑定状态。 |
+| `AppearanceSampledSurfaceBinding` | 采样表面绑定。定义每个 Appearance 关联的 5 个纹理通道及其 bindless slot。`AppearanceSampledSurfaceDomain` 枚举区分 geometry_image/surface_image 纹理源。 |
+| `GeometryAppearanceHost` | 几何 Appearance 宿主。替代 `GeometryMaterialHost`，PBR 材质通过 Appearance 组件而非独立的 Material 系统管理。为每个 Appearance 构建 SampledSurfaceBinding 并管理 UV 变换/Alpha Test 标志。 |
+| `GeometryAppearanceResolver` | 从 Appearance 组件 + GeometryAppearanceHost 合并解析最终 PBR 渲染参数。处理纹理/常量混合 (例如 base_color_texture * base_color_factor)。 |
+
+#### 3.3.11 PBR 着色基础 (`shaders/include/vr/render/pbr.glsl`)
+
+PBR 着色模型遵循 GGX-Smith + Fresnel Schlick 的 metallic-roughness 工作流。
+
+| 组件 | 说明 |
+|------|------|
+| `PbrParams` | PBR 参数结构体：base_color, metallic, roughness, normal_ts, occlusion, emissive, unlit_flag |
+| `DecodePbrParams` | 从纹理采样结果解码 PBR 参数 (linear→sRGB base_color, occlusion×roughness) |
+| `EvaluateDirectionalLight` | 直接光 PBR：NdotL/NdotV/NdotH、GGX Distribution (Trowbridge-Reitz)、Smith Geometry、Fresnel Schlick |
+| `EvaluateAmbientIBL` | 环境光 PBR：Diffuse IBL (irradiance map × base_color × occlusion) + Specular IBL (prefiltered map × split-sum BRDF LUT) |
+| `appearance_decode_3d.glsl` | Appearance 纹理解码：`DecodeBaseColor/DecodeNormal/DecodeMetallicRoughness/DecodeOcclusion/DecodeEmissive` 从 bindless 纹理表读取并组合为 `PbrParams` |
+| `geometry_tangent_space.hpp` | GPU 切线空间预备。从 position/normal/uv 生成 tangent/bitangent (MikkTSpace 风格)、fallback basis、退化 UV 检测。法线贴图必需。 |
+
+#### 3.3.12 Bindless 统一渲染合约
+
+**职责**: 将所有渲染子系统的纹理/采样器访问统一为 Bindless Descriptor Indexing。替代传统的 per-pass descriptor set 绑定，实现渲染器间零开销的纹理访问。
+
+| 组件 | 说明 |
+|------|------|
+| `BindlessResourceSystem` | Bindless 资源系统。管理 2 个全局 Descriptor Table：Set 0 = SampledImage[8192] (texture2D/texture2DArray/textureCube)、Set 1 = Sampler[256]。在 Init 时创建占位符 Image/Sampler 填充所有 slot (防止未绑定访问崩溃)。提供 6 个 `Configure*` 方法为各子系统注入 bindless slot 分配逻辑。 |
+| `BindlessSlot` | Bindless 槽位句柄。`{index, generation}` 双重校验，防止 use-after-free。`IsValid()` 检查 generation != 0。 |
+| `BindlessTableDesc` | Bindless 表描述符。descriptor_type、capacity、stage_flags、partially_bound、variable_descriptor_count、update_after_bind 策略。 |
+| `BindlessUpdateAfterBindPolicy` | Update-After-Bind 策略：auto_if_supported (检测设备支持并自动启用) / disabled (禁止) / required (必须)。 |
+
+**GLSL 端合约** (`shaders/include/vr/render/bindless.glsl`):
+- Set 0: `texture2D g_Textures2D[]`, `texture2DArray g_Textures2DArray[]`, `textureCube g_TexturesCube[]`
+- Set 1: `sampler g_Samplers[]`
+- 统一采样函数: `SampleTexture2D(idx, sampler_idx, uv)`, `SampleTextureCube(idx, sampler_idx, dir)`, `SampleTextureCubeLod(idx, sampler_idx, dir, lod)`, `SampleTexture2DArray(idx, sampler_idx, uvw)`
+- 所有渲染着色器通过 `#include` 引用，使用 `nonuniformEXT` 修饰符实现 divergent indexing
+
+**子系统 Bindless 集成**:
+```
+BindlessResourceSystem::ConfigureTextureHost      → TextureHost 的每个 Texture 分配 SampledImage slot + Sampler slot
+BindlessResourceSystem::ConfigureSurfaceImageHost  → SurfaceImageHost 分配 SampledImage slot
+BindlessResourceSystem::ConfigureGeometryImageHost → GeometryImageHost 分配 SampledImage slot
+BindlessResourceSystem::ConfigureShadowAtlasHost   → ShadowAtlasHost 分配 SampledImage slot
+BindlessResourceSystem::ConfigureRenderTargetHost  → RenderTargetHost 分配 SampledImage slot
+BindlessResourceSystem::ConfigureGlyphUploadHost   → GlyphUploadHost 分配 SampledImageArray slot
+```
+
+**设计理念**:
+- 渲染器不再持有独立的 VkDescriptorSet，改为从 BindlessResourceSystem 查询 `BindlessSlot`
+- Push Constant 传递 slot index 至着色器，着色器通过 `nonuniformEXT` 动态索引纹理数组
+- DescriptorHost 负责底层的 VkDescriptorPool/VkDescriptorSetLayout/VkDescriptorSet 管理
+- 合约验证: `bindless_shader_contract_tests.cpp` 交叉验证 C++ BindlessTableDesc 与 SPIR-V 反射输出
+
 ### 3.4 Runtime 类型化服务层 (`vr/runtime`)
 
 **职责**: 新一代运行时核心。将每个 Host/Renderer 包装为带类型标签的 Service，通过编译期依赖图 (DAG) 进行生命周期编排和执行调度。支持 Profile 驱动的二进制裁剪。
@@ -321,7 +377,7 @@ Profile 系统通过编译期模板参数决定哪些 Service 被包含和激活
 | **Text** | pixel size, 2D style | world size, billboard, 3D style | UTF8 buffer, font/material/batch data, color, align, SDF |
 | **Light** | 2D point light (position+radius+color) | 3D point/spot/directional | intensity, color, range, shadow flags, culling mask |
 | **Shadow** | 2D shadow caster (occluder shape) | 3D shadow caster (mesh route) | shadow map slot, bias, filter mode, depth format |
-| **Appearance** | 2D visibility+link group | 3D visibility+link group | appearance record, dirty tracking, link handle |
+| **Appearance** | 2D visibility+link group | 3D visibility+link group + PBR params + sampled surface bindings | appearance record, dirty tracking, link handle, `AppearanceSampledSurfaceBinding` (5 texture channels: base_color/normal/metallic-roughness/occlusion/emissive), `AppearanceGpuRecord`, `AppearanceHandle`, `AppearancePipelineBucket` |
 | **Animation** | 2D animation clock/track | 3D animation clock/track | clock state, Property/Material/Camera/Path/Skeletal/Morph/VertexDeform/FrameSequence tracks, clip route, evaluation state |
 | **Particle** | 2D particle (position+velocity+color+size+rotation) | 3D particle (position+velocity+color+size+rotation) | age/lifetime, emitter route, sort key, texture index, GPU compute update |
 | **ParticleEmitter** | 2D emission shape (Point/Circle) | 3D emission shape (Point/Sphere/Cone/Box) | emission rate, burst, initial property ranges, lifetime distribution |
@@ -388,9 +444,10 @@ Profile 系统通过编译期模板参数决定哪些 Service 被包含和激活
 
 | 系统 | 职责 | 关键特性 |
 |------|------|---------|
-| `AppearanceSystem<Dim>` | Appearance 组件管理 | 可见性记录、脏标记、link 句柄 |
-| `AppearanceLinkSystem` | Appearance 链接 | 链接 Geometry/Surface 到 Appearance 记录、跨渲染器协调 |
-| `AppearanceRuntimeSystem<Dim>` | Appearance 运行时 | 运行时 appearance 数据生成、缓存、与渲染器批量对接 |
+| `AppearanceSystem<Dim>` | Appearance 组件管理 | 可见性记录、脏标记、link 句柄、PBR 材质参数查询 (base_color/metallic/roughness/normal_scale/occlusion/emissive/unlit)、`AppearanceSampledSurfaceBinding` 纹理通道管理 |
+| `AppearanceLinkSystem` | Appearance 链接 | 链接 Geometry/Surface 到 Appearance 记录、跨渲染器协调、增量 Link/Delink、batch 刷新 |
+| `AppearanceRuntimeSystem<Dim>` | Appearance 运行时 | 运行时 appearance 数据生成、`AppearanceGpuRecord` 缓存、与渲染器批量对接。`AppearanceSampledSurfaceBinding3D` 对外提供统一纹理绑定接口 |
+| `VisualRuntimeRouteCommon` | Visual 运行时路由公共宏 | 跨子系统共享宏 `VR_ECS_VISUAL_RUNTIME_ROUTE_SORT_KEY_FIELD/TRAILING_FIELDS` 用于 Geometry/Surface/Particle 的统一 runtime route 字段定义 |
 
 ##### 动画系统组 (Phase 1 完整实现)
 
@@ -400,8 +457,8 @@ Profile 系统通过编译期模板参数决定哪些 Service 被包含和激活
 | `AnimationCurveSystem<Dim>` | 动画曲线 | 关键帧曲线采样 (Linear/Step/CubicSpline)、时间→值映射 |
 | `AnimationPropertyTrackSystem<Dim>` | Property 轨道 | 采样 Position/Rotation/Scale/Color/Float 轨道 |
 | `AnimationPropertyEvaluationSystem<Dim>` | Property 求值 | 将 Property 轨道输出写入 Transform、Appearance 组件 |
-| `AnimationMaterialTrackSystem` | Material 轨道 | 采样 Albedo/Metallic/Roughness/Emissive 材质动画轨道 |
-| `AnimationMaterialEvaluationSystem` | Material 求值 | 将 Material 轨道输出写入 Appearance/Material 组件 |
+| `AnimationVisualTrackSystem` | Visual 轨道 (原 Material Track) | 采样 base_color/metallic/roughness/emissive 外观动画轨道 |
+| `AnimationVisualEvaluationSystem` | Visual 求值 (原 Material Evaluation) | 将 Visual Track 输出写入 Appearance 组件 |
 | `AnimationCameraTrackSystem<Dim>` | Camera 轨道 | 采样 FOV/Near/Far/Position/LookAt 动画轨道 |
 | `AnimationCameraEvaluationSystem<Dim>` | Camera 求值 | 同步 Camera 轨道输出到 Camera 组件 |
 | `AnimationPathMotionSystem<Dim>` | 路径运动 | Position/Rotation/Scale 路径曲线采样、路径约束 (Follow/LookAt) |
@@ -437,12 +494,14 @@ Profile 系统通过编译期模板参数决定哪些 Service 被包含和激活
 
 | 组件 | 说明 |
 |------|------|
-| `GeometryResourceHost` | 几何资源注册：mesh/image/material 资源 ID 管理。 |
-| `GeometryMaterialHost` | 材质系统：PBR 材质 (albedo/metallic/roughness)、材质参数缓冲区上传。 |
-| `GeometryImageHost` | 几何图像：纹理 Image/View/Sampler 绑定、Descriptor 写入。 |
-| `GeometryUploadHost` | 几何上传：顶点/索引缓冲区上传、路径数据上传。 |
-| `GeometryRenderer2D` | 2D 几何渲染：路径线段→顶点缓冲、描边/填充、抗锯齿、Push Constant。集成 Appearance 渲染支持。 |
-| `GeometryRenderer3D` | 3D 几何渲染：GPU 实例化绘制、PBR 材质绑定、Shadow mapping 支持。集成 Appearance 渲染支持。 |
+| `GeometryResourceHost` | 几何资源注册：mesh/image 资源 ID 管理。 |
+| `GeometryImageHost` | 几何图像：纹理 Image/View/Sampler 绑定、Bindless slot 注册。 |
+| `GeometryUploadHost` | 几何上传：顶点/索引缓冲区上传、路径数据上传、切线空间数据上传。 |
+| `GeometryAppearanceHost` | 几何 Appearance 宿主 (替代旧 `GeometryMaterialHost`)。管理每个 Appearance 的 SampledSurface 绑定 (base_color/normal/metallic-roughness/occlusion/emissive)、UV 变换、Alpha Test 标志。PBR 材质从此通过 Appearance 而非独立 Material 系统处理。 |
+| `GeometryAppearanceResolver` | Geometry Appearance 解析器。从 Appearance 组件 + `GeometryAppearanceHost` 解析最终 PBR 渲染参数 (base_color/metallic/roughness/normal_scale/occlusion/unlit)。 |
+| `GeometryTangentSpace` | 几何切线空间构建。从 position/normal/uv 生成 tangent/bitangent 用于法线贴图。支持 fallback basis、退化 UV 检测。PBR 法线贴图必需的预备阶段。 |
+| `GeometryRenderer2D` | 2D 几何渲染：路径线段→顶点缓冲、描边/填充、抗锯齿、Push Constant (含 bindless slot index)。集成 Appearance 渲染支持。 |
+| `GeometryRenderer3D` | 3D 几何渲染：GPU 实例化绘制、PBR 材质 + Bindless + Appearance SampledSurface 绑定 (通过 `appearance_decode_3d.glsl` + `pbr.glsl`)、Shadow mapping 支持。 |
 
 #### 3.6.3 Surface 渲染器 (`vr/surface`)
 
@@ -450,8 +509,8 @@ Profile 系统通过编译期模板参数决定哪些 Service 被包含和激活
 |------|------|
 | `SurfaceImageHost` | Surface 图像/精灵管理：图集页面、采样器绑定、Descriptor 写入。 |
 | `SurfaceUploadHost` | Surface 上传：图像数据上传至 GPU、脏区域追踪。 |
-| `SurfaceRenderer2D` | 2D Surface 渲染：精灵绘制、混合模式、UV 变换、tint color。 |
-| `SurfaceRenderer3D` | 3D Surface 渲染：世界空间 Surface、纹理过滤、双面渲染。 |
+| `SurfaceRenderer2D` | 2D Surface 渲染：精灵绘制、混合模式 (bindless texture slot)、UV 变换、tint color。 |
+| `SurfaceRenderer3D` | 3D Surface 渲染：世界空间 Surface、纹理过滤 (bindless sampler slot)、双面渲染。 |
 
 #### 3.6.4 Light/Shadow 渲染器 (`vr/light`, `vr/shadow`)
 
@@ -557,10 +616,12 @@ RenderRuntime::Tick()
   │
   ├── SceneSubmissionBuilder::Build       (构建 RenderScenePacket + 背景/环境注入)
   │
+  ├── BindlessResourceSystem::PrepareFrame   (刷新 SampledImage/Sampler 表写入)
+  │
   ├── SceneRecorder3D::Record       (Multi-view packet 路由 → 场景 Pass)
-  │   ├── SkyEnvironmentPass::Record (天空环境渲染 → 深度预填充或后处理)
+  │   ├── SkyEnvironmentPass::Record (天空环境渲染 → bindless texture slot)
   │   ├── SceneRenderStage           (Opaque → Transparent 阶段)
-  │   ├── ParticleRenderer::Render  (粒子绘制)
+  │   ├── ParticleRenderer::Render  (粒子绘制 → bindless slot + Push Constant)
   │   └── BackgroundPass2D (2D only) (2D 背景渲染)
   │
   ├── IBLHost::Bind                  (绑定 Irradiance/Specular/BRDF LUT)
@@ -626,6 +687,9 @@ RenderRuntime::Tick()
 |------|------|
 | `shaders/include/vr/common/math.glsl` | 通用数学工具函数 (矩阵变换、坐标转换)。 |
 | `shaders/include/vr/text/text_shading.glsl` | 文本着色函数 (SDF 边缘平滑、轮廓、颜色混合)。被 `text_2d.frag` 和 `text_3d.frag` 引用。 |
+| `shaders/include/vr/render/bindless.glsl` | Bindless 纹理采样共享头文件。声明全局 bindless descriptor arrays (Set 0: `g_Textures2D[]/g_Textures2DArray[]/g_TexturesCube[]`, Set 1: `g_Samplers[]`)。提供 `SampleTexture2D/SampleTextureCube/SampleTexture2DArray/SampleTextureCubeLod` 统一采样函数。所有渲染着色器通过 `#include` 引用。 |
+| `shaders/include/vr/render/pbr.glsl` | PBR 着色共享头文件 (91 行)。`PbrParams` 结构体、`DecodePbrParams`、`EvaluateDirectionalLight` (GGX-Smith/Fresnel Schlick BRDF)、`EvaluateAmbientIBL` (Diffuse+Specular)、ACES Tone Map。 |
+| `shaders/include/vr/render/appearance_decode_3d.glsl` | Appearance 3D 解码共享头文件 (105 行)。从 bindless 纹理表解码 SampledSurface 贴图→`PbrParams`。`DecodeBaseColor/DecodeNormal/DecodeMetallicRoughness/DecodeOcclusion/DecodeEmissive`。 |
 
 ### 5.4 着色器工具链
 
@@ -713,7 +777,7 @@ vr.types
 
 ### 8.1 测试 (`tests/`)
 
-基于自定义轻量框架 (`test_framework.hpp/cpp`)。约 65 个测试文件，覆盖：
+基于自定义轻量框架 (`test_framework.hpp/cpp`)。约 73 个测试文件，覆盖：
 - ECS 组件/系统单元测试 (Transform, Camera, Bounds, Culling, Geometry, Surface, Text, Light, Shadow, Appearance, Animation, Particle)
 - 动画系统单元测试 (Clock/Curve/Property/Material/Camera/Path/Skeletal/Morph/VertexDeform/FrameSequence)
 - 动画 Host 单元测试 (Clip/Skeletal/Morph/VertexDeform/FrameSequence)
@@ -764,3 +828,9 @@ vr.types
 22. **质量分级测试框架**: `scripts/testing/` 引入 Quality Profiles (Critical/High/Medium/Low)，通过 `vr_quality_runner.py` 自动化测试编排。`quality_profiles.json` 定义可配置的门禁规则，支持 CI 集成。
 23. **Scene 场景抽象层**: 将场景背景/环境管理从 ECS 组件和 Recorder 中分离为独立 `vr/scene/` 层。`Scene<Dim, Background>` 模板通过编译期 trait 派发实现零开销的 2D/3D 分支选择。
 24. **天空环境重构与惰性 IBL**: `SkyboxRenderer` 被三件套替换：`SkyEnvironment` (POD 数据) + `SkyEnvironmentGpuHost` (GPU 资源管理 + 惰性烘焙协调) + `SkyEnvironmentPass` (6 种渲染模式)。IBL 管线从主动烘焙改为惰性模式：`SkyEnvironmentGpuHost` 追踪待烘焙环境，通过 `TryBakePendingEnvironment` 按需触发 `IblBakeHost`，仅在环境首次可见或参数变更时才烘焙。
+25. **Bindless 统一渲染合约**: 所有渲染子系统通过 `BindlessResourceSystem` 统一纹理/采样器访问。2 个全局 Descriptor Table (Set 0=SampledImage[8192], Set 1=Sampler[256]) + 占位符填充 + `BindlessSlot {index, generation}` 双重校验。渲染器不再持有独立 VkDescriptorSet，改为 Push Constant 传递 bindless slot index，着色器通过 `nonuniformEXT` 动态索引。统一后各渲染器代码大幅精简 (Surface -500+, Particle -700+, Text -500+)。
+26. **CrashTracer 运行时集成**: CrashTracer 从 bench-only 提升为 Runtime 级基础设施。`InstallProcessCrashTracer` 在应用程序入口点安装进程级 SEH 崩溃处理器，替代旧的 `bench_crash_tracer_support`。`vulkan_context.cpp` 集成 CrashTracer 初始化逻辑。
+27. **fast_math 迁移**: 移除 math shim 层，将 `spatial_math.hpp` 和所有 ECS 系统直接迁移至新 `fast_math` API。降低头文件依赖、提升 SIMD 优化覆盖面、消除中间层的编译开销。
+28. **Appearance 语义统一**: `Appearance` 组件现在是所有视觉渲染的**唯一语义中心**。PBR 材质参数 (base_color/metallic/roughness/normal_scale/occlusion/emissive) 和 SampledSurface 纹理绑定 (5 通道) 统一存储在 Appearance 中。`GeometryMaterialHost` 被 `GeometryAppearanceHost` + `GeometryAppearanceResolver` 替代，消除了 Material→Appearance 的隐式耦合和重复数据。
+29. **PBR 着色基础**: 新增 `pbr.glsl` (GGX-Smith/Fresnel Schlick BRDF) 和 `appearance_decode_3d.glsl` (bindless 纹理解码)。`GeometryTangentSpace` 提供法线贴图必需的切线空间构建。PBR 渲染路径：Appearance 组件 → `GeometryAppearanceHost` → `AppearanceGpuPrepare` → bindless slot → `appearance_decode_3d.glsl` → `pbr.glsl` → `geometry_3d.frag`。
+30. **Visual Runtime Route 统一**: 新增 `VisualRuntimeRouteCommon` 跨子系统共享宏，Geometry/Surface/Particle 的 runtime route 使用统一的字段定义和操作函数。`HasAppearanceHandleChanged()` / `ClearAppearanceRuntimeRoute()` 跨子系统共通。
