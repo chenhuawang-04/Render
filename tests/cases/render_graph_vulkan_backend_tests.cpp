@@ -1,6 +1,7 @@
 #include "support/test_framework.hpp"
 #include "vr/render/render_runtime_host.hpp"
 #include "vr/render_graph/frame_snapshot.hpp"
+#include "vr/render_graph/render_graph_executor.hpp"
 #include "vr/render_graph/vulkan_barrier_plan.hpp"
 #include "vr/render_graph/vulkan_resource_table.hpp"
 #include "vr/runtime/services/render_graph_runtime_service.hpp"
@@ -62,8 +63,25 @@ using RenderGraphRuntimeService = vr::runtime::services::RenderGraphRuntimeServi
     return false;
 }
 
-[[nodiscard]] Host::CreateInfo MakeMinimalRenderTargetRuntimeCreateInfo() {
+[[nodiscard]] bool IsValidationUnavailable(std::string_view message_) {
+    constexpr std::array<std::string_view, 4U> patterns{
+        "validation layer",
+        "vk_layer_khronos_validation",
+        "requested layer",
+        "validation",
+    };
+    for (const auto pattern : patterns) {
+        if (ContainsCaseInsensitive(message_, pattern)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+[[nodiscard]] Host::CreateInfo MakeMinimalRenderTargetRuntimeCreateInfo(
+    const bool enable_validation_ = false) {
     Host::CreateInfo create_info{};
+    create_info.platform.instance.enable_validation = enable_validation_;
     create_info.modules.enable_texture_host = false;
     create_info.modules.enable_frame_composer_host = false;
     create_info.modules.enable_ibl_host = false;
@@ -434,6 +452,418 @@ VR_TEST_CASE(RenderGraphVulkanBackend_builds_command_ready_barrier_batches_from_
     table.Shutdown(host.Context(), host.RenderTarget(), 0U, 0U);
 }
 
+VR_TEST_CASE(RenderGraphExecutor_invokes_pass_execute_thunks,
+             "integration;render_graph;executor;vulkan") {
+    Host host{};
+    try {
+        host.Initialize(MakeMinimalRenderTargetRuntimeCreateInfo());
+    } catch (const std::exception& exception_) {
+        if (IsEnvironmentSkipError(exception_.what())) {
+            VR_SKIP(exception_.what());
+        }
+        throw;
+    }
+
+    vr::render_graph::RenderGraphBuilder builder{};
+    std::uint32_t executed_pass_count = 0U;
+    const auto pass = builder.AddPass("execute_only_pass", true);
+    builder.SetExecuteCallback(pass, [&](vr::render_graph::GraphCommandContext&) {
+        executed_pass_count += 1U;
+    });
+
+    const auto compiled = builder.Compile();
+    vr::QueueFamilyIndices queue_families{};
+    queue_families.graphics = 2U;
+    const auto lowered = vr::render_graph::LowerToVulkanBarrierPlan(compiled, queue_families);
+
+    vr::render_graph::VulkanResourceTable table{};
+    table.BeginFrame(host.Context(), host.RenderTarget(), 0U, 0U);
+    const auto command_ready = vr::render_graph::BuildCommandReadyVulkanBarrierPlan(
+        lowered,
+        table,
+        host.RenderTarget());
+
+    const VkCommandBuffer command_buffer = host.Context().BeginSingleTimeCommands();
+    const auto stats = vr::render_graph::RenderGraphExecutor::Record(
+        vr::render_graph::GraphCommandContext{
+            host.Context(),
+            command_buffer,
+            compiled,
+            table,
+            host.RenderTarget(),
+            lowered,
+            command_ready,
+        });
+    host.Context().EndSingleTimeCommands(command_buffer);
+
+    VR_CHECK(executed_pass_count == 1U);
+    VR_CHECK(stats.pass_count == 1U);
+    VR_CHECK(stats.command_batch_count == 0U);
+
+    table.Shutdown(host.Context(), host.RenderTarget(), 0U, 0U);
+}
+
+VR_TEST_CASE(RenderGraphExecutor_records_minimal_graph_barrier_batches,
+             "integration;render_graph;executor;vulkan") {
+    Host host{};
+    try {
+        host.Initialize(MakeMinimalRenderTargetRuntimeCreateInfo());
+    } catch (const std::exception& exception_) {
+        if (IsEnvironmentSkipError(exception_.what())) {
+            VR_SKIP(exception_.what());
+        }
+        throw;
+    }
+    if (host.Context().EnabledVulkan13Features().synchronization2 != VK_TRUE) {
+        VR_SKIP("synchronization2 feature unavailable");
+    }
+
+    vr::render_graph::RenderGraphBuilder builder{};
+    const auto staging_buffer = builder.CreateBuffer(
+        "staging_buffer",
+        vr::render_graph::BufferDesc{
+            .size_bytes = 1024U,
+            .usage = vr::render_graph::buffer_usage_storage_flag |
+                     vr::render_graph::buffer_usage_transfer_dst_flag,
+        });
+    const auto upload = builder.AddPass("upload_buffer", false, vr::render_graph::QueueClass::graphics);
+    const auto consume = builder.AddPass("consume_buffer", true, vr::render_graph::QueueClass::graphics);
+    const auto staged = builder.Write(
+        upload,
+        staging_buffer,
+        vr::render_graph::AccessDesc{
+            .access = vr::render_graph::AccessKind::transfer_write,
+            .buffer_range = {.offset_bytes = 32U, .size_bytes = 256U},
+        });
+    (void)builder.Read(
+        consume,
+        staged,
+        vr::render_graph::AccessDesc{
+            .access = vr::render_graph::AccessKind::uniform_read,
+            .buffer_range = {.offset_bytes = 32U, .size_bytes = 256U},
+        });
+
+    const auto compiled = builder.Compile();
+    vr::QueueFamilyIndices queue_families{};
+    queue_families.graphics = 2U;
+    const auto lowered = vr::render_graph::LowerToVulkanBarrierPlan(compiled, queue_families);
+
+    vr::render_graph::VulkanResourceTable table{};
+    table.BeginFrame(host.Context(), host.RenderTarget(), 0U, 0U);
+    table.Resolve(host.Context(), host.GpuMemory(), host.RenderTarget(), compiled, 0U, 0U);
+    const auto command_ready = vr::render_graph::BuildCommandReadyVulkanBarrierPlan(
+        lowered,
+        table,
+        host.RenderTarget());
+
+    const VkCommandBuffer command_buffer = host.Context().BeginSingleTimeCommands();
+    const auto stats = vr::render_graph::RenderGraphExecutor::Record(
+        vr::render_graph::GraphCommandContext{
+            host.Context(),
+            command_buffer,
+            compiled,
+            table,
+            host.RenderTarget(),
+            lowered,
+            command_ready,
+        });
+    host.Context().EndSingleTimeCommands(command_buffer);
+
+    VR_CHECK(stats.command_batch_count == 1U);
+    VR_CHECK(stats.image_barrier_count == 0U);
+    VR_CHECK(stats.buffer_barrier_count == 1U);
+    VR_CHECK(stats.queue_transfer_batch_count == 0U);
+
+    table.Shutdown(host.Context(), host.RenderTarget(), 0U, 0U);
+}
+
+VR_TEST_CASE(RenderGraphRuntimeService_records_barrier_batches_when_execution_enabled,
+             "integration;render_graph;executor;runtime;vulkan") {
+    Host host{};
+    try {
+        host.Initialize(MakeMinimalRenderTargetRuntimeCreateInfo());
+    } catch (const std::exception& exception_) {
+        if (IsEnvironmentSkipError(exception_.what())) {
+            VR_SKIP(exception_.what());
+        }
+        throw;
+    }
+
+    host.EnsureSwapchainTargetsForFrame(0U, 0U);
+
+    vr::ecs::Camera<vr::ecs::Dim3> camera{};
+    camera.style.viewport = {.origin_x = 0.0F, .origin_y = 0.0F, .width = 256.0F, .height = 144.0F};
+    camera.runtime.revision = 1U;
+    camera.runtime.culling_mask = 0xFFU;
+    auto view = vr::render::MakeRenderViewFromCamera(
+        camera,
+        static_cast<const vr::ecs::Transform<vr::ecs::Dim3>*>(nullptr),
+        vr::render::RenderViewKind::world,
+        0U);
+    auto packet = vr::render::MakeSingleViewScenePacket(view, 99U);
+    const auto snapshot = vr::render_graph::MakeFrameSnapshot(packet, 4U);
+
+    struct MockPhaseContext final {
+        struct FrameContext final {
+            vr::VulkanContext& device;
+            Host::RuntimeServicesType& services;
+            struct FrameInfo final {
+                std::uint32_t frame_index = 0U;
+                std::uint32_t image_index = 0U;
+            } frame{};
+            struct ProgressInfo final {
+                std::uint64_t graphics_submitted = 0U;
+                std::uint64_t graphics_completed = 0U;
+            } progress{};
+            VkCommandBuffer command_buffer = VK_NULL_HANDLE;
+            vr::render::SwapchainTargetSet* swapchain_targets = nullptr;
+        } frame_context;
+    };
+
+    auto& service = host.Services().Get<RenderGraphRuntimeService>();
+    service.EnableRecordExecution();
+    const VkCommandBuffer command_buffer = host.Context().BeginSingleTimeCommands();
+    MockPhaseContext context{
+        .frame_context = {
+            .device = host.Context(),
+            .services = host.Services(),
+            .frame = {.frame_index = 4U, .image_index = 0U},
+            .progress = {.graphics_submitted = 0U, .graphics_completed = 0U},
+            .command_buffer = command_buffer,
+            .swapchain_targets = &host.SwapchainTargets(),
+        },
+    };
+
+    service.BeginFrame(context);
+    service.SetFrameSnapshot<vr::ecs::Dim3>(snapshot);
+    service.PreRecord(context);
+    service.Record(context);
+    host.Context().EndSingleTimeCommands(command_buffer);
+
+    const auto& stats = service.LastRecordStats();
+    if (host.Context().EnabledVulkan13Features().synchronization2 == VK_TRUE &&
+        host.Context().EnabledVulkan13Features().dynamicRendering == VK_TRUE) {
+        VR_CHECK(stats.command_batch_count >= 1U);
+        VR_CHECK(stats.image_barrier_count >= 1U);
+        VR_CHECK(stats.pass_count >= 2U);
+    } else {
+        VR_CHECK(stats.command_batch_count == 0U);
+        VR_CHECK(stats.image_barrier_count == 0U);
+    }
+    VR_CHECK(stats.queue_transfer_batch_count == 0U);
+}
+
+VR_TEST_CASE(RenderGraphRuntimeService_executes_minimal_graph_during_runtime_tick,
+             "integration;render_graph;runtime;executor;vulkan") {
+    Host host{};
+    try {
+        host.Initialize(MakeMinimalRenderTargetRuntimeCreateInfo());
+    } catch (const std::exception& exception_) {
+        if (IsEnvironmentSkipError(exception_.what())) {
+            VR_SKIP(exception_.what());
+        }
+        throw;
+    }
+
+    struct TickRecorder final {
+        const vr::render::RenderScenePacket3D* frame_packet = nullptr;
+
+        void PrepareFrame(const vr::render::SceneRecorder3DPrepareView&) noexcept {}
+        void Record(const vr::render::FrameRecordContext&) noexcept {}
+        [[nodiscard]] const vr::render::RenderScenePacket3D* FramePacket() const noexcept {
+            return frame_packet;
+        }
+    } recorder{};
+
+    vr::ecs::Camera<vr::ecs::Dim3> camera{};
+    camera.style.viewport = {.origin_x = 0.0F, .origin_y = 0.0F, .width = 192.0F, .height = 108.0F};
+    camera.runtime.revision = 1U;
+    camera.runtime.culling_mask = 0xFFU;
+    auto view = vr::render::MakeRenderViewFromCamera(
+        camera,
+        static_cast<const vr::ecs::Transform<vr::ecs::Dim3>*>(nullptr),
+        vr::render::RenderViewKind::world,
+        0U);
+    auto packet = vr::render::MakeSingleViewScenePacket(view, 909U);
+    recorder.frame_packet = &packet;
+
+    auto& service = host.Services().Get<RenderGraphRuntimeService>();
+    service.EnableRecordExecution();
+
+    const bool graph_execution_supported =
+        host.Context().EnabledVulkan13Features().synchronization2 == VK_TRUE &&
+        host.Context().EnabledVulkan13Features().dynamicRendering == VK_TRUE;
+    if (!graph_execution_supported) {
+        host.Shutdown();
+        VR_SKIP("synchronization2 or dynamicRendering feature unavailable");
+    }
+
+    std::uint32_t submitted_frames = 0U;
+    std::uint32_t executed_graph_frames = 0U;
+    constexpr std::uint32_t max_ticks = 4U;
+    for (std::uint32_t tick_index = 0U; tick_index < max_ticks && host.IsRunning(); ++tick_index) {
+        const auto tick_result = host.Tick(recorder);
+        if (tick_result.render.code == vr::render::TickCode::Submitted ||
+            tick_result.render.code == vr::render::TickCode::RecreateRequested) {
+            ++submitted_frames;
+        }
+        if (service.LastRecordStats().pass_count > 0U) {
+            ++executed_graph_frames;
+        }
+        SDL_Delay(1U);
+    }
+
+    VR_CHECK(submitted_frames > 0U);
+    if (graph_execution_supported) {
+        VR_CHECK(executed_graph_frames > 0U);
+    } else {
+        VR_CHECK(executed_graph_frames == 0U);
+    }
+
+    host.Shutdown();
+}
+
+VR_TEST_CASE(RenderGraphRuntimeService_handles_swapchain_recreate_with_graph_execution,
+             "integration;render_graph;runtime;present;vulkan") {
+    Host host{};
+    try {
+        host.Initialize(MakeMinimalRenderTargetRuntimeCreateInfo());
+    } catch (const std::exception& exception_) {
+        if (IsEnvironmentSkipError(exception_.what())) {
+            VR_SKIP(exception_.what());
+        }
+        throw;
+    }
+
+    const bool graph_execution_supported =
+        host.Context().EnabledVulkan13Features().synchronization2 == VK_TRUE &&
+        host.Context().EnabledVulkan13Features().dynamicRendering == VK_TRUE;
+    if (!graph_execution_supported) {
+        host.Shutdown();
+        VR_SKIP("synchronization2 or dynamicRendering feature unavailable");
+    }
+
+    struct TickRecorder final {
+        const vr::render::RenderScenePacket3D* frame_packet = nullptr;
+
+        void PrepareFrame(const vr::render::SceneRecorder3DPrepareView&) noexcept {}
+        void Record(const vr::render::FrameRecordContext&) noexcept {}
+        [[nodiscard]] const vr::render::RenderScenePacket3D* FramePacket() const noexcept {
+            return frame_packet;
+        }
+    } recorder{};
+
+    vr::ecs::Camera<vr::ecs::Dim3> camera{};
+    camera.style.viewport = {.origin_x = 0.0F, .origin_y = 0.0F, .width = 224.0F, .height = 126.0F};
+    camera.runtime.revision = 1U;
+    camera.runtime.culling_mask = 0xFFU;
+    auto view = vr::render::MakeRenderViewFromCamera(
+        camera,
+        static_cast<const vr::ecs::Transform<vr::ecs::Dim3>*>(nullptr),
+        vr::render::RenderViewKind::world,
+        0U);
+    auto packet = vr::render::MakeSingleViewScenePacket(view, 1001U);
+    recorder.frame_packet = &packet;
+
+    auto& service = host.Services().Get<RenderGraphRuntimeService>();
+    service.EnableRecordExecution();
+
+    auto tick_result = host.Tick(recorder);
+    VR_CHECK(tick_result.render.code == vr::render::TickCode::Submitted ||
+             tick_result.render.code == vr::render::TickCode::RecreateRequested);
+
+    host.Swapchain().MarkDirty();
+
+    std::uint32_t submitted_after_resize = 0U;
+    std::uint32_t executed_after_resize = 0U;
+    constexpr std::uint32_t max_ticks = 4U;
+    for (std::uint32_t tick_index = 0U; tick_index < max_ticks && host.IsRunning(); ++tick_index) {
+        const auto one_tick = host.Tick(recorder);
+        if (one_tick.render.code == vr::render::TickCode::Submitted ||
+            one_tick.render.code == vr::render::TickCode::RecreateRequested) {
+            ++submitted_after_resize;
+        }
+        if (service.LastRecordStats().pass_count > 0U) {
+            ++executed_after_resize;
+        }
+        SDL_Delay(1U);
+    }
+
+    VR_CHECK(submitted_after_resize > 0U);
+    VR_CHECK(executed_after_resize > 0U);
+
+    host.Shutdown();
+}
+
+VR_TEST_CASE(RenderGraphRuntimeService_validation_enabled_minimal_tick_and_resize_stay_clean,
+             "integration;render_graph;runtime;validation;vulkan") {
+    Host host{};
+    try {
+        host.Initialize(MakeMinimalRenderTargetRuntimeCreateInfo(true));
+    } catch (const std::exception& exception_) {
+        if (IsEnvironmentSkipError(exception_.what()) || IsValidationUnavailable(exception_.what())) {
+            VR_SKIP(exception_.what());
+        }
+        throw;
+    }
+
+    const bool graph_execution_supported =
+        host.Context().EnabledVulkan13Features().synchronization2 == VK_TRUE &&
+        host.Context().EnabledVulkan13Features().dynamicRendering == VK_TRUE;
+    if (!graph_execution_supported) {
+        host.Shutdown();
+        VR_SKIP("synchronization2 or dynamicRendering feature unavailable");
+    }
+
+    struct TickRecorder final {
+        const vr::render::RenderScenePacket3D* frame_packet = nullptr;
+
+        void PrepareFrame(const vr::render::SceneRecorder3DPrepareView&) noexcept {}
+        void Record(const vr::render::FrameRecordContext&) noexcept {}
+        [[nodiscard]] const vr::render::RenderScenePacket3D* FramePacket() const noexcept {
+            return frame_packet;
+        }
+    } recorder{};
+
+    vr::ecs::Camera<vr::ecs::Dim3> camera{};
+    camera.style.viewport = {.origin_x = 0.0F, .origin_y = 0.0F, .width = 208.0F, .height = 117.0F};
+    camera.runtime.revision = 2U;
+    camera.runtime.culling_mask = 0xFFU;
+    auto view = vr::render::MakeRenderViewFromCamera(
+        camera,
+        static_cast<const vr::ecs::Transform<vr::ecs::Dim3>*>(nullptr),
+        vr::render::RenderViewKind::world,
+        0U);
+    auto packet = vr::render::MakeSingleViewScenePacket(view, 1002U);
+    recorder.frame_packet = &packet;
+
+    auto& service = host.Services().Get<RenderGraphRuntimeService>();
+    service.EnableRecordExecution();
+
+    std::uint32_t submitted_frames = 0U;
+    const auto first_tick = host.Tick(recorder);
+    if (first_tick.render.code == vr::render::TickCode::Submitted ||
+        first_tick.render.code == vr::render::TickCode::RecreateRequested) {
+        ++submitted_frames;
+    }
+
+    host.Swapchain().MarkDirty();
+    constexpr std::uint32_t max_ticks = 4U;
+    for (std::uint32_t tick_index = 0U; tick_index < max_ticks && host.IsRunning(); ++tick_index) {
+        const auto one_tick = host.Tick(recorder);
+        if (one_tick.render.code == vr::render::TickCode::Submitted ||
+            one_tick.render.code == vr::render::TickCode::RecreateRequested) {
+            ++submitted_frames;
+        }
+        SDL_Delay(1U);
+    }
+
+    VR_CHECK(submitted_frames > 0U);
+    VR_CHECK(service.LastRecordStats().pass_count > 0U);
+
+    host.Shutdown();
+}
+
 VR_TEST_CASE(RenderGraphVulkanBackend_resolves_imported_and_owned_resources,
              "integration;render_graph;vulkan") {
     Host host{};
@@ -616,6 +1046,70 @@ VR_TEST_CASE(RenderGraphVulkanBackend_runtime_service_resolves_physical_resource
     VR_CHECK(lowered_json.find("\"barrierBatches\"") != std::string::npos);
     VR_CHECK(lowered_json.find("\"oldLayout\": \"color_attachment_optimal\"") != std::string::npos);
     VR_CHECK(command_ready_json.find("\"commandBatches\"") != std::string::npos);
+}
+
+VR_TEST_CASE(RenderGraphVulkanBackend_builds_minimal_frame_graph_present_transition_batches,
+             "integration;render_graph;present;vulkan") {
+    Host host{};
+    try {
+        host.Initialize(MakeMinimalRenderTargetRuntimeCreateInfo());
+    } catch (const std::exception& exception_) {
+        if (IsEnvironmentSkipError(exception_.what())) {
+            VR_SKIP(exception_.what());
+        }
+        throw;
+    }
+
+    host.EnsureSwapchainTargetsForFrame(0U, 0U);
+    const auto imported_present = host.SwapchainTargets().Get(0U);
+    VR_REQUIRE(vr::render::IsValidRenderTargetHandle(imported_present));
+
+    vr::ecs::Camera<vr::ecs::Dim3> camera{};
+    camera.style.viewport = {.origin_x = 0.0F, .origin_y = 0.0F, .width = 160.0F, .height = 90.0F};
+    camera.runtime.revision = 1U;
+    camera.runtime.culling_mask = 0xFFU;
+    auto view = vr::render::MakeRenderViewFromCamera(
+        camera,
+        static_cast<const vr::ecs::Transform<vr::ecs::Dim3>*>(nullptr),
+        vr::render::RenderViewKind::world,
+        0U);
+    auto packet = vr::render::MakeSingleViewScenePacket(view, 808U);
+    const auto snapshot = vr::render_graph::MakeFrameSnapshot(packet, 6U);
+
+    vr::render_graph::RenderGraphBuilder builder{};
+    const auto build_result = vr::render_graph::BuildMinimalFrameGraph(builder, snapshot);
+    const auto compiled = builder.Compile();
+    VR_CHECK(build_result.built);
+    VR_CHECK(compiled.HasExecutablePasses());
+
+    vr::QueueFamilyIndices queue_families{};
+    queue_families.graphics = 2U;
+    const auto lowered = vr::render_graph::LowerToVulkanBarrierPlan(compiled, queue_families);
+
+    vr::render_graph::VulkanResourceTable table{};
+    table.BeginFrame(host.Context(), host.RenderTarget(), 0U, 0U);
+    table.RegisterImportedTexture(build_result.present_target, imported_present);
+    table.Resolve(host.Context(), host.GpuMemory(), host.RenderTarget(), compiled, 0U, 0U);
+    const auto command_ready = vr::render_graph::BuildCommandReadyVulkanBarrierPlan(
+        lowered,
+        table,
+        host.RenderTarget());
+    const std::string command_json = command_ready.BuildJson();
+
+    VR_REQUIRE(command_ready.command_batches.size() >= 2U);
+    bool saw_present_transition = false;
+    for (const auto& batch_ : command_ready.command_batches) {
+        for (const auto& image_barrier : batch_.dependency.image_barriers) {
+            if (image_barrier.newLayout == VK_IMAGE_LAYOUT_PRESENT_SRC_KHR) {
+                saw_present_transition = true;
+            }
+        }
+    }
+    VR_CHECK(saw_present_transition);
+    VR_CHECK(command_json.find("\"commandBatches\"") != std::string::npos);
+    VR_CHECK(command_json.find("\"imageBarrierCount\": 1") != std::string::npos);
+
+    table.Shutdown(host.Context(), host.RenderTarget(), 0U, 0U);
 }
 
 VR_TEST_CASE(RenderGraphVulkanBackend_resolves_imported_buffers,

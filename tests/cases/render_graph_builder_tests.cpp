@@ -509,20 +509,32 @@ VR_TEST_CASE(RenderGraphBuilder_builds_minimal_scene_overlay_present_chain,
     VR_CHECK(build_result.has_scene_pass);
     VR_CHECK(build_result.has_overlay_pass);
     VR_CHECK(build_result.has_depth);
-    VR_REQUIRE(compiled.ExecutionOrder().size() == 3U);
-    VR_REQUIRE(compiled.Passes().size() == 3U);
+    VR_REQUIRE(compiled.ExecutionOrder().size() == 4U);
+    VR_REQUIRE(compiled.Passes().size() == 4U);
     VR_CHECK(compiled.Passes()[0].debug_name == "main_scene_pass");
     VR_CHECK(compiled.Passes()[1].debug_name == "overlay_pass");
     VR_CHECK(compiled.Passes()[2].debug_name == "present_to_swapchain");
+    VR_CHECK(compiled.Passes()[3].debug_name == "present_transition");
+    VR_CHECK(compiled.Passes()[0].executable);
+    VR_CHECK(compiled.Passes()[1].executable);
+    VR_CHECK(compiled.Passes()[2].executable);
+    VR_CHECK(!compiled.Passes()[3].executable);
+    VR_REQUIRE(compiled.Passes()[0].raster_pass.has_value());
+    VR_REQUIRE(compiled.Passes()[1].raster_pass.has_value());
+    VR_CHECK(!compiled.Passes()[2].raster_pass.has_value());
+    VR_CHECK(!compiled.Passes()[3].raster_pass.has_value());
+    VR_CHECK(static_cast<bool>(compiled.Passes()[2].execute));
     VR_REQUIRE(compiled.Passes()[0].writes.size() == 2U);
     VR_CHECK(compiled.Passes()[0].writes[0].access == vr::render_graph::AccessKind::color_attachment_write);
     VR_CHECK(compiled.Passes()[0].writes[1].access == vr::render_graph::AccessKind::depth_stencil_write);
     VR_REQUIRE(compiled.Passes()[1].reads.size() == 1U);
     VR_CHECK(compiled.Passes()[1].reads[0].access == vr::render_graph::AccessKind::shader_sample_read);
     VR_REQUIRE(compiled.Passes()[2].reads.size() == 1U);
-    VR_CHECK(compiled.Passes()[2].reads[0].access == vr::render_graph::AccessKind::shader_sample_read);
+    VR_CHECK(compiled.Passes()[2].reads[0].access == vr::render_graph::AccessKind::transfer_read);
     VR_REQUIRE(compiled.Passes()[2].writes.size() == 1U);
-    VR_CHECK(compiled.Passes()[2].writes[0].access == vr::render_graph::AccessKind::present);
+    VR_CHECK(compiled.Passes()[2].writes[0].access == vr::render_graph::AccessKind::transfer_write);
+    VR_REQUIRE(compiled.Passes()[3].reads.size() == 1U);
+    VR_CHECK(compiled.Passes()[3].reads[0].access == vr::render_graph::AccessKind::present);
 }
 
 VR_TEST_CASE(RenderGraphBuilder_exports_dot_and_json,

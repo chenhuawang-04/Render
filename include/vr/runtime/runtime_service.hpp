@@ -3,6 +3,7 @@
 #include <concepts>
 #include <cstdint>
 #include <string_view>
+#include <vulkan/vulkan.h>
 
 namespace vr::runtime {
 
@@ -49,6 +50,15 @@ template<typename ContextT>
     return ResolveFrameContext(context_).progress.graphics_completed;
 }
 
+template<typename ContextT>
+[[nodiscard]] VkCommandBuffer ResolveCommandBuffer(ContextT& context_) noexcept {
+    auto& frame_context = ResolveFrameContext(context_);
+    if constexpr (requires { frame_context.command_buffer; }) {
+        return frame_context.command_buffer;
+    }
+    return VK_NULL_HANDLE;
+}
+
 } // namespace detail
 
 template<typename T>
@@ -81,6 +91,11 @@ concept RuntimeServiceSupportsPrepareFrame = requires(ServiceT& service_, Contex
 template<typename ServiceT, typename ContextT>
 concept RuntimeServiceSupportsPreRecord = requires(ServiceT& service_, ContextT& context_) {
     service_.PreRecord(context_);
+};
+
+template<typename ServiceT, typename ContextT>
+concept RuntimeServiceSupportsRecord = requires(ServiceT& service_, ContextT& context_) {
+    service_.Record(context_);
 };
 
 template<typename ServiceT, typename ContextT>
@@ -135,6 +150,13 @@ template<typename ServiceT, typename ContextT>
 inline void CallPreRecordIfSupported(ServiceT& service_, ContextT& context_) {
     if constexpr (RuntimeServiceSupportsPreRecord<ServiceT, ContextT>) {
         service_.PreRecord(context_);
+    }
+}
+
+template<typename ServiceT, typename ContextT>
+inline void CallRecordIfSupported(ServiceT& service_, ContextT& context_) {
+    if constexpr (RuntimeServiceSupportsRecord<ServiceT, ContextT>) {
+        service_.Record(context_);
     }
 }
 

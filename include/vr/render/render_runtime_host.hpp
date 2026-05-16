@@ -923,10 +923,13 @@ public:
                                                                             acquired_frame.token.frame_index,
                                                                             create_info_cache.render_loop.command_usage_flags);
         RecordTickFrame(recorder_, acquired_frame, command_buffer);
+        phase_driver_.OnRecord(frame_index,
+                               render_loop.Sync().LastSubmittedValue(),
+                               render_loop.Sync().CompletedSubmitValue(),
+                               command_buffer);
         render_loop.Commands().EndCommandBuffer(command_buffer);
 
         result.render = SubmitPresentTickFrame(acquired_frame, command_buffer, upload_flush);
-        phase_driver_.OnRecord();
         phase_driver_.OnSubmit();
 
         phase_driver_.OnPostRecord(frame_index,
@@ -1354,6 +1357,7 @@ private:
         RuntimeServicesType& services;
         FrameInfo frame{};
         ProgressInfo progress{};
+        VkCommandBuffer command_buffer = VK_NULL_HANDLE;
         SwapchainTargetSet* swapchain_targets = nullptr;
     };
 
@@ -1412,7 +1416,19 @@ private:
             execution.Mark(vr::runtime::RuntimeExecutionStage::PreRecord);
         }
 
-        void OnRecord() noexcept {
+        void OnRecord(const std::uint32_t frame_index_,
+                      const std::uint64_t graphics_submitted_,
+                      const std::uint64_t graphics_completed_,
+                      const VkCommandBuffer command_buffer_) {
+            auto frame_context = runtime.BuildServicePhaseFrameContext(frame_index_,
+                                                                      graphics_submitted_,
+                                                                      graphics_completed_);
+            frame_context.command_buffer = command_buffer_;
+            auto phase_context = ServicePhaseContext{
+                .frame_context = frame_context,
+                .execution = execution,
+            };
+            runtime.services_ref.Record(phase_context);
             execution.Mark(vr::runtime::RuntimeExecutionStage::Record);
         }
 

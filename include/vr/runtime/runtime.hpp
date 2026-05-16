@@ -162,8 +162,11 @@ public:
                                  .image_view = frame.image_view,
                              },
                              command_buffer);
+        phase_driver.OnRecord(frame.token.frame_index,
+                              host.Loop().Sync().LastSubmittedValue(),
+                              host.Loop().Sync().CompletedSubmitValue(),
+                              command_buffer);
         kernel.Commands().End(command_buffer);
-        phase_driver.OnRecord();
 
         const GraphicsSubmitResult submit_result = kernel.SubmitGraphics({
             .token = frame.token,
@@ -523,8 +526,16 @@ private:
             execution.PreRecord(runtime.Services());
         }
 
-        void OnRecord() noexcept {
-            execution.MarkRecord();
+        void OnRecord(const std::uint32_t frame_index_,
+                      const std::uint64_t graphics_submitted_,
+                      const std::uint64_t graphics_completed_,
+                      const VkCommandBuffer command_buffer_) {
+            runtime.UpdatePhaseFrameContext(phase_frame_context,
+                                            frame_index_,
+                                            graphics_submitted_,
+                                            graphics_completed_,
+                                            command_buffer_);
+            execution.Record(runtime.Services());
         }
 
         void OnSubmit() noexcept {
@@ -592,7 +603,8 @@ private:
     void UpdatePhaseFrameContext(FrameContext& frame_context_,
                                  const std::uint32_t frame_index_,
                                  const std::uint64_t graphics_submitted_,
-                                 const std::uint64_t graphics_completed_) {
+                                 const std::uint64_t graphics_completed_,
+                                 const VkCommandBuffer command_buffer_ = VK_NULL_HANDLE) {
         frame_context_.frame.frame_id = host.CurrentFrameId();
         frame_context_.frame.frame_index = frame_index_;
 
@@ -606,6 +618,7 @@ private:
         if (frame_context_.timelines.graphics.next_value <= graphics_submitted_) {
             frame_context_.timelines.graphics.next_value = graphics_submitted_ + 1U;
         }
+        frame_context_.command_buffer = command_buffer_;
         frame_context_.swapchain_targets = host.HasRenderTargetHost() ? &host.SwapchainTargets() : nullptr;
     }
 

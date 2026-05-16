@@ -3,6 +3,7 @@
 #include "vr/render_graph/compiled_render_graph.hpp"
 
 #include <cstddef>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -45,6 +46,9 @@ public:
 
     [[nodiscard]] CompiledRenderGraph Compile() const;
 
+    void SetRasterPassDesc(PassHandle pass_, RasterPassDesc raster_pass_);
+    void SetExecuteCallback(PassHandle pass_, PassExecutionThunk execute_);
+
     void Reset() noexcept;
 
     [[nodiscard]] std::size_t ResourceCount() const noexcept {
@@ -82,6 +86,8 @@ private:
         std::string debug_name{};
         bool side_effect = false;
         QueueClass queue = QueueClass::graphics;
+        std::optional<RasterPassDesc> raster_pass{};
+        PassExecutionThunk execute{};
         std::vector<AccessDesc> reads{};
         std::vector<WriteRecord> writes{};
     };

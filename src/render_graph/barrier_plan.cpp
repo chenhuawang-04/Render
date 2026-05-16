@@ -602,7 +602,26 @@ BarrierPlan BuildBarrierPlan(const CompiledRenderGraph& compiled_graph_) {
 
             const ResourceKind kind = ResolveResourceKind(compiled_graph_, access_.resource.resource_index);
             auto& previous_ = last_accesses[access_.resource.resource_index];
-            if (RequiresBarrier(previous_, access_, pass_.queue, kind)) {
+            if (!previous_.valid && pass_.executable && access_.access != AccessKind::none) {
+                batch.barriers.push_back(LogicalBarrier{
+                    .resource = access_.resource,
+                    .kind = kind,
+                    .before = AccessKind::none,
+                    .after = access_.access,
+                    .src_queue = pass_.queue,
+                    .dst_queue = pass_.queue,
+                    .subresource_range = access_.subresource_range,
+                    .buffer_range = access_.buffer_range,
+                    .src_pass = invalid_pass_handle,
+                    .dst_pass = pass_.handle,
+                    .src_pass_order = invalid_render_graph_index,
+                    .dst_pass_order = pass_order,
+                    .queue_transfer = false,
+                    .host_boundary = IsHostAccess(access_.access),
+                    .aliasing = false,
+                    .uav_ordering = false,
+                });
+            } else if (RequiresBarrier(previous_, access_, pass_.queue, kind)) {
                 batch.barriers.push_back(LogicalBarrier{
                     .resource = access_.resource,
                     .kind = kind,

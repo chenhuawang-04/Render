@@ -262,7 +262,17 @@ std::string CompiledRenderGraph::BuildDebugString() const {
             oss << pass_.dependencies[dep_index].index;
         }
         oss << " reads=" << pass_.reads.size();
-        oss << " writes=" << pass_.writes.size() << '\n';
+        oss << " writes=" << pass_.writes.size();
+        if (pass_.raster_pass.has_value()) {
+            oss << " raster_colors=" << pass_.raster_pass->color_attachments.size();
+            if (pass_.raster_pass->has_depth_attachment) {
+                oss << " depth";
+            }
+        }
+        if (pass_.executable) {
+            oss << " executable";
+        }
+        oss << '\n';
     }
 
     oss << "liveness=" << liveness_ranges.size() << '\n';
@@ -362,6 +372,7 @@ std::string CompiledRenderGraph::BuildJson() const {
         oss << "      \"index\": " << pass_.handle.index << ",\n";
         oss << "      \"name\": \"" << EscapeJsonString(pass_.debug_name) << "\",\n";
         oss << "      \"sideEffect\": " << (pass_.side_effect ? "true" : "false") << ",\n";
+        oss << "      \"executable\": " << (pass_.executable ? "true" : "false") << ",\n";
         oss << "      \"queue\": \"" << QueueClassToString(pass_.queue) << "\",\n";
 
         oss << "      \"dependencies\": [";
@@ -562,6 +573,18 @@ ResourceVersionHandle RenderGraphBuilder::Write(const PassHandle pass_,
     return output_version;
 }
 
+void RenderGraphBuilder::SetRasterPassDesc(const PassHandle pass_,
+                                          RasterPassDesc raster_pass_) {
+    PassNode& target_pass = RequirePass(pass_);
+    target_pass.raster_pass = std::move(raster_pass_);
+}
+
+void RenderGraphBuilder::SetExecuteCallback(const PassHandle pass_,
+                                            PassExecutionThunk execute_) {
+    PassNode& target_pass = RequirePass(pass_);
+    target_pass.execute = std::move(execute_);
+}
+
 CompiledRenderGraph RenderGraphBuilder::Compile() const {
     CompiledRenderGraph compiled{};
     if (passes.empty()) {
@@ -684,7 +707,10 @@ CompiledRenderGraph RenderGraphBuilder::Compile() const {
         compiled_pass.handle = handle_;
         compiled_pass.debug_name = pass_.debug_name;
         compiled_pass.side_effect = pass_.side_effect;
+        compiled_pass.executable = static_cast<bool>(pass_.execute) || pass_.raster_pass.has_value();
         compiled_pass.queue = pass_.queue;
+        compiled_pass.raster_pass = pass_.raster_pass;
+        compiled_pass.execute = pass_.execute;
         compiled_pass.reads = pass_.reads;
         for (const auto dependency_ : dependencies[handle_.index]) {
             if (active[dependency_.index]) {

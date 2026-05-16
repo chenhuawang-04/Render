@@ -113,6 +113,15 @@ public:
         trace.Mark(RuntimeExecutionStage::PreRecord);
     }
 
+    void Record(ServicesType& services_) {
+        auto context = RuntimeRecordPhaseContext<Profile, BackendTag, FramesInFlight>{
+            .frame_context = *frame_context,
+            .execution = trace,
+        };
+        services_.Record(context);
+        trace.Mark(RuntimeExecutionStage::Record);
+    }
+
     void PostRecord(ServicesType& services_) {
         auto context = RuntimeRecordPhaseContext<Profile, BackendTag, FramesInFlight>{
             .frame_context = *frame_context,

@@ -127,6 +127,13 @@ public:
     }
 
     template<typename ContextT>
+    void Record(ContextT& context_) {
+        ForEachBound([&](auto& service_) {
+            CallRecordIfSupported(service_, context_);
+        });
+    }
+
+    template<typename ContextT>
     void PostRecord(ContextT& context_) {
         ForEachBound([&](auto& service_) {
             CallPostRecordIfSupported(service_, context_);

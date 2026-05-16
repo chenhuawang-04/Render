@@ -46,6 +46,7 @@ struct RuntimeFrameContext final {
     ServicesType& services;
     KernelType& kernel;
     CommandService& commands;
+    VkCommandBuffer command_buffer = VK_NULL_HANDLE;
     vr::render::SwapchainTargetSet* swapchain_targets = nullptr;
 };
 

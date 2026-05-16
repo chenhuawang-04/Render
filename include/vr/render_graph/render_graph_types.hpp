@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <limits>
 #include <type_traits>
+#include <vector>
 
 namespace vr::render_graph {
 
@@ -163,6 +164,53 @@ struct AccessDesc final {
     BufferRange buffer_range{};
 };
 
+enum class AttachmentLoadOp : std::uint8_t {
+    load = 0U,
+    clear = 1U,
+    dont_care = 2U,
+};
+
+enum class AttachmentStoreOp : std::uint8_t {
+    store = 0U,
+    dont_care = 1U,
+};
+
+struct ClearColorValue final {
+    float red = 0.0F;
+    float green = 0.0F;
+    float blue = 0.0F;
+    float alpha = 1.0F;
+};
+
+struct ClearDepthStencilValue final {
+    float depth = 1.0F;
+    std::uint32_t stencil = 0U;
+};
+
+struct RasterColorAttachmentDesc final {
+    ResourceHandle target{};
+    AttachmentLoadOp load_op = AttachmentLoadOp::load;
+    AttachmentStoreOp store_op = AttachmentStoreOp::store;
+    ClearColorValue clear_value{};
+};
+
+struct RasterDepthAttachmentDesc final {
+    ResourceHandle target{};
+    AttachmentLoadOp load_op = AttachmentLoadOp::load;
+    AttachmentStoreOp store_op = AttachmentStoreOp::store;
+    AttachmentLoadOp stencil_load_op = AttachmentLoadOp::dont_care;
+    AttachmentStoreOp stencil_store_op = AttachmentStoreOp::dont_care;
+    ClearDepthStencilValue clear_value{};
+    bool read_only = false;
+};
+
+struct RasterPassDesc final {
+    std::vector<RasterColorAttachmentDesc> color_attachments{};
+    bool has_depth_attachment = false;
+    RasterDepthAttachmentDesc depth_attachment{};
+    std::uint32_t layer_count = 1U;
+};
+
 [[nodiscard]] constexpr bool IsValidResourceHandle(const ResourceHandle handle_) noexcept {
     return handle_.index != invalid_render_graph_index &&
            handle_.generation != 0U;
@@ -196,5 +244,9 @@ static_assert(std::is_standard_layout_v<ResourceVersionHandle>);
 static_assert(std::is_standard_layout_v<SubresourceRange>);
 static_assert(std::is_standard_layout_v<BufferRange>);
 static_assert(std::is_standard_layout_v<AccessDesc>);
+static_assert(std::is_standard_layout_v<ClearColorValue>);
+static_assert(std::is_standard_layout_v<ClearDepthStencilValue>);
+static_assert(std::is_standard_layout_v<RasterColorAttachmentDesc>);
+static_assert(std::is_standard_layout_v<RasterDepthAttachmentDesc>);
 
 } // namespace vr::render_graph

@@ -3,6 +3,7 @@
 #include "vr/render_graph/frame_graph_build.hpp"
 #include "vr/render_graph/frame_snapshot.hpp"
 #include "vr/render_graph/render_graph_builder.hpp"
+#include "vr/render_graph/render_graph_executor.hpp"
 #include "vr/render_graph/vulkan_barrier_plan.hpp"
 #include "vr/render_graph/vulkan_resource_table.hpp"
 #include "vr/runtime/runtime_service.hpp"
@@ -43,6 +44,7 @@ public:
         compiled_graph = {};
         lowered_vulkan_barriers = {};
         command_ready_vulkan_barriers = {};
+        record_stats = {};
         has_compiled_graph = false;
         frame_snapshot = std::monostate{};
     }
@@ -56,6 +58,7 @@ public:
         compiled_graph = {};
         lowered_vulkan_barriers = {};
         command_ready_vulkan_barriers = {};
+        record_stats = {};
         has_compiled_graph = false;
 
         if (const auto* snapshot_2d = TryGetFrameSnapshot<ecs::Dim2>();
@@ -78,6 +81,34 @@ public:
                 physical_resources,
                 services.template Get<RenderTargetService>().Host());
         }
+    }
+
+    template<typename ContextT>
+    void Record(ContextT& context_) {
+        if (!record_execution_enabled || !has_compiled_graph || !compiled_graph.HasExecutablePasses()) {
+            return;
+        }
+        auto& device = vr::runtime::detail::ResolveDevice(context_);
+        if (device.EnabledVulkan13Features().synchronization2 != VK_TRUE ||
+            device.EnabledVulkan13Features().dynamicRendering != VK_TRUE) {
+            return;
+        }
+        const VkCommandBuffer command_buffer = vr::runtime::detail::ResolveCommandBuffer(context_);
+        if (command_buffer == VK_NULL_HANDLE) {
+            return;
+        }
+
+        auto& services = vr::runtime::detail::ResolveServices(context_);
+        record_stats = render_graph::RenderGraphExecutor::Record(
+            render_graph::GraphCommandContext{
+                device,
+                command_buffer,
+                compiled_graph,
+                physical_resources,
+                services.template Get<RenderTargetService>().Host(),
+                lowered_vulkan_barriers,
+                command_ready_vulkan_barriers,
+            });
     }
 
     template<typename ContextT>
@@ -126,12 +157,24 @@ public:
         return physical_resources;
     }
 
+    void EnableRecordExecution(const bool value_ = true) noexcept {
+        record_execution_enabled = value_;
+    }
+
+    [[nodiscard]] bool RecordExecutionEnabled() const noexcept {
+        return record_execution_enabled;
+    }
+
     [[nodiscard]] const render_graph::VulkanBarrierPlan& PlannedVulkanBarriers() const noexcept {
         return lowered_vulkan_barriers;
     }
 
     [[nodiscard]] const render_graph::VulkanCommandReadyPlan& PlannedCommandReadyVulkanBarriers() const noexcept {
         return command_ready_vulkan_barriers;
+    }
+
+    [[nodiscard]] const render_graph::RenderGraphRecordStats& LastRecordStats() const noexcept {
+        return record_stats;
     }
 
 private:
@@ -180,8 +223,10 @@ private:
     render_graph::CompiledRenderGraph compiled_graph{};
     render_graph::VulkanBarrierPlan lowered_vulkan_barriers{};
     render_graph::VulkanCommandReadyPlan command_ready_vulkan_barriers{};
+    render_graph::RenderGraphRecordStats record_stats{};
     render_graph::VulkanResourceTable physical_resources{};
     bool has_compiled_graph = false;
+    bool record_execution_enabled = false;
     FrameSnapshotVariant frame_snapshot{};
 };
 

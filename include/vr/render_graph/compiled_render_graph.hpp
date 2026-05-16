@@ -3,16 +3,24 @@
 #include "vr/render_graph/barrier_plan.hpp"
 #include "vr/render_graph/render_graph_types.hpp"
 
+#include <functional>
+#include <optional>
 #include <string>
 #include <vector>
 
 namespace vr::render_graph {
 
+class GraphCommandContext;
+using PassExecutionThunk = std::function<void(GraphCommandContext&)>;
+
 struct CompiledPass final {
     PassHandle handle{};
     std::string debug_name{};
     bool side_effect = false;
+    bool executable = false;
     QueueClass queue = QueueClass::graphics;
+    std::optional<RasterPassDesc> raster_pass{};
+    PassExecutionThunk execute{};
     std::vector<PassHandle> dependencies{};
     std::vector<AccessDesc> reads{};
     std::vector<AccessDesc> writes{};
@@ -60,6 +68,15 @@ public:
 
     [[nodiscard]] const BarrierPlan& PlannedBarriers() const noexcept {
         return barrier_plan;
+    }
+
+    [[nodiscard]] bool HasExecutablePasses() const noexcept {
+        for (const auto& pass_ : passes) {
+            if (pass_.executable) {
+                return true;
+            }
+        }
+        return false;
     }
 
     [[nodiscard]] const CompiledPass* FindPass(PassHandle handle_) const noexcept;
