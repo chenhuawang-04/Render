@@ -85,12 +85,8 @@ public:
 
     template<typename ContextT>
     void Record(ContextT& context_) {
-        if (!record_execution_enabled || !has_compiled_graph || !compiled_graph.HasExecutablePasses()) {
-            return;
-        }
         auto& device = vr::runtime::detail::ResolveDevice(context_);
-        if (device.EnabledVulkan13Features().synchronization2 != VK_TRUE ||
-            device.EnabledVulkan13Features().dynamicRendering != VK_TRUE) {
+        if (!CanExecuteGraphRecord(device)) {
             return;
         }
         const VkCommandBuffer command_buffer = vr::runtime::detail::ResolveCommandBuffer(context_);
@@ -163,6 +159,14 @@ public:
 
     [[nodiscard]] bool RecordExecutionEnabled() const noexcept {
         return record_execution_enabled;
+    }
+
+    [[nodiscard]] bool CanExecuteGraphRecord(const VulkanContext& device_) const noexcept {
+        return record_execution_enabled &&
+               has_compiled_graph &&
+               compiled_graph.HasExecutablePasses() &&
+               device_.EnabledVulkan13Features().synchronization2 == VK_TRUE &&
+               device_.EnabledVulkan13Features().dynamicRendering == VK_TRUE;
     }
 
     [[nodiscard]] const render_graph::VulkanBarrierPlan& PlannedVulkanBarriers() const noexcept {

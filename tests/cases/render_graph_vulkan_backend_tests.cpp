@@ -667,9 +667,12 @@ VR_TEST_CASE(RenderGraphRuntimeService_executes_minimal_graph_during_runtime_tic
 
     struct TickRecorder final {
         const vr::render::RenderScenePacket3D* frame_packet = nullptr;
+        std::uint32_t legacy_record_count = 0U;
 
         void PrepareFrame(const vr::render::SceneRecorder3DPrepareView&) noexcept {}
-        void Record(const vr::render::FrameRecordContext&) noexcept {}
+        void Record(const vr::render::FrameRecordContext&) noexcept {
+            legacy_record_count += 1U;
+        }
         [[nodiscard]] const vr::render::RenderScenePacket3D* FramePacket() const noexcept {
             return frame_packet;
         }
@@ -716,8 +719,10 @@ VR_TEST_CASE(RenderGraphRuntimeService_executes_minimal_graph_during_runtime_tic
     VR_CHECK(submitted_frames > 0U);
     if (graph_execution_supported) {
         VR_CHECK(executed_graph_frames > 0U);
+        VR_CHECK(recorder.legacy_record_count == 0U);
     } else {
         VR_CHECK(executed_graph_frames == 0U);
+        VR_CHECK(recorder.legacy_record_count > 0U);
     }
 
     host.Shutdown();

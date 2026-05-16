@@ -2004,6 +2004,11 @@ private:
             augmented.render_target_host = runtime.render_target_initialized ? &runtime.render_target_host : nullptr;
             augmented.swapchain_targets = runtime.render_target_initialized ? &runtime.swapchain_targets : nullptr;
 
+            const auto& graph_service = runtime.services_ref.template Get<runtime::services::RenderGraphRuntimeService>();
+            if (graph_service.CanExecuteGraphRecord(runtime.platform_host.Context())) {
+                return;
+            }
+
             if constexpr (FrameContextRecorder<RecorderT>) {
                 recorder.Record(augmented);
             } else {
