@@ -2,6 +2,7 @@
 
 #include "Center/Memory/Container/Vector/McVector.hpp"
 #include "vr/ecs/component/camera_component.hpp"
+#include "vr/render_graph/render_graph_types.hpp"
 #include "vr/ecs/system/light_culling_system.hpp"
 #include "vr/ecs/component/transform_component.hpp"
 #include "vr/ecs/system/surface_runtime_system.hpp"
@@ -32,6 +33,10 @@ struct SurfaceRenderer2DPrepareView;
 struct FrameRecordContext;
 class UploadHost;
 class BindlessResourceSystem;
+}
+
+namespace vr::render_graph {
+class GraphCommandContext;
 }
 
 namespace vr::resource {
@@ -136,6 +141,8 @@ public:
 
     void PrepareFrame(const render::SurfaceRenderer2DPrepareView& prepare_view_);
     void Record(const render::FrameRecordContext& record_context_);
+    void RecordGraphOverlay(render_graph::GraphCommandContext& context_,
+                            render_graph::ResourceHandle color_target_);
     void OnSwapchainRecreated(std::uint32_t image_count_,
                               VkExtent2D extent_,
                               VkFormat format_);
@@ -226,6 +233,11 @@ private:
         render::PipelineHost& pipeline_host_,
         VkFormat color_format_,
         BlendModeKind blend_mode_);
+    void RecordGraphInternal(render_graph::GraphCommandContext& context_,
+                             render_graph::ResourceHandle color_target_);
+    void RecordDrawBatches(VkCommandBuffer command_buffer_,
+                           VkExtent2D render_extent_,
+                           VkFormat color_format_);
     void EnsureFallbackTexture(VulkanContext& context_,
                                render::UploadHost& upload_host_,
                                std::uint32_t frame_index_);

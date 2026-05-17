@@ -3,6 +3,7 @@
 #include "Center/Memory/Container/Vector/McVector.hpp"
 #include "vr/render/animation_frame_coordinator.hpp"
 #include "vr/render/environment/sky_environment_pass.hpp"
+#include "vr/render_graph/frame_graph_build.hpp"
 #include "vr/render/light_frame_coordinator.hpp"
 #include "vr/render/light_shadow_link_coordinator.hpp"
 #include "vr/render/scene_bloom_post_stack.hpp"
@@ -10,11 +11,36 @@
 #include "vr/render/scene_submission.hpp"
 #include "vr/render/shadow_atlas_binding_coordinator.hpp"
 #include "vr/render/shadow_frame_coordinator.hpp"
+#include "vr/render_graph/frame_graph_build.hpp"
+#include "vr/render_graph/graph_command_context.hpp"
 #include "vr/shadow/shadow_atlas_host.hpp"
 #include "vr/shadow/shadow_renderer_3d.hpp"
 
 #include <cstdint>
 #include <stdexcept>
+
+namespace vr::render {
+
+} // namespace vr::render
+
+namespace vr::geometry {
+class GeometryRenderer3D;
+}
+
+namespace vr::particle {
+class ParticleRenderer2D;
+class ParticleRenderer3D;
+}
+
+namespace vr::surface {
+class SurfaceRenderer2D;
+class SurfaceRenderer3D;
+}
+
+namespace vr::text {
+class TextRenderer2D;
+class TextRenderer3D;
+}
 
 namespace vr::render {
 
@@ -60,6 +86,45 @@ struct SceneRecorder3DStats final {
     std::uint8_t reserved0 = 0U;
     std::uint16_t reserved1 = 0U;
 };
+
+template<typename RendererT>
+concept SceneRecorder3DGraphSceneRecordable =
+    requires {
+        &RendererT::RecordGraphSceneStage;
+    };
+
+template<typename RendererT>
+concept SceneRecorder3DGraphOverlayRecordable =
+    requires {
+        &RendererT::RecordGraphOverlay;
+    };
+
+template<typename RendererT>
+struct SceneRecorder3DGraphSceneSupport : std::bool_constant<SceneRecorder3DGraphSceneRecordable<RendererT>> {};
+
+template<>
+struct SceneRecorder3DGraphSceneSupport<geometry::GeometryRenderer3D> : std::true_type {};
+
+template<>
+struct SceneRecorder3DGraphSceneSupport<surface::SurfaceRenderer3D> : std::true_type {};
+
+template<>
+struct SceneRecorder3DGraphSceneSupport<text::TextRenderer3D> : std::true_type {};
+
+template<>
+struct SceneRecorder3DGraphSceneSupport<particle::ParticleRenderer3D> : std::true_type {};
+
+template<typename RendererT>
+struct SceneRecorder3DGraphOverlaySupport : std::bool_constant<SceneRecorder3DGraphOverlayRecordable<RendererT>> {};
+
+template<>
+struct SceneRecorder3DGraphOverlaySupport<text::TextRenderer2D> : std::true_type {};
+
+template<>
+struct SceneRecorder3DGraphOverlaySupport<surface::SurfaceRenderer2D> : std::true_type {};
+
+template<>
+struct SceneRecorder3DGraphOverlaySupport<particle::ParticleRenderer2D> : std::true_type {};
 
 class SceneRecorder3D final {
 public:
@@ -149,6 +214,7 @@ public:
             .submission_layer_mask = submission_layer_mask_,
             .prepare_fn = &PrepareRenderer<RendererT>,
             .record_fn = &RecordSceneRenderer<RendererT>,
+            .graph_record_fn = ResolveGraphSceneRecordFn<RendererT>(),
             .swapchain_recreated_fn = &OnSwapchainRecreatedRenderer<RendererT>,
             .configure_scene_fn = &ConfigureSceneRendererBinding<RendererT>,
             .configure_direct_scene_fn = &ConfigureDirectSceneRendererBinding<RendererT>,
@@ -184,7 +250,8 @@ public:
             .submission_layer_mask = submission_layer_mask_,
             .prepare_fn = &PrepareRenderer<RendererT>,
             .record_fn = &RecordRenderer<RendererT>,
-            .swapchain_recreated_fn = &OnSwapchainRecreatedRenderer<RendererT>,
+            .graph_record_fn = ResolveGraphOverlayRecordFn<RendererT>(),
+            .swapchain_recreated_fn = &OptionalOnSwapchainRecreatedRenderer<RendererT>,
             .set_output_target_fn = &SetOverlayOutputTarget<RendererT>,
         };
         UpsertOverlayRendererEntry(entry);
@@ -198,6 +265,10 @@ public:
     void PrepareFrame(const SceneRecorder3DPrepareView& prepare_view_);
     void PrepareFrame(const SceneRecorder3DPrepareView& prepare_view_,
                       const RenderScenePacket3D& frame_packet_);
+    void BuildRenderGraph(render_graph::RenderGraphBuilder& builder_,
+                          const render_graph::FrameSnapshot3D& snapshot_,
+                          const render_graph::MinimalFrameGraphBuildResult<ecs::Dim3>& build_result_,
+                          render_graph::ResourceVersionHandle& color_chain_);
     void Record(const FrameRecordContext& record_context_);
     void Record(const FrameRecordContext& record_context_,
                 const RenderScenePacket3D& frame_packet_);
@@ -226,6 +297,11 @@ private:
     using PrepareFn = void (*)(void*, const SceneRecorder3DPrepareView&);
     using RecordFn = void (*)(void*, const FrameRecordContext&);
     using SceneRecordFn = void (*)(void*, const FrameRecordContext&, SceneRecorder3DSceneStage);
+    using GraphSceneRecordFn = void (*)(void*,
+                                        render_graph::GraphCommandContext&,
+                                        SceneRenderStage,
+                                        render_graph::ResourceHandle,
+                                        render_graph::ResourceHandle);
     using SwapchainRecreatedFn = void (*)(void*,
                                           std::uint32_t,
                                           VkExtent2D,
@@ -249,6 +325,9 @@ private:
     using ConfigurePreSceneAnimationFn = void (*)(void*,
                                                   render::AnimationFrameCoordinator<ecs::Dim3>*);
     using SetOverlayOutputFn = void (*)(void*, const RenderTargetColorOutputConfig&);
+    using GraphOverlayRecordFn = void (*)(void*,
+                                          render_graph::GraphCommandContext&,
+                                          render_graph::ResourceHandle);
 
     static constexpr SceneRecorder3DSceneStage scene_stage_record_order[2] = {
         SceneRecorder3DSceneStage::opaque,
@@ -280,6 +359,7 @@ private:
         std::uint32_t submission_layer_mask = all_submission_layers;
         PrepareFn prepare_fn = nullptr;
         SceneRecordFn record_fn = nullptr;
+        GraphSceneRecordFn graph_record_fn = nullptr;
         SwapchainRecreatedFn swapchain_recreated_fn = nullptr;
         ConfigureSceneFn configure_scene_fn = nullptr;
         ConfigureDirectSceneFn configure_direct_scene_fn = nullptr;
@@ -293,6 +373,7 @@ private:
         std::uint32_t submission_layer_mask = all_submission_layers;
         PrepareFn prepare_fn = nullptr;
         RecordFn record_fn = nullptr;
+        GraphOverlayRecordFn graph_record_fn = nullptr;
         SwapchainRecreatedFn swapchain_recreated_fn = nullptr;
         SetOverlayOutputFn set_output_target_fn = nullptr;
     };
@@ -388,6 +469,40 @@ private:
             static_cast<RendererT*>(renderer_)->RecordSceneStage(record_context_, stage_);
         } else {
             static_cast<RendererT*>(renderer_)->Record(record_context_);
+        }
+    }
+
+    template<typename RendererT>
+    static void RecordGraphSceneRenderer(void* renderer_,
+                                         render_graph::GraphCommandContext& context_,
+                                         SceneRenderStage stage_,
+                                         render_graph::ResourceHandle color_target_,
+                                         render_graph::ResourceHandle depth_target_) {
+        static_cast<RendererT*>(renderer_)->RecordGraphSceneStage(context_, stage_, color_target_, depth_target_);
+    }
+
+    template<typename RendererT>
+    static constexpr GraphSceneRecordFn ResolveGraphSceneRecordFn() noexcept {
+        if constexpr (SceneRecorder3DGraphSceneSupport<RendererT>::value) {
+            return &RecordGraphSceneRenderer<RendererT>;
+        } else {
+            return nullptr;
+        }
+    }
+
+    template<typename RendererT>
+    static void RecordGraphOverlayRenderer(void* renderer_,
+                                           render_graph::GraphCommandContext& context_,
+                                           render_graph::ResourceHandle color_target_) {
+        static_cast<RendererT*>(renderer_)->RecordGraphOverlay(context_, color_target_);
+    }
+
+    template<typename RendererT>
+    static constexpr GraphOverlayRecordFn ResolveGraphOverlayRecordFn() noexcept {
+        if constexpr (SceneRecorder3DGraphOverlaySupport<RendererT>::value) {
+            return &RecordGraphOverlayRenderer<RendererT>;
+        } else {
+            return nullptr;
         }
     }
 

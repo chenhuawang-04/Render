@@ -159,6 +159,19 @@ template<ecs::DimensionTag DimensionT>
 [[nodiscard]] MinimalFrameGraphBuildResult<DimensionT> BuildMinimalFrameGraph(
     RenderGraphBuilder& builder_,
     const FrameSnapshot<DimensionT>& snapshot_) {
+    return BuildMinimalFrameGraph(builder_,
+                                  snapshot_,
+                                  [](RenderGraphBuilder&,
+                                     const FrameSnapshot<DimensionT>&,
+                                     MinimalFrameGraphBuildResult<DimensionT>&,
+                                     ResourceVersionHandle&) {});
+}
+
+template<ecs::DimensionTag DimensionT, typename ExtendFnT>
+[[nodiscard]] MinimalFrameGraphBuildResult<DimensionT> BuildMinimalFrameGraph(
+    RenderGraphBuilder& builder_,
+    const FrameSnapshot<DimensionT>& snapshot_,
+    ExtendFnT&& extend_) {
     MinimalFrameGraphBuildResult<DimensionT> result{};
     if (snapshot_.ViewCount() == 0U || snapshot_.ActiveView() == nullptr) {
         return result;
@@ -223,23 +236,17 @@ template<ecs::DimensionTag DimensionT>
         }
     }
 
-    if (snapshot_.HasOverlayView() &&
+    const bool build_overlay_pass =
+        snapshot_.HasOverlayView() &&
         !detail::IndicesMatch(snapshot_.selection.scene_view_index,
-                              snapshot_.selection.overlay_view_index)) {
+                              snapshot_.selection.overlay_view_index);
+    if (build_overlay_pass) {
         if (!IsValidResourceHandle(result.scene_color)) {
             result.scene_color = builder_.CreateTexture("overlay_color",
                                                         detail::MakeSceneColorDesc(snapshot_),
                                                         ResourceLifetime::transient);
         }
         result.overlay_pass = builder_.AddPass("overlay_pass");
-        if (IsValidResourceVersionHandle(color_chain)) {
-            (void)builder_.Read(result.overlay_pass,
-                                color_chain,
-                                AccessDesc{.access = AccessKind::shader_sample_read});
-        }
-        color_chain = builder_.Write(result.overlay_pass,
-                                     result.scene_color,
-                                     AccessDesc{.access = AccessKind::color_attachment_write});
         builder_.SetRasterPassDesc(result.overlay_pass,
                                    RasterPassDesc{
                                        .color_attachments = {
@@ -253,26 +260,45 @@ template<ecs::DimensionTag DimensionT>
         result.has_overlay_pass = true;
     }
 
-    result.present_pass = builder_.AddPass("present_to_swapchain");
-    if (IsValidResourceVersionHandle(color_chain)) {
-        (void)builder_.Read(result.present_pass,
-                            color_chain,
-                            AccessDesc{.access = AccessKind::transfer_read});
+    extend_(builder_, snapshot_, result, color_chain);
+
+    if (IsValidPassHandle(result.overlay_pass)) {
+        if (IsValidResourceVersionHandle(color_chain)) {
+            (void)builder_.Read(result.overlay_pass,
+                                color_chain,
+                                AccessDesc{.access = AccessKind::shader_sample_read});
+        }
+        color_chain = builder_.Write(result.overlay_pass,
+                                     result.scene_color,
+                                     AccessDesc{.access = AccessKind::color_attachment_write});
     }
-    const auto present_target_v1 = builder_.Write(result.present_pass,
-                                                  result.present_target,
-                                                  AccessDesc{.access = AccessKind::transfer_write});
-    if (IsValidResourceHandle(result.scene_color)) {
-        builder_.SetExecuteCallback(result.present_pass,
-                                    [source = result.scene_color,
-                                     present = result.present_target](GraphCommandContext& context_) {
-                                        detail::RecordMinimalPresentCopyPass(context_, source, present);
-                                    });
+
+    ResourceVersionHandle present_ready_version = invalid_resource_version;
+    if (IsValidResourceVersionHandle(color_chain) &&
+        color_chain.resource_index == result.present_target.index) {
+        present_ready_version = color_chain;
+    } else {
+        result.present_pass = builder_.AddPass("present_to_swapchain");
+        if (IsValidResourceVersionHandle(color_chain)) {
+            (void)builder_.Read(result.present_pass,
+                                color_chain,
+                                AccessDesc{.access = AccessKind::transfer_read});
+        }
+        present_ready_version = builder_.Write(result.present_pass,
+                                              result.present_target,
+                                              AccessDesc{.access = AccessKind::transfer_write});
+        if (IsValidResourceHandle(result.scene_color)) {
+            builder_.SetExecuteCallback(result.present_pass,
+                                        [source = result.scene_color,
+                                         present = result.present_target](GraphCommandContext& context_) {
+                                            detail::RecordMinimalPresentCopyPass(context_, source, present);
+                                        });
+        }
     }
 
     result.present_transition_pass = builder_.AddPass("present_transition", true);
     (void)builder_.Read(result.present_transition_pass,
-                        present_target_v1,
+                        present_ready_version,
                         AccessDesc{.access = AccessKind::present});
     result.built = true;
     return result;

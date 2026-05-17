@@ -8,6 +8,7 @@
 #include "vr/particle/particle_simulation_host.hpp"
 #include "vr/particle/particle_upload_host.hpp"
 #include "vr/render/descriptor_host.hpp"
+#include "vr/render_graph/render_graph_types.hpp"
 #include "vr/render/pipeline_host.hpp"
 #include "vr/render/render_target_pass.hpp"
 #include "vr/resource/image_host.hpp"
@@ -30,6 +31,10 @@ struct ParticleRenderer2DPrepareView;
 struct FrameRecordContext;
 class UploadHost;
 class BindlessResourceSystem;
+}
+
+namespace vr::render_graph {
+class GraphCommandContext;
 }
 
 namespace vr::resource {
@@ -96,6 +101,8 @@ public:
 
     void PrepareFrame(const render::ParticleRenderer2DPrepareView& prepare_view_);
     void Record(const render::FrameRecordContext& record_context_);
+    void RecordGraphOverlay(render_graph::GraphCommandContext& context_,
+                            render_graph::ResourceHandle color_target_);
     void OnSwapchainRecreated(std::uint32_t image_count_,
                               VkExtent2D extent_,
                               VkFormat format_);
@@ -146,6 +153,11 @@ private:
         render::PipelineHost& pipeline_host_,
         VkFormat color_format_,
         BlendModeKind blend_mode_);
+    void RecordGraphInternal(render_graph::GraphCommandContext& context_,
+                             render_graph::ResourceHandle color_target_);
+    void RecordDrawBatches(VkCommandBuffer command_buffer_,
+                           VkExtent2D render_extent_,
+                           VkFormat color_format_);
     void RemapCpuInstancesToBindless();
     [[nodiscard]] std::uint32_t ResolveTextureSlot(std::uint32_t texture_id_) const noexcept;
     [[nodiscard]] std::uint32_t ResolveSamplerSlot(std::uint32_t texture_id_) const noexcept;

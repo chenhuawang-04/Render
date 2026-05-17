@@ -1,6 +1,7 @@
 ﻿#include "vr/surface/surface_renderer_2d.hpp"
 
 #include "vr/render/color_blend_state.hpp"
+#include "vr/render_graph/graph_command_context.hpp"
 #include "vr/render/bindless_resource_system.hpp"
 #include "vr/render/render_loop_host.hpp"
 #include "vr/render/render_target_pass.hpp"
@@ -568,122 +569,184 @@ void SurfaceRenderer2D::Record(const render::FrameRecordContext& record_context_
     scissor.extent = color_pass.target.extent;
     vkCmdSetScissor(record_context_.command_buffer, 0U, 1U, &scissor);
 
-    if (last_upload_result.upload.buffer != VK_NULL_HANDLE &&
-        !runtime_scratch.draw_batches.empty()) {
-        const VkBuffer vertex_buffer = last_upload_result.upload.buffer;
-        const VkDeviceSize vertex_offset = last_upload_result.upload.offset;
-        vkCmdBindVertexBuffers(record_context_.command_buffer,
-                               0U,
-                               1U,
-                               &vertex_buffer,
-                               &vertex_offset);
-
-        PushConstants push_constants{};
-        push_constants.viewport_width = static_cast<float>(color_pass.target.extent.width);
-        push_constants.viewport_height = static_cast<float>(color_pass.target.extent.height);
-        push_constants.inv_viewport_width_2x = (color_pass.target.extent.width > 0U)
-            ? (2.0F / static_cast<float>(color_pass.target.extent.width))
-            : 0.0F;
-        push_constants.inv_viewport_height_2x = (color_pass.target.extent.height > 0U)
-            ? (2.0F / static_cast<float>(color_pass.target.extent.height))
-            : 0.0F;
-        push_constants.params = 0U;
-        push_constants.params |= create_info_cache.input_positions_pixel_space ? 0x1U : 0U;
-        push_constants.params |= create_info_cache.pixel_space_origin_top_left ? 0x2U : 0U;
-        push_constants.reserved0 = 0U;
-        push_constants.reserved1 = 0U;
-        push_constants.reserved2 = 0U;
-
-        VkDescriptorSet frame_lighting_descriptor_set = VK_NULL_HANDLE;
-        if (active_frame_index < frame_lighting_resources.size()) {
-            frame_lighting_descriptor_set = frame_lighting_resources[active_frame_index].descriptor_set;
-        }
-
-        const std::array<VkDescriptorSet, 2U> bindless_sets{
-            bindless_resources->SampledImageSet(),
-            bindless_resources->SamplerSet()
-        };
-        if (bindless_sets[0U] == VK_NULL_HANDLE || bindless_sets[1U] == VK_NULL_HANDLE) {
-            throw std::runtime_error("SurfaceRenderer2D::Record requires valid bindless descriptor sets");
-        }
-
-        render::GraphicsPipelineId bound_pipeline{};
-        bool bindless_sets_bound = false;
-        bool lighting_set_bound = false;
-        for (const ecs::Surface2DDrawBatch& batch : runtime_scratch.draw_batches) {
-            if (frame_lighting_descriptor_set == VK_NULL_HANDLE) {
-                ++stats.skipped_batch_count;
-                continue;
-            }
-            if (batch.instance_count == 0U) {
-                ++stats.skipped_batch_count;
-                continue;
-            }
-
-            const BlendModeKind blend_mode = ResolveBlendModeFromBatchParams(batch.params);
-            const render::GraphicsPipelineId pipeline_id = EnsurePipelineForBlendMode(
-                *context,
-                *pipeline_host,
-                color_pass.target.format,
-                blend_mode);
-            if (!pipeline_id.IsValid()) {
-                ++stats.skipped_batch_count;
-                continue;
-            }
-
-            if (bound_pipeline.value != pipeline_id.value) {
-                vkCmdBindPipeline(record_context_.command_buffer,
-                                  VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                  pipeline_host->GetGraphicsPipeline(pipeline_id));
-                vkCmdPushConstants(record_context_.command_buffer,
-                                   pipeline_host->GetPipelineLayout(pipeline_layout_id),
-                                   VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                                   0U,
-                                   sizeof(PushConstants),
-                                   &push_constants);
-                bound_pipeline = pipeline_id;
-                bindless_sets_bound = false;
-                lighting_set_bound = false;
-            }
-
-            if (!bindless_sets_bound) {
-                vkCmdBindDescriptorSets(record_context_.command_buffer,
-                                        VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                        pipeline_host->GetPipelineLayout(pipeline_layout_id),
-                                        0U,
-                                        static_cast<std::uint32_t>(bindless_sets.size()),
-                                        bindless_sets.data(),
-                                        0U,
-                                        nullptr);
-                bindless_sets_bound = true;
-                ++stats.descriptor_set_bind_count;
-            }
-
-            if (!lighting_set_bound) {
-                vkCmdBindDescriptorSets(record_context_.command_buffer,
-                                        VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                        pipeline_host->GetPipelineLayout(pipeline_layout_id),
-                                        2U,
-                                        1U,
-                                        &frame_lighting_descriptor_set,
-                                        0U,
-                                        nullptr);
-                lighting_set_bound = true;
-                ++stats.light_descriptor_set_bind_count;
-            }
-
-            vkCmdDraw(record_context_.command_buffer,
-                      6U,
-                      batch.instance_count,
-                      0U,
-                      batch.instance_begin);
-            ++stats.draw_call_count;
-        }
-    }
+    RecordDrawBatches(record_context_.command_buffer,
+                      color_pass.target.extent,
+                      color_pass.target.format);
 
     vkCmdEndRendering(record_context_.command_buffer);
     render::RecordEndColorPass(record_context_, output_target_config);
     image_initialized[record_context_.image_index] = 1U;
+}
+
+void SurfaceRenderer2D::RecordGraphOverlay(render_graph::GraphCommandContext& context_,
+                                           render_graph::ResourceHandle color_target_) {
+    RecordGraphInternal(context_, color_target_);
+}
+
+void SurfaceRenderer2D::RecordGraphInternal(render_graph::GraphCommandContext& context_,
+                                            render_graph::ResourceHandle color_target_) {
+    if (!initialized) {
+        throw std::runtime_error("SurfaceRenderer2D::RecordGraphOverlay called before Initialize");
+    }
+    if (context == nullptr || descriptor_host == nullptr || pipeline_host == nullptr) {
+        throw std::runtime_error("SurfaceRenderer2D::RecordGraphOverlay called before PrepareFrame");
+    }
+    if (bindless_resources == nullptr || !bindless_resources->IsInitialized()) {
+        throw std::runtime_error("SurfaceRenderer2D::RecordGraphOverlay requires initialized BindlessResourceSystem");
+    }
+    if (context_.CommandBuffer() == VK_NULL_HANDLE) {
+        throw std::runtime_error("SurfaceRenderer2D::RecordGraphOverlay requires valid command buffer");
+    }
+
+    const auto resolved_color = context_.ResolveTextureView(color_target_);
+    const VkExtent2D render_extent{resolved_color.extent.width, resolved_color.extent.height};
+    if (render_extent.width == 0U || render_extent.height == 0U) {
+        throw std::runtime_error("SurfaceRenderer2D::RecordGraphOverlay resolved zero-sized render extent");
+    }
+
+    EnsurePipelineObjects(*context,
+                          *descriptor_host,
+                          *pipeline_host,
+                          resolved_color.format);
+
+    VkViewport viewport{};
+    viewport.x = 0.0F;
+    viewport.y = 0.0F;
+    viewport.width = static_cast<float>(render_extent.width);
+    viewport.height = static_cast<float>(render_extent.height);
+    viewport.minDepth = 0.0F;
+    viewport.maxDepth = 1.0F;
+    vkCmdSetViewport(context_.CommandBuffer(), 0U, 1U, &viewport);
+
+    VkRect2D scissor{};
+    scissor.offset = VkOffset2D{0, 0};
+    scissor.extent = render_extent;
+    vkCmdSetScissor(context_.CommandBuffer(), 0U, 1U, &scissor);
+
+    RecordDrawBatches(context_.CommandBuffer(),
+                      render_extent,
+                      resolved_color.format);
+}
+
+void SurfaceRenderer2D::RecordDrawBatches(VkCommandBuffer command_buffer_,
+                                          VkExtent2D render_extent_,
+                                          VkFormat color_format_) {
+    if (last_upload_result.upload.buffer == VK_NULL_HANDLE ||
+        runtime_scratch.draw_batches.empty()) {
+        return;
+    }
+
+    const VkBuffer vertex_buffer = last_upload_result.upload.buffer;
+    const VkDeviceSize vertex_offset = last_upload_result.upload.offset;
+    vkCmdBindVertexBuffers(command_buffer_,
+                           0U,
+                           1U,
+                           &vertex_buffer,
+                           &vertex_offset);
+
+    PushConstants push_constants{};
+    push_constants.viewport_width = static_cast<float>(render_extent_.width);
+    push_constants.viewport_height = static_cast<float>(render_extent_.height);
+    push_constants.inv_viewport_width_2x = (render_extent_.width > 0U)
+        ? (2.0F / static_cast<float>(render_extent_.width))
+        : 0.0F;
+    push_constants.inv_viewport_height_2x = (render_extent_.height > 0U)
+        ? (2.0F / static_cast<float>(render_extent_.height))
+        : 0.0F;
+    push_constants.params = 0U;
+    push_constants.params |= create_info_cache.input_positions_pixel_space ? 0x1U : 0U;
+    push_constants.params |= create_info_cache.pixel_space_origin_top_left ? 0x2U : 0U;
+    push_constants.reserved0 = 0U;
+    push_constants.reserved1 = 0U;
+    push_constants.reserved2 = 0U;
+
+    VkDescriptorSet frame_lighting_descriptor_set = VK_NULL_HANDLE;
+    if (active_frame_index < frame_lighting_resources.size()) {
+        frame_lighting_descriptor_set = frame_lighting_resources[active_frame_index].descriptor_set;
+    }
+
+    const std::array<VkDescriptorSet, 2U> bindless_sets{
+        bindless_resources->SampledImageSet(),
+        bindless_resources->SamplerSet()
+    };
+    if (bindless_sets[0U] == VK_NULL_HANDLE || bindless_sets[1U] == VK_NULL_HANDLE) {
+        throw std::runtime_error("SurfaceRenderer2D::RecordDrawBatches requires valid bindless descriptor sets");
+    }
+
+    if (frame_lighting_descriptor_set == VK_NULL_HANDLE) {
+        stats.skipped_batch_count += static_cast<std::uint32_t>(runtime_scratch.draw_batches.size());
+        return;
+    }
+
+    const VkPipelineLayout pipeline_layout = pipeline_host->GetPipelineLayout(pipeline_layout_id);
+    render::GraphicsPipelineId bound_pipeline{};
+    bool bindless_sets_bound = false;
+    bool lighting_set_bound = false;
+    for (const ecs::Surface2DDrawBatch& batch : runtime_scratch.draw_batches) {
+        if (batch.instance_count == 0U) {
+            ++stats.skipped_batch_count;
+            continue;
+        }
+
+        const BlendModeKind blend_mode = ResolveBlendModeFromBatchParams(batch.params);
+        const render::GraphicsPipelineId pipeline_id = EnsurePipelineForBlendMode(
+            *context,
+            *pipeline_host,
+            color_format_,
+            blend_mode);
+        if (!pipeline_id.IsValid()) {
+            ++stats.skipped_batch_count;
+            continue;
+        }
+
+        if (bound_pipeline.value != pipeline_id.value) {
+            vkCmdBindPipeline(command_buffer_,
+                              VK_PIPELINE_BIND_POINT_GRAPHICS,
+                              pipeline_host->GetGraphicsPipeline(pipeline_id));
+            vkCmdPushConstants(command_buffer_,
+                               pipeline_layout,
+                               VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                               0U,
+                               sizeof(PushConstants),
+                               &push_constants);
+            bound_pipeline = pipeline_id;
+            bindless_sets_bound = false;
+            lighting_set_bound = false;
+        }
+
+        if (!bindless_sets_bound) {
+            vkCmdBindDescriptorSets(command_buffer_,
+                                    VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                    pipeline_layout,
+                                    0U,
+                                    static_cast<std::uint32_t>(bindless_sets.size()),
+                                    bindless_sets.data(),
+                                    0U,
+                                    nullptr);
+            bindless_sets_bound = true;
+            ++stats.descriptor_set_bind_count;
+        }
+
+        if (!lighting_set_bound) {
+            vkCmdBindDescriptorSets(command_buffer_,
+                                    VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                    pipeline_layout,
+                                    2U,
+                                    1U,
+                                    &frame_lighting_descriptor_set,
+                                    0U,
+                                    nullptr);
+            lighting_set_bound = true;
+            ++stats.light_descriptor_set_bind_count;
+        }
+
+        vkCmdDraw(command_buffer_,
+                  6U,
+                  batch.instance_count,
+                  0U,
+                  batch.instance_begin);
+        ++stats.draw_call_count;
+    }
 }
 
 void SurfaceRenderer2D::OnSwapchainRecreated(std::uint32_t image_count_,

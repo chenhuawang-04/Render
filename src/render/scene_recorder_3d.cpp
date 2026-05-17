@@ -1,13 +1,63 @@
 ﻿#include "vr/render/scene_recorder_3d.hpp"
+#include "vr/geometry/geometry_renderer_3d.hpp"
 #include "vr/render/environment/sky_environment_gpu_host.hpp"
 #include "vr/render/ibl_bake_host.hpp"
 
+#include <cmath>
+#include <algorithm>
+#include <cmath>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace vr::render {
 
 namespace {
+
+constexpr float k_min_bloom_downsample_scale = 0.125F;
+constexpr float k_max_bloom_downsample_scale = 1.0F;
+
+[[nodiscard]] float ClampBloomDownsampleScale(const float value_) noexcept {
+    if (!std::isfinite(value_)) {
+        return k_min_bloom_downsample_scale;
+    }
+    return std::clamp(value_, k_min_bloom_downsample_scale, k_max_bloom_downsample_scale);
+}
+
+[[nodiscard]] render_graph::TextureFormat ResolveBloomIntermediateGraphFormat(
+    const render::RenderTargetBloomRendererCreateInfo& bloom_create_info_) noexcept {
+    switch (bloom_create_info_.intermediate_format) {
+    case VK_FORMAT_R8G8B8A8_UNORM:
+        return render_graph::TextureFormat::r8g8b8a8_unorm;
+    case VK_FORMAT_R16G16B16A16_SFLOAT:
+        return render_graph::TextureFormat::r16g16b16a16_sfloat;
+    default:
+        break;
+    }
+    return render_graph::TextureFormat::r16g16b16a16_sfloat;
+}
+
+[[nodiscard]] render_graph::TextureDesc BuildBloomIntermediateDesc(
+    const render_graph::FrameSnapshot3D& snapshot_,
+    const render::RenderTargetBloomRendererCreateInfo& bloom_create_info_) noexcept {
+    const float scale = ClampBloomDownsampleScale(bloom_create_info_.downsample_scale);
+    const std::uint32_t width = std::max<std::uint32_t>(
+        1U,
+        static_cast<std::uint32_t>(static_cast<float>(snapshot_.reference_extent.width) * scale));
+    const std::uint32_t height = std::max<std::uint32_t>(
+        1U,
+        static_cast<std::uint32_t>(static_cast<float>(snapshot_.reference_extent.height) * scale));
+    return render_graph::TextureDesc{
+        .dimension = render_graph::TextureDimension::image_2d,
+        .format = ResolveBloomIntermediateGraphFormat(bloom_create_info_),
+        .extent = {.width = width, .height = height, .depth = 1U},
+        .usage = render_graph::texture_usage_color_attachment_flag |
+                 render_graph::texture_usage_sampled_flag,
+        .mip_level_count = 1U,
+        .array_layer_count = 1U,
+        .sample_count = render_graph::SampleCount::x1,
+    };
+}
 
 [[nodiscard]] bool CanPrepareSkyEnvironmentPass(const SceneRecorder3DPrepareView& prepare_view_,
                                                 const scene::SkyEnvironmentRenderState& state_) noexcept {
@@ -416,6 +466,397 @@ void SceneRecorder3D::PrepareFrame(const SceneRecorder3DPrepareView& prepare_vie
                                    const RenderScenePacket3D& frame_packet_) {
     SetFramePacket(&frame_packet_);
     PrepareFrame(prepare_view_);
+}
+
+void SceneRecorder3D::BuildRenderGraph(
+    render_graph::RenderGraphBuilder& builder_,
+    const render_graph::FrameSnapshot3D& snapshot_,
+    const render_graph::MinimalFrameGraphBuildResult<ecs::Dim3>& build_result_,
+    render_graph::ResourceVersionHandle& color_chain_) {
+    (void)snapshot_;
+    (void)color_chain_;
+    if (!initialized) {
+        return;
+    }
+
+    const bool shadow_enabled = IsShadowEnabledForSubmission();
+    const bool graph_overlay_present = IsValidPassHandle(build_result_.overlay_pass);
+    const bool graph_post_stack_enabled = !HasExplicitSceneTargetForSubmission() &&
+                                          HasSceneViewForSubmission() &&
+                                          IsPostProcessEnabledForSubmission();
+    const bool record_sky_after_opaque = HasSkyEnvironmentPassForSubmission() &&
+                                         SkyEnvironmentDrawOrderForSubmission() ==
+                                             scene::SkyEnvironmentDrawOrder::after_opaque_depth_tested &&
+                                         build_result_.has_depth &&
+                                         IsValidResourceHandle(build_result_.scene_depth);
+    const bool record_sky_before_opaque = HasSkyEnvironmentPassForSubmission() &&
+                                          !record_sky_after_opaque;
+
+    if (record_sky_before_opaque && scene_view != nullptr && frame_packet != nullptr) {
+        const auto sky_pass = builder_.AddPass("sky_environment_pre_opaque");
+        if (IsValidPassHandle(build_result_.scene_pass)) {
+            builder_.AddDependency(build_result_.scene_pass, sky_pass);
+        }
+        builder_.SetRasterPassDesc(sky_pass,
+                                   render_graph::RasterPassDesc{
+                                       .color_attachments = {
+                                           render_graph::RasterColorAttachmentDesc{
+                                               .target = build_result_.scene_color,
+                                               .load_op = render_graph::AttachmentLoadOp::clear,
+                                               .store_op = render_graph::AttachmentStoreOp::store,
+                                               .clear_value = {.red = 0.02F, .green = 0.02F, .blue = 0.03F, .alpha = 1.0F},
+                                           },
+                                       },
+                                   });
+        const RenderView3D captured_view = *scene_view;
+        const scene::SkyEnvironmentRenderState captured_state = frame_packet->extra.environment;
+        const auto scene_color = build_result_.scene_color;
+        builder_.SetExecuteCallback(sky_pass,
+                                    [this, captured_view, captured_state, scene_color](render_graph::GraphCommandContext& context_) {
+                                        const auto color_view = context_.ResolveTextureView(scene_color);
+                                        sky_environment_pass.RecordGraphPass(context_.CommandBuffer(),
+                                                                             captured_view,
+                                                                             captured_state,
+                                                                             color_view.format,
+                                                                             false,
+                                                                             VK_FORMAT_UNDEFINED);
+                                    });
+        builder_.SetRasterPassDesc(build_result_.scene_pass,
+                                   render_graph::RasterPassDesc{
+                                       .color_attachments = {
+                                           render_graph::RasterColorAttachmentDesc{
+                                               .target = build_result_.scene_color,
+                                               .load_op = render_graph::AttachmentLoadOp::load,
+                                               .store_op = render_graph::AttachmentStoreOp::store,
+                                           },
+                                       },
+                                       .has_depth_attachment = build_result_.has_depth,
+                                       .depth_attachment = render_graph::RasterDepthAttachmentDesc{
+                                           .target = build_result_.scene_depth,
+                                           .load_op = render_graph::AttachmentLoadOp::clear,
+                                           .store_op = render_graph::AttachmentStoreOp::store,
+                                           .stencil_load_op = render_graph::AttachmentLoadOp::dont_care,
+                                           .stencil_store_op = render_graph::AttachmentStoreOp::dont_care,
+                                           .clear_value = {.depth = 1.0F, .stencil = 0U},
+                                       },
+                                   });
+    }
+
+    if (record_sky_after_opaque &&
+        scene_view != nullptr &&
+        frame_packet != nullptr &&
+        IsValidResourceHandle(build_result_.scene_color) &&
+        IsValidResourceHandle(build_result_.scene_depth) &&
+        IsValidResourceVersionHandle(color_chain_)) {
+        const auto sky_pass = builder_.AddPass("sky_environment_post_opaque");
+        (void)builder_.Read(sky_pass,
+                            color_chain_,
+                            render_graph::AccessDesc{.access = render_graph::AccessKind::color_attachment_read});
+        (void)builder_.Read(sky_pass,
+                            build_result_.scene_depth,
+                            render_graph::AccessDesc{.access = render_graph::AccessKind::depth_stencil_read});
+        color_chain_ = builder_.Write(sky_pass,
+                                      build_result_.scene_color,
+                                      render_graph::AccessDesc{.access = render_graph::AccessKind::color_attachment_write});
+        builder_.SetRasterPassDesc(sky_pass,
+                                   render_graph::RasterPassDesc{
+                                       .color_attachments = {
+                                           render_graph::RasterColorAttachmentDesc{
+                                               .target = build_result_.scene_color,
+                                               .load_op = render_graph::AttachmentLoadOp::load,
+                                               .store_op = render_graph::AttachmentStoreOp::store,
+                                           },
+                                       },
+                                       .has_depth_attachment = true,
+                                       .depth_attachment = render_graph::RasterDepthAttachmentDesc{
+                                           .target = build_result_.scene_depth,
+                                           .load_op = render_graph::AttachmentLoadOp::load,
+                                           .store_op = render_graph::AttachmentStoreOp::store,
+                                           .stencil_load_op = render_graph::AttachmentLoadOp::dont_care,
+                                           .stencil_store_op = render_graph::AttachmentStoreOp::dont_care,
+                                           .clear_value = {.depth = 1.0F, .stencil = 0U},
+                                           .read_only = true,
+                                       },
+                                   });
+        const RenderView3D captured_view = *scene_view;
+        const scene::SkyEnvironmentRenderState captured_state = frame_packet->extra.environment;
+        const auto scene_color = build_result_.scene_color;
+        const auto scene_depth = build_result_.scene_depth;
+        builder_.SetExecuteCallback(sky_pass,
+                                    [this, captured_view, captured_state, scene_color, scene_depth](render_graph::GraphCommandContext& context_) {
+                                        const auto color_view = context_.ResolveTextureView(scene_color);
+                                        const auto depth_view = context_.ResolveTextureView(scene_depth);
+                                        sky_environment_pass.RecordGraphPass(context_.CommandBuffer(),
+                                                                             captured_view,
+                                                                             captured_state,
+                                                                             color_view.format,
+                                                                             true,
+                                                                             depth_view.format);
+                                    });
+    }
+
+    std::vector<const SceneRendererEntry*> opaque_visible_entries{};
+    for (const SceneRendererEntry& entry_ : scene_renderer_entries) {
+        if (entry_.stage != SceneRecorder3DSceneStage::opaque ||
+            !IsLayerVisibleForSubmission(entry_.submission_layer_mask)) {
+            continue;
+        }
+        if (entry_.renderer == nullptr) {
+            continue;
+        }
+        opaque_visible_entries.push_back(&entry_);
+    }
+    if (!opaque_visible_entries.empty() &&
+        IsValidPassHandle(build_result_.scene_pass)) {
+        const auto scene_color = build_result_.scene_color;
+        const auto scene_depth = build_result_.scene_depth;
+        builder_.SetExecuteCallback(build_result_.scene_pass,
+                                    [opaque_visible_entries, scene_color, scene_depth](render_graph::GraphCommandContext& context_) {
+                                        for (const auto* entry_ : opaque_visible_entries) {
+                                            if (entry_->graph_record_fn == nullptr) {
+                                                continue;
+                                            }
+                                            entry_->graph_record_fn(entry_->renderer,
+                                                                    context_,
+                                                                    SceneRenderStage::opaque,
+                                                                    scene_color,
+                                                                    scene_depth);
+                                        }
+                                    });
+    }
+
+    std::vector<const SceneRendererEntry*> transparent_visible_entries{};
+    for (const SceneRendererEntry& entry_ : scene_renderer_entries) {
+        if (entry_.stage != SceneRecorder3DSceneStage::transparent ||
+            !IsLayerVisibleForSubmission(entry_.submission_layer_mask)) {
+            continue;
+        }
+        if (entry_.renderer == nullptr) {
+            continue;
+        }
+        transparent_visible_entries.push_back(&entry_);
+    }
+    if (!transparent_visible_entries.empty() &&
+        IsValidResourceHandle(build_result_.scene_color) &&
+        IsValidResourceVersionHandle(color_chain_)) {
+        const auto transparent_pass = builder_.AddPass("transparent_scene_pass");
+        (void)builder_.Read(transparent_pass,
+                            color_chain_,
+                            render_graph::AccessDesc{.access = render_graph::AccessKind::color_attachment_read});
+        if (IsValidResourceHandle(build_result_.scene_depth)) {
+            (void)builder_.Read(transparent_pass,
+                                build_result_.scene_depth,
+                                render_graph::AccessDesc{.access = render_graph::AccessKind::depth_stencil_read});
+        }
+        color_chain_ = builder_.Write(transparent_pass,
+                                      build_result_.scene_color,
+                                      render_graph::AccessDesc{.access = render_graph::AccessKind::color_attachment_write});
+        builder_.SetRasterPassDesc(transparent_pass,
+                                   render_graph::RasterPassDesc{
+                                       .color_attachments = {
+                                           render_graph::RasterColorAttachmentDesc{
+                                               .target = build_result_.scene_color,
+                                               .load_op = render_graph::AttachmentLoadOp::load,
+                                               .store_op = render_graph::AttachmentStoreOp::store,
+                                           },
+                                       },
+                                       .has_depth_attachment = build_result_.has_depth,
+                                       .depth_attachment = render_graph::RasterDepthAttachmentDesc{
+                                           .target = build_result_.scene_depth,
+                                           .load_op = render_graph::AttachmentLoadOp::load,
+                                           .store_op = render_graph::AttachmentStoreOp::store,
+                                           .stencil_load_op = render_graph::AttachmentLoadOp::dont_care,
+                                           .stencil_store_op = render_graph::AttachmentStoreOp::dont_care,
+                                           .clear_value = {.depth = 1.0F, .stencil = 0U},
+                                           .read_only = true,
+                                       },
+                                   });
+        const auto scene_color = build_result_.scene_color;
+        const auto scene_depth = build_result_.scene_depth;
+        builder_.SetExecuteCallback(transparent_pass,
+                                    [transparent_visible_entries, scene_color, scene_depth](render_graph::GraphCommandContext& context_) {
+                                        for (const auto* entry_ : transparent_visible_entries) {
+                                            if (entry_->graph_record_fn == nullptr) {
+                                                continue;
+                                            }
+                                            entry_->graph_record_fn(entry_->renderer,
+                                                                    context_,
+                                                                    SceneRenderStage::transparent,
+                                                                    scene_color,
+                                                                    scene_depth);
+                                        }
+                                    });
+    }
+
+    if (graph_post_stack_enabled &&
+        !graph_overlay_present &&
+        IsValidResourceHandle(build_result_.scene_color) &&
+        IsValidResourceHandle(build_result_.present_target) &&
+        IsValidResourceVersionHandle(color_chain_)) {
+        auto& bloom_renderer = post_stack.Bloom();
+        const auto& bloom_create_info = bloom_renderer.CreateInfo();
+        const auto bloom_desc = BuildBloomIntermediateDesc(snapshot_, bloom_create_info);
+        const auto bloom_target_a = builder_.CreateTexture("bloom_target_a", bloom_desc);
+        const auto bloom_target_b = builder_.CreateTexture("bloom_target_b", bloom_desc);
+
+        const auto prefilter_pass = builder_.AddPass("bloom_prefilter");
+        (void)builder_.Read(prefilter_pass,
+                            color_chain_,
+                            render_graph::AccessDesc{.access = render_graph::AccessKind::shader_sample_read});
+        const auto bloom_a_v1 = builder_.Write(prefilter_pass,
+                                               bloom_target_a,
+                                               render_graph::AccessDesc{.access = render_graph::AccessKind::color_attachment_write});
+        builder_.SetRasterPassDesc(prefilter_pass,
+                                   render_graph::RasterPassDesc{
+                                       .color_attachments = {
+                                           render_graph::RasterColorAttachmentDesc{
+                                               .target = bloom_target_a,
+                                               .load_op = render_graph::AttachmentLoadOp::dont_care,
+                                               .store_op = render_graph::AttachmentStoreOp::store,
+                                           },
+                                       },
+                                   });
+        const auto scene_color = build_result_.scene_color;
+        builder_.SetExecuteCallback(prefilter_pass,
+                                    [this, scene_color, bloom_target_a](render_graph::GraphCommandContext& context_) {
+                                        post_stack.Bloom().RecordGraphPrefilterPass(context_, scene_color, bloom_target_a);
+                                    });
+
+        auto bloom_chain = bloom_a_v1;
+        const std::uint32_t blur_pair_count = std::max<std::uint32_t>(1U, bloom_create_info.blur_pass_pair_count);
+        for (std::uint32_t blur_index = 0U; blur_index < blur_pair_count; ++blur_index) {
+            const auto blur_h_pass = builder_.AddPass("bloom_blur_h");
+            (void)builder_.Read(blur_h_pass,
+                                bloom_chain,
+                                render_graph::AccessDesc{.access = render_graph::AccessKind::shader_sample_read});
+            const auto bloom_b_v = builder_.Write(blur_h_pass,
+                                                  bloom_target_b,
+                                                  render_graph::AccessDesc{.access = render_graph::AccessKind::color_attachment_write});
+            builder_.SetRasterPassDesc(blur_h_pass,
+                                       render_graph::RasterPassDesc{
+                                           .color_attachments = {
+                                               render_graph::RasterColorAttachmentDesc{
+                                                   .target = bloom_target_b,
+                                                   .load_op = render_graph::AttachmentLoadOp::dont_care,
+                                                   .store_op = render_graph::AttachmentStoreOp::store,
+                                               },
+                                           },
+                                       });
+            builder_.SetExecuteCallback(blur_h_pass,
+                                        [this, bloom_target_a, bloom_target_b](render_graph::GraphCommandContext& context_) {
+                                            post_stack.Bloom().RecordGraphBlurPass(context_, bloom_target_a, bloom_target_b);
+                                        });
+
+            const auto blur_v_pass = builder_.AddPass("bloom_blur_v");
+            (void)builder_.Read(blur_v_pass,
+                                bloom_b_v,
+                                render_graph::AccessDesc{.access = render_graph::AccessKind::shader_sample_read});
+            bloom_chain = builder_.Write(blur_v_pass,
+                                         bloom_target_a,
+                                         render_graph::AccessDesc{.access = render_graph::AccessKind::color_attachment_write});
+            builder_.SetRasterPassDesc(blur_v_pass,
+                                       render_graph::RasterPassDesc{
+                                           .color_attachments = {
+                                               render_graph::RasterColorAttachmentDesc{
+                                                   .target = bloom_target_a,
+                                                   .load_op = render_graph::AttachmentLoadOp::dont_care,
+                                                   .store_op = render_graph::AttachmentStoreOp::store,
+                                               },
+                                           },
+                                       });
+            builder_.SetExecuteCallback(blur_v_pass,
+                                        [this, bloom_target_b, bloom_target_a](render_graph::GraphCommandContext& context_) {
+                                            post_stack.Bloom().RecordGraphBlurPass(context_, bloom_target_b, bloom_target_a);
+                                        });
+        }
+
+        const auto combine_pass = builder_.AddPass("bloom_combine");
+        (void)builder_.Read(combine_pass,
+                            color_chain_,
+                            render_graph::AccessDesc{.access = render_graph::AccessKind::shader_sample_read});
+        (void)builder_.Read(combine_pass,
+                            bloom_chain,
+                            render_graph::AccessDesc{.access = render_graph::AccessKind::shader_sample_read});
+        color_chain_ = builder_.Write(combine_pass,
+                                      build_result_.present_target,
+                                      render_graph::AccessDesc{.access = render_graph::AccessKind::color_attachment_write});
+        builder_.SetRasterPassDesc(combine_pass,
+                                   render_graph::RasterPassDesc{
+                                       .color_attachments = {
+                                           render_graph::RasterColorAttachmentDesc{
+                                               .target = build_result_.present_target,
+                                               .load_op = bloom_create_info.clear_swapchain
+                                                   ? render_graph::AttachmentLoadOp::clear
+                                                   : render_graph::AttachmentLoadOp::load,
+                                               .store_op = render_graph::AttachmentStoreOp::store,
+                                               .clear_value = {
+                                                   .red = bloom_create_info.clear_color.float32[0],
+                                                   .green = bloom_create_info.clear_color.float32[1],
+                                                   .blue = bloom_create_info.clear_color.float32[2],
+                                                   .alpha = bloom_create_info.clear_color.float32[3],
+                                               },
+                                           },
+                                       },
+                                   });
+        builder_.SetExecuteCallback(combine_pass,
+                                    [this, scene_color, bloom_target_a, build_result_](render_graph::GraphCommandContext& context_) {
+                                        post_stack.Bloom().RecordGraphCombinePass(context_,
+                                                                                  scene_color,
+                                                                                  bloom_target_a,
+                                                                                  build_result_.present_target);
+                                    });
+    }
+
+    if (IsValidPassHandle(build_result_.overlay_pass) &&
+        IsValidResourceHandle(build_result_.scene_color)) {
+        std::vector<const OverlayRendererEntry*> visible_overlay_entries{};
+        for (const OverlayRendererEntry& entry_ : overlay_renderer_entries) {
+            if (!IsOverlayLayerVisibleForSubmission(entry_.submission_layer_mask)) {
+                continue;
+            }
+            if (entry_.renderer == nullptr) {
+                continue;
+            }
+            visible_overlay_entries.push_back(&entry_);
+        }
+        if (!visible_overlay_entries.empty()) {
+            const auto overlay_target = build_result_.scene_color;
+            builder_.SetExecuteCallback(build_result_.overlay_pass,
+                                        [visible_overlay_entries, overlay_target](render_graph::GraphCommandContext& context_) {
+                                            for (const auto* entry_ : visible_overlay_entries) {
+                                                if (entry_->graph_record_fn == nullptr) {
+                                                    continue;
+                                                }
+                                                entry_->graph_record_fn(entry_->renderer, context_, overlay_target);
+                                            }
+                                        });
+        }
+    }
+
+    if (!shadow_enabled) {
+        return;
+    }
+
+    for (const PreSceneRendererEntry& entry : pre_scene_renderer_entries) {
+        if (!IsLayerVisibleForSubmission(entry.submission_layer_mask)) {
+            continue;
+        }
+        if (entry.kind != PreSceneRendererKind::shadow || entry.renderer == nullptr) {
+            continue;
+        }
+
+        auto* shadow_renderer = static_cast<shadow::ShadowRenderer3D*>(entry.renderer);
+        const auto shadow_pass = builder_.AddPass("shadow_prepass", true);
+        if (IsValidPassHandle(build_result_.scene_pass)) {
+            builder_.AddDependency(build_result_.scene_pass, shadow_pass);
+        }
+        builder_.SetExecuteCallback(shadow_pass,
+                                    [shadow_renderer](render_graph::GraphCommandContext& context_) {
+                                        render::FrameRecordContext record_context{};
+                                        record_context.command_buffer = context_.CommandBuffer();
+                                        shadow_renderer->Record(record_context);
+                                    });
+    }
 }
 
 void SceneRecorder3D::Record(const FrameRecordContext& record_context_) {
