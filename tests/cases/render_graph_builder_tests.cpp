@@ -731,6 +731,23 @@ VR_TEST_CASE(SceneRecorder2D_build_render_graph_routes_scene_consumer_to_present
     VR_CHECK(compiled.Passes()[scene_consumer_index].executable);
     VR_REQUIRE(compiled.Passes()[scene_consumer_index].raster_pass.has_value());
     VR_CHECK(static_cast<bool>(compiled.Passes()[scene_consumer_index].execute));
+    VR_REQUIRE(compiled.Passes()[scene_consumer_index].descriptor_bindings.size() == 2U);
+    VR_CHECK(compiled.Passes()[scene_consumer_index].descriptor_bindings[0U].set == 0U);
+    VR_CHECK(compiled.Passes()[scene_consumer_index].descriptor_bindings[0U].binding == 0U);
+    VR_CHECK(compiled.Passes()[scene_consumer_index].descriptor_bindings[0U].source ==
+             vr::render_graph::DescriptorBindingSource::bindless_table);
+    VR_CHECK(compiled.Passes()[scene_consumer_index].descriptor_bindings[0U].kind ==
+             vr::render_graph::DescriptorBindingKind::sampled_image_table);
+    VR_CHECK(compiled.Passes()[scene_consumer_index].descriptor_bindings[0U].source_id ==
+             vr::render::BindlessResourceSystem::SampledImageTableContractId().value);
+    VR_CHECK(compiled.Passes()[scene_consumer_index].descriptor_bindings[1U].set == 1U);
+    VR_CHECK(compiled.Passes()[scene_consumer_index].descriptor_bindings[1U].binding == 0U);
+    VR_CHECK(compiled.Passes()[scene_consumer_index].descriptor_bindings[1U].source ==
+             vr::render_graph::DescriptorBindingSource::bindless_table);
+    VR_CHECK(compiled.Passes()[scene_consumer_index].descriptor_bindings[1U].kind ==
+             vr::render_graph::DescriptorBindingKind::sampler_table);
+    VR_CHECK(compiled.Passes()[scene_consumer_index].descriptor_bindings[1U].source_id ==
+             vr::render::BindlessResourceSystem::SamplerTableContractId().value);
     VR_CHECK(find_pass_index("present_to_swapchain") == compiled.Passes().size());
 
     recorder.ClearFramePacket();
@@ -1215,6 +1232,25 @@ VR_TEST_CASE(SceneRecorder3D_build_render_graph_inserts_bloom_chain_before_prese
     VR_CHECK(compiled.Passes()[3].debug_name == "bloom_blur_v");
     VR_CHECK(compiled.Passes()[4].debug_name == "bloom_combine");
     VR_CHECK(compiled.Passes().back().debug_name == "present_transition");
+    for (std::size_t pass_index = 1U; pass_index <= 4U; ++pass_index) {
+        VR_REQUIRE(compiled.Passes()[pass_index].descriptor_bindings.size() == 2U);
+        VR_CHECK(compiled.Passes()[pass_index].descriptor_bindings[0U].set == 0U);
+        VR_CHECK(compiled.Passes()[pass_index].descriptor_bindings[0U].binding == 0U);
+        VR_CHECK(compiled.Passes()[pass_index].descriptor_bindings[0U].source ==
+                 vr::render_graph::DescriptorBindingSource::bindless_table);
+        VR_CHECK(compiled.Passes()[pass_index].descriptor_bindings[0U].kind ==
+                 vr::render_graph::DescriptorBindingKind::sampled_image_table);
+        VR_CHECK(compiled.Passes()[pass_index].descriptor_bindings[0U].source_id ==
+                 vr::render::BindlessResourceSystem::SampledImageTableContractId().value);
+        VR_CHECK(compiled.Passes()[pass_index].descriptor_bindings[1U].set == 1U);
+        VR_CHECK(compiled.Passes()[pass_index].descriptor_bindings[1U].binding == 0U);
+        VR_CHECK(compiled.Passes()[pass_index].descriptor_bindings[1U].source ==
+                 vr::render_graph::DescriptorBindingSource::bindless_table);
+        VR_CHECK(compiled.Passes()[pass_index].descriptor_bindings[1U].kind ==
+                 vr::render_graph::DescriptorBindingKind::sampler_table);
+        VR_CHECK(compiled.Passes()[pass_index].descriptor_bindings[1U].source_id ==
+                 vr::render::BindlessResourceSystem::SamplerTableContractId().value);
+    }
 
     recorder.ClearFramePacket();
 }

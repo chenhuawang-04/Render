@@ -6,11 +6,54 @@
 
 #include "vr/render_graph/compiled_render_graph.hpp"
 
+#include <algorithm>
 #include <stdexcept>
 
 namespace vr::render_graph {
 
-RenderGraphRecordStats RenderGraphExecutor::Record(const GraphCommandContext& context_) {
+namespace {
+
+void PrepareDescriptorSetsForPass(GraphCommandContext& context_,
+                                  const CompiledPass& pass_) {
+    if (pass_.descriptor_bindings.empty()) {
+        context_.SetCurrentPassDescriptorSets({});
+        return;
+    }
+    if (!context_.HasDescriptorHost()) {
+        throw std::runtime_error(
+            "RenderGraphExecutor::Record requires DescriptorHost for passes with descriptor bindings");
+    }
+
+    std::uint32_t max_set_index = 0U;
+    for (const auto& binding_ : pass_.descriptor_bindings) {
+        max_set_index = std::max(max_set_index, binding_.set);
+    }
+
+    std::vector<VkDescriptorSet> descriptor_sets(max_set_index + 1U, VK_NULL_HANDLE);
+    for (const auto& binding_ : pass_.descriptor_bindings) {
+        switch (binding_.source) {
+        case DescriptorBindingSource::bindless_table:
+            descriptor_sets[binding_.set] =
+                context_.Descriptors().GetBindlessDescriptorSet(
+                    render::BindlessTableId{.value = binding_.source_id});
+            break;
+        case DescriptorBindingSource::none:
+        default:
+            throw std::runtime_error(
+                "RenderGraphExecutor::Record encountered unsupported descriptor binding source");
+        }
+        if (descriptor_sets[binding_.set] == VK_NULL_HANDLE) {
+            throw std::runtime_error(
+                "RenderGraphExecutor::Record resolved null descriptor set from descriptor binding plan");
+        }
+    }
+
+    context_.SetCurrentPassDescriptorSets(std::move(descriptor_sets));
+}
+
+} // namespace
+
+RenderGraphRecordStats RenderGraphExecutor::Record(GraphCommandContext& context_) {
     RenderGraphRecordStats stats{};
 
     const VkCommandBuffer command_buffer = context_.CommandBuffer();
@@ -61,18 +104,22 @@ RenderGraphRecordStats RenderGraphExecutor::Record(const GraphCommandContext& co
             continue;
         }
 
+        context_.SetCurrentPass(pass_->handle);
+        PrepareDescriptorSetsForPass(context_, *pass_);
+
         if (has_raster_pass) {
             const auto rendering_info = context_.BuildRenderingInfo(*pass_->raster_pass);
             context_.BeginRendering(rendering_info);
         }
 
         if (pass_->execute) {
-            pass_->execute(const_cast<GraphCommandContext&>(context_));
+            pass_->execute(context_);
         }
 
         if (has_raster_pass) {
             context_.EndRendering();
         }
+        context_.ClearCurrentPass();
         stats.pass_count += 1U;
     }
 

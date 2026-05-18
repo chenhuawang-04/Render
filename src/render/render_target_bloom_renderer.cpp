@@ -1,6 +1,7 @@
 ﻿#include "vr/render/render_target_bloom_renderer.hpp"
 
 #include "vr/render_graph/graph_command_context.hpp"
+#include "vr/render_graph/render_graph_builder.hpp"
 #include "vr/render/generated/render_target_bloom_blur_frag_spv.hpp"
 #include "vr/render/generated/render_target_bloom_combine_frag_spv.hpp"
 #include "vr/render/generated/render_target_bloom_prefilter_frag_spv.hpp"
@@ -40,6 +41,28 @@ constexpr float k_max_downsample_scale = 1.0F;
         1U,
         static_cast<std::uint32_t>(static_cast<float>(source_extent_.height) * clamped_scale));
     return VkExtent2D{width, height};
+}
+
+[[nodiscard]] BindlessTableId ResolveSampledImageTableId(
+    const BindlessResourceSystem* bindless_resources_) noexcept {
+    if (bindless_resources_ != nullptr) {
+        const auto table_id = bindless_resources_->SampledImageTable();
+        if (table_id.IsValid()) {
+            return table_id;
+        }
+    }
+    return BindlessResourceSystem::SampledImageTableContractId();
+}
+
+[[nodiscard]] BindlessTableId ResolveSamplerTableId(
+    const BindlessResourceSystem* bindless_resources_) noexcept {
+    if (bindless_resources_ != nullptr) {
+        const auto table_id = bindless_resources_->SamplerTable();
+        if (table_id.IsValid()) {
+            return table_id;
+        }
+    }
+    return BindlessResourceSystem::SamplerTableContractId();
 }
 
 void BindFullscreenViewportAndScissor(VkCommandBuffer command_buffer_,
@@ -491,6 +514,33 @@ void RenderTargetBloomRenderer::Record(const FrameRecordContext& record_context_
     ++stats.pass_count;
 }
 
+void RenderTargetBloomRenderer::DescribeGraphSingleSourceBindings(
+    render_graph::RenderGraphBuilder& builder_,
+    const render_graph::PassHandle pass_) const {
+    if (!initialized) {
+        throw std::runtime_error(
+            "RenderTargetBloomRenderer::DescribeGraphSingleSourceBindings called before Initialize");
+    }
+    const auto sampled_image_table = ResolveSampledImageTableId(bindless_resources);
+    const auto sampler_table = ResolveSamplerTableId(bindless_resources);
+    builder_.AddBindlessTableBinding(pass_,
+                                     0U,
+                                     render_graph::DescriptorBindingKind::sampled_image_table,
+                                     sampled_image_table.value,
+                                     render_graph::shader_stage_fragment_flag);
+    builder_.AddBindlessTableBinding(pass_,
+                                     1U,
+                                     render_graph::DescriptorBindingKind::sampler_table,
+                                     sampler_table.value,
+                                     render_graph::shader_stage_fragment_flag);
+}
+
+void RenderTargetBloomRenderer::DescribeGraphDualSourceBindings(
+    render_graph::RenderGraphBuilder& builder_,
+    const render_graph::PassHandle pass_) const {
+    DescribeGraphSingleSourceBindings(builder_, pass_);
+}
+
 void RenderTargetBloomRenderer::RecordGraphPrefilterPass(render_graph::GraphCommandContext& context_,
                                                      render_graph::ResourceHandle scene_source_,
                                                      render_graph::ResourceHandle bloom_target_) {
@@ -510,21 +560,13 @@ void RenderTargetBloomRenderer::RecordGraphPrefilterPass(render_graph::GraphComm
 
     const auto scene_slot = render_target_host->EnsureBindlessImageSlot(source_target);
     const auto sampler = bindless_resources->DefaultSamplerSlot();
-    const VkDescriptorSet bindless_sets[] = {
-        bindless_resources->SampledImageSet(),
-        bindless_resources->SamplerSet(),
-    };
     vkCmdBindPipeline(context_.CommandBuffer(),
                       VK_PIPELINE_BIND_POINT_GRAPHICS,
                       pipeline_host->GetGraphicsPipeline(prefilter_pipeline_id));
-    vkCmdBindDescriptorSets(context_.CommandBuffer(),
-                            VK_PIPELINE_BIND_POINT_GRAPHICS,
-                            pipeline_host->GetPipelineLayout(single_source_pipeline_layout_id),
-                            0U,
-                            2U,
-                            bindless_sets,
-                            0U,
-                            nullptr);
+    context_.BindCurrentPassDescriptorSets(VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                           pipeline_host->GetPipelineLayout(single_source_pipeline_layout_id),
+                                           0U,
+                                           2U);
     ++stats.descriptor_set_bind_count;
     BindFullscreenViewportAndScissor(context_.CommandBuffer(), VkExtent2D{bloom_view.extent.width, bloom_view.extent.height});
 
@@ -565,21 +607,13 @@ void RenderTargetBloomRenderer::RecordGraphBlurPass(render_graph::GraphCommandCo
 
     const auto input_slot = render_target_host->EnsureBindlessImageSlot(input_target);
     const auto sampler = bindless_resources->DefaultSamplerSlot();
-    const VkDescriptorSet bindless_sets[] = {
-        bindless_resources->SampledImageSet(),
-        bindless_resources->SamplerSet(),
-    };
     vkCmdBindPipeline(context_.CommandBuffer(),
                       VK_PIPELINE_BIND_POINT_GRAPHICS,
                       pipeline_host->GetGraphicsPipeline(blur_pipeline_id));
-    vkCmdBindDescriptorSets(context_.CommandBuffer(),
-                            VK_PIPELINE_BIND_POINT_GRAPHICS,
-                            pipeline_host->GetPipelineLayout(single_source_pipeline_layout_id),
-                            0U,
-                            2U,
-                            bindless_sets,
-                            0U,
-                            nullptr);
+    context_.BindCurrentPassDescriptorSets(VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                           pipeline_host->GetPipelineLayout(single_source_pipeline_layout_id),
+                                           0U,
+                                           2U);
     ++stats.descriptor_set_bind_count;
     BindFullscreenViewportAndScissor(context_.CommandBuffer(), VkExtent2D{output_view.extent.width, output_view.extent.height});
 
@@ -628,21 +662,13 @@ void RenderTargetBloomRenderer::RecordGraphCombinePass(render_graph::GraphComman
     const auto scene_slot = render_target_host->EnsureBindlessImageSlot(scene_target);
     const auto bloom_slot = render_target_host->EnsureBindlessImageSlot(bloom_target);
     const auto sampler = bindless_resources->DefaultSamplerSlot();
-    const VkDescriptorSet bindless_sets[] = {
-        bindless_resources->SampledImageSet(),
-        bindless_resources->SamplerSet(),
-    };
     vkCmdBindPipeline(context_.CommandBuffer(),
                       VK_PIPELINE_BIND_POINT_GRAPHICS,
                       pipeline_host->GetGraphicsPipeline(combine_pipeline_id));
-    vkCmdBindDescriptorSets(context_.CommandBuffer(),
-                            VK_PIPELINE_BIND_POINT_GRAPHICS,
-                            pipeline_host->GetPipelineLayout(dual_source_pipeline_layout_id),
-                            0U,
-                            2U,
-                            bindless_sets,
-                            0U,
-                            nullptr);
+    context_.BindCurrentPassDescriptorSets(VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                           pipeline_host->GetPipelineLayout(dual_source_pipeline_layout_id),
+                                           0U,
+                                           2U);
     ++stats.descriptor_set_bind_count;
     BindFullscreenViewportAndScissor(context_.CommandBuffer(), VkExtent2D{output_view.extent.width, output_view.extent.height});
 

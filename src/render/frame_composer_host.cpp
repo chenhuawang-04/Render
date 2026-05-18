@@ -253,6 +253,7 @@ void FrameComposerHost::BuildRenderGraph(
                 tonemap_renderer.BuildGraphColorAttachmentDesc(present_target_, false),
             },
         });
+    tonemap_renderer.DescribeGraphDescriptorBindings(builder_, tonemap_pass);
     builder_.SetExecuteCallback(
         tonemap_pass,
         [this, hdr_color_resource, present_target_](render_graph::GraphCommandContext& context_) {

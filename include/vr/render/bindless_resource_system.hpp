@@ -74,6 +74,14 @@ struct BindlessResourceSystemStats final {
 
 class BindlessResourceSystem final {
 public:
+    [[nodiscard]] static constexpr BindlessTableId SampledImageTableContractId() noexcept {
+        return BindlessTableId{.value = 1U};
+    }
+
+    [[nodiscard]] static constexpr BindlessTableId SamplerTableContractId() noexcept {
+        return BindlessTableId{.value = 2U};
+    }
+
     BindlessResourceSystem() = default;
     ~BindlessResourceSystem() = default;
 

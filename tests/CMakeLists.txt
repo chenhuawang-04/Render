@@ -48,6 +48,7 @@ add_executable(${VR_TEST_TARGET}
     cases/render_shadow_frame_coordinator_tests.cpp
     cases/render_target_types_tests.cpp
     cases/render_graph_builder_tests.cpp
+    cases/render_graph_descriptor_tests.cpp
     cases/background_2d_graph_tests.cpp
     cases/render_graph_barrier_tests.cpp
     cases/render_graph_queue_scheduler_tests.cpp

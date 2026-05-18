@@ -24,6 +24,7 @@ struct CompiledPass final {
     std::vector<PassHandle> dependencies{};
     std::vector<AccessDesc> reads{};
     std::vector<AccessDesc> writes{};
+    std::vector<PassDescriptorBindingDesc> descriptor_bindings{};
 };
 
 struct CompiledResource final {

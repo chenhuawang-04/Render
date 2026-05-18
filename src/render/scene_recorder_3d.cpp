@@ -734,6 +734,7 @@ void SceneRecorder3D::BuildRenderGraph(
                                            },
                                        },
                                    });
+        bloom_renderer.DescribeGraphSingleSourceBindings(builder_, prefilter_pass);
         const auto scene_color = build_result_.scene_color;
         builder_.SetExecuteCallback(prefilter_pass,
                                     [this, scene_color, bloom_target_a](render_graph::GraphCommandContext& context_) {
@@ -760,6 +761,7 @@ void SceneRecorder3D::BuildRenderGraph(
                                                },
                                            },
                                        });
+            bloom_renderer.DescribeGraphSingleSourceBindings(builder_, blur_h_pass);
             builder_.SetExecuteCallback(blur_h_pass,
                                         [this, bloom_target_a, bloom_target_b](render_graph::GraphCommandContext& context_) {
                                             post_stack.Bloom().RecordGraphBlurPass(context_, bloom_target_a, bloom_target_b);
@@ -782,6 +784,7 @@ void SceneRecorder3D::BuildRenderGraph(
                                                },
                                            },
                                        });
+            bloom_renderer.DescribeGraphSingleSourceBindings(builder_, blur_v_pass);
             builder_.SetExecuteCallback(blur_v_pass,
                                         [this, bloom_target_b, bloom_target_a](render_graph::GraphCommandContext& context_) {
                                             post_stack.Bloom().RecordGraphBlurPass(context_, bloom_target_b, bloom_target_a);
@@ -819,6 +822,7 @@ void SceneRecorder3D::BuildRenderGraph(
                                            },
                                        },
                                    });
+        bloom_renderer.DescribeGraphDualSourceBindings(builder_, combine_pass);
         builder_.SetExecuteCallback(combine_pass,
                                     [this, scene_color, bloom_target_a, postprocess_output_target](render_graph::GraphCommandContext& context_) {
                                         post_stack.Bloom().RecordGraphCombinePass(context_,

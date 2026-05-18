@@ -17,7 +17,7 @@ struct RenderGraphRecordStats final {
 
 class RenderGraphExecutor final {
 public:
-    [[nodiscard]] static RenderGraphRecordStats Record(const GraphCommandContext& context_);
+    [[nodiscard]] static RenderGraphRecordStats Record(GraphCommandContext& context_);
 };
 
 } // namespace vr::render_graph

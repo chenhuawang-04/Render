@@ -55,6 +55,23 @@ enum class QueueClass : std::uint8_t {
     transfer = 2U,
 };
 
+enum ShaderStageFlags : std::uint32_t {
+    shader_stage_none_flag = 0U,
+    shader_stage_vertex_flag = 1U << 0U,
+    shader_stage_fragment_flag = 1U << 1U,
+    shader_stage_compute_flag = 1U << 2U,
+};
+
+enum class DescriptorBindingSource : std::uint8_t {
+    none = 0U,
+    bindless_table = 1U,
+};
+
+enum class DescriptorBindingKind : std::uint8_t {
+    sampled_image_table = 0U,
+    sampler_table = 1U,
+};
+
 enum TextureUsageFlags : std::uint32_t {
     texture_usage_none_flag = 0U,
     texture_usage_sampled_flag = 1U << 0U,
@@ -211,6 +228,15 @@ struct RasterPassDesc final {
     std::uint32_t layer_count = 1U;
 };
 
+struct PassDescriptorBindingDesc final {
+    std::uint32_t set = 0U;
+    std::uint32_t binding = 0U;
+    DescriptorBindingSource source = DescriptorBindingSource::none;
+    DescriptorBindingKind kind = DescriptorBindingKind::sampled_image_table;
+    std::uint32_t stage_flags = shader_stage_none_flag;
+    std::uint32_t source_id = 0U;
+};
+
 [[nodiscard]] constexpr bool IsValidResourceHandle(const ResourceHandle handle_) noexcept {
     return handle_.index != invalid_render_graph_index &&
            handle_.generation != 0U;
@@ -235,6 +261,11 @@ struct RasterPassDesc final {
     return (flags_ & static_cast<std::uint32_t>(flag_)) != 0U;
 }
 
+[[nodiscard]] constexpr bool HasShaderStageFlag(const std::uint32_t flags_,
+                                                const ShaderStageFlags flag_) noexcept {
+    return (flags_ & static_cast<std::uint32_t>(flag_)) != 0U;
+}
+
 static_assert(std::is_standard_layout_v<Extent3D>);
 static_assert(std::is_standard_layout_v<TextureDesc>);
 static_assert(std::is_standard_layout_v<BufferDesc>);
@@ -248,5 +279,6 @@ static_assert(std::is_standard_layout_v<ClearColorValue>);
 static_assert(std::is_standard_layout_v<ClearDepthStencilValue>);
 static_assert(std::is_standard_layout_v<RasterColorAttachmentDesc>);
 static_assert(std::is_standard_layout_v<RasterDepthAttachmentDesc>);
+static_assert(std::is_standard_layout_v<PassDescriptorBindingDesc>);
 
 } // namespace vr::render_graph

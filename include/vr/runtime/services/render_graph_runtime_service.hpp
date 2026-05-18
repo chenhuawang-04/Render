@@ -8,6 +8,7 @@
 #include "vr/render_graph/vulkan_resource_table.hpp"
 #include "vr/runtime/runtime_service.hpp"
 #include "vr/runtime/service_dependency.hpp"
+#include "vr/runtime/services/descriptor_service.hpp"
 #include "vr/runtime/services/gpu_memory_service.hpp"
 #include "vr/runtime/services/render_target_service.hpp"
 
@@ -27,7 +28,7 @@ namespace vr::runtime::services {
 class RenderGraphRuntimeService final {
 public:
     using CreateInfo = vr::runtime::EmptyServiceCreateInfo;
-    using Dependencies = vr::runtime::DependsOn<GpuMemoryService, RenderTargetService>;
+    using Dependencies = vr::runtime::DependsOn<GpuMemoryService, RenderTargetService, DescriptorService>;
     static constexpr std::string_view Name = "RenderGraphRuntimeService";
     static constexpr std::uint32_t invalid_frame_index =
         (std::numeric_limits<std::uint32_t>::max)();
@@ -202,16 +203,17 @@ public:
         }
 
         auto& services = vr::runtime::detail::ResolveServices(context_);
-        record_stats = render_graph::RenderGraphExecutor::Record(
-            render_graph::GraphCommandContext{
-                device,
-                command_buffer,
-                compiled_graph,
-                physical_resources,
-                services.template Get<RenderTargetService>().Host(),
-                lowered_vulkan_barriers,
-                command_ready_vulkan_barriers,
-            });
+        auto graph_context = render_graph::GraphCommandContext{
+            device,
+            command_buffer,
+            compiled_graph,
+            physical_resources,
+            services.template Get<RenderTargetService>().Host(),
+            &services.template Get<DescriptorService>().Host(),
+            lowered_vulkan_barriers,
+            command_ready_vulkan_barriers,
+        };
+        record_stats = render_graph::RenderGraphExecutor::Record(graph_context);
     }
 
     template<typename ContextT>

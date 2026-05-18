@@ -1,12 +1,14 @@
 #pragma once
 
 #include "vr/render/render_pass_preset.hpp"
+#include "vr/render/descriptor_host.hpp"
 #include "vr/render/render_target_host.hpp"
 #include "vr/render_graph/render_graph_types.hpp"
 #include "vr/render_graph/vulkan_barrier_plan.hpp"
 #include "vr/render_graph/vulkan_resource_table.hpp"
 #include "vr/vulkan_context.hpp"
 
+#include <stdexcept>
 #include <vector>
 
 namespace vr::render_graph {
@@ -46,6 +48,7 @@ public:
                         const CompiledRenderGraph& compiled_graph_,
                         const VulkanResourceTable& physical_resources_,
                         render::RenderTargetHost& render_target_host_,
+                        render::DescriptorHost* descriptor_host_,
                         const VulkanBarrierPlan& lowered_vulkan_barriers_,
                         const VulkanCommandReadyPlan& command_ready_vulkan_barriers_) noexcept
         : device(&device_),
@@ -53,6 +56,7 @@ public:
           compiled_graph(&compiled_graph_),
           physical_resources(&physical_resources_),
           render_target_host(&render_target_host_),
+          descriptor_host(descriptor_host_),
           lowered_vulkan_barriers(&lowered_vulkan_barriers_),
           command_ready_vulkan_barriers(&command_ready_vulkan_barriers_) {}
 
@@ -74,6 +78,17 @@ public:
 
     [[nodiscard]] render::RenderTargetHost& RenderTargets() const noexcept {
         return *render_target_host;
+    }
+
+    [[nodiscard]] bool HasDescriptorHost() const noexcept {
+        return descriptor_host != nullptr;
+    }
+
+    [[nodiscard]] render::DescriptorHost& Descriptors() const {
+        if (descriptor_host == nullptr) {
+            throw std::runtime_error("GraphCommandContext does not have DescriptorHost bound");
+        }
+        return *descriptor_host;
     }
 
     [[nodiscard]] const VulkanBarrierPlan& LoweredBarriers() const noexcept {
@@ -186,14 +201,78 @@ public:
         vkCmdEndRendering(command_buffer);
     }
 
+    void SetCurrentPass(const PassHandle handle_) noexcept {
+        current_pass = handle_;
+        current_pass_descriptor_sets.clear();
+    }
+
+    void ClearCurrentPass() noexcept {
+        current_pass = invalid_pass_handle;
+        current_pass_descriptor_sets.clear();
+    }
+
+    [[nodiscard]] PassHandle CurrentPass() const noexcept {
+        return current_pass;
+    }
+
+    void SetCurrentPassDescriptorSets(std::vector<VkDescriptorSet> descriptor_sets_) {
+        current_pass_descriptor_sets = std::move(descriptor_sets_);
+    }
+
+    [[nodiscard]] std::uint32_t CurrentPassDescriptorSetCount() const noexcept {
+        return static_cast<std::uint32_t>(current_pass_descriptor_sets.size());
+    }
+
+    [[nodiscard]] VkDescriptorSet CurrentPassDescriptorSet(const std::uint32_t set_index_) const {
+        if (set_index_ >= current_pass_descriptor_sets.size()) {
+            throw std::out_of_range(
+                "GraphCommandContext current pass descriptor set index is out of range");
+        }
+        return current_pass_descriptor_sets[set_index_];
+    }
+
+    void BindCurrentPassDescriptorSets(const VkPipelineBindPoint bind_point_,
+                                       const VkPipelineLayout pipeline_layout_,
+                                       const std::uint32_t first_set_,
+                                       const std::uint32_t set_count_) const {
+        if (!IsValidPassHandle(current_pass)) {
+            throw std::runtime_error(
+                "GraphCommandContext::BindCurrentPassDescriptorSets requires an active pass");
+        }
+        if (set_count_ == 0U) {
+            return;
+        }
+        if (first_set_ + set_count_ > current_pass_descriptor_sets.size()) {
+            throw std::out_of_range(
+                "GraphCommandContext::BindCurrentPassDescriptorSets range exceeds prepared descriptor sets");
+        }
+        for (std::uint32_t set_offset = 0U; set_offset < set_count_; ++set_offset) {
+            if (current_pass_descriptor_sets[first_set_ + set_offset] == VK_NULL_HANDLE) {
+                throw std::runtime_error(
+                    "GraphCommandContext::BindCurrentPassDescriptorSets encountered an unprepared descriptor set");
+            }
+        }
+        vkCmdBindDescriptorSets(command_buffer,
+                                bind_point_,
+                                pipeline_layout_,
+                                first_set_,
+                                set_count_,
+                                current_pass_descriptor_sets.data() + first_set_,
+                                0U,
+                                nullptr);
+    }
+
 private:
     VulkanContext* device = nullptr;
     VkCommandBuffer command_buffer = VK_NULL_HANDLE;
     const CompiledRenderGraph* compiled_graph = nullptr;
     const VulkanResourceTable* physical_resources = nullptr;
     render::RenderTargetHost* render_target_host = nullptr;
+    render::DescriptorHost* descriptor_host = nullptr;
     const VulkanBarrierPlan* lowered_vulkan_barriers = nullptr;
     const VulkanCommandReadyPlan* command_ready_vulkan_barriers = nullptr;
+    PassHandle current_pass = invalid_pass_handle;
+    std::vector<VkDescriptorSet> current_pass_descriptor_sets{};
 };
 
 } // namespace vr::render_graph

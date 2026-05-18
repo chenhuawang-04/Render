@@ -488,16 +488,17 @@ VR_TEST_CASE(RenderGraphExecutor_invokes_pass_execute_thunks,
         host.RenderTarget());
 
     const VkCommandBuffer command_buffer = host.Context().BeginSingleTimeCommands();
-    const auto stats = vr::render_graph::RenderGraphExecutor::Record(
-        vr::render_graph::GraphCommandContext{
-            host.Context(),
-            command_buffer,
-            compiled,
-            table,
-            host.RenderTarget(),
-            lowered,
-            command_ready,
-        });
+    auto graph_context = vr::render_graph::GraphCommandContext{
+        host.Context(),
+        command_buffer,
+        compiled,
+        table,
+        host.RenderTarget(),
+        nullptr,
+        lowered,
+        command_ready,
+    };
+    const auto stats = vr::render_graph::RenderGraphExecutor::Record(graph_context);
     host.Context().EndSingleTimeCommands(command_buffer);
 
     VR_CHECK(executed_pass_count == 1U);
@@ -561,16 +562,17 @@ VR_TEST_CASE(RenderGraphExecutor_records_minimal_graph_barrier_batches,
         host.RenderTarget());
 
     const VkCommandBuffer command_buffer = host.Context().BeginSingleTimeCommands();
-    const auto stats = vr::render_graph::RenderGraphExecutor::Record(
-        vr::render_graph::GraphCommandContext{
-            host.Context(),
-            command_buffer,
-            compiled,
-            table,
-            host.RenderTarget(),
-            lowered,
-            command_ready,
-        });
+    auto graph_context = vr::render_graph::GraphCommandContext{
+        host.Context(),
+        command_buffer,
+        compiled,
+        table,
+        host.RenderTarget(),
+        nullptr,
+        lowered,
+        command_ready,
+    };
+    const auto stats = vr::render_graph::RenderGraphExecutor::Record(graph_context);
     host.Context().EndSingleTimeCommands(command_buffer);
 
     VR_CHECK(stats.command_batch_count == 1U);

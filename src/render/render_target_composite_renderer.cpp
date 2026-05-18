@@ -2,6 +2,7 @@
 
 #include "vr/render/bindless_resource_system.hpp"
 #include "vr/render_graph/graph_command_context.hpp"
+#include "vr/render_graph/render_graph_builder.hpp"
 #include "vr/render/generated/render_target_composite_frag_spv.hpp"
 #include "vr/render/generated/render_target_composite_vert_spv.hpp"
 
@@ -43,6 +44,28 @@ namespace {
         break;
     }
     return render_graph::AttachmentStoreOp::store;
+}
+
+[[nodiscard]] BindlessTableId ResolveSampledImageTableId(
+    const BindlessResourceSystem* bindless_resources_) noexcept {
+    if (bindless_resources_ != nullptr) {
+        const auto table_id = bindless_resources_->SampledImageTable();
+        if (table_id.IsValid()) {
+            return table_id;
+        }
+    }
+    return BindlessResourceSystem::SampledImageTableContractId();
+}
+
+[[nodiscard]] BindlessTableId ResolveSamplerTableId(
+    const BindlessResourceSystem* bindless_resources_) noexcept {
+    if (bindless_resources_ != nullptr) {
+        const auto table_id = bindless_resources_->SamplerTable();
+        if (table_id.IsValid()) {
+            return table_id;
+        }
+    }
+    return BindlessResourceSystem::SamplerTableContractId();
 }
 
 void BindFullscreenViewportAndScissor(VkCommandBuffer command_buffer_,
@@ -211,6 +234,27 @@ void RenderTargetCompositeRenderer::Record(const FrameRecordContext& record_cont
     RecordEndColorPass(record_context_, output_target_config);
 }
 
+void RenderTargetCompositeRenderer::DescribeGraphDescriptorBindings(
+    render_graph::RenderGraphBuilder& builder_,
+    const render_graph::PassHandle pass_) const {
+    if (!initialized) {
+        throw std::runtime_error(
+            "RenderTargetCompositeRenderer::DescribeGraphDescriptorBindings called before Initialize");
+    }
+    const auto sampled_image_table = ResolveSampledImageTableId(bindless_resources);
+    const auto sampler_table = ResolveSamplerTableId(bindless_resources);
+    builder_.AddBindlessTableBinding(pass_,
+                                     0U,
+                                     render_graph::DescriptorBindingKind::sampled_image_table,
+                                     sampled_image_table.value,
+                                     render_graph::shader_stage_fragment_flag);
+    builder_.AddBindlessTableBinding(pass_,
+                                     1U,
+                                     render_graph::DescriptorBindingKind::sampler_table,
+                                     sampler_table.value,
+                                     render_graph::shader_stage_fragment_flag);
+}
+
 render_graph::RasterColorAttachmentDesc RenderTargetCompositeRenderer::BuildGraphColorAttachmentDesc(
     render_graph::ResourceHandle output_target_,
     bool has_previous_content_) const noexcept {
@@ -285,7 +329,8 @@ void RenderTargetCompositeRenderer::RecordGraphPass(render_graph::GraphCommandCo
                           output_view.format,
                           VkExtent2D{output_view.extent.width, output_view.extent.height},
                           source_graph_slot,
-                          graph_sampler_slot);
+                          graph_sampler_slot,
+                          &context_);
 }
 
 void RenderTargetCompositeRenderer::OnSwapchainRecreated(std::uint32_t image_count_,
@@ -391,25 +436,34 @@ void RenderTargetCompositeRenderer::BindAndDrawFullscreen(
     VkFormat output_format_,
     VkExtent2D output_extent_,
     BindlessSlot source_texture_slot_,
-    BindlessSlot sampler_slot_) {
+    BindlessSlot sampler_slot_,
+    render_graph::GraphCommandContext* graph_context_) {
     EnsurePipelineObjects(*context, *descriptor_host, *pipeline_host, output_format_);
     BindFullscreenViewportAndScissor(command_buffer_, output_extent_);
 
     vkCmdBindPipeline(command_buffer_,
                       VK_PIPELINE_BIND_POINT_GRAPHICS,
                       pipeline_host->GetGraphicsPipeline(pipeline_id));
-    const VkDescriptorSet bindless_sets[] = {
-        bindless_resources->SampledImageSet(),
-        bindless_resources->SamplerSet()
-    };
-    vkCmdBindDescriptorSets(command_buffer_,
-                            VK_PIPELINE_BIND_POINT_GRAPHICS,
-                            pipeline_host->GetPipelineLayout(pipeline_layout_id),
-                            0U,
-                            2U,
-                            bindless_sets,
-                            0U,
-                            nullptr);
+    if (graph_context_ != nullptr) {
+        graph_context_->BindCurrentPassDescriptorSets(
+            VK_PIPELINE_BIND_POINT_GRAPHICS,
+            pipeline_host->GetPipelineLayout(pipeline_layout_id),
+            0U,
+            2U);
+    } else {
+        const VkDescriptorSet bindless_sets[] = {
+            bindless_resources->SampledImageSet(),
+            bindless_resources->SamplerSet()
+        };
+        vkCmdBindDescriptorSets(command_buffer_,
+                                VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                pipeline_host->GetPipelineLayout(pipeline_layout_id),
+                                0U,
+                                2U,
+                                bindless_sets,
+                                0U,
+                                nullptr);
+    }
     stats.descriptor_set_bind_count += 2U;
 
     PushConstants push_constants{};

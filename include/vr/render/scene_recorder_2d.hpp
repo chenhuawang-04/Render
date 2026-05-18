@@ -94,6 +94,12 @@ concept SceneRecorder2DGraphSceneConsumerAttachmentDescribable =
         &RendererT::BuildGraphColorAttachmentDesc;
     };
 
+template<typename RendererT>
+concept SceneRecorder2DGraphDescriptorBindable =
+    requires {
+        &RendererT::DescribeGraphDescriptorBindings;
+    };
+
 class SceneRecorder2D final {
 public:
     SceneRecorder2D() = default;
@@ -206,6 +212,7 @@ public:
             .record_fn = &RecordRenderer<RendererT>,
             .graph_record_fn = ResolveSceneConsumerGraphRecordFn<RendererT>(),
             .build_graph_color_attachment_fn = ResolveSceneConsumerGraphColorAttachmentFn<RendererT>(),
+            .describe_graph_bindings_fn = ResolveGraphDescriptorBindingsFn<RendererT>(),
             .swapchain_recreated_fn = &OnSwapchainRecreatedRenderer<RendererT>,
             .configure_scene_consumer_fn = &ConfigureSceneConsumerBinding<RendererT>,
             .set_output_target_fn = &SetOverlayOutputTarget<RendererT>,
@@ -282,6 +289,9 @@ private:
         void*,
         render_graph::ResourceHandle,
         bool);
+    using DescribeGraphBindingsFn = void (*)(void*,
+                                             render_graph::RenderGraphBuilder&,
+                                             render_graph::PassHandle);
     using SwapchainRecreatedFn = void (*)(void*,
                                           std::uint32_t,
                                           VkExtent2D,
@@ -341,6 +351,7 @@ private:
         RecordFn record_fn = nullptr;
         GraphSceneConsumerRecordFn graph_record_fn = nullptr;
         BuildGraphColorAttachmentFn build_graph_color_attachment_fn = nullptr;
+        DescribeGraphBindingsFn describe_graph_bindings_fn = nullptr;
         SwapchainRecreatedFn swapchain_recreated_fn = nullptr;
         ConfigureSceneConsumerFn configure_scene_consumer_fn = nullptr;
         SetOverlayOutputFn set_output_target_fn = nullptr;
@@ -463,6 +474,22 @@ private:
     static constexpr BuildGraphColorAttachmentFn ResolveSceneConsumerGraphColorAttachmentFn() noexcept {
         if constexpr (SceneRecorder2DGraphSceneConsumerAttachmentDescribable<RendererT>) {
             return &BuildSceneConsumerGraphColorAttachment<RendererT>;
+        } else {
+            return nullptr;
+        }
+    }
+
+    template<typename RendererT>
+    static void DescribeGraphBindings(void* renderer_,
+                                      render_graph::RenderGraphBuilder& builder_,
+                                      render_graph::PassHandle pass_) {
+        static_cast<RendererT*>(renderer_)->DescribeGraphDescriptorBindings(builder_, pass_);
+    }
+
+    template<typename RendererT>
+    static constexpr DescribeGraphBindingsFn ResolveGraphDescriptorBindingsFn() noexcept {
+        if constexpr (SceneRecorder2DGraphDescriptorBindable<RendererT>) {
+            return &DescribeGraphBindings<RendererT>;
         } else {
             return nullptr;
         }

@@ -410,6 +410,11 @@ void SceneRecorder2D::BuildRenderGraph(
                                                false),
                                        },
                                    });
+        if (scene_consumer_entry.describe_graph_bindings_fn != nullptr) {
+            scene_consumer_entry.describe_graph_bindings_fn(scene_consumer_entry.renderer,
+                                                            builder_,
+                                                            scene_consumer_pass);
+        }
         const auto scene_source = build_result_.scene_color;
         builder_.SetExecuteCallback(scene_consumer_pass,
                                     [this, scene_source, scene_consumer_output](render_graph::GraphCommandContext& context_) {

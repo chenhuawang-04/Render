@@ -17,6 +17,10 @@ namespace vr {
 class VulkanContext;
 }
 
+namespace vr::render_graph {
+class RenderGraphBuilder;
+}
+
 namespace vr::render {
 
 struct RenderTargetCompositeRendererCreateInfo final {
@@ -48,6 +52,8 @@ public:
 
     void PrepareFrame(const RenderTargetCompositeRendererPrepareView& prepare_view_);
     void Record(const FrameRecordContext& record_context_);
+    void DescribeGraphDescriptorBindings(render_graph::RenderGraphBuilder& builder_,
+                                         render_graph::PassHandle pass_) const;
     [[nodiscard]] render_graph::RasterColorAttachmentDesc BuildGraphColorAttachmentDesc(
         render_graph::ResourceHandle output_target_,
         bool has_previous_content_) const noexcept;
@@ -81,7 +87,8 @@ private:
                                VkFormat output_format_,
                                VkExtent2D output_extent_,
                                BindlessSlot source_texture_slot_,
-                               BindlessSlot sampler_slot_);
+                               BindlessSlot sampler_slot_,
+                               render_graph::GraphCommandContext* graph_context_ = nullptr);
 
 private:
     RenderTargetCompositeRendererCreateInfo create_info_cache{};

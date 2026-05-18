@@ -19,6 +19,7 @@ class VulkanContext;
 
 namespace vr::render_graph {
 class GraphCommandContext;
+class RenderGraphBuilder;
 }
 
 namespace vr::render {
@@ -65,6 +66,10 @@ public:
 
     void PrepareFrame(const RenderTargetBloomRendererPrepareView& prepare_view_);
     void Record(const FrameRecordContext& record_context_);
+    void DescribeGraphSingleSourceBindings(render_graph::RenderGraphBuilder& builder_,
+                                           render_graph::PassHandle pass_) const;
+    void DescribeGraphDualSourceBindings(render_graph::RenderGraphBuilder& builder_,
+                                         render_graph::PassHandle pass_) const;
     void RecordGraphPrefilterPass(render_graph::GraphCommandContext& context_,
                                   render_graph::ResourceHandle scene_source_,
                                   render_graph::ResourceHandle bloom_target_);

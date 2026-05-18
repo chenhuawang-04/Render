@@ -47,6 +47,14 @@ public:
     [[nodiscard]] CompiledRenderGraph Compile() const;
 
     void AddDependency(PassHandle pass_, PassHandle dependency_);
+    void AddPassDescriptorBinding(PassHandle pass_,
+                                  const PassDescriptorBindingDesc& descriptor_binding_);
+    void AddBindlessTableBinding(PassHandle pass_,
+                                 std::uint32_t set_,
+                                 DescriptorBindingKind kind_,
+                                 std::uint32_t bindless_table_id_,
+                                 std::uint32_t stage_flags_ = shader_stage_fragment_flag,
+                                 std::uint32_t binding_ = 0U);
     void SetRasterPassDesc(PassHandle pass_, RasterPassDesc raster_pass_);
     void SetExecuteCallback(PassHandle pass_, PassExecutionThunk execute_);
 
@@ -92,6 +100,7 @@ private:
         std::vector<PassHandle> explicit_dependencies{};
         std::vector<AccessDesc> reads{};
         std::vector<WriteRecord> writes{};
+        std::vector<PassDescriptorBindingDesc> descriptor_bindings{};
     };
 
     [[nodiscard]] ResourceNode& RequireResource(ResourceHandle handle_);

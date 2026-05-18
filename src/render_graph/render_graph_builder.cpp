@@ -54,6 +54,58 @@ namespace {
     return "unknown";
 }
 
+[[nodiscard]] const char* DescriptorBindingSourceToString(
+    const DescriptorBindingSource source_) noexcept {
+    switch (source_) {
+    case DescriptorBindingSource::none:
+        return "none";
+    case DescriptorBindingSource::bindless_table:
+        return "bindless_table";
+    default:
+        break;
+    }
+    return "unknown";
+}
+
+[[nodiscard]] const char* DescriptorBindingKindToString(
+    const DescriptorBindingKind kind_) noexcept {
+    switch (kind_) {
+    case DescriptorBindingKind::sampled_image_table:
+        return "sampled_image_table";
+    case DescriptorBindingKind::sampler_table:
+        return "sampler_table";
+    default:
+        break;
+    }
+    return "unknown";
+}
+
+[[nodiscard]] std::string BuildShaderStageFlagsString(
+    const std::uint32_t stage_flags_) {
+    std::ostringstream oss{};
+    bool first = true;
+    const auto append = [&](const char* label_) {
+        if (!first) {
+            oss << '|';
+        }
+        oss << label_;
+        first = false;
+    };
+    if (HasShaderStageFlag(stage_flags_, shader_stage_vertex_flag)) {
+        append("vertex");
+    }
+    if (HasShaderStageFlag(stage_flags_, shader_stage_fragment_flag)) {
+        append("fragment");
+    }
+    if (HasShaderStageFlag(stage_flags_, shader_stage_compute_flag)) {
+        append("compute");
+    }
+    if (first) {
+        return "none";
+    }
+    return oss.str();
+}
+
 [[nodiscard]] const char* AccessKindToString(const AccessKind access_) noexcept {
     switch (access_) {
     case AccessKind::none:
@@ -207,6 +259,16 @@ void AppendJsonAccessDesc(std::ostringstream& oss_,
     oss_ << '}';
 }
 
+void AppendJsonDescriptorBinding(std::ostringstream& oss_,
+                                 const PassDescriptorBindingDesc& binding_) {
+    oss_ << "{\"set\": " << binding_.set
+         << ", \"binding\": " << binding_.binding
+         << ", \"source\": \"" << DescriptorBindingSourceToString(binding_.source) << '"'
+         << ", \"kind\": \"" << DescriptorBindingKindToString(binding_.kind) << '"'
+         << ", \"stageFlags\": \"" << BuildShaderStageFlagsString(binding_.stage_flags) << '"'
+         << ", \"sourceId\": " << binding_.source_id << '}';
+}
+
 [[nodiscard]] std::string BuildAccessDotLabel(const AccessDesc& access_,
                                               const ResourceKind kind_) {
     std::ostringstream oss{};
@@ -272,6 +334,9 @@ std::string CompiledRenderGraph::BuildDebugString() const {
         if (pass_.executable) {
             oss << " executable";
         }
+        if (!pass_.descriptor_bindings.empty()) {
+            oss << " descriptor_bindings=" << pass_.descriptor_bindings.size();
+        }
         oss << '\n';
     }
 
@@ -299,6 +364,9 @@ std::string CompiledRenderGraph::BuildDotGraph() const {
             oss << "\\nside_effect";
         }
         oss << "\\nqueue=" << QueueClassToString(pass_.queue);
+        if (!pass_.descriptor_bindings.empty()) {
+            oss << "\\ndescriptors=" << pass_.descriptor_bindings.size();
+        }
         oss << "\"];\n";
     }
 
@@ -330,6 +398,11 @@ std::string CompiledRenderGraph::BuildDotGraph() const {
                 oss << "  pass_" << pass_.handle.index << " -> " << MakeResourceNodeId(write_.resource)
                     << " [label=\"" << BuildAccessDotLabel(write_, liveness_->kind) << "\"];\n";
             }
+        }
+        for (const auto& binding_ : pass_.descriptor_bindings) {
+            oss << "  pass_" << pass_.handle.index << " -> pass_" << pass_.handle.index
+                << " [style=dotted,label=\"set " << binding_.set
+                << " " << DescriptorBindingKindToString(binding_.kind) << "\"];\n";
         }
     }
 
@@ -411,6 +484,15 @@ std::string CompiledRenderGraph::BuildJson() const {
             });
             const ResourceKind kind = (resource_ != nullptr) ? resource_->kind : ResourceKind::buffer;
             AppendJsonAccessDesc(oss, write_, kind);
+        }
+        oss << "],\n";
+
+        oss << "      \"descriptorBindings\": [";
+        for (std::size_t binding_index = 0; binding_index < pass_.descriptor_bindings.size(); ++binding_index) {
+            if (binding_index != 0U) {
+                oss << ", ";
+            }
+            AppendJsonDescriptorBinding(oss, pass_.descriptor_bindings[binding_index]);
         }
         oss << "]\n";
         oss << "    }";
@@ -580,6 +662,56 @@ void RenderGraphBuilder::AddDependency(const PassHandle pass_,
     AppendUnique(target_pass.explicit_dependencies, dependency_);
 }
 
+void RenderGraphBuilder::AddPassDescriptorBinding(
+    const PassHandle pass_,
+    const PassDescriptorBindingDesc& descriptor_binding_) {
+    PassNode& target_pass = RequirePass(pass_);
+    if (descriptor_binding_.source == DescriptorBindingSource::none) {
+        throw std::invalid_argument(
+            "RenderGraphBuilder::AddPassDescriptorBinding requires a valid descriptor binding source");
+    }
+    if (descriptor_binding_.stage_flags == shader_stage_none_flag) {
+        throw std::invalid_argument(
+            "RenderGraphBuilder::AddPassDescriptorBinding requires non-empty shader stage flags");
+    }
+    if (descriptor_binding_.source_id == 0U) {
+        throw std::invalid_argument(
+            "RenderGraphBuilder::AddPassDescriptorBinding requires a valid descriptor binding source id");
+    }
+
+    const auto duplicate = std::find_if(
+        target_pass.descriptor_bindings.begin(),
+        target_pass.descriptor_bindings.end(),
+        [&](const PassDescriptorBindingDesc& existing_) {
+            return existing_.set == descriptor_binding_.set &&
+                   existing_.binding == descriptor_binding_.binding;
+        });
+    if (duplicate != target_pass.descriptor_bindings.end()) {
+        throw std::invalid_argument(
+            "RenderGraphBuilder::AddPassDescriptorBinding encountered duplicate set/binding in one pass");
+    }
+
+    target_pass.descriptor_bindings.push_back(descriptor_binding_);
+}
+
+void RenderGraphBuilder::AddBindlessTableBinding(
+    const PassHandle pass_,
+    const std::uint32_t set_,
+    const DescriptorBindingKind kind_,
+    const std::uint32_t bindless_table_id_,
+    const std::uint32_t stage_flags_,
+    const std::uint32_t binding_) {
+    AddPassDescriptorBinding(pass_,
+                             PassDescriptorBindingDesc{
+                                 .set = set_,
+                                 .binding = binding_,
+                                 .source = DescriptorBindingSource::bindless_table,
+                                 .kind = kind_,
+                                 .stage_flags = stage_flags_,
+                                 .source_id = bindless_table_id_,
+                             });
+}
+
 void RenderGraphBuilder::SetRasterPassDesc(const PassHandle pass_,
                                           RasterPassDesc raster_pass_) {
     PassNode& target_pass = RequirePass(pass_);
@@ -725,6 +857,16 @@ CompiledRenderGraph RenderGraphBuilder::Compile() const {
         compiled_pass.raster_pass = pass_.raster_pass;
         compiled_pass.execute = pass_.execute;
         compiled_pass.reads = pass_.reads;
+        compiled_pass.descriptor_bindings = pass_.descriptor_bindings;
+        std::sort(compiled_pass.descriptor_bindings.begin(),
+                  compiled_pass.descriptor_bindings.end(),
+                  [](const PassDescriptorBindingDesc& lhs_,
+                     const PassDescriptorBindingDesc& rhs_) {
+                      if (lhs_.set != rhs_.set) {
+                          return lhs_.set < rhs_.set;
+                      }
+                      return lhs_.binding < rhs_.binding;
+                  });
         for (const auto dependency_ : dependencies[handle_.index]) {
             if (active[dependency_.index]) {
                 compiled_pass.dependencies.push_back(dependency_);
