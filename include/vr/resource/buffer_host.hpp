@@ -34,15 +34,25 @@ struct BufferResource {
     uint32_t memory_type_index = 0U;
     VkDeviceSize non_coherent_atom_size = 1U;
     void* mapped_ptr = nullptr;
+    bool owns_allocation = false;
 };
 
 class BufferHost final {
 public:
     BufferHost() = delete;
 
+    [[nodiscard]] static BufferResource CreateBufferObject(VulkanContext& context_,
+                                                           const BufferCreateInfo& create_info_);
+
     [[nodiscard]] static BufferResource CreateBuffer(VulkanContext& context_,
                                                      const BufferCreateInfo& create_info_,
                                                      GpuMemoryHost& gpu_memory_host_);
+
+    static void BindAllocation(BufferResource& resource_,
+                               GpuMemoryHost& gpu_memory_host_,
+                               const Center::Memory::Vulkan::Slice& allocation_slice_,
+                               bool owns_allocation_ = true,
+                               VkDeviceSize resource_offset_ = 0U);
 
     static void DestroyBuffer(VulkanContext& context_,
                               BufferResource& resource_);

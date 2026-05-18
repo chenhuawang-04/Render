@@ -11,6 +11,21 @@ namespace vr::resource {
 
 namespace {
 
+using AllocationKind = Center::Memory::Vulkan::AllocationKind;
+using AllocationRequest = Center::Memory::Vulkan::AllocationRequest;
+using HostAccess = Center::Memory::Vulkan::HostAccess;
+using LifetimeHint = Center::Memory::Vulkan::LifetimeHint;
+
+[[nodiscard]] std::size_t ToSizeTCheckedLocal(VkDeviceSize value_,
+                                              const char* stage_) {
+    if (value_ > static_cast<VkDeviceSize>(std::numeric_limits<std::size_t>::max())) {
+        std::ostringstream oss;
+        oss << stage_ << " overflow: VkDeviceSize does not fit size_t";
+        throw std::runtime_error(oss.str());
+    }
+    return static_cast<std::size_t>(value_);
+}
+
 [[nodiscard]] const char* AllocStatusName(Center::Memory::Vulkan::VulkanAllocStatus status_) noexcept {
     using Status = Center::Memory::Vulkan::VulkanAllocStatus;
     switch (status_) {
@@ -93,6 +108,37 @@ namespace {
     return oss.str();
 }
 
+[[nodiscard]] AllocationRequest BuildAllocationRequest(
+    const Center::Memory::Vulkan::resource_handle_t resource_,
+    const VkMemoryRequirements& requirements_,
+    VkMemoryPropertyFlags required_properties_,
+    VkMemoryPropertyFlags preferred_properties_,
+    const bool persistent_map_,
+    const AllocationKind allocation_kind_,
+    const LifetimeHint lifetime_hint_,
+    const HostAccess host_access_,
+    const bool dedicated_required_,
+    const bool dedicated_preferred_) {
+    AllocationRequest request{};
+    request.resource = resource_;
+    request.size = ToSizeTCheckedLocal(requirements_.size, "GpuMemoryHost::BuildAllocationRequest(size)");
+    request.alignment = ToSizeTCheckedLocal(
+        std::max<VkDeviceSize>(1U, requirements_.alignment),
+        "GpuMemoryHost::BuildAllocationRequest(alignment)");
+    request.selector.memory_type_bits = requirements_.memoryTypeBits;
+    request.selector.required_flags = static_cast<std::uint32_t>(required_properties_);
+    request.selector.preferred_flags = static_cast<std::uint32_t>(preferred_properties_);
+    request.persistent_map = persistent_map_;
+    request.dedicated_required = dedicated_required_;
+    request.dedicated_preferred = dedicated_preferred_;
+    request.allocation_kind = allocation_kind_;
+    request.lifetime_hint = lifetime_hint_;
+    request.host_access = host_access_;
+    request.buffer_image_granularity = static_cast<std::size_t>(
+        std::max<VkDeviceSize>(1U, requirements_.alignment));
+    return request;
+}
+
 } // namespace
 
 void GpuMemoryHost::Initialize(VulkanContext& context_,
@@ -161,39 +207,77 @@ Center::Memory::Vulkan::Slice GpuMemoryHost::AllocateAndBindBuffer(
     if (requirements_.size == 0U || requirements_.memoryTypeBits == 0U) {
         throw std::runtime_error("GpuMemoryHost::AllocateAndBindBuffer invalid memory requirements");
     }
+    Center::Memory::Vulkan::Slice slice = AllocateBufferMemory(requirements_,
+                                                               required_properties_,
+                                                               preferred_properties_,
+                                                               persistent_map_,
+                                                               lifetime_hint_,
+                                                               host_access_,
+                                                               dedicated_required_,
+                                                               dedicated_preferred_,
+                                                               buffer_);
+    if (!BindBufferMemory(buffer_, slice, 0U)) {
+        allocator->deallocate(slice);
+        throw std::runtime_error("GpuMemoryHost::AllocateAndBindBuffer(bind_resource) failed");
+    }
+    return slice;
+}
 
-    Center::Memory::Vulkan::AllocationRequest request{};
-    request.resource = Center::Memory::VulkanNativeBackend::to_resource_handle(buffer_);
-    request.size = ToSizeTChecked(requirements_.size, "GpuMemoryHost::AllocateAndBindBuffer(size)");
-    request.alignment = ToSizeTChecked(
-        std::max<VkDeviceSize>(1U, requirements_.alignment),
-        "GpuMemoryHost::AllocateAndBindBuffer(alignment)");
-    request.selector.memory_type_bits = requirements_.memoryTypeBits;
-    request.selector.required_flags = static_cast<std::uint32_t>(required_properties_);
-    request.selector.preferred_flags = static_cast<std::uint32_t>(preferred_properties_);
-    request.persistent_map = persistent_map_;
-    request.dedicated_required = dedicated_required_;
-    request.dedicated_preferred = dedicated_preferred_;
-    request.allocation_kind = Center::Memory::Vulkan::AllocationKind::buffer;
-    request.lifetime_hint = lifetime_hint_;
-    request.host_access = host_access_;
-    request.buffer_image_granularity = static_cast<std::size_t>(
-        std::max<VkDeviceSize>(1U, requirements_.alignment));
+Center::Memory::Vulkan::Slice GpuMemoryHost::AllocateBufferMemory(
+    const VkMemoryRequirements& requirements_,
+    VkMemoryPropertyFlags required_properties_,
+    VkMemoryPropertyFlags preferred_properties_,
+    bool persistent_map_,
+    Center::Memory::Vulkan::LifetimeHint lifetime_hint_,
+    Center::Memory::Vulkan::HostAccess host_access_,
+    bool dedicated_required_,
+    bool dedicated_preferred_,
+    VkBuffer dedicated_buffer_) {
+    if (!initialized || !allocator.has_value()) {
+        throw std::runtime_error("GpuMemoryHost::AllocateBufferMemory called before Initialize");
+    }
+    if (requirements_.size == 0U || requirements_.memoryTypeBits == 0U) {
+        throw std::runtime_error("GpuMemoryHost::AllocateBufferMemory invalid memory requirements");
+    }
+
+    const AllocationRequest request = BuildAllocationRequest(
+        dedicated_buffer_ != VK_NULL_HANDLE
+            ? Center::Memory::VulkanNativeBackend::to_resource_handle(dedicated_buffer_)
+            : Center::Memory::Vulkan::kInvalidResourceHandle,
+        requirements_,
+        required_properties_,
+        preferred_properties_,
+        persistent_map_,
+        AllocationKind::buffer,
+        lifetime_hint_,
+        host_access_,
+        dedicated_required_,
+        dedicated_preferred_);
 
     Center::Memory::Vulkan::Slice slice = allocator->allocate(request);
     if (!slice.valid()) {
         throw std::runtime_error(MakeAllocationFailureMessage(
-            "GpuMemoryHost::AllocateAndBindBuffer(allocate)",
+            "GpuMemoryHost::AllocateBufferMemory(allocate)",
             allocator->last_failure()));
     }
-
-    if (!allocator->provider().bind_resource(request, slice, 0U)) {
-        allocator->deallocate(slice);
-        throw std::runtime_error(
-            "GpuMemoryHost::AllocateAndBindBuffer(bind_resource) failed");
-    }
-
     return slice;
+}
+
+bool GpuMemoryHost::BindBufferMemory(
+    VkBuffer buffer_,
+    const Center::Memory::Vulkan::Slice& slice_,
+    VkDeviceSize resource_offset_) noexcept {
+    if (!initialized || !allocator.has_value() || buffer_ == VK_NULL_HANDLE || !slice_.valid()) {
+        return false;
+    }
+    if (resource_offset_ > static_cast<VkDeviceSize>(std::numeric_limits<std::size_t>::max())) {
+        return false;
+    }
+    return allocator->provider().bind_resource(
+        AllocationKind::buffer,
+        Center::Memory::VulkanNativeBackend::to_resource_handle(buffer_),
+        slice_,
+        static_cast<std::size_t>(resource_offset_));
 }
 
 Center::Memory::Vulkan::Slice GpuMemoryHost::AllocateAndBindImage(
@@ -216,39 +300,79 @@ Center::Memory::Vulkan::Slice GpuMemoryHost::AllocateAndBindImage(
     if (requirements_.size == 0U || requirements_.memoryTypeBits == 0U) {
         throw std::runtime_error("GpuMemoryHost::AllocateAndBindImage invalid memory requirements");
     }
+    Center::Memory::Vulkan::Slice slice = AllocateImageMemory(requirements_,
+                                                              tiling_,
+                                                              required_properties_,
+                                                              preferred_properties_,
+                                                              persistent_map_,
+                                                              lifetime_hint_,
+                                                              host_access_,
+                                                              dedicated_required_,
+                                                              dedicated_preferred_,
+                                                              image_);
+    if (!BindImageMemory(image_, slice, 0U)) {
+        allocator->deallocate(slice);
+        throw std::runtime_error("GpuMemoryHost::AllocateAndBindImage(bind_resource) failed");
+    }
+    return slice;
+}
 
-    Center::Memory::Vulkan::AllocationRequest request{};
-    request.resource = Center::Memory::VulkanNativeBackend::to_resource_handle(image_);
-    request.size = ToSizeTChecked(requirements_.size, "GpuMemoryHost::AllocateAndBindImage(size)");
-    request.alignment = ToSizeTChecked(
-        std::max<VkDeviceSize>(1U, requirements_.alignment),
-        "GpuMemoryHost::AllocateAndBindImage(alignment)");
-    request.selector.memory_type_bits = requirements_.memoryTypeBits;
-    request.selector.required_flags = static_cast<std::uint32_t>(required_properties_);
-    request.selector.preferred_flags = static_cast<std::uint32_t>(preferred_properties_);
-    request.persistent_map = persistent_map_;
-    request.dedicated_required = dedicated_required_;
-    request.dedicated_preferred = dedicated_preferred_;
-    request.allocation_kind = ToAllocationKind(tiling_);
-    request.lifetime_hint = lifetime_hint_;
-    request.host_access = host_access_;
-    request.buffer_image_granularity = static_cast<std::size_t>(
-        std::max<VkDeviceSize>(1U, requirements_.alignment));
+Center::Memory::Vulkan::Slice GpuMemoryHost::AllocateImageMemory(
+    const VkMemoryRequirements& requirements_,
+    VkImageTiling tiling_,
+    VkMemoryPropertyFlags required_properties_,
+    VkMemoryPropertyFlags preferred_properties_,
+    bool persistent_map_,
+    Center::Memory::Vulkan::LifetimeHint lifetime_hint_,
+    Center::Memory::Vulkan::HostAccess host_access_,
+    bool dedicated_required_,
+    bool dedicated_preferred_,
+    VkImage dedicated_image_) {
+    if (!initialized || !allocator.has_value()) {
+        throw std::runtime_error("GpuMemoryHost::AllocateImageMemory called before Initialize");
+    }
+    if (requirements_.size == 0U || requirements_.memoryTypeBits == 0U) {
+        throw std::runtime_error("GpuMemoryHost::AllocateImageMemory invalid memory requirements");
+    }
+
+    const AllocationRequest request = BuildAllocationRequest(
+        dedicated_image_ != VK_NULL_HANDLE
+            ? Center::Memory::VulkanNativeBackend::to_resource_handle(dedicated_image_)
+            : Center::Memory::Vulkan::kInvalidResourceHandle,
+        requirements_,
+        required_properties_,
+        preferred_properties_,
+        persistent_map_,
+        ToAllocationKind(tiling_),
+        lifetime_hint_,
+        host_access_,
+        dedicated_required_,
+        dedicated_preferred_);
 
     Center::Memory::Vulkan::Slice slice = allocator->allocate(request);
     if (!slice.valid()) {
         throw std::runtime_error(MakeAllocationFailureMessage(
-            "GpuMemoryHost::AllocateAndBindImage(allocate)",
+            "GpuMemoryHost::AllocateImageMemory(allocate)",
             allocator->last_failure()));
     }
-
-    if (!allocator->provider().bind_resource(request, slice, 0U)) {
-        allocator->deallocate(slice);
-        throw std::runtime_error(
-            "GpuMemoryHost::AllocateAndBindImage(bind_resource) failed");
-    }
-
     return slice;
+}
+
+bool GpuMemoryHost::BindImageMemory(
+    VkImage image_,
+    const Center::Memory::Vulkan::Slice& slice_,
+    VkDeviceSize resource_offset_) noexcept {
+    if (!initialized || !allocator.has_value() || image_ == VK_NULL_HANDLE || !slice_.valid()) {
+        return false;
+    }
+    if (resource_offset_ > static_cast<VkDeviceSize>(std::numeric_limits<std::size_t>::max())) {
+        return false;
+    }
+    return allocator->provider().bind_resource(
+        ToAllocationKind(VK_IMAGE_TILING_OPTIMAL),
+        Center::Memory::VulkanNativeBackend::to_resource_handle(image_),
+        slice_,
+        static_cast<std::size_t>(resource_offset_));
 }
 
 void GpuMemoryHost::Deallocate(const Center::Memory::Vulkan::Slice& slice_) noexcept {

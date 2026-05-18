@@ -472,6 +472,81 @@ VR_TEST_CASE(RenderGraphVulkanBackend_builds_command_ready_barrier_batches_from_
     table.Shutdown(host.Context(), host.RenderTarget(), 0U, 0U);
 }
 
+VR_TEST_CASE(RenderGraphVulkanBackend_aliases_non_overlapping_transient_buffers_onto_shared_page,
+             "integration;render_graph;vulkan") {
+    Host host{};
+    try {
+        host.Initialize(MakeMinimalRenderTargetRuntimeCreateInfo());
+    } catch (const std::exception& exception_) {
+        if (IsEnvironmentSkipError(exception_.what())) {
+            VR_SKIP(exception_.what());
+        }
+        throw;
+    }
+
+    vr::render_graph::RenderGraphBuilder builder{};
+    const auto temp_a = builder.CreateBuffer(
+        "temp_a",
+        vr::render_graph::BufferDesc{
+            .size_bytes = 4096U,
+            .usage = vr::render_graph::buffer_usage_storage_flag,
+        });
+    const auto temp_b = builder.CreateBuffer(
+        "temp_b",
+        vr::render_graph::BufferDesc{
+            .size_bytes = 4096U,
+            .usage = vr::render_graph::buffer_usage_storage_flag,
+        });
+
+    const auto pass_a = builder.AddPass("pass_a");
+    const auto pass_b = builder.AddPass("pass_b", true);
+    const auto pass_c = builder.AddPass("pass_c");
+    const auto pass_d = builder.AddPass("pass_d", true);
+
+    const auto temp_a_written = builder.Write(
+        pass_a,
+        temp_a,
+        vr::render_graph::AccessDesc{.access = vr::render_graph::AccessKind::shader_storage_write});
+    (void)builder.Read(
+        pass_b,
+        temp_a_written,
+        vr::render_graph::AccessDesc{.access = vr::render_graph::AccessKind::shader_storage_read});
+    const auto temp_b_written = builder.Write(
+        pass_c,
+        temp_b,
+        vr::render_graph::AccessDesc{.access = vr::render_graph::AccessKind::shader_storage_write});
+    (void)builder.Read(
+        pass_d,
+        temp_b_written,
+        vr::render_graph::AccessDesc{.access = vr::render_graph::AccessKind::shader_storage_read});
+
+    const auto compiled = builder.Compile();
+    vr::render_graph::VulkanResourceTable table{};
+    table.BeginFrame(host.Context(), host.RenderTarget(), 0U, 0U);
+    table.Resolve(host.Context(), host.GpuMemory(), host.RenderTarget(), compiled, 0U, 0U);
+
+    const auto* record_a = table.FindBuffer(temp_a);
+    const auto* record_b = table.FindBuffer(temp_b);
+    VR_REQUIRE(record_a != nullptr);
+    VR_REQUIRE(record_b != nullptr);
+    VR_CHECK(record_a->owned_resource.buffer != VK_NULL_HANDLE);
+    VR_CHECK(record_b->owned_resource.buffer != VK_NULL_HANDLE);
+    VR_CHECK(record_a->alias_page_index == record_b->alias_page_index);
+    VR_CHECK(record_a->alias_page_index != vr::render_graph::invalid_render_graph_index);
+    VR_CHECK(record_a->owned_resource.allocation_slice.handle ==
+             record_b->owned_resource.allocation_slice.handle);
+    VR_CHECK(record_a->owned_resource.allocation_slice.offset ==
+             record_b->owned_resource.allocation_slice.offset);
+    VR_CHECK(!record_a->owned_resource.owns_allocation);
+    VR_CHECK(!record_b->owned_resource.owns_allocation);
+    VR_CHECK(record_a->aliased);
+    VR_CHECK(record_b->aliased);
+    VR_CHECK(table.Stats().transient_buffer_page_count == 1U);
+    VR_CHECK(table.Stats().transient_aliased_buffer_count == 2U);
+
+    table.Shutdown(host.Context(), host.RenderTarget(), 0U, 0U);
+}
+
 VR_TEST_CASE(RenderGraphExecutor_invokes_pass_execute_thunks,
              "integration;render_graph;executor;vulkan") {
     Host host{};

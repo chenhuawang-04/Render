@@ -46,6 +46,22 @@ public:
         bool dedicated_required_ = false,
         bool dedicated_preferred_ = false);
 
+    [[nodiscard]] Center::Memory::Vulkan::Slice AllocateBufferMemory(
+        const VkMemoryRequirements& requirements_,
+        VkMemoryPropertyFlags required_properties_,
+        VkMemoryPropertyFlags preferred_properties_,
+        bool persistent_map_,
+        Center::Memory::Vulkan::LifetimeHint lifetime_hint_ = Center::Memory::Vulkan::LifetimeHint::long_lived,
+        Center::Memory::Vulkan::HostAccess host_access_ = Center::Memory::Vulkan::HostAccess::none,
+        bool dedicated_required_ = false,
+        bool dedicated_preferred_ = false,
+        VkBuffer dedicated_buffer_ = VK_NULL_HANDLE);
+
+    [[nodiscard]] bool BindBufferMemory(
+        VkBuffer buffer_,
+        const Center::Memory::Vulkan::Slice& slice_,
+        VkDeviceSize resource_offset_ = 0U) noexcept;
+
     [[nodiscard]] Center::Memory::Vulkan::Slice AllocateAndBindImage(
         VkImage image_,
         const VkMemoryRequirements& requirements_,
@@ -57,6 +73,23 @@ public:
         Center::Memory::Vulkan::HostAccess host_access_ = Center::Memory::Vulkan::HostAccess::none,
         bool dedicated_required_ = false,
         bool dedicated_preferred_ = true);
+
+    [[nodiscard]] Center::Memory::Vulkan::Slice AllocateImageMemory(
+        const VkMemoryRequirements& requirements_,
+        VkImageTiling tiling_,
+        VkMemoryPropertyFlags required_properties_,
+        VkMemoryPropertyFlags preferred_properties_,
+        bool persistent_map_,
+        Center::Memory::Vulkan::LifetimeHint lifetime_hint_ = Center::Memory::Vulkan::LifetimeHint::long_lived,
+        Center::Memory::Vulkan::HostAccess host_access_ = Center::Memory::Vulkan::HostAccess::none,
+        bool dedicated_required_ = false,
+        bool dedicated_preferred_ = true,
+        VkImage dedicated_image_ = VK_NULL_HANDLE);
+
+    [[nodiscard]] bool BindImageMemory(
+        VkImage image_,
+        const Center::Memory::Vulkan::Slice& slice_,
+        VkDeviceSize resource_offset_ = 0U) noexcept;
 
     void Deallocate(const Center::Memory::Vulkan::Slice& slice_) noexcept;
 

@@ -79,25 +79,21 @@ void CheckVk(const char* stage_, VkResult result_) {
 
 } // namespace
 
-BufferResource BufferHost::CreateBuffer(VulkanContext& context_,
-                                        const BufferCreateInfo& create_info_,
-                                        GpuMemoryHost& gpu_memory_host_) {
+BufferResource BufferHost::CreateBufferObject(VulkanContext& context_,
+                                              const BufferCreateInfo& create_info_) {
     if (!context_.IsDeviceInitialized()) {
-        throw std::runtime_error("BufferHost::CreateBuffer requires initialized Vulkan device");
-    }
-    if (!gpu_memory_host_.IsInitialized()) {
-        throw std::runtime_error("BufferHost::CreateBuffer requires initialized GpuMemoryHost");
+        throw std::runtime_error("BufferHost::CreateBufferObject requires initialized Vulkan device");
     }
     if (create_info_.size == 0U) {
-        throw std::runtime_error("BufferHost::CreateBuffer requires size > 0");
+        throw std::runtime_error("BufferHost::CreateBufferObject requires size > 0");
     }
     if (create_info_.usage == 0U) {
-        throw std::runtime_error("BufferHost::CreateBuffer requires non-zero usage flags");
+        throw std::runtime_error("BufferHost::CreateBufferObject requires non-zero usage flags");
     }
     if (create_info_.persistently_mapped &&
         (create_info_.memory_properties & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) == 0U) {
         throw std::runtime_error(
-            "BufferHost::CreateBuffer persistently_mapped requires HOST_VISIBLE memory");
+            "BufferHost::CreateBufferObject persistently_mapped requires HOST_VISIBLE memory");
     }
 
     BufferResource resource{};
@@ -111,7 +107,7 @@ BufferResource BufferHost::CreateBuffer(VulkanContext& context_,
     if (create_info_.sharing_mode == VK_SHARING_MODE_CONCURRENT) {
         if (create_info_.queue_family_indices.empty()) {
             throw std::runtime_error(
-                "BufferHost::CreateBuffer concurrent sharing requires queue_family_indices");
+                "BufferHost::CreateBufferObject concurrent sharing requires queue_family_indices");
         }
         buffer_info.queueFamilyIndexCount = static_cast<uint32_t>(create_info_.queue_family_indices.size());
         buffer_info.pQueueFamilyIndices = create_info_.queue_family_indices.data();
@@ -122,7 +118,18 @@ BufferResource BufferHost::CreateBuffer(VulkanContext& context_,
 
     CheckVk("vkCreateBuffer",
             vkCreateBuffer(context_.Device(), &buffer_info, nullptr, &resource.buffer));
+    resource.size = create_info_.size;
+    resource.usage = create_info_.usage;
+    return resource;
+}
 
+BufferResource BufferHost::CreateBuffer(VulkanContext& context_,
+                                        const BufferCreateInfo& create_info_,
+                                        GpuMemoryHost& gpu_memory_host_) {
+    if (!gpu_memory_host_.IsInitialized()) {
+        throw std::runtime_error("BufferHost::CreateBuffer requires initialized GpuMemoryHost");
+    }
+    BufferResource resource = CreateBufferObject(context_, create_info_);
     try {
         VkMemoryRequirements memory_requirements{};
         vkGetBufferMemoryRequirements(context_.Device(), resource.buffer, &memory_requirements);
@@ -131,8 +138,7 @@ BufferResource BufferHost::CreateBuffer(VulkanContext& context_,
             (create_info_.memory_properties & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0U;
         const bool persistent_map = host_visible_requested || create_info_.persistently_mapped;
 
-        resource.allocation_slice = gpu_memory_host_.AllocateAndBindBuffer(
-            resource.buffer,
+        const auto allocation_slice = gpu_memory_host_.AllocateBufferMemory(
             memory_requirements,
             create_info_.memory_properties,
             create_info_.memory_properties,
@@ -140,26 +146,49 @@ BufferResource BufferHost::CreateBuffer(VulkanContext& context_,
             InferLifetimeHint(create_info_),
             InferHostAccess(create_info_),
             false,
-            false);
-
-        resource.memory_host = &gpu_memory_host_;
-        resource.memory_type_index = resource.allocation_slice.memory_type_index;
-        resource.memory_properties = gpu_memory_host_.QueryMemoryProperties(resource.memory_type_index);
-        resource.non_coherent_atom_size = 1U;
-        resource.size = create_info_.size;
-        resource.usage = create_info_.usage;
-        resource.mapped_ptr = resource.allocation_slice.mapped_ptr;
-
-        if (host_visible_requested && resource.mapped_ptr == nullptr) {
-            throw std::runtime_error(
-                "BufferHost::CreateBuffer host-visible allocation is not persistently mapped");
-        }
+            false,
+            resource.buffer);
+        BindAllocation(resource, gpu_memory_host_, allocation_slice, true, 0U);
     } catch (...) {
         DestroyBuffer(context_, resource);
         throw;
     }
 
     return resource;
+}
+
+void BufferHost::BindAllocation(BufferResource& resource_,
+                                GpuMemoryHost& gpu_memory_host_,
+                                const Center::Memory::Vulkan::Slice& allocation_slice_,
+                                const bool owns_allocation_,
+                                const VkDeviceSize resource_offset_) {
+    if (resource_.buffer == VK_NULL_HANDLE) {
+        throw std::runtime_error("BufferHost::BindAllocation requires a created VkBuffer");
+    }
+    if (!gpu_memory_host_.IsInitialized()) {
+        throw std::runtime_error("BufferHost::BindAllocation requires initialized GpuMemoryHost");
+    }
+    if (!allocation_slice_.valid()) {
+        throw std::runtime_error("BufferHost::BindAllocation requires a valid allocation slice");
+    }
+    if (!gpu_memory_host_.BindBufferMemory(resource_.buffer, allocation_slice_, resource_offset_)) {
+        throw std::runtime_error("BufferHost::BindAllocation bind failed");
+    }
+
+    resource_.allocation_slice = allocation_slice_;
+    resource_.memory_host = &gpu_memory_host_;
+    resource_.memory_type_index = allocation_slice_.memory_type_index;
+    resource_.memory_properties = gpu_memory_host_.QueryMemoryProperties(resource_.memory_type_index);
+    resource_.non_coherent_atom_size = 1U;
+    resource_.mapped_ptr = AddByteOffset(allocation_slice_.mapped_ptr, resource_offset_);
+    resource_.owns_allocation = owns_allocation_;
+
+    const bool host_visible_requested =
+        (resource_.memory_properties & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0U;
+    if (host_visible_requested && resource_.mapped_ptr == nullptr) {
+        throw std::runtime_error(
+            "BufferHost::BindAllocation host-visible allocation is not persistently mapped");
+    }
 }
 
 void BufferHost::DestroyBuffer(VulkanContext& context_,
@@ -170,7 +199,9 @@ void BufferHost::DestroyBuffer(VulkanContext& context_,
     }
     resource_.buffer = VK_NULL_HANDLE;
 
-    if (resource_.memory_host != nullptr && resource_.allocation_slice.valid()) {
+    if (resource_.owns_allocation &&
+        resource_.memory_host != nullptr &&
+        resource_.allocation_slice.valid()) {
         resource_.memory_host->Deallocate(resource_.allocation_slice);
     }
 
@@ -182,6 +213,7 @@ void BufferHost::DestroyBuffer(VulkanContext& context_,
     resource_.memory_properties = 0U;
     resource_.memory_type_index = 0U;
     resource_.non_coherent_atom_size = 1U;
+    resource_.owns_allocation = false;
 }
 
 void* BufferHost::Map(VulkanContext& context_,

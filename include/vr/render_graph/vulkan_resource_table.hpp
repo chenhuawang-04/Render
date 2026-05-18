@@ -35,7 +35,19 @@ struct PhysicalBufferRecord final {
     BufferDesc desc{};
     resource::BufferResource owned_resource{};
     ImportedBufferBinding imported_buffer{};
+    std::uint32_t alias_page_index = invalid_render_graph_index;
+    bool aliased = false;
     bool imported = false;
+};
+
+struct TransientBufferPageRecord final {
+    std::uint32_t page_index = invalid_render_graph_index;
+    Center::Memory::Vulkan::Slice allocation_slice{};
+    resource::GpuMemoryHost* memory_host = nullptr;
+    VkDeviceSize size_bytes = 0U;
+    VkDeviceSize alignment_bytes = 1U;
+    std::uint32_t memory_type_bits = 0U;
+    std::vector<ResourceHandle> resources{};
 };
 
 struct VulkanResourceTableStats final {
@@ -45,6 +57,8 @@ struct VulkanResourceTableStats final {
     std::uint32_t persistent_buffer_count = 0U;
     std::uint32_t transient_texture_count = 0U;
     std::uint32_t transient_buffer_count = 0U;
+    std::uint32_t transient_buffer_page_count = 0U;
+    std::uint32_t transient_aliased_buffer_count = 0U;
 };
 
 class VulkanResourceTable final {
@@ -99,6 +113,7 @@ private:
 private:
     std::vector<PhysicalTextureRecord> textures{};
     std::vector<PhysicalBufferRecord> buffers{};
+    std::vector<TransientBufferPageRecord> transient_buffer_pages{};
     std::vector<render::RenderTargetHandle> imported_textures{};
     std::vector<ImportedBufferBinding> imported_buffers{};
     VulkanResourceTableStats stats{};

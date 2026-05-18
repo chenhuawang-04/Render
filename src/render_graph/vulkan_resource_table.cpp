@@ -1,6 +1,9 @@
 #include "vr/render_graph/vulkan_resource_table.hpp"
 
+#include "vr/render_graph/alias_allocator.hpp"
+
 #include <algorithm>
+#include <limits>
 #include <stdexcept>
 
 namespace vr::render_graph {
@@ -193,6 +196,56 @@ namespace {
            bindings_[logical_.index].buffer != VK_NULL_HANDLE;
 }
 
+struct PreparedTransientBuffer final {
+    const CompiledResource* resource = nullptr;
+    const TransientAllocationRecord* allocation_record = nullptr;
+    resource::BufferCreateInfo create_info{};
+    resource::BufferResource buffer_object{};
+    VkMemoryRequirements memory_requirements{};
+};
+
+[[nodiscard]] const TransientAllocationRecord* FindTransientAllocationRecord(
+    const TransientAllocationPlan& plan_,
+    const ResourceHandle logical_) noexcept {
+    const auto existing = std::find_if(plan_.records.begin(),
+                                       plan_.records.end(),
+                                       [&](const TransientAllocationRecord& record_) {
+                                           return record_.resource.index == logical_.index;
+                                       });
+    return existing != plan_.records.end() ? &(*existing) : nullptr;
+}
+
+[[nodiscard]] auto FindPreparedTransientBuffer(std::vector<PreparedTransientBuffer>& prepared_,
+                                               const ResourceHandle logical_) {
+    return std::find_if(prepared_.begin(),
+                        prepared_.end(),
+                        [&](const PreparedTransientBuffer& entry_) {
+                            return entry_.resource != nullptr &&
+                                   entry_.resource->handle.index == logical_.index;
+                        });
+}
+
+[[nodiscard]] auto FindTransientBufferPageRecord(
+    std::vector<TransientBufferPageRecord>& pages_,
+    const std::uint32_t page_index_) {
+    return std::find_if(pages_.begin(),
+                        pages_.end(),
+                        [&](const TransientBufferPageRecord& page_) {
+                            return page_.page_index == page_index_;
+                        });
+}
+
+void DestroyTransientBufferPages(std::vector<TransientBufferPageRecord>& pages_) noexcept {
+    for (auto& page_ : pages_) {
+        if (page_.memory_host != nullptr && page_.allocation_slice.valid()) {
+            page_.memory_host->Deallocate(page_.allocation_slice);
+            page_.allocation_slice = {};
+        }
+        page_.memory_host = nullptr;
+    }
+    pages_.clear();
+}
+
 } // namespace
 
 void VulkanResourceTable::BeginFrame(VulkanContext& device_,
@@ -232,92 +285,253 @@ void VulkanResourceTable::Resolve(VulkanContext& device_,
                                   const std::uint64_t completed_submit_value_) {
     std::vector<PhysicalTextureRecord> previous_textures = std::move(textures);
     std::vector<PhysicalBufferRecord> previous_buffers = std::move(buffers);
+    std::vector<TransientBufferPageRecord> previous_transient_buffer_pages = std::move(transient_buffer_pages);
     textures.clear();
     buffers.clear();
+    transient_buffer_pages.clear();
     textures.reserve(compiled_graph_.Resources().size());
     buffers.reserve(compiled_graph_.Resources().size());
 
-    for (const auto& resource_ : compiled_graph_.Resources()) {
-        if (resource_.kind == ResourceKind::texture) {
-            auto previous = FindTextureRecord(previous_textures, resource_.handle);
-            PhysicalTextureRecord record{};
+    try {
+        std::vector<PreparedTransientBuffer> prepared_transient_buffers{};
+        prepared_transient_buffers.reserve(compiled_graph_.Resources().size());
+        for (const auto& resource_ : compiled_graph_.Resources()) {
+            if (resource_.kind != ResourceKind::buffer ||
+                resource_.lifetime != ResourceLifetime::transient) {
+                continue;
+            }
+
+            PreparedTransientBuffer prepared{};
+            prepared.resource = &resource_;
+            prepared.allocation_record = FindTransientAllocationRecord(compiled_graph_.TransientAllocations(),
+                                                                       resource_.handle);
+            prepared.create_info = BuildBufferCreateInfo(resource_.buffer);
+            prepared.buffer_object = resource::BufferHost::CreateBufferObject(device_,
+                                                                              prepared.create_info);
+            vkGetBufferMemoryRequirements(device_.Device(),
+                                          prepared.buffer_object.buffer,
+                                          &prepared.memory_requirements);
+            prepared_transient_buffers.push_back(std::move(prepared));
+        }
+
+        for (const auto& page_ : compiled_graph_.TransientAllocations().pages) {
+            if (page_.kind != ResourceKind::buffer || page_.resources.empty()) {
+                continue;
+            }
+
+            VkDeviceSize page_size = 0U;
+            VkDeviceSize page_alignment = 1U;
+            std::uint32_t memory_type_bits = 0xFFFFFFFFU;
+            bool have_resource = false;
+            for (const auto handle_ : page_.resources) {
+                const auto prepared = FindPreparedTransientBuffer(prepared_transient_buffers, handle_);
+                if (prepared == prepared_transient_buffers.end()) {
+                    continue;
+                }
+                page_size = (std::max)(page_size, prepared->memory_requirements.size);
+                page_alignment = (std::max)(page_alignment, prepared->memory_requirements.alignment);
+                memory_type_bits &= prepared->memory_requirements.memoryTypeBits;
+                have_resource = true;
+            }
+
+            if (!have_resource) {
+                continue;
+            }
+            if (memory_type_bits == 0U) {
+                throw std::runtime_error(
+                    "VulkanResourceTable transient buffer alias page has no shared memory type bits");
+            }
+
+            VkMemoryRequirements aggregate_requirements{};
+            aggregate_requirements.size = page_size;
+            aggregate_requirements.alignment = page_alignment;
+            aggregate_requirements.memoryTypeBits = memory_type_bits;
+
+            TransientBufferPageRecord page_record{};
+            page_record.page_index = page_.page_index;
+            page_record.size_bytes = page_size;
+            page_record.alignment_bytes = page_alignment;
+            page_record.memory_type_bits = memory_type_bits;
+            page_record.resources = page_.resources;
+            page_record.allocation_slice = gpu_memory_host_.AllocateBufferMemory(
+                aggregate_requirements,
+                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                false,
+                Center::Memory::Vulkan::LifetimeHint::transient,
+                Center::Memory::Vulkan::HostAccess::none,
+                false,
+                false);
+            page_record.memory_host = &gpu_memory_host_;
+            transient_buffer_pages.push_back(std::move(page_record));
+        }
+
+        for (const auto& resource_ : compiled_graph_.Resources()) {
+            if (resource_.kind == ResourceKind::texture) {
+                auto previous = FindTextureRecord(previous_textures, resource_.handle);
+                PhysicalTextureRecord record{};
+                record.logical = resource_.handle;
+                record.debug_name = resource_.debug_name;
+                record.lifetime = resource_.lifetime;
+                record.desc = resource_.texture;
+
+                if (resource_.lifetime == ResourceLifetime::imported) {
+                    if (!HasImportedTextureBinding(imported_textures, resource_.handle)) {
+                        throw std::invalid_argument(
+                            "VulkanResourceTable missing imported texture binding for logical resource");
+                    }
+                    record.render_target = imported_textures[resource_.handle.index];
+                    record.imported = true;
+                } else if (resource_.lifetime == ResourceLifetime::persistent &&
+                           previous != previous_textures.end() &&
+                           !previous->imported &&
+                           TextureDescsEqual(previous->desc, resource_.texture) &&
+                           render::IsValidRenderTargetHandle(previous->render_target)) {
+                    record.render_target = previous->render_target;
+                    previous->render_target = render::invalid_render_target_handle;
+                } else {
+                    if (previous != previous_textures.end() &&
+                        !previous->imported &&
+                        render::IsValidRenderTargetHandle(previous->render_target)) {
+                        (void)render_target_host_.DestroyTarget(device_,
+                                                                previous->render_target,
+                                                                last_submitted_value_,
+                                                                completed_submit_value_);
+                        previous->render_target = render::invalid_render_target_handle;
+                    }
+
+                    render::RenderTargetDesc desc = BuildRenderTargetDesc(resource_.texture);
+                    desc.debug_name = record.debug_name.c_str();
+                    desc.lifetime = ResolveRenderTargetLifetime(resource_.lifetime);
+                    record.render_target = (resource_.lifetime == ResourceLifetime::persistent)
+                        ? render_target_host_.CreatePersistentTarget(device_, desc)
+                        : render_target_host_.CreateTransientTarget(device_, desc);
+                }
+
+                textures.push_back(std::move(record));
+                continue;
+            }
+
+            auto previous = FindBufferRecord(previous_buffers, resource_.handle);
+            PhysicalBufferRecord record{};
             record.logical = resource_.handle;
             record.debug_name = resource_.debug_name;
             record.lifetime = resource_.lifetime;
-            record.desc = resource_.texture;
+            record.desc = resource_.buffer;
 
             if (resource_.lifetime == ResourceLifetime::imported) {
-                if (!HasImportedTextureBinding(imported_textures, resource_.handle)) {
+                if (!HasImportedBufferBinding(imported_buffers, resource_.handle)) {
                     throw std::invalid_argument(
-                        "VulkanResourceTable missing imported texture binding for logical resource");
+                        "VulkanResourceTable missing imported buffer binding for logical resource");
                 }
-                record.render_target = imported_textures[resource_.handle.index];
                 record.imported = true;
+                record.imported_buffer = imported_buffers[resource_.handle.index];
             } else if (resource_.lifetime == ResourceLifetime::persistent &&
-                       previous != previous_textures.end() &&
+                       previous != previous_buffers.end() &&
                        !previous->imported &&
-                       TextureDescsEqual(previous->desc, resource_.texture) &&
-                       render::IsValidRenderTargetHandle(previous->render_target)) {
-                record.render_target = previous->render_target;
-                previous->render_target = render::invalid_render_target_handle;
-            } else {
-                if (previous != previous_textures.end() &&
-                    !previous->imported &&
-                    render::IsValidRenderTargetHandle(previous->render_target)) {
-                    (void)render_target_host_.DestroyTarget(device_,
-                                                            previous->render_target,
-                                                            last_submitted_value_,
-                                                            completed_submit_value_);
-                    previous->render_target = render::invalid_render_target_handle;
+                       BufferDescsEqual(previous->desc, resource_.buffer) &&
+                       previous->owned_resource.buffer != VK_NULL_HANDLE) {
+                record.owned_resource = previous->owned_resource;
+                previous->owned_resource = {};
+            } else if (resource_.lifetime == ResourceLifetime::transient) {
+                const auto prepared = FindPreparedTransientBuffer(prepared_transient_buffers, resource_.handle);
+                if (prepared == prepared_transient_buffers.end()) {
+                    throw std::runtime_error(
+                        "VulkanResourceTable missing prepared transient buffer");
                 }
 
-                render::RenderTargetDesc desc = BuildRenderTargetDesc(resource_.texture);
-                desc.debug_name = record.debug_name.c_str();
-                desc.lifetime = ResolveRenderTargetLifetime(resource_.lifetime);
-                record.render_target = (resource_.lifetime == ResourceLifetime::persistent)
-                    ? render_target_host_.CreatePersistentTarget(device_, desc)
-                    : render_target_host_.CreateTransientTarget(device_, desc);
+                record.owned_resource = prepared->buffer_object;
+                prepared->buffer_object = {};
+
+                const bool page_backed = prepared->allocation_record != nullptr &&
+                                         prepared->allocation_record->eligible &&
+                                         prepared->allocation_record->page_index != invalid_render_graph_index;
+                if (page_backed) {
+                    const auto page_it = FindTransientBufferPageRecord(transient_buffer_pages,
+                                                                       prepared->allocation_record->page_index);
+                    if (page_it == transient_buffer_pages.end()) {
+                        throw std::runtime_error(
+                            "VulkanResourceTable transient buffer page assignment missing page record");
+                    }
+                    resource::BufferHost::BindAllocation(record.owned_resource,
+                                                         gpu_memory_host_,
+                                                         page_it->allocation_slice,
+                                                         false,
+                                                         prepared->allocation_record->page_offset_bytes);
+                    record.alias_page_index = page_it->page_index;
+                    record.aliased = prepared->allocation_record->aliased;
+                } else {
+                    const bool host_visible_requested =
+                        (prepared->create_info.memory_properties & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0U;
+                    const bool persistent_map =
+                        host_visible_requested || prepared->create_info.persistently_mapped;
+                    const auto allocation_slice = gpu_memory_host_.AllocateBufferMemory(
+                        prepared->memory_requirements,
+                        prepared->create_info.memory_properties,
+                        prepared->create_info.memory_properties,
+                        persistent_map,
+                        Center::Memory::Vulkan::LifetimeHint::transient,
+                        host_visible_requested
+                            ? Center::Memory::Vulkan::HostAccess::sequential_write
+                            : Center::Memory::Vulkan::HostAccess::none,
+                        false,
+                        false,
+                        record.owned_resource.buffer);
+                    resource::BufferHost::BindAllocation(record.owned_resource,
+                                                         gpu_memory_host_,
+                                                         allocation_slice,
+                                                         true,
+                                                         0U);
+                }
+            } else {
+                if (previous != previous_buffers.end() &&
+                    !previous->imported &&
+                    previous->owned_resource.buffer != VK_NULL_HANDLE) {
+                    resource::BufferHost::DestroyBuffer(device_, previous->owned_resource);
+                    previous->owned_resource = {};
+                }
+                record.owned_resource = resource::BufferHost::CreateBuffer(
+                    device_,
+                    BuildBufferCreateInfo(resource_.buffer),
+                    gpu_memory_host_);
             }
 
-            textures.push_back(std::move(record));
-            continue;
+            buffers.push_back(std::move(record));
         }
-
-        auto previous = FindBufferRecord(previous_buffers, resource_.handle);
-        PhysicalBufferRecord record{};
-        record.logical = resource_.handle;
-        record.debug_name = resource_.debug_name;
-        record.lifetime = resource_.lifetime;
-        record.desc = resource_.buffer;
-
-        if (resource_.lifetime == ResourceLifetime::imported) {
-            if (!HasImportedBufferBinding(imported_buffers, resource_.handle)) {
-                throw std::invalid_argument(
-                    "VulkanResourceTable missing imported buffer binding for logical resource");
+    } catch (...) {
+        for (auto& texture_ : textures) {
+            if (!texture_.imported && render::IsValidRenderTargetHandle(texture_.render_target)) {
+                (void)render_target_host_.DestroyTarget(device_,
+                                                        texture_.render_target,
+                                                        last_submitted_value_,
+                                                        completed_submit_value_);
             }
-            record.imported = true;
-            record.imported_buffer = imported_buffers[resource_.handle.index];
-        } else if (resource_.lifetime == ResourceLifetime::persistent &&
-                   previous != previous_buffers.end() &&
-                   !previous->imported &&
-                   BufferDescsEqual(previous->desc, resource_.buffer) &&
-                   previous->owned_resource.buffer != VK_NULL_HANDLE) {
-            record.owned_resource = previous->owned_resource;
-            previous->owned_resource = {};
-        } else {
-            if (previous != previous_buffers.end() &&
-                !previous->imported &&
-                previous->owned_resource.buffer != VK_NULL_HANDLE) {
-                resource::BufferHost::DestroyBuffer(device_, previous->owned_resource);
-                previous->owned_resource = {};
-            }
-            record.owned_resource = resource::BufferHost::CreateBuffer(
-                device_,
-                BuildBufferCreateInfo(resource_.buffer),
-                gpu_memory_host_);
         }
+        textures.clear();
 
-        buffers.push_back(std::move(record));
+        for (auto& buffer_ : buffers) {
+            if (!buffer_.imported && buffer_.owned_resource.buffer != VK_NULL_HANDLE) {
+                resource::BufferHost::DestroyBuffer(device_, buffer_.owned_resource);
+            }
+        }
+        buffers.clear();
+        DestroyTransientBufferPages(transient_buffer_pages);
+
+        for (auto& texture_ : previous_textures) {
+            if (!texture_.imported && render::IsValidRenderTargetHandle(texture_.render_target)) {
+                (void)render_target_host_.DestroyTarget(device_,
+                                                        texture_.render_target,
+                                                        last_submitted_value_,
+                                                        completed_submit_value_);
+            }
+        }
+        for (auto& buffer_ : previous_buffers) {
+            if (!buffer_.imported && buffer_.owned_resource.buffer != VK_NULL_HANDLE) {
+                resource::BufferHost::DestroyBuffer(device_, buffer_.owned_resource);
+            }
+        }
+        DestroyTransientBufferPages(previous_transient_buffer_pages);
+        throw;
     }
 
     for (auto& record_ : previous_textures) {
@@ -334,6 +548,7 @@ void VulkanResourceTable::Resolve(VulkanContext& device_,
             resource::BufferHost::DestroyBuffer(device_, record_.owned_resource);
         }
     }
+    DestroyTransientBufferPages(previous_transient_buffer_pages);
 
     RefreshStats();
 }
@@ -465,6 +680,8 @@ void VulkanResourceTable::DestroyTransientRecords(VulkanContext& device_,
         }
         ++buffer_it;
     }
+
+    DestroyTransientBufferPages(transient_buffer_pages);
 }
 
 void VulkanResourceTable::DestroyAllRecords(VulkanContext& device_,
@@ -489,6 +706,7 @@ void VulkanResourceTable::DestroyAllRecords(VulkanContext& device_,
         }
     }
     buffers.clear();
+    DestroyTransientBufferPages(transient_buffer_pages);
 }
 
 void VulkanResourceTable::RefreshStats() noexcept {
@@ -509,8 +727,10 @@ void VulkanResourceTable::RefreshStats() noexcept {
             stats.persistent_buffer_count += 1U;
         } else if (buffer_.lifetime == ResourceLifetime::transient) {
             stats.transient_buffer_count += 1U;
+            stats.transient_aliased_buffer_count += buffer_.aliased ? 1U : 0U;
         }
     }
+    stats.transient_buffer_page_count = static_cast<std::uint32_t>(transient_buffer_pages.size());
 }
 
 } // namespace vr::render_graph
