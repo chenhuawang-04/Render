@@ -2,6 +2,7 @@
 
 #include "vr/asset/texture_host.hpp"
 #include "vr/render_graph/graph_command_context.hpp"
+#include "vr/render_graph/render_graph_builder.hpp"
 #include "vr/ecs/system/transparency_render_policy.hpp"
 #include "vr/particle/generated/particle_2d_frag_spv.hpp"
 #include "vr/particle/generated/particle_2d_vert_spv.hpp"
@@ -27,6 +28,28 @@ namespace vr::particle {
 namespace {
 
 constexpr VkPrimitiveTopology k_particle_topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+[[nodiscard]] render::BindlessTableId ResolveSampledImageTableId(
+    const render::BindlessResourceSystem* bindless_resources_) noexcept {
+    if (bindless_resources_ != nullptr) {
+        const auto table_id = bindless_resources_->SampledImageTable();
+        if (table_id.IsValid()) {
+            return table_id;
+        }
+    }
+    return render::BindlessResourceSystem::SampledImageTableContractId();
+}
+
+[[nodiscard]] render::BindlessTableId ResolveSamplerTableId(
+    const render::BindlessResourceSystem* bindless_resources_) noexcept {
+    if (bindless_resources_ != nullptr) {
+        const auto table_id = bindless_resources_->SamplerTable();
+        if (table_id.IsValid()) {
+            return table_id;
+        }
+    }
+    return render::BindlessResourceSystem::SamplerTableContractId();
+}
 
 [[nodiscard]] ecs::ParticleSimulationMode AccumulateRequestedSimulationMode(
     ecs::ParticleSimulationMode current_,
@@ -434,6 +457,30 @@ void ParticleRenderer2D::PrepareFrame(const render::ParticleRenderer2DPrepareVie
     stats.skipped_upload = last_upload_result.skipped_upload;
 }
 
+void ParticleRenderer2D::DescribeGraphDescriptorBindings(render_graph::RenderGraphBuilder& builder_,
+                                                         const render_graph::PassHandle pass_) const {
+    if (!initialized) {
+        throw std::runtime_error(
+            "ParticleRenderer2D::DescribeGraphDescriptorBindings called before Initialize");
+    }
+
+    const auto sampled_image_table = ResolveSampledImageTableId(bindless_resources);
+    const auto sampler_table = ResolveSamplerTableId(bindless_resources);
+    builder_.SetPassShaderContract(
+        pass_,
+        render_graph::MakeSharedBindlessFragmentShaderContract("particle_2d.frag"));
+    builder_.AddBindlessTableBinding(pass_,
+                                     0U,
+                                     render_graph::DescriptorBindingKind::sampled_image_table,
+                                     sampled_image_table.value,
+                                     render_graph::shader_stage_fragment_flag);
+    builder_.AddBindlessTableBinding(pass_,
+                                     1U,
+                                     render_graph::DescriptorBindingKind::sampler_table,
+                                     sampler_table.value,
+                                     render_graph::shader_stage_fragment_flag);
+}
+
 void ParticleRenderer2D::Record(const render::FrameRecordContext& record_context_) {
     if (!initialized) {
         throw std::runtime_error("ParticleRenderer2D::Record called before Initialize");
@@ -557,12 +604,14 @@ void ParticleRenderer2D::RecordGraphInternal(render_graph::GraphCommandContext& 
 
     RecordDrawBatches(context_.CommandBuffer(),
                       render_extent,
-                      resolved_color.format);
+                      resolved_color.format,
+                      &context_);
 }
 
 void ParticleRenderer2D::RecordDrawBatches(VkCommandBuffer command_buffer_,
                                            VkExtent2D render_extent_,
-                                           VkFormat color_format_) {
+                                           VkFormat color_format_,
+                                           const render_graph::GraphCommandContext* graph_context_) {
     if (((gpu_build_active &&
           last_gpu_build_result.resources.draw_instances.buffer != VK_NULL_HANDLE) ||
          (last_upload_result.upload.buffer != VK_NULL_HANDLE)) &&
@@ -597,24 +646,30 @@ void ParticleRenderer2D::RecordDrawBatches(VkCommandBuffer command_buffer_,
         push_constants.reserved1 = 0U;
         push_constants.reserved2 = 0U;
 
-        const std::array<VkDescriptorSet, 2U> bindless_sets{
-            bindless_resources->SampledImageSet(),
-            bindless_resources->SamplerSet()
-        };
-        if (bindless_sets[0U] == VK_NULL_HANDLE || bindless_sets[1U] == VK_NULL_HANDLE) {
-            throw std::runtime_error(
-                "ParticleRenderer2D::RecordDrawBatches requires valid bindless descriptor sets");
-        }
-
         const VkPipelineLayout pipeline_layout = pipeline_host->GetPipelineLayout(pipeline_layout_id);
-        vkCmdBindDescriptorSets(command_buffer_,
-                                VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                pipeline_layout,
-                                0U,
-                                static_cast<std::uint32_t>(bindless_sets.size()),
-                                bindless_sets.data(),
-                                0U,
-                                nullptr);
+        if (graph_context_ != nullptr) {
+            graph_context_->BindCurrentPassDescriptorSets(VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                                          pipeline_layout,
+                                                          0U,
+                                                          2U);
+        } else {
+            const std::array<VkDescriptorSet, 2U> bindless_sets{
+                bindless_resources->SampledImageSet(),
+                bindless_resources->SamplerSet()
+            };
+            if (bindless_sets[0U] == VK_NULL_HANDLE || bindless_sets[1U] == VK_NULL_HANDLE) {
+                throw std::runtime_error(
+                    "ParticleRenderer2D::RecordDrawBatches requires valid bindless descriptor sets");
+            }
+            vkCmdBindDescriptorSets(command_buffer_,
+                                    VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                    pipeline_layout,
+                                    0U,
+                                    static_cast<std::uint32_t>(bindless_sets.size()),
+                                    bindless_sets.data(),
+                                    0U,
+                                    nullptr);
+        }
         ++stats.descriptor_set_bind_count;
 
         render::GraphicsPipelineId bound_pipeline{};

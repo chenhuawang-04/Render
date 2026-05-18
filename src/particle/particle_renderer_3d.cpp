@@ -2,6 +2,7 @@
 
 #include "vr/ecs/system/particle_system.hpp"
 #include "vr/render_graph/graph_command_context.hpp"
+#include "vr/render_graph/render_graph_builder.hpp"
 #include "vr/ecs/system/spatial_math.hpp"
 #include "vr/ecs/system/transparency_render_policy.hpp"
 #include "vr/particle/generated/particle_3d_frag_spv.hpp"
@@ -29,6 +30,28 @@ namespace vr::particle {
 namespace {
 
 constexpr VkPrimitiveTopology k_particle_topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+[[nodiscard]] render::BindlessTableId ResolveSampledImageTableId(
+    const render::BindlessResourceSystem* bindless_resources_) noexcept {
+    if (bindless_resources_ != nullptr) {
+        const auto table_id = bindless_resources_->SampledImageTable();
+        if (table_id.IsValid()) {
+            return table_id;
+        }
+    }
+    return render::BindlessResourceSystem::SampledImageTableContractId();
+}
+
+[[nodiscard]] render::BindlessTableId ResolveSamplerTableId(
+    const render::BindlessResourceSystem* bindless_resources_) noexcept {
+    if (bindless_resources_ != nullptr) {
+        const auto table_id = bindless_resources_->SamplerTable();
+        if (table_id.IsValid()) {
+            return table_id;
+        }
+    }
+    return render::BindlessResourceSystem::SamplerTableContractId();
+}
 
 [[nodiscard]] float ResolveDepthClearValue(bool reverse_z_,
                                            float configured_value_) noexcept {
@@ -833,6 +856,30 @@ void ParticleRenderer3D::PrepareFrame(const render::ParticleRenderer3DPrepareVie
     }
 }
 
+void ParticleRenderer3D::DescribeGraphDescriptorBindings(render_graph::RenderGraphBuilder& builder_,
+                                                         const render_graph::PassHandle pass_) const {
+    if (!initialized) {
+        throw std::runtime_error(
+            "ParticleRenderer3D::DescribeGraphDescriptorBindings called before Initialize");
+    }
+
+    const auto sampled_image_table = ResolveSampledImageTableId(bindless_resources);
+    const auto sampler_table = ResolveSamplerTableId(bindless_resources);
+    builder_.SetPassShaderContract(
+        pass_,
+        render_graph::MakeSharedBindlessFragmentShaderContract("particle_3d.frag"));
+    builder_.AddBindlessTableBinding(pass_,
+                                     0U,
+                                     render_graph::DescriptorBindingKind::sampled_image_table,
+                                     sampled_image_table.value,
+                                     render_graph::shader_stage_fragment_flag);
+    builder_.AddBindlessTableBinding(pass_,
+                                     1U,
+                                     render_graph::DescriptorBindingKind::sampler_table,
+                                     sampler_table.value,
+                                     render_graph::shader_stage_fragment_flag);
+}
+
 void ParticleRenderer3D::Record(const render::FrameRecordContext& record_context_) {
     RecordInternal(record_context_, 0U, false);
 }
@@ -1316,22 +1363,10 @@ void ParticleRenderer3D::RecordGraphInternal(render_graph::GraphCommandContext& 
         push_constants.reserved1 = 0U;
         push_constants.reserved2 = 0U;
 
-        const std::array<VkDescriptorSet, 2U> bindless_sets{
-            bindless_resources->SampledImageSet(),
-            bindless_resources->SamplerSet()
-        };
-        if (bindless_sets[0U] == VK_NULL_HANDLE || bindless_sets[1U] == VK_NULL_HANDLE) {
-            throw std::runtime_error(
-                "ParticleRenderer3D::RecordGraphSceneStage requires valid bindless descriptor sets");
-        }
-        vkCmdBindDescriptorSets(context_.CommandBuffer(),
-                                VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                pipeline_layout,
-                                0U,
-                                static_cast<std::uint32_t>(bindless_sets.size()),
-                                bindless_sets.data(),
-                                0U,
-                                nullptr);
+        context_.BindCurrentPassDescriptorSets(VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                               pipeline_layout,
+                                               0U,
+                                               2U);
         ++stats.descriptor_set_bind_count;
 
         render::GraphicsPipelineId bound_pipeline{};

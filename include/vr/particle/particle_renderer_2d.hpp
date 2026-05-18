@@ -35,6 +35,7 @@ class BindlessResourceSystem;
 
 namespace vr::render_graph {
 class GraphCommandContext;
+class RenderGraphBuilder;
 }
 
 namespace vr::resource {
@@ -100,6 +101,8 @@ public:
     void ResetOutputTargetConfig() noexcept;
 
     void PrepareFrame(const render::ParticleRenderer2DPrepareView& prepare_view_);
+    void DescribeGraphDescriptorBindings(render_graph::RenderGraphBuilder& builder_,
+                                         render_graph::PassHandle pass_) const;
     void Record(const render::FrameRecordContext& record_context_);
     void RecordGraphOverlay(render_graph::GraphCommandContext& context_,
                             render_graph::ResourceHandle color_target_);
@@ -157,7 +160,8 @@ private:
                              render_graph::ResourceHandle color_target_);
     void RecordDrawBatches(VkCommandBuffer command_buffer_,
                            VkExtent2D render_extent_,
-                           VkFormat color_format_);
+                           VkFormat color_format_,
+                           const render_graph::GraphCommandContext* graph_context_ = nullptr);
     void RemapCpuInstancesToBindless();
     [[nodiscard]] std::uint32_t ResolveTextureSlot(std::uint32_t texture_id_) const noexcept;
     [[nodiscard]] std::uint32_t ResolveSamplerSlot(std::uint32_t texture_id_) const noexcept;

@@ -1,16 +1,19 @@
 #include "support/test_framework.hpp"
 #include "vr/geometry/geometry_renderer_2d.hpp"
 #include "vr/geometry/geometry_renderer_3d.hpp"
+#include "vr/render/bindless_resource_system.hpp"
 #include "vr/render/render_target_composite_renderer.hpp"
 #include "vr/render/scene_recorder_2d.hpp"
 #include "vr/render/scene_recorder_3d.hpp"
 #include "vr/render_graph/frame_graph_build.hpp"
 #include "vr/render_graph/frame_snapshot.hpp"
 #include "vr/render_graph/render_graph_builder.hpp"
+#include "vr/particle/particle_renderer_2d.hpp"
 #include "vr/particle/particle_renderer_3d.hpp"
 #include "vr/runtime/runtime.hpp"
 #include "vr/runtime/services/render_graph_runtime_service.hpp"
 #include "vr/shadow/shadow_renderer_3d.hpp"
+#include "vr/surface/surface_renderer_2d.hpp"
 #include "vr/surface/surface_renderer_3d.hpp"
 #include "vr/text/text_renderer_2d.hpp"
 #include "vr/text/text_renderer_3d.hpp"
@@ -28,6 +31,49 @@ template<typename FnT>
         return true;
     }
     return false;
+}
+
+void CheckSharedBindlessBindings(vr::test::TestContext& test_context_,
+                                 const vr::render_graph::CompiledPass& pass_) {
+    test_context_.Require(pass_.descriptor_bindings.size() == 2U,
+                          "pass_.descriptor_bindings.size() == 2U",
+                          {__FILE__, static_cast<std::uint32_t>(__LINE__)});
+    test_context_.Check(pass_.descriptor_bindings[0U].set == 0U,
+                        "pass_.descriptor_bindings[0U].set == 0U",
+                        {__FILE__, static_cast<std::uint32_t>(__LINE__)});
+    test_context_.Check(pass_.descriptor_bindings[0U].binding == 0U,
+                        "pass_.descriptor_bindings[0U].binding == 0U",
+                        {__FILE__, static_cast<std::uint32_t>(__LINE__)});
+    test_context_.Check(pass_.descriptor_bindings[0U].source ==
+                            vr::render_graph::DescriptorBindingSource::bindless_table,
+                        "pass_.descriptor_bindings[0U].source == DescriptorBindingSource::bindless_table",
+                        {__FILE__, static_cast<std::uint32_t>(__LINE__)});
+    test_context_.Check(pass_.descriptor_bindings[0U].kind ==
+                            vr::render_graph::DescriptorBindingKind::sampled_image_table,
+                        "pass_.descriptor_bindings[0U].kind == DescriptorBindingKind::sampled_image_table",
+                        {__FILE__, static_cast<std::uint32_t>(__LINE__)});
+    test_context_.Check(pass_.descriptor_bindings[0U].source_id ==
+                            vr::render::BindlessResourceSystem::SampledImageTableContractId().value,
+                        "pass_.descriptor_bindings[0U].source_id == SampledImageTableContractId()",
+                        {__FILE__, static_cast<std::uint32_t>(__LINE__)});
+    test_context_.Check(pass_.descriptor_bindings[1U].set == 1U,
+                        "pass_.descriptor_bindings[1U].set == 1U",
+                        {__FILE__, static_cast<std::uint32_t>(__LINE__)});
+    test_context_.Check(pass_.descriptor_bindings[1U].binding == 0U,
+                        "pass_.descriptor_bindings[1U].binding == 0U",
+                        {__FILE__, static_cast<std::uint32_t>(__LINE__)});
+    test_context_.Check(pass_.descriptor_bindings[1U].source ==
+                            vr::render_graph::DescriptorBindingSource::bindless_table,
+                        "pass_.descriptor_bindings[1U].source == DescriptorBindingSource::bindless_table",
+                        {__FILE__, static_cast<std::uint32_t>(__LINE__)});
+    test_context_.Check(pass_.descriptor_bindings[1U].kind ==
+                            vr::render_graph::DescriptorBindingKind::sampler_table,
+                        "pass_.descriptor_bindings[1U].kind == DescriptorBindingKind::sampler_table",
+                        {__FILE__, static_cast<std::uint32_t>(__LINE__)});
+    test_context_.Check(pass_.descriptor_bindings[1U].source_id ==
+                            vr::render::BindlessResourceSystem::SamplerTableContractId().value,
+                        "pass_.descriptor_bindings[1U].source_id == SamplerTableContractId()",
+                        {__FILE__, static_cast<std::uint32_t>(__LINE__)});
 }
 
 VR_TEST_CASE(RenderGraphBuilder_tracks_linear_resource_versioning,
@@ -619,6 +665,7 @@ VR_TEST_CASE(SceneRecorder2D_build_render_graph_routes_background_to_scene_pass,
     VR_CHECK(compiled.Passes()[0].executable);
     VR_REQUIRE(compiled.Passes()[0].raster_pass.has_value());
     VR_CHECK(static_cast<bool>(compiled.Passes()[0].execute));
+    CheckSharedBindlessBindings(test_context_, compiled.Passes()[0]);
 
     recorder.ClearFramePacket();
 }
@@ -669,6 +716,109 @@ VR_TEST_CASE(SceneRecorder2D_build_render_graph_routes_overlay_text_to_overlay_p
     VR_CHECK(compiled.Passes()[1].executable);
     VR_REQUIRE(compiled.Passes()[1].raster_pass.has_value());
     VR_CHECK(static_cast<bool>(compiled.Passes()[1].execute));
+    CheckSharedBindlessBindings(test_context_, compiled.Passes()[1]);
+
+    recorder.ClearFramePacket();
+}
+
+VR_TEST_CASE(SceneRecorder2D_build_render_graph_routes_overlay_surface_to_overlay_pass,
+             "unit;core;render_graph;runtime") {
+    vr::render::SceneRecorder2D recorder{};
+    recorder.Initialize();
+    vr::surface::SurfaceRenderer2D overlay_surface{};
+    overlay_surface.Initialize();
+    recorder.RegisterOverlayRenderer(overlay_surface);
+
+    vr::ecs::Camera<vr::ecs::Dim2> world_camera{};
+    world_camera.style.viewport = {.origin_x = 0.0F, .origin_y = 0.0F, .width = 320.0F, .height = 180.0F};
+    world_camera.runtime.revision = 1U;
+    world_camera.runtime.culling_mask = 0x1U;
+    auto world_view = vr::render::MakeRenderViewFromCamera(
+        world_camera,
+        static_cast<const vr::ecs::Transform<vr::ecs::Dim2>*>(nullptr),
+        vr::render::RenderViewKind::world,
+        0U);
+    auto overlay_view = vr::render::MakeRenderViewFromCamera(
+        world_camera,
+        static_cast<const vr::ecs::Transform<vr::ecs::Dim2>*>(nullptr),
+        vr::render::RenderViewKind::ui,
+        1U);
+    const std::array views{world_view, overlay_view};
+    auto packet = vr::render::MakeScenePacketFromViewRange(
+        views.data(),
+        static_cast<std::uint32_t>(views.size()),
+        0U,
+        4406U,
+        vr::render::RenderScenePacketKind::mixed);
+    packet.postprocess_policy = vr::render::RenderPostProcessPolicy::disabled;
+    packet.flags = vr::render::render_scene_packet_allow_overlay_flag;
+    recorder.SetFramePacket(&packet);
+
+    const auto snapshot = vr::render_graph::MakeFrameSnapshot(packet, 30U);
+    vr::render_graph::RenderGraphBuilder builder{};
+    auto color_chain = vr::render_graph::invalid_resource_version;
+    const auto build_result = vr::render_graph::BuildMinimalFrameGraph(builder, snapshot);
+    recorder.BuildRenderGraph(builder, snapshot, build_result, color_chain);
+    const auto compiled = builder.Compile();
+
+    VR_CHECK(build_result.built);
+    VR_REQUIRE(compiled.Passes().size() >= 4U);
+    VR_CHECK(compiled.Passes()[1].debug_name == "overlay_pass");
+    VR_CHECK(compiled.Passes()[1].executable);
+    VR_REQUIRE(compiled.Passes()[1].raster_pass.has_value());
+    VR_CHECK(static_cast<bool>(compiled.Passes()[1].execute));
+    CheckSharedBindlessBindings(test_context_, compiled.Passes()[1]);
+
+    recorder.ClearFramePacket();
+}
+
+VR_TEST_CASE(SceneRecorder2D_build_render_graph_routes_overlay_particle_to_overlay_pass,
+             "unit;core;render_graph;runtime") {
+    vr::render::SceneRecorder2D recorder{};
+    recorder.Initialize();
+    vr::particle::ParticleRenderer2D overlay_particle{};
+    overlay_particle.Initialize();
+    recorder.RegisterOverlayRenderer(overlay_particle);
+
+    vr::ecs::Camera<vr::ecs::Dim2> world_camera{};
+    world_camera.style.viewport = {.origin_x = 0.0F, .origin_y = 0.0F, .width = 320.0F, .height = 180.0F};
+    world_camera.runtime.revision = 1U;
+    world_camera.runtime.culling_mask = 0x1U;
+    auto world_view = vr::render::MakeRenderViewFromCamera(
+        world_camera,
+        static_cast<const vr::ecs::Transform<vr::ecs::Dim2>*>(nullptr),
+        vr::render::RenderViewKind::world,
+        0U);
+    auto overlay_view = vr::render::MakeRenderViewFromCamera(
+        world_camera,
+        static_cast<const vr::ecs::Transform<vr::ecs::Dim2>*>(nullptr),
+        vr::render::RenderViewKind::ui,
+        1U);
+    const std::array views{world_view, overlay_view};
+    auto packet = vr::render::MakeScenePacketFromViewRange(
+        views.data(),
+        static_cast<std::uint32_t>(views.size()),
+        0U,
+        4407U,
+        vr::render::RenderScenePacketKind::mixed);
+    packet.postprocess_policy = vr::render::RenderPostProcessPolicy::disabled;
+    packet.flags = vr::render::render_scene_packet_allow_overlay_flag;
+    recorder.SetFramePacket(&packet);
+
+    const auto snapshot = vr::render_graph::MakeFrameSnapshot(packet, 31U);
+    vr::render_graph::RenderGraphBuilder builder{};
+    auto color_chain = vr::render_graph::invalid_resource_version;
+    const auto build_result = vr::render_graph::BuildMinimalFrameGraph(builder, snapshot);
+    recorder.BuildRenderGraph(builder, snapshot, build_result, color_chain);
+    const auto compiled = builder.Compile();
+
+    VR_CHECK(build_result.built);
+    VR_REQUIRE(compiled.Passes().size() >= 4U);
+    VR_CHECK(compiled.Passes()[1].debug_name == "overlay_pass");
+    VR_CHECK(compiled.Passes()[1].executable);
+    VR_REQUIRE(compiled.Passes()[1].raster_pass.has_value());
+    VR_CHECK(static_cast<bool>(compiled.Passes()[1].execute));
+    CheckSharedBindlessBindings(test_context_, compiled.Passes()[1]);
 
     recorder.ClearFramePacket();
 }
@@ -1188,6 +1338,7 @@ VR_TEST_CASE(SceneRecorder3D_build_render_graph_inserts_transparent_scene_pass_b
     VR_CHECK(compiled.Passes()[1].reads[0].access == vr::render_graph::AccessKind::color_attachment_read);
     VR_REQUIRE(compiled.Passes()[1].writes.size() == 1U);
     VR_CHECK(compiled.Passes()[1].writes[0].access == vr::render_graph::AccessKind::color_attachment_write);
+    CheckSharedBindlessBindings(test_context_, compiled.Passes()[1]);
     VR_CHECK(compiled.Passes()[2].debug_name == "overlay_pass");
     VR_CHECK(compiled.Passes()[3].debug_name == "present_to_swapchain");
     VR_CHECK(compiled.Passes()[4].debug_name == "present_transition");
@@ -1417,6 +1568,53 @@ VR_TEST_CASE(SceneRecorder3D_build_render_graph_routes_mixed_surface_text_partic
     VR_CHECK(compiled.Passes()[1].executable);
     VR_REQUIRE(compiled.Passes()[1].raster_pass.has_value());
     VR_CHECK(static_cast<bool>(compiled.Passes()[1].execute));
+    CheckSharedBindlessBindings(test_context_, compiled.Passes()[1]);
+
+    recorder.ClearFramePacket();
+}
+
+VR_TEST_CASE(SceneRecorder3D_build_render_graph_routes_single_particle_transparent_slice_to_transparent_pass,
+             "unit;core;render_graph;runtime") {
+    vr::render::SceneRecorder3D recorder{};
+    recorder.Initialize();
+    vr::particle::ParticleRenderer3D particle_renderer{};
+    particle_renderer.Initialize();
+    recorder.RegisterTransparentSceneRenderer(particle_renderer, vr::render::SceneRenderPassRole::single);
+
+    vr::ecs::Camera<vr::ecs::Dim3> world_camera{};
+    world_camera.style.viewport = {.origin_x = 0.0F, .origin_y = 0.0F, .width = 320.0F, .height = 180.0F};
+    world_camera.runtime.revision = 1U;
+    world_camera.runtime.culling_mask = 0x1U;
+    auto world_view = vr::render::MakeRenderViewFromCamera(
+        world_camera,
+        static_cast<const vr::ecs::Transform<vr::ecs::Dim3>*>(nullptr),
+        vr::render::RenderViewKind::world,
+        0U);
+    auto packet = vr::render::MakeSingleViewScenePacket(world_view, 894U);
+    packet.postprocess_policy = vr::render::RenderPostProcessPolicy::disabled;
+    recorder.SetFramePacket(&packet);
+
+    const auto snapshot = vr::render_graph::MakeFrameSnapshot(packet, 22U);
+    vr::render_graph::RenderGraphBuilder builder{};
+    auto color_chain = vr::render_graph::invalid_resource_version;
+    const auto build_result = vr::render_graph::BuildMinimalFrameGraph(
+        builder,
+        snapshot,
+        [&recorder](vr::render_graph::RenderGraphBuilder& builder_ref_,
+                    const vr::render_graph::FrameSnapshot3D& snapshot_ref_,
+                    vr::render_graph::MinimalFrameGraphBuildResult<vr::ecs::Dim3>& build_result_ref_,
+                    vr::render_graph::ResourceVersionHandle& color_chain_ref_) {
+            recorder.BuildRenderGraph(builder_ref_, snapshot_ref_, build_result_ref_, color_chain_ref_);
+        });
+    const auto compiled = builder.Compile();
+
+    VR_CHECK(build_result.built);
+    VR_REQUIRE(compiled.Passes().size() >= 4U);
+    VR_CHECK(compiled.Passes()[1].debug_name == "transparent_scene_pass");
+    VR_CHECK(compiled.Passes()[1].executable);
+    VR_REQUIRE(compiled.Passes()[1].raster_pass.has_value());
+    VR_CHECK(static_cast<bool>(compiled.Passes()[1].execute));
+    CheckSharedBindlessBindings(test_context_, compiled.Passes()[1]);
 
     recorder.ClearFramePacket();
 }
@@ -1474,6 +1672,7 @@ VR_TEST_CASE(SceneRecorder3D_build_render_graph_routes_overlay_text_to_overlay_p
     VR_CHECK(compiled.Passes()[1].executable);
     VR_REQUIRE(compiled.Passes()[1].raster_pass.has_value());
     VR_CHECK(static_cast<bool>(compiled.Passes()[1].execute));
+    CheckSharedBindlessBindings(test_context_, compiled.Passes()[1]);
 
     recorder.ClearFramePacket();
 }
@@ -1519,6 +1718,7 @@ VR_TEST_CASE(SceneRecorder3D_build_render_graph_routes_single_surface_opaque_sli
     VR_CHECK(compiled.Passes()[0].executable);
     VR_REQUIRE(compiled.Passes()[0].raster_pass.has_value());
     VR_CHECK(static_cast<bool>(compiled.Passes()[0].execute));
+    CheckSharedBindlessBindings(test_context_, compiled.Passes()[0]);
 
     recorder.ClearFramePacket();
 }

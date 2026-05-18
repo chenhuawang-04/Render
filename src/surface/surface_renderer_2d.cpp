@@ -2,6 +2,7 @@
 
 #include "vr/render/color_blend_state.hpp"
 #include "vr/render_graph/graph_command_context.hpp"
+#include "vr/render_graph/render_graph_builder.hpp"
 #include "vr/render/bindless_resource_system.hpp"
 #include "vr/render/render_loop_host.hpp"
 #include "vr/render/render_target_pass.hpp"
@@ -24,6 +25,32 @@
 #include <utility>
 
 namespace vr::surface {
+
+namespace {
+
+[[nodiscard]] render::BindlessTableId ResolveSampledImageTableId(
+    const render::BindlessResourceSystem* bindless_resources_) noexcept {
+    if (bindless_resources_ != nullptr) {
+        const auto table_id = bindless_resources_->SampledImageTable();
+        if (table_id.IsValid()) {
+            return table_id;
+        }
+    }
+    return render::BindlessResourceSystem::SampledImageTableContractId();
+}
+
+[[nodiscard]] render::BindlessTableId ResolveSamplerTableId(
+    const render::BindlessResourceSystem* bindless_resources_) noexcept {
+    if (bindless_resources_ != nullptr) {
+        const auto table_id = bindless_resources_->SamplerTable();
+        if (table_id.IsValid()) {
+            return table_id;
+        }
+    }
+    return render::BindlessResourceSystem::SamplerTableContractId();
+}
+
+} // namespace
 
 std::size_t SurfaceRenderer2D::BlendModeIndex(BlendModeKind mode_) noexcept {
     return static_cast<std::size_t>(mode_);
@@ -517,6 +544,30 @@ void SurfaceRenderer2D::PrepareFrame(const render::SurfaceRenderer2DPrepareView&
     pending_dirty_component_count = 0U;
 }
 
+void SurfaceRenderer2D::DescribeGraphDescriptorBindings(render_graph::RenderGraphBuilder& builder_,
+                                                        const render_graph::PassHandle pass_) const {
+    if (!initialized) {
+        throw std::runtime_error(
+            "SurfaceRenderer2D::DescribeGraphDescriptorBindings called before Initialize");
+    }
+
+    const auto sampled_image_table = ResolveSampledImageTableId(bindless_resources);
+    const auto sampler_table = ResolveSamplerTableId(bindless_resources);
+    builder_.SetPassShaderContract(
+        pass_,
+        render_graph::MakeSharedBindlessFragmentShaderContract("surface_2d.frag"));
+    builder_.AddBindlessTableBinding(pass_,
+                                     0U,
+                                     render_graph::DescriptorBindingKind::sampled_image_table,
+                                     sampled_image_table.value,
+                                     render_graph::shader_stage_fragment_flag);
+    builder_.AddBindlessTableBinding(pass_,
+                                     1U,
+                                     render_graph::DescriptorBindingKind::sampler_table,
+                                     sampler_table.value,
+                                     render_graph::shader_stage_fragment_flag);
+}
+
 void SurfaceRenderer2D::Record(const render::FrameRecordContext& record_context_) {
     if (!initialized) {
         throw std::runtime_error("SurfaceRenderer2D::Record called before Initialize");
@@ -625,12 +676,14 @@ void SurfaceRenderer2D::RecordGraphInternal(render_graph::GraphCommandContext& c
 
     RecordDrawBatches(context_.CommandBuffer(),
                       render_extent,
-                      resolved_color.format);
+                      resolved_color.format,
+                      &context_);
 }
 
 void SurfaceRenderer2D::RecordDrawBatches(VkCommandBuffer command_buffer_,
                                           VkExtent2D render_extent_,
-                                          VkFormat color_format_) {
+                                          VkFormat color_format_,
+                                          const render_graph::GraphCommandContext* graph_context_) {
     if (last_upload_result.upload.buffer == VK_NULL_HANDLE ||
         runtime_scratch.draw_batches.empty()) {
         return;
@@ -715,14 +768,21 @@ void SurfaceRenderer2D::RecordDrawBatches(VkCommandBuffer command_buffer_,
         }
 
         if (!bindless_sets_bound) {
-            vkCmdBindDescriptorSets(command_buffer_,
-                                    VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                    pipeline_layout,
-                                    0U,
-                                    static_cast<std::uint32_t>(bindless_sets.size()),
-                                    bindless_sets.data(),
-                                    0U,
-                                    nullptr);
+            if (graph_context_ != nullptr) {
+                graph_context_->BindCurrentPassDescriptorSets(VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                                              pipeline_layout,
+                                                              0U,
+                                                              2U);
+            } else {
+                vkCmdBindDescriptorSets(command_buffer_,
+                                        VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                        pipeline_layout,
+                                        0U,
+                                        static_cast<std::uint32_t>(bindless_sets.size()),
+                                        bindless_sets.data(),
+                                        0U,
+                                        nullptr);
+            }
             bindless_sets_bound = true;
             ++stats.descriptor_set_bind_count;
         }

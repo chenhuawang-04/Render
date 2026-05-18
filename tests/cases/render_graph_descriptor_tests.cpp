@@ -15,6 +15,41 @@ template<typename FnT>
     return false;
 }
 
+void CheckSharedBindlessBindings(vr::test::TestContext& test_context_,
+                                 const vr::render_graph::CompiledPass& pass_) {
+    test_context_.Require(pass_.descriptor_bindings.size() == 2U,
+                          "pass_.descriptor_bindings.size() == 2U",
+                          {__FILE__, static_cast<std::uint32_t>(__LINE__)});
+    test_context_.Check(pass_.descriptor_bindings[0U].set == 0U,
+                        "pass_.descriptor_bindings[0U].set == 0U",
+                        {__FILE__, static_cast<std::uint32_t>(__LINE__)});
+    test_context_.Check(pass_.descriptor_bindings[0U].binding == 0U,
+                        "pass_.descriptor_bindings[0U].binding == 0U",
+                        {__FILE__, static_cast<std::uint32_t>(__LINE__)});
+    test_context_.Check(pass_.descriptor_bindings[0U].source ==
+                            vr::render_graph::DescriptorBindingSource::bindless_table,
+                        "pass_.descriptor_bindings[0U].source == DescriptorBindingSource::bindless_table",
+                        {__FILE__, static_cast<std::uint32_t>(__LINE__)});
+    test_context_.Check(pass_.descriptor_bindings[0U].kind ==
+                            vr::render_graph::DescriptorBindingKind::sampled_image_table,
+                        "pass_.descriptor_bindings[0U].kind == DescriptorBindingKind::sampled_image_table",
+                        {__FILE__, static_cast<std::uint32_t>(__LINE__)});
+    test_context_.Check(pass_.descriptor_bindings[1U].set == 1U,
+                        "pass_.descriptor_bindings[1U].set == 1U",
+                        {__FILE__, static_cast<std::uint32_t>(__LINE__)});
+    test_context_.Check(pass_.descriptor_bindings[1U].binding == 0U,
+                        "pass_.descriptor_bindings[1U].binding == 0U",
+                        {__FILE__, static_cast<std::uint32_t>(__LINE__)});
+    test_context_.Check(pass_.descriptor_bindings[1U].source ==
+                            vr::render_graph::DescriptorBindingSource::bindless_table,
+                        "pass_.descriptor_bindings[1U].source == DescriptorBindingSource::bindless_table",
+                        {__FILE__, static_cast<std::uint32_t>(__LINE__)});
+    test_context_.Check(pass_.descriptor_bindings[1U].kind ==
+                            vr::render_graph::DescriptorBindingKind::sampler_table,
+                        "pass_.descriptor_bindings[1U].kind == DescriptorBindingKind::sampler_table",
+                        {__FILE__, static_cast<std::uint32_t>(__LINE__)});
+}
+
 VR_TEST_CASE(RenderGraphDescriptor_pass_bindings_compile_into_compiled_graph,
              "unit;core;render_graph;descriptor") {
     vr::render_graph::RenderGraphBuilder builder{};
@@ -93,6 +128,37 @@ VR_TEST_CASE(RenderGraphDescriptor_pass_bindings_compile_into_compiled_graph,
     VR_CHECK(json.find("\"kind\": \"sampler_table\"") != std::string::npos);
 }
 
+VR_TEST_CASE(RenderGraphDescriptor_duplicate_identical_binding_is_accepted,
+             "unit;core;render_graph;descriptor") {
+    vr::render_graph::RenderGraphBuilder builder{};
+    const auto pass = builder.AddPass("consume_color", true);
+    builder.SetPassShaderContract(
+        pass,
+        vr::render_graph::MakeSharedBindlessFragmentShaderContract("test_bindless_contract"));
+    builder.AddBindlessTableBinding(pass,
+                                    0U,
+                                    vr::render_graph::DescriptorBindingKind::sampled_image_table,
+                                    51U,
+                                    vr::render_graph::shader_stage_fragment_flag);
+    builder.AddBindlessTableBinding(pass,
+                                    0U,
+                                    vr::render_graph::DescriptorBindingKind::sampled_image_table,
+                                    51U,
+                                    vr::render_graph::shader_stage_fragment_flag);
+    builder.AddBindlessTableBinding(pass,
+                                    1U,
+                                    vr::render_graph::DescriptorBindingKind::sampler_table,
+                                    52U,
+                                    vr::render_graph::shader_stage_fragment_flag);
+
+    const auto compiled = builder.Compile();
+    const auto* consume_pass = compiled.FindPass(pass);
+    VR_REQUIRE(consume_pass != nullptr);
+    CheckSharedBindlessBindings(test_context_, *consume_pass);
+    VR_CHECK(consume_pass->descriptor_bindings[0U].source_id == 51U);
+    VR_CHECK(consume_pass->descriptor_bindings[1U].source_id == 52U);
+}
+
 VR_TEST_CASE(RenderGraphDescriptor_duplicate_set_binding_is_rejected,
              "unit;core;render_graph;descriptor") {
     vr::render_graph::RenderGraphBuilder builder{};
@@ -111,6 +177,91 @@ VR_TEST_CASE(RenderGraphDescriptor_duplicate_set_binding_is_rejected,
                                         vr::render_graph::DescriptorBindingKind::sampler_table,
                                         22U,
                                         vr::render_graph::shader_stage_fragment_flag);
+    }));
+}
+
+VR_TEST_CASE(RenderGraphDescriptor_shader_contracts_merge_compatible_bindings,
+             "unit;core;render_graph;descriptor") {
+    vr::render_graph::RenderGraphBuilder builder{};
+    const auto pass = builder.AddPass("consume_color", true);
+    builder.SetPassShaderContract(
+        pass,
+        vr::render_graph::PassShaderContractDesc{
+            .debug_name = "sampled_table_only",
+            .bindings = {
+                vr::render_graph::ShaderContractBindingDesc{
+                    .set = 0U,
+                    .binding = 0U,
+                    .kind = vr::render_graph::DescriptorBindingKind::sampled_image_table,
+                    .stage_flags = vr::render_graph::shader_stage_fragment_flag,
+                    .descriptor_count = 3U,
+                },
+            },
+        });
+    builder.SetPassShaderContract(
+        pass,
+        vr::render_graph::PassShaderContractDesc{
+            .debug_name = "sampler_table_only",
+            .bindings = {
+                vr::render_graph::ShaderContractBindingDesc{
+                    .set = 1U,
+                    .binding = 0U,
+                    .kind = vr::render_graph::DescriptorBindingKind::sampler_table,
+                    .stage_flags = vr::render_graph::shader_stage_fragment_flag,
+                    .descriptor_count = 1U,
+                },
+            },
+        });
+    builder.AddBindlessTableBinding(pass,
+                                    0U,
+                                    vr::render_graph::DescriptorBindingKind::sampled_image_table,
+                                    61U,
+                                    vr::render_graph::shader_stage_fragment_flag);
+    builder.AddBindlessTableBinding(pass,
+                                    1U,
+                                    vr::render_graph::DescriptorBindingKind::sampler_table,
+                                    62U,
+                                    vr::render_graph::shader_stage_fragment_flag);
+
+    const auto compiled = builder.Compile();
+    const auto* consume_pass = compiled.FindPass(pass);
+    VR_REQUIRE(consume_pass != nullptr);
+    CheckSharedBindlessBindings(test_context_, *consume_pass);
+}
+
+VR_TEST_CASE(RenderGraphDescriptor_conflicting_shader_contract_merge_is_rejected,
+             "unit;core;render_graph;descriptor") {
+    vr::render_graph::RenderGraphBuilder builder{};
+    const auto pass = builder.AddPass("consume_color", true);
+    builder.SetPassShaderContract(
+        pass,
+        vr::render_graph::PassShaderContractDesc{
+            .debug_name = "sampled_table_only",
+            .bindings = {
+                vr::render_graph::ShaderContractBindingDesc{
+                    .set = 0U,
+                    .binding = 0U,
+                    .kind = vr::render_graph::DescriptorBindingKind::sampled_image_table,
+                    .stage_flags = vr::render_graph::shader_stage_fragment_flag,
+                    .descriptor_count = 3U,
+                },
+            },
+        });
+    VR_CHECK(ThrowsAnyException([&]() {
+        builder.SetPassShaderContract(
+            pass,
+            vr::render_graph::PassShaderContractDesc{
+                .debug_name = "conflicting_sampled_binding",
+                .bindings = {
+                    vr::render_graph::ShaderContractBindingDesc{
+                        .set = 0U,
+                        .binding = 0U,
+                        .kind = vr::render_graph::DescriptorBindingKind::sampler_table,
+                        .stage_flags = vr::render_graph::shader_stage_fragment_flag,
+                        .descriptor_count = 1U,
+                    },
+                },
+            });
     }));
 }
 

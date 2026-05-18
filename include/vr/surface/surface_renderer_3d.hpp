@@ -39,6 +39,7 @@ class IblHost;
 
 namespace vr::render_graph {
 class GraphCommandContext;
+class RenderGraphBuilder;
 }
 
 namespace vr::resource {
@@ -140,6 +141,8 @@ public:
     void ResetDepthTargetConfig() noexcept;
 
     void PrepareFrame(const render::SurfaceRenderer3DPrepareView& prepare_view_);
+    void DescribeGraphDescriptorBindings(render_graph::RenderGraphBuilder& builder_,
+                                         render_graph::PassHandle pass_) const;
     void Record(const render::FrameRecordContext& record_context_);
     void RecordSceneStage(const render::FrameRecordContext& record_context_,
                           render::SceneRenderStage stage_);

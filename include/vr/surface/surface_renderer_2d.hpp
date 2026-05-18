@@ -37,6 +37,7 @@ class BindlessResourceSystem;
 
 namespace vr::render_graph {
 class GraphCommandContext;
+class RenderGraphBuilder;
 }
 
 namespace vr::resource {
@@ -140,6 +141,8 @@ public:
     void ResetOutputTargetConfig() noexcept;
 
     void PrepareFrame(const render::SurfaceRenderer2DPrepareView& prepare_view_);
+    void DescribeGraphDescriptorBindings(render_graph::RenderGraphBuilder& builder_,
+                                         render_graph::PassHandle pass_) const;
     void Record(const render::FrameRecordContext& record_context_);
     void RecordGraphOverlay(render_graph::GraphCommandContext& context_,
                             render_graph::ResourceHandle color_target_);
@@ -237,7 +240,8 @@ private:
                              render_graph::ResourceHandle color_target_);
     void RecordDrawBatches(VkCommandBuffer command_buffer_,
                            VkExtent2D render_extent_,
-                           VkFormat color_format_);
+                           VkFormat color_format_,
+                           const render_graph::GraphCommandContext* graph_context_ = nullptr);
     void EnsureFallbackTexture(VulkanContext& context_,
                                render::UploadHost& upload_host_,
                                std::uint32_t frame_index_);

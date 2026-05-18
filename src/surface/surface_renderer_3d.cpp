@@ -2,6 +2,7 @@
 
 #include "vr/asset/texture_host.hpp"
 #include "vr/render_graph/graph_command_context.hpp"
+#include "vr/render_graph/render_graph_builder.hpp"
 #include "vr/ecs/system/transparency_render_policy.hpp"
 #include "vr/ecs/system/spatial_math.hpp"
 #include "vr/render/bindless_resource_system.hpp"
@@ -25,6 +26,32 @@
 #include <utility>
 
 namespace vr::surface {
+
+namespace {
+
+[[nodiscard]] render::BindlessTableId ResolveSampledImageTableId(
+    const render::BindlessResourceSystem* bindless_resources_) noexcept {
+    if (bindless_resources_ != nullptr) {
+        const auto table_id = bindless_resources_->SampledImageTable();
+        if (table_id.IsValid()) {
+            return table_id;
+        }
+    }
+    return render::BindlessResourceSystem::SampledImageTableContractId();
+}
+
+[[nodiscard]] render::BindlessTableId ResolveSamplerTableId(
+    const render::BindlessResourceSystem* bindless_resources_) noexcept {
+    if (bindless_resources_ != nullptr) {
+        const auto table_id = bindless_resources_->SamplerTable();
+        if (table_id.IsValid()) {
+            return table_id;
+        }
+    }
+    return render::BindlessResourceSystem::SamplerTableContractId();
+}
+
+} // namespace
 
 bool SurfaceRenderer3D::IsDepthFormatSupported(VulkanContext& context_, VkFormat format_) noexcept {
     if (format_ == VK_FORMAT_UNDEFINED || context_.PhysicalDevice() == VK_NULL_HANDLE) {
@@ -657,6 +684,30 @@ void SurfaceRenderer3D::PrepareFrame(const render::SurfaceRenderer3DPrepareView&
     pending_dirty_component_count = 0U;
 }
 
+void SurfaceRenderer3D::DescribeGraphDescriptorBindings(render_graph::RenderGraphBuilder& builder_,
+                                                        const render_graph::PassHandle pass_) const {
+    if (!initialized) {
+        throw std::runtime_error(
+            "SurfaceRenderer3D::DescribeGraphDescriptorBindings called before Initialize");
+    }
+
+    const auto sampled_image_table = ResolveSampledImageTableId(bindless_resources);
+    const auto sampler_table = ResolveSamplerTableId(bindless_resources);
+    builder_.SetPassShaderContract(
+        pass_,
+        render_graph::MakeSharedBindlessFragmentShaderContract("surface_3d.frag"));
+    builder_.AddBindlessTableBinding(pass_,
+                                     0U,
+                                     render_graph::DescriptorBindingKind::sampled_image_table,
+                                     sampled_image_table.value,
+                                     render_graph::shader_stage_fragment_flag);
+    builder_.AddBindlessTableBinding(pass_,
+                                     1U,
+                                     render_graph::DescriptorBindingKind::sampler_table,
+                                     sampler_table.value,
+                                     render_graph::shader_stage_fragment_flag);
+}
+
 void SurfaceRenderer3D::Record(const render::FrameRecordContext& record_context_) {
     RecordInternal(record_context_, 0U, false);
 }
@@ -1046,19 +1097,14 @@ void SurfaceRenderer3D::RecordGraphInternal(render_graph::GraphCommandContext& c
             (active_frame_index < frame_appearance_resources.size())
                 ? frame_appearance_resources[active_frame_index].descriptor_set
                 : VK_NULL_HANDLE;
-        const std::array<VkDescriptorSet, 4U> descriptor_sets{
-            bindless_resources->SampledImageSet(),
-            bindless_resources->SamplerSet(),
+        const std::array<VkDescriptorSet, 2U> local_descriptor_sets{
             appearance_descriptor_set,
             active_ibl_params_descriptor_set
         };
-        if (descriptor_sets[0U] == VK_NULL_HANDLE || descriptor_sets[1U] == VK_NULL_HANDLE) {
-            throw std::runtime_error("SurfaceRenderer3D::RecordGraphSceneStage requires valid bindless descriptor sets");
-        }
-        if (descriptor_sets[2U] == VK_NULL_HANDLE) {
+        if (local_descriptor_sets[0U] == VK_NULL_HANDLE) {
             throw std::runtime_error("SurfaceRenderer3D::RecordGraphSceneStage requires valid appearance descriptor set");
         }
-        if (descriptor_sets[3U] == VK_NULL_HANDLE) {
+        if (local_descriptor_sets[1U] == VK_NULL_HANDLE) {
             throw std::runtime_error("SurfaceRenderer3D::RecordGraphSceneStage requires valid IBL params descriptor set");
         }
 
@@ -1104,12 +1150,16 @@ void SurfaceRenderer3D::RecordGraphInternal(render_graph::GraphCommandContext& c
                                    0U,
                                    sizeof(PushConstants),
                                    &push_constants);
+                context_.BindCurrentPassDescriptorSets(VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                                       pipeline_layout,
+                                                       0U,
+                                                       2U);
                 vkCmdBindDescriptorSets(context_.CommandBuffer(),
                                         VK_PIPELINE_BIND_POINT_GRAPHICS,
                                         pipeline_layout,
-                                        0U,
-                                        static_cast<std::uint32_t>(descriptor_sets.size()),
-                                        descriptor_sets.data(),
+                                        2U,
+                                        static_cast<std::uint32_t>(local_descriptor_sets.size()),
+                                        local_descriptor_sets.data(),
                                         0U,
                                         nullptr);
                 shared_state_bound = true;
