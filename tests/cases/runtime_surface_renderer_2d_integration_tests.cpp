@@ -1,4 +1,5 @@
 #include "support/test_framework.hpp"
+#include "support/render_graph_test_utils.hpp"
 #include "vr/ecs/system/appearance_system.hpp"
 #include "vr/ecs/system/surface_system.hpp"
 #include "vr/ecs/system/transform_system.hpp"
@@ -304,6 +305,7 @@ VR_TEST_CASE(RuntimeIntegration_surface_renderer_2d_bindless_scene_packet_smoke,
         std::uint32_t max_light_descriptor_binds = 0U;
         std::uint32_t max_descriptor_updates = 0U;
         std::uint32_t min_bindless_slot_index = std::numeric_limits<std::uint32_t>::max();
+        bool graph_only_active = false;
         std::array<std::uint32_t, 1U> dirty_indices{1U};
 
         constexpr std::uint32_t max_ticks = 10U;
@@ -321,6 +323,8 @@ VR_TEST_CASE(RuntimeIntegration_surface_renderer_2d_bindless_scene_packet_smoke,
                 tick_result.render.code == vr::render::TickCode::RecreateRequested) {
                 ++submitted_frames;
             }
+            graph_only_active =
+                graph_only_active || vr::test::IsGraphOnlyScene2DRecordActive(runtime);
 
             const auto stats = surface_renderer.Stats();
             max_draw_calls = std::max(max_draw_calls, stats.draw_call_count);
@@ -343,6 +347,7 @@ VR_TEST_CASE(RuntimeIntegration_surface_renderer_2d_bindless_scene_packet_smoke,
         }
 
         VR_REQUIRE(submitted_frames > 0U);
+        VR_CHECK(graph_only_active);
         VR_CHECK(max_draw_calls > 0U);
         VR_CHECK(max_draw_batches > 0U);
         VR_CHECK(max_instances > 0U);
@@ -355,7 +360,7 @@ VR_TEST_CASE(RuntimeIntegration_surface_renderer_2d_bindless_scene_packet_smoke,
         VR_CHECK(surface_image_host.ResolveBindlessImageSlot(7102U).IsValid());
         VR_CHECK(min_bindless_slot_index != std::numeric_limits<std::uint32_t>::max());
         VR_CHECK(recorder.Stats().frame_packet_prepare_count > 0U);
-        VR_CHECK(recorder.Stats().frame_packet_record_count > 0U);
+        VR_CHECK(recorder.Stats().frame_packet_record_count == 0U);
         VR_CHECK(recorder.Stats().frame_view_count == 1U);
 
         recorder.Shutdown(runtime.Context());

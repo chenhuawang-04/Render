@@ -1,9 +1,11 @@
-﻿#include "support/test_framework.hpp"
+#include "support/test_framework.hpp"
+#include "support/render_graph_test_utils.hpp"
 #include "vr/ecs/system/appearance_system.hpp"
 #include "vr/ecs/system/geometry_path_system.hpp"
 #include "vr/ecs/system/geometry_system.hpp"
 #include "vr/geometry/geometry_renderer_2d.hpp"
 #include "vr/render/render_runtime_host.hpp"
+#include "vr/render/render_target_composite_renderer.hpp"
 #include "vr/render/render_view_submission_utils.hpp"
 #include "vr/render/scene_recorder_2d.hpp"
 
@@ -41,7 +43,7 @@ using GeometrySystem2D = vr::ecs::GeometrySystem<vr::ecs::Dim2>;
 }
 
 [[nodiscard]] bool IsEnvironmentSkipError(std::string_view message_) {
-    constexpr std::array<std::string_view, 15U> patterns{
+    constexpr std::array<std::string_view, 18U> patterns{
         "sdl_initsubsystem",
         "sdl_createwindow",
         "sdl_vulkan_getinstanceextensions",
@@ -55,6 +57,9 @@ using GeometrySystem2D = vr::ecs::GeometrySystem<vr::ecs::Dim2>;
         "vkgetphysicaldevicesurfacesupportkhr",
         "vkgetphysicaldevicesurfaceformatskhr",
         "vkgetphysicaldevicesurfacepresentmodeskhr",
+        "bindlessresourcesystem",
+        "descriptor indexing",
+        "runtime descriptor array",
         "dynamicrendering",
         "synchronization2"
     };
@@ -321,6 +326,7 @@ VR_TEST_CASE(RuntimeIntegration_scene_recorder_2d_geometry_scene_packet_smoke,
         std::uint32_t submitted_frames = 0U;
         std::uint32_t max_draw_calls = 0U;
         std::uint32_t max_primitives = 0U;
+        bool graph_only_active = false;
 
         for (std::uint32_t tick_index = 0U;
              tick_index < 8U && runtime.IsRunning();
@@ -330,16 +336,19 @@ VR_TEST_CASE(RuntimeIntegration_scene_recorder_2d_geometry_scene_packet_smoke,
                 tick_result.render.code == vr::render::TickCode::RecreateRequested) {
                 ++submitted_frames;
             }
+            graph_only_active =
+                graph_only_active || vr::test::IsGraphOnlyScene2DRecordActive(runtime);
             max_draw_calls = std::max(max_draw_calls, geometry_renderer.Stats().draw_call_count);
             max_primitives = std::max(max_primitives, geometry_renderer.Stats().primitive_count);
             SDL_Delay(1U);
         }
 
         VR_REQUIRE(submitted_frames > 0U);
+        VR_CHECK(graph_only_active);
         VR_CHECK(max_draw_calls > 0U);
         VR_CHECK(max_primitives > 0U);
         VR_CHECK(recorder.Stats().frame_packet_prepare_count > 0U);
-        VR_CHECK(recorder.Stats().frame_packet_record_count > 0U);
+        VR_CHECK(recorder.Stats().frame_packet_record_count == 0U);
         VR_CHECK(recorder.Stats().frame_view_count == 1U);
         VR_CHECK(recorder.Stats().effective_layer_mask == 0x1U);
         VR_CHECK(recorder.Stats().overlay_enabled == 0U);
@@ -352,6 +361,172 @@ VR_TEST_CASE(RuntimeIntegration_scene_recorder_2d_geometry_scene_packet_smoke,
         runtime.Shutdown();
         runtime_initialized = false;
     } catch (const std::exception& exception_) {
+        if (geometry_renderer_initialized && runtime_initialized && runtime.IsInitialized()) {
+            geometry_renderer.Shutdown(runtime.Context());
+            geometry_renderer_initialized = false;
+        }
+        if (geometry_upload_host_initialized && runtime_initialized && runtime.IsInitialized()) {
+            geometry_upload_host.Shutdown(runtime.Context());
+            geometry_upload_host_initialized = false;
+        }
+        if (runtime_initialized && runtime.IsInitialized()) {
+            runtime.Shutdown();
+            runtime_initialized = false;
+        }
+
+        if (IsEnvironmentSkipError(exception_.what())) {
+            VR_SKIP(exception_.what());
+        }
+        throw;
+    }
+}
+
+VR_TEST_CASE(RuntimeIntegration_scene_recorder_2d_scene_consumer_composite_smoke,
+             "integration;gpu;sdl;runtime;geometry;scene2d;postprocess") {
+    Runtime runtime{};
+    vr::geometry::GeometryUploadHost geometry_upload_host{};
+    vr::geometry::GeometryRenderer2D geometry_renderer{};
+    vr::render::RenderTargetCompositeRenderer composite_renderer{};
+    vr::render::SceneRecorder2D recorder{};
+
+    bool runtime_initialized = false;
+    bool geometry_upload_host_initialized = false;
+    bool geometry_renderer_initialized = false;
+    bool composite_renderer_initialized = false;
+
+    std::array<Geometry2D, 1U> geometry_components{};
+    InitializePathComponent(geometry_components[0U],
+                            21U,
+                            211U,
+                            vr::ecs::Rgba8{255U, 214U, 154U, 255U},
+                            8.0F,
+                            std::array<vr::ecs::Float2, 4U>{
+                                vr::ecs::Float2{.x = 70.0F, .y = 64.0F},
+                                vr::ecs::Float2{.x = 344.0F, .y = 96.0F},
+                                vr::ecs::Float2{.x = 300.0F, .y = 244.0F},
+                                vr::ecs::Float2{.x = 92.0F, .y = 226.0F}
+                            });
+
+    try {
+        Runtime::CreateInfo create_info{};
+        create_info.platform.window.title = "vr_tests_scene_recorder_2d_composite";
+        create_info.platform.window.width = 640;
+        create_info.platform.window.height = 360;
+        create_info.platform.window.resizable = true;
+        create_info.platform.window.high_pixel_density = true;
+        create_info.platform.instance.enable_validation = false;
+        create_info.platform.device.required_vulkan12_features.runtimeDescriptorArray = VK_TRUE;
+        create_info.platform.device.required_vulkan12_features.descriptorBindingPartiallyBound = VK_TRUE;
+        create_info.platform.device.required_vulkan12_features.descriptorBindingVariableDescriptorCount = VK_TRUE;
+        create_info.platform.device.required_vulkan12_features.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
+        create_info.platform.device.required_vulkan13_features.dynamicRendering = VK_TRUE;
+        create_info.platform.device.required_vulkan13_features.synchronization2 = VK_TRUE;
+        create_info.render_loop.swapchain.enable_vsync = false;
+        create_info.render_loop.swapchain.preferred_image_count = 2U;
+        create_info.render_loop.commands.initial_primary_per_frame = 2U;
+        create_info.render_loop.commands.primary_growth_chunk = 2U;
+        create_info.poll_events_each_tick = true;
+        runtime.Initialize(create_info);
+        runtime_initialized = true;
+
+        vr::geometry::GeometryUploadHostCreateInfo upload_create_info{};
+        upload_create_info.frames_in_flight = 2U;
+        upload_create_info.initial_2d_primitive_buffer_bytes = 256U * 1024U;
+        geometry_upload_host.Initialize(runtime.Context(), runtime.GpuMemory(), upload_create_info);
+        geometry_upload_host_initialized = true;
+
+        vr::geometry::GeometryRenderer2DCreateInfo renderer_create_info{};
+        renderer_create_info.runtime_build.quad_subdivision = 8U;
+        renderer_create_info.runtime_build.cubic_subdivision = 12U;
+        renderer_create_info.reserve_component_count = 1U;
+        renderer_create_info.reserve_primitive_count = 512U;
+        renderer_create_info.input_positions_pixel_space = true;
+        renderer_create_info.pixel_space_origin_top_left = true;
+        renderer_create_info.clear_swapchain = false;
+        renderer_create_info.clear_color = {{0.06F, 0.08F, 0.11F, 1.0F}};
+        geometry_renderer.Initialize(renderer_create_info);
+        geometry_renderer_initialized = true;
+        geometry_renderer.SetHost(&geometry_upload_host);
+        geometry_renderer.SetSceneData(geometry_components.data(), 1U);
+
+        vr::render::RenderTargetCompositeRendererCreateInfo composite_create_info{};
+        composite_create_info.clear_swapchain = true;
+        composite_create_info.enable_reinhard_tonemap = true;
+        composite_create_info.exposure = 1.10F;
+        composite_create_info.output_gamma = 2.2F;
+        composite_renderer.Initialize(composite_create_info);
+        composite_renderer_initialized = true;
+
+        recorder.Initialize({});
+        recorder.BindRuntime(runtime);
+        recorder.RegisterSceneRenderer(geometry_renderer, vr::render::SceneRenderPassRole::single, 0x1U);
+        recorder.RegisterSceneConsumer(composite_renderer,
+                                      vr::render::SceneRecorder2D::MakePresentOverlayOutputConfig(),
+                                      0x1U);
+
+        vr::render::RenderView2D main_view{};
+        vr::render::RenderScenePacket2D main_scene_packet{};
+        vr::render::RefreshExtentBoundScreenSceneSubmission(main_view,
+                                                            main_scene_packet,
+                                                            runtime.Swapchain().Extent(),
+                                                            0U,
+                                                            vr::render::RenderViewKind::world,
+                                                            vr::render::render_view_postprocess_enabled_flag,
+                                                            vr::render::render_scene_packet_allow_postprocess_flag,
+                                                            0x1U);
+        recorder.SetFramePacket(&main_scene_packet);
+
+        std::uint32_t submitted_frames = 0U;
+        std::uint32_t max_geometry_draw_calls = 0U;
+        std::uint32_t max_geometry_primitives = 0U;
+        std::uint32_t max_composite_draw_calls = 0U;
+        std::uint32_t max_composite_descriptor_binds = 0U;
+        bool graph_only_active = false;
+
+        for (std::uint32_t tick_index = 0U;
+             tick_index < 8U && runtime.IsRunning();
+             ++tick_index) {
+            const Runtime::RuntimeTickResult tick_result = runtime.Tick(recorder);
+            if (tick_result.render.code == vr::render::TickCode::Submitted ||
+                tick_result.render.code == vr::render::TickCode::RecreateRequested) {
+                ++submitted_frames;
+            }
+            graph_only_active =
+                graph_only_active || vr::test::IsGraphOnlyScene2DRecordActive(runtime);
+            max_geometry_draw_calls = std::max(max_geometry_draw_calls, geometry_renderer.Stats().draw_call_count);
+            max_geometry_primitives = std::max(max_geometry_primitives, geometry_renderer.Stats().primitive_count);
+            max_composite_draw_calls = std::max(max_composite_draw_calls, composite_renderer.Stats().draw_call_count);
+            max_composite_descriptor_binds = std::max(max_composite_descriptor_binds,
+                                                      composite_renderer.Stats().descriptor_set_bind_count);
+            SDL_Delay(1U);
+        }
+
+        VR_REQUIRE(submitted_frames > 0U);
+        VR_CHECK(graph_only_active);
+        VR_CHECK(max_geometry_draw_calls > 0U);
+        VR_CHECK(max_geometry_primitives > 0U);
+        VR_CHECK(max_composite_draw_calls > 0U);
+        VR_CHECK(max_composite_descriptor_binds > 0U);
+        VR_CHECK(recorder.Stats().frame_packet_prepare_count > 0U);
+        VR_CHECK(recorder.Stats().frame_packet_record_count == 0U);
+        VR_CHECK(recorder.Stats().postprocess_enabled == 1U);
+        VR_CHECK(recorder.Stats().frame_view_count == 1U);
+        VR_CHECK(!recorder.SceneTargets().IsReady());
+
+        recorder.Shutdown(runtime.Context());
+        composite_renderer.Shutdown(runtime.Context());
+        composite_renderer_initialized = false;
+        geometry_renderer.Shutdown(runtime.Context());
+        geometry_renderer_initialized = false;
+        geometry_upload_host.Shutdown(runtime.Context());
+        geometry_upload_host_initialized = false;
+        runtime.Shutdown();
+        runtime_initialized = false;
+    } catch (const std::exception& exception_) {
+        if (composite_renderer_initialized && runtime_initialized && runtime.IsInitialized()) {
+            composite_renderer.Shutdown(runtime.Context());
+            composite_renderer_initialized = false;
+        }
         if (geometry_renderer_initialized && runtime_initialized && runtime.IsInitialized()) {
             geometry_renderer.Shutdown(runtime.Context());
             geometry_renderer_initialized = false;

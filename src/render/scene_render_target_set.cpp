@@ -276,6 +276,10 @@ void SceneRenderTargetSet::AcquireTransientTargets(VulkanContext& context_,
     }
 }
 
+void SceneRenderTargetSet::InvalidateFrameTargets() noexcept {
+    InvalidateCurrentFrameTargets();
+}
+
 RenderTargetColorOutputConfig SceneRenderTargetSet::BuildColorOutputConfig(bool clear_target_,
                                                                            bool final_pass_) const {
     if (!IsReady()) {

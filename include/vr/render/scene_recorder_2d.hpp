@@ -2,6 +2,8 @@
 
 #include "Center/Memory/Container/Vector/McVector.hpp"
 #include "vr/render/environment/background_pass_2d.hpp"
+#include "vr/render_graph/frame_graph_build.hpp"
+#include "vr/render_graph/graph_command_context.hpp"
 #include "vr/render/light_frame_coordinator.hpp"
 #include "vr/render/light_shadow_link_coordinator.hpp"
 #include "vr/render/scene_submission.hpp"
@@ -14,13 +16,21 @@
 #include <cstdint>
 #include <stdexcept>
 
+namespace vr::runtime::services {
+class RenderGraphRuntimeService;
+}
+
 namespace vr::render {
 
 template<typename T>
 using SceneRecorder2DMcVector = Center::Memory::mc_vector<T, Center::Memory::Tags::Container>;
 
 struct SceneRecorder2DCreateInfo final {
-    SceneRenderTargetSetCreateInfo scene_target{};
+    SceneRenderTargetSetCreateInfo scene_target = [] {
+        SceneRenderTargetSetCreateInfo create_info{};
+        create_info.enable_depth = false;
+        return create_info;
+    }();
     std::uint32_t reserve_pre_scene_renderer_count = 1U;
     std::uint32_t reserve_scene_renderer_count = 4U;
     std::uint32_t reserve_overlay_renderer_count = 2U;
@@ -55,6 +65,35 @@ struct SceneRecorder2DStats final {
     std::uint16_t reserved1 = 0U;
 };
 
+template<typename RendererT>
+concept SceneRecorder2DGraphColorPassRecordable =
+    requires {
+        &RendererT::RecordGraphColorPass;
+    };
+
+template<typename RendererT>
+concept SceneRecorder2DGraphOverlayRecordable =
+    requires {
+        &RendererT::RecordGraphOverlay;
+    };
+
+template<typename RendererT>
+struct SceneRecorder2DGraphRecordSupport
+    : std::bool_constant<SceneRecorder2DGraphColorPassRecordable<RendererT> ||
+                         SceneRecorder2DGraphOverlayRecordable<RendererT>> {};
+
+template<typename RendererT>
+concept SceneRecorder2DGraphSceneConsumerRecordable =
+    requires {
+        &RendererT::RecordGraphPass;
+    };
+
+template<typename RendererT>
+concept SceneRecorder2DGraphSceneConsumerAttachmentDescribable =
+    requires {
+        &RendererT::BuildGraphColorAttachmentDesc;
+    };
+
 class SceneRecorder2D final {
 public:
     SceneRecorder2D() = default;
@@ -77,6 +116,14 @@ public:
         BindRuntimeResources(runtime_.Context(),
                              runtime_.RenderTarget(),
                              runtime_.HasRenderTargetPool() ? &runtime_.TargetPool() : nullptr);
+        if constexpr (requires(RuntimeT& runtime_ref_) {
+                          runtime_ref_.Services();
+                      }) {
+            graph_runtime_service =
+                runtime_.Services().template TryGet<runtime::services::RenderGraphRuntimeService>();
+        } else {
+            graph_runtime_service = nullptr;
+        }
     }
 
     void ClearRuntimeBinding() noexcept;
@@ -135,6 +182,7 @@ public:
             .submission_layer_mask = submission_layer_mask_,
             .prepare_fn = &PrepareRenderer<RendererT>,
             .record_fn = &RecordRenderer<RendererT>,
+            .graph_record_fn = ResolveGraphRecordFn<RendererT>(),
             .swapchain_recreated_fn = &OnSwapchainRecreatedRenderer<RendererT>,
             .configure_scene_fn = &ConfigureSceneRendererBinding<RendererT>,
             .configure_direct_scene_fn = &ConfigureDirectSceneRendererBinding<RendererT>,
@@ -156,6 +204,8 @@ public:
             .submission_layer_mask = submission_layer_mask_,
             .prepare_fn = &PrepareRenderer<RendererT>,
             .record_fn = &RecordRenderer<RendererT>,
+            .graph_record_fn = ResolveSceneConsumerGraphRecordFn<RendererT>(),
+            .build_graph_color_attachment_fn = ResolveSceneConsumerGraphColorAttachmentFn<RendererT>(),
             .swapchain_recreated_fn = &OnSwapchainRecreatedRenderer<RendererT>,
             .configure_scene_consumer_fn = &ConfigureSceneConsumerBinding<RendererT>,
             .set_output_target_fn = &SetOverlayOutputTarget<RendererT>,
@@ -175,6 +225,7 @@ public:
             .submission_layer_mask = submission_layer_mask_,
             .prepare_fn = &PrepareRenderer<RendererT>,
             .record_fn = &RecordRenderer<RendererT>,
+            .graph_record_fn = ResolveGraphRecordFn<RendererT>(),
             .swapchain_recreated_fn = &OnSwapchainRecreatedRenderer<RendererT>,
             .set_output_target_fn = &SetOverlayOutputTarget<RendererT>,
         };
@@ -190,6 +241,10 @@ public:
     void PrepareFrame(const SceneRecorder2DPrepareView& prepare_view_);
     void PrepareFrame(const SceneRecorder2DPrepareView& prepare_view_,
                       const RenderScenePacket2D& frame_packet_);
+    void BuildRenderGraph(render_graph::RenderGraphBuilder& builder_,
+                          const render_graph::FrameSnapshot2D& snapshot_,
+                          const render_graph::MinimalFrameGraphBuildResult<ecs::Dim2>& build_result_,
+                          render_graph::ResourceVersionHandle& color_chain_);
     void Record(const FrameRecordContext& record_context_);
     void Record(const FrameRecordContext& record_context_,
                 const RenderScenePacket2D& frame_packet_);
@@ -216,6 +271,17 @@ private:
 
     using PrepareFn = void (*)(void*, const SceneRecorder2DPrepareView&);
     using RecordFn = void (*)(void*, const FrameRecordContext&);
+    using GraphRecordFn = void (*)(void*,
+                                   render_graph::GraphCommandContext&,
+                                   render_graph::ResourceHandle);
+    using GraphSceneConsumerRecordFn = void (*)(void*,
+                                                render_graph::GraphCommandContext&,
+                                                render_graph::ResourceHandle,
+                                                render_graph::ResourceHandle);
+    using BuildGraphColorAttachmentFn = render_graph::RasterColorAttachmentDesc (*)(
+        void*,
+        render_graph::ResourceHandle,
+        bool);
     using SwapchainRecreatedFn = void (*)(void*,
                                           std::uint32_t,
                                           VkExtent2D,
@@ -259,6 +325,7 @@ private:
         std::uint32_t submission_layer_mask = all_submission_layers;
         PrepareFn prepare_fn = nullptr;
         RecordFn record_fn = nullptr;
+        GraphRecordFn graph_record_fn = nullptr;
         SwapchainRecreatedFn swapchain_recreated_fn = nullptr;
         ConfigureSceneFn configure_scene_fn = nullptr;
         ConfigureDirectSceneFn configure_direct_scene_fn = nullptr;
@@ -272,6 +339,8 @@ private:
         std::uint32_t submission_layer_mask = all_submission_layers;
         PrepareFn prepare_fn = nullptr;
         RecordFn record_fn = nullptr;
+        GraphSceneConsumerRecordFn graph_record_fn = nullptr;
+        BuildGraphColorAttachmentFn build_graph_color_attachment_fn = nullptr;
         SwapchainRecreatedFn swapchain_recreated_fn = nullptr;
         ConfigureSceneConsumerFn configure_scene_consumer_fn = nullptr;
         SetOverlayOutputFn set_output_target_fn = nullptr;
@@ -283,6 +352,7 @@ private:
         std::uint32_t submission_layer_mask = all_submission_layers;
         PrepareFn prepare_fn = nullptr;
         RecordFn record_fn = nullptr;
+        GraphRecordFn graph_record_fn = nullptr;
         SwapchainRecreatedFn swapchain_recreated_fn = nullptr;
         SetOverlayOutputFn set_output_target_fn = nullptr;
     };
@@ -341,6 +411,61 @@ private:
     static void RecordRenderer(void* renderer_,
                                const FrameRecordContext& record_context_) {
         static_cast<RendererT*>(renderer_)->Record(record_context_);
+    }
+
+    template<typename RendererT>
+    static void RecordGraphRenderer(void* renderer_,
+                                    render_graph::GraphCommandContext& context_,
+                                    render_graph::ResourceHandle color_target_) {
+        if constexpr (SceneRecorder2DGraphColorPassRecordable<RendererT>) {
+            static_cast<RendererT*>(renderer_)->RecordGraphColorPass(context_, color_target_);
+        } else {
+            static_cast<RendererT*>(renderer_)->RecordGraphOverlay(context_, color_target_);
+        }
+    }
+
+    template<typename RendererT>
+    static constexpr GraphRecordFn ResolveGraphRecordFn() noexcept {
+        if constexpr (SceneRecorder2DGraphRecordSupport<RendererT>::value) {
+            return &RecordGraphRenderer<RendererT>;
+        } else {
+            return nullptr;
+        }
+    }
+
+    template<typename RendererT>
+    static void RecordGraphSceneConsumer(void* renderer_,
+                                         render_graph::GraphCommandContext& context_,
+                                         render_graph::ResourceHandle source_color_,
+                                         render_graph::ResourceHandle output_target_) {
+        static_cast<RendererT*>(renderer_)->RecordGraphPass(context_, source_color_, output_target_);
+    }
+
+    template<typename RendererT>
+    static constexpr GraphSceneConsumerRecordFn ResolveSceneConsumerGraphRecordFn() noexcept {
+        if constexpr (SceneRecorder2DGraphSceneConsumerRecordable<RendererT>) {
+            return &RecordGraphSceneConsumer<RendererT>;
+        } else {
+            return nullptr;
+        }
+    }
+
+    template<typename RendererT>
+    static render_graph::RasterColorAttachmentDesc BuildSceneConsumerGraphColorAttachment(
+        void* renderer_,
+        render_graph::ResourceHandle output_target_,
+        bool has_previous_content_) {
+        return static_cast<RendererT*>(renderer_)->BuildGraphColorAttachmentDesc(output_target_,
+                                                                                 has_previous_content_);
+    }
+
+    template<typename RendererT>
+    static constexpr BuildGraphColorAttachmentFn ResolveSceneConsumerGraphColorAttachmentFn() noexcept {
+        if constexpr (SceneRecorder2DGraphSceneConsumerAttachmentDescribable<RendererT>) {
+            return &BuildSceneConsumerGraphColorAttachment<RendererT>;
+        } else {
+            return nullptr;
+        }
     }
 
     template<typename RendererT>
@@ -499,6 +624,7 @@ private:
     [[nodiscard]] bool HasBackgroundPassForSubmission() const noexcept;
     [[nodiscard]] bool IsLayerVisibleForSubmission(std::uint32_t submission_layer_mask_) const noexcept;
     [[nodiscard]] bool IsOverlayLayerVisibleForSubmission(std::uint32_t submission_layer_mask_) const noexcept;
+    [[nodiscard]] bool PreferGraphOnlyRuntimePath(const VulkanContext& device_) const noexcept;
     void ConfigureBackgroundPassForTargets();
     void ConfigureSceneRenderersForTargets();
     void ConfigureSceneConsumerForTargets();
@@ -528,6 +654,7 @@ private:
     VulkanContext* context = nullptr;
     RenderTargetHost* render_target_host = nullptr;
     RenderTargetPool* render_target_pool = nullptr;
+    runtime::services::RenderGraphRuntimeService* graph_runtime_service = nullptr;
     render::LightFrameCoordinator<ecs::Dim2>* light_frame_coordinator = nullptr;
     render::ShadowFrameCoordinator<ecs::Dim2>* shadow_frame_coordinator = nullptr;
     shadow::ShadowAtlasHost* shadow_atlas_host = nullptr;

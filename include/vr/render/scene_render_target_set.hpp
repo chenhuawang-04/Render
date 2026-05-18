@@ -84,6 +84,7 @@ public:
                                             VkExtent2D swapchain_extent_,
                                             std::uint64_t last_submitted_value_,
                                             std::uint64_t completed_submit_value_);
+    void InvalidateFrameTargets() noexcept;
 
     [[nodiscard]] RenderTargetColorOutputConfig BuildColorOutputConfig(bool clear_target_,
                                                                        bool final_pass_) const;

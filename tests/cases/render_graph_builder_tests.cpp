@@ -1,5 +1,8 @@
 #include "support/test_framework.hpp"
+#include "vr/geometry/geometry_renderer_2d.hpp"
 #include "vr/geometry/geometry_renderer_3d.hpp"
+#include "vr/render/render_target_composite_renderer.hpp"
+#include "vr/render/scene_recorder_2d.hpp"
 #include "vr/render/scene_recorder_3d.hpp"
 #include "vr/render_graph/frame_graph_build.hpp"
 #include "vr/render_graph/frame_snapshot.hpp"
@@ -542,6 +545,282 @@ VR_TEST_CASE(RenderGraphBuilder_builds_minimal_scene_overlay_present_chain,
     VR_CHECK(compiled.Passes()[2].writes[0].access == vr::render_graph::AccessKind::transfer_write);
     VR_REQUIRE(compiled.Passes()[3].reads.size() == 1U);
     VR_CHECK(compiled.Passes()[3].reads[0].access == vr::render_graph::AccessKind::present);
+}
+
+VR_TEST_CASE(SceneRecorder2D_build_render_graph_routes_geometry_scene_to_scene_pass,
+             "unit;core;render_graph;runtime") {
+    vr::render::SceneRecorder2D recorder{};
+    recorder.Initialize();
+    vr::geometry::GeometryRenderer2D geometry_renderer{};
+    geometry_renderer.Initialize();
+    recorder.RegisterSceneRenderer(geometry_renderer, vr::render::SceneRenderPassRole::single);
+
+    vr::ecs::Camera<vr::ecs::Dim2> world_camera{};
+    world_camera.style.viewport = {.origin_x = 0.0F, .origin_y = 0.0F, .width = 320.0F, .height = 180.0F};
+    world_camera.runtime.revision = 1U;
+    world_camera.runtime.culling_mask = 0x1U;
+    auto world_view = vr::render::MakeRenderViewFromCamera(
+        world_camera,
+        static_cast<const vr::ecs::Transform<vr::ecs::Dim2>*>(nullptr),
+        vr::render::RenderViewKind::world,
+        0U);
+    auto packet = vr::render::MakeSingleViewScenePacket(world_view, 4401U);
+    packet.postprocess_policy = vr::render::RenderPostProcessPolicy::disabled;
+    recorder.SetFramePacket(&packet);
+
+    const auto snapshot = vr::render_graph::MakeFrameSnapshot(packet, 25U);
+    vr::render_graph::RenderGraphBuilder builder{};
+    auto color_chain = vr::render_graph::invalid_resource_version;
+    const auto build_result = vr::render_graph::BuildMinimalFrameGraph(builder, snapshot);
+    recorder.BuildRenderGraph(builder, snapshot, build_result, color_chain);
+    const auto compiled = builder.Compile();
+
+    VR_CHECK(build_result.built);
+    VR_REQUIRE(compiled.Passes().size() >= 3U);
+    VR_CHECK(compiled.Passes()[0].debug_name == "main_scene_pass");
+    VR_CHECK(compiled.Passes()[0].executable);
+    VR_REQUIRE(compiled.Passes()[0].raster_pass.has_value());
+    VR_CHECK(static_cast<bool>(compiled.Passes()[0].execute));
+
+    recorder.ClearFramePacket();
+}
+
+VR_TEST_CASE(SceneRecorder2D_build_render_graph_routes_background_to_scene_pass,
+             "unit;core;render_graph;runtime") {
+    vr::render::SceneRecorder2D recorder{};
+    recorder.Initialize();
+
+    vr::ecs::Camera<vr::ecs::Dim2> world_camera{};
+    world_camera.style.viewport = {.origin_x = 0.0F, .origin_y = 0.0F, .width = 320.0F, .height = 180.0F};
+    world_camera.runtime.revision = 1U;
+    world_camera.runtime.culling_mask = 0x1U;
+    auto world_view = vr::render::MakeRenderViewFromCamera(
+        world_camera,
+        static_cast<const vr::ecs::Transform<vr::ecs::Dim2>*>(nullptr),
+        vr::render::RenderViewKind::world,
+        0U);
+    auto packet = vr::render::MakeSingleViewScenePacket(world_view, 4403U);
+    packet.postprocess_policy = vr::render::RenderPostProcessPolicy::disabled;
+    packet.extra.background.mode = vr::scene::Background2DMode::solid_color;
+    packet.extra.background.color0 = {.x = 0.15F, .y = 0.25F, .z = 0.35F, .w = 1.0F};
+    packet.extra.background.opacity = 1.0F;
+    recorder.SetFramePacket(&packet);
+
+    const auto snapshot = vr::render_graph::MakeFrameSnapshot(packet, 27U);
+    vr::render_graph::RenderGraphBuilder builder{};
+    auto color_chain = vr::render_graph::invalid_resource_version;
+    const auto build_result = vr::render_graph::BuildMinimalFrameGraph(builder, snapshot);
+    recorder.BuildRenderGraph(builder, snapshot, build_result, color_chain);
+    const auto compiled = builder.Compile();
+
+    VR_CHECK(build_result.built);
+    VR_REQUIRE(compiled.Passes().size() >= 3U);
+    VR_CHECK(compiled.Passes()[0].debug_name == "main_scene_pass");
+    VR_CHECK(compiled.Passes()[0].executable);
+    VR_REQUIRE(compiled.Passes()[0].raster_pass.has_value());
+    VR_CHECK(static_cast<bool>(compiled.Passes()[0].execute));
+
+    recorder.ClearFramePacket();
+}
+
+VR_TEST_CASE(SceneRecorder2D_build_render_graph_routes_overlay_text_to_overlay_pass,
+             "unit;core;render_graph;runtime") {
+    vr::render::SceneRecorder2D recorder{};
+    recorder.Initialize();
+    vr::text::TextRenderer2D overlay_text{};
+    overlay_text.Initialize();
+    recorder.RegisterOverlayRenderer(overlay_text);
+
+    vr::ecs::Camera<vr::ecs::Dim2> world_camera{};
+    world_camera.style.viewport = {.origin_x = 0.0F, .origin_y = 0.0F, .width = 320.0F, .height = 180.0F};
+    world_camera.runtime.revision = 1U;
+    world_camera.runtime.culling_mask = 0x1U;
+    auto world_view = vr::render::MakeRenderViewFromCamera(
+        world_camera,
+        static_cast<const vr::ecs::Transform<vr::ecs::Dim2>*>(nullptr),
+        vr::render::RenderViewKind::world,
+        0U);
+    auto overlay_view = vr::render::MakeRenderViewFromCamera(
+        world_camera,
+        static_cast<const vr::ecs::Transform<vr::ecs::Dim2>*>(nullptr),
+        vr::render::RenderViewKind::ui,
+        1U);
+    const std::array views{world_view, overlay_view};
+    auto packet = vr::render::MakeScenePacketFromViewRange(
+        views.data(),
+        static_cast<std::uint32_t>(views.size()),
+        0U,
+        4405U,
+        vr::render::RenderScenePacketKind::mixed);
+    packet.postprocess_policy = vr::render::RenderPostProcessPolicy::disabled;
+    packet.flags = vr::render::render_scene_packet_allow_overlay_flag;
+    recorder.SetFramePacket(&packet);
+
+    const auto snapshot = vr::render_graph::MakeFrameSnapshot(packet, 29U);
+    vr::render_graph::RenderGraphBuilder builder{};
+    auto color_chain = vr::render_graph::invalid_resource_version;
+    const auto build_result = vr::render_graph::BuildMinimalFrameGraph(builder, snapshot);
+    recorder.BuildRenderGraph(builder, snapshot, build_result, color_chain);
+    const auto compiled = builder.Compile();
+
+    VR_CHECK(build_result.built);
+    VR_REQUIRE(compiled.Passes().size() >= 4U);
+    VR_CHECK(compiled.Passes()[1].debug_name == "overlay_pass");
+    VR_CHECK(compiled.Passes()[1].executable);
+    VR_REQUIRE(compiled.Passes()[1].raster_pass.has_value());
+    VR_CHECK(static_cast<bool>(compiled.Passes()[1].execute));
+
+    recorder.ClearFramePacket();
+}
+
+VR_TEST_CASE(SceneRecorder2D_build_render_graph_routes_scene_consumer_to_present,
+             "unit;core;render_graph;runtime") {
+    vr::render::SceneRecorder2D recorder{};
+    recorder.Initialize();
+    vr::render::RenderTargetCompositeRenderer composite_renderer{};
+    composite_renderer.Initialize();
+    recorder.RegisterSceneConsumer(composite_renderer);
+
+    vr::ecs::Camera<vr::ecs::Dim2> world_camera{};
+    world_camera.style.viewport = {.origin_x = 0.0F, .origin_y = 0.0F, .width = 320.0F, .height = 180.0F};
+    world_camera.runtime.revision = 1U;
+    world_camera.runtime.culling_mask = 0x1U;
+    auto world_view = vr::render::MakeRenderViewFromCamera(
+        world_camera,
+        static_cast<const vr::ecs::Transform<vr::ecs::Dim2>*>(nullptr),
+        vr::render::RenderViewKind::world,
+        0U);
+    auto packet = vr::render::MakeSingleViewScenePacket(world_view, 4407U);
+    packet.flags = vr::render::render_scene_packet_allow_postprocess_flag;
+    packet.postprocess_policy = vr::render::RenderPostProcessPolicy::enabled;
+    world_view.flags = vr::render::render_view_postprocess_enabled_flag;
+    vr::render::RefreshRenderViewSignature(world_view);
+    packet.views = &world_view;
+    vr::render::RefreshRenderScenePacketSignature(packet);
+    recorder.SetFramePacket(&packet);
+
+    const auto snapshot = vr::render_graph::MakeFrameSnapshot(packet, 31U);
+    vr::render_graph::RenderGraphBuilder builder{};
+    auto color_chain = vr::render_graph::invalid_resource_version;
+    const auto build_result = vr::render_graph::BuildMinimalFrameGraph(
+        builder,
+        snapshot,
+        [&recorder](vr::render_graph::RenderGraphBuilder& builder_ref_,
+                    const vr::render_graph::FrameSnapshot2D& snapshot_ref_,
+                    vr::render_graph::MinimalFrameGraphBuildResult<vr::ecs::Dim2>& build_result_ref_,
+                    vr::render_graph::ResourceVersionHandle& color_chain_ref_) {
+            recorder.BuildRenderGraph(builder_ref_, snapshot_ref_, build_result_ref_, color_chain_ref_);
+        });
+    const auto compiled = builder.Compile();
+
+    auto find_pass_index = [&compiled](const std::string_view name_) -> std::size_t {
+        for (std::size_t i = 0; i < compiled.Passes().size(); ++i) {
+            if (compiled.Passes()[i].debug_name == name_) {
+                return i;
+            }
+        }
+        return compiled.Passes().size();
+    };
+
+    const std::size_t scene_consumer_index = find_pass_index("scene_consumer_pass");
+    const std::size_t present_transition_index = find_pass_index("present_transition");
+    VR_CHECK(build_result.built);
+    VR_REQUIRE(scene_consumer_index < compiled.Passes().size());
+    VR_REQUIRE(present_transition_index < compiled.Passes().size());
+    VR_CHECK(scene_consumer_index < present_transition_index);
+    VR_CHECK(compiled.Passes()[scene_consumer_index].executable);
+    VR_REQUIRE(compiled.Passes()[scene_consumer_index].raster_pass.has_value());
+    VR_CHECK(static_cast<bool>(compiled.Passes()[scene_consumer_index].execute));
+    VR_CHECK(find_pass_index("present_to_swapchain") == compiled.Passes().size());
+
+    recorder.ClearFramePacket();
+}
+
+VR_TEST_CASE(SceneRecorder2D_build_render_graph_routes_scene_consumer_before_overlay_with_copyback,
+             "unit;core;render_graph;runtime") {
+    vr::render::SceneRecorder2D recorder{};
+    recorder.Initialize();
+    vr::render::RenderTargetCompositeRenderer composite_renderer{};
+    composite_renderer.Initialize();
+    vr::text::TextRenderer2D overlay_text{};
+    overlay_text.Initialize();
+    recorder.RegisterSceneConsumer(composite_renderer);
+    recorder.RegisterOverlayRenderer(overlay_text);
+
+    vr::ecs::Camera<vr::ecs::Dim2> world_camera{};
+    world_camera.style.viewport = {.origin_x = 0.0F, .origin_y = 0.0F, .width = 320.0F, .height = 180.0F};
+    world_camera.runtime.revision = 1U;
+    world_camera.runtime.culling_mask = 0x1U;
+    auto world_view = vr::render::MakeRenderViewFromCamera(
+        world_camera,
+        static_cast<const vr::ecs::Transform<vr::ecs::Dim2>*>(nullptr),
+        vr::render::RenderViewKind::world,
+        0U);
+    auto overlay_view = vr::render::MakeRenderViewFromCamera(
+        world_camera,
+        static_cast<const vr::ecs::Transform<vr::ecs::Dim2>*>(nullptr),
+        vr::render::RenderViewKind::ui,
+        1U);
+    world_view.flags = vr::render::render_view_postprocess_enabled_flag;
+    overlay_view.flags = vr::render::render_view_overlay_enabled_flag;
+    vr::render::RefreshRenderViewSignature(world_view);
+    vr::render::RefreshRenderViewSignature(overlay_view);
+    const std::array views{world_view, overlay_view};
+    auto packet = vr::render::MakeScenePacketFromViewRange(
+        views.data(),
+        static_cast<std::uint32_t>(views.size()),
+        0U,
+        4409U,
+        vr::render::RenderScenePacketKind::mixed);
+    packet.flags = vr::render::render_scene_packet_allow_postprocess_flag |
+                   vr::render::render_scene_packet_allow_overlay_flag;
+    packet.postprocess_policy = vr::render::RenderPostProcessPolicy::enabled;
+    vr::render::RefreshRenderScenePacketSignature(packet);
+    recorder.SetFramePacket(&packet);
+
+    const auto snapshot = vr::render_graph::MakeFrameSnapshot(packet, 33U);
+    vr::render_graph::RenderGraphBuilder builder{};
+    auto color_chain = vr::render_graph::invalid_resource_version;
+    const auto build_result = vr::render_graph::BuildMinimalFrameGraph(
+        builder,
+        snapshot,
+        [&recorder](vr::render_graph::RenderGraphBuilder& builder_ref_,
+                    const vr::render_graph::FrameSnapshot2D& snapshot_ref_,
+                    vr::render_graph::MinimalFrameGraphBuildResult<vr::ecs::Dim2>& build_result_ref_,
+                    vr::render_graph::ResourceVersionHandle& color_chain_ref_) {
+            recorder.BuildRenderGraph(builder_ref_, snapshot_ref_, build_result_ref_, color_chain_ref_);
+        });
+    const auto compiled = builder.Compile();
+
+    auto find_pass_index = [&compiled](const std::string_view name_) -> std::size_t {
+        for (std::size_t i = 0; i < compiled.Passes().size(); ++i) {
+            if (compiled.Passes()[i].debug_name == name_) {
+                return i;
+            }
+        }
+        return compiled.Passes().size();
+    };
+
+    const std::size_t consumer_index = find_pass_index("scene_consumer_pass");
+    const std::size_t copyback_index = find_pass_index("scene_consumer_copyback");
+    const std::size_t overlay_index = find_pass_index("overlay_pass");
+    const std::size_t present_index = find_pass_index("present_to_swapchain");
+    VR_CHECK(build_result.built);
+    VR_REQUIRE(consumer_index < compiled.Passes().size());
+    VR_REQUIRE(copyback_index < compiled.Passes().size());
+    VR_REQUIRE(overlay_index < compiled.Passes().size());
+    VR_REQUIRE(present_index < compiled.Passes().size());
+    VR_CHECK(consumer_index < copyback_index);
+    VR_CHECK(copyback_index < overlay_index);
+    VR_CHECK(overlay_index < present_index);
+    VR_CHECK(compiled.Passes()[consumer_index].executable);
+    VR_REQUIRE(compiled.Passes()[consumer_index].raster_pass.has_value());
+    VR_CHECK(static_cast<bool>(compiled.Passes()[consumer_index].execute));
+    VR_CHECK(compiled.Passes()[copyback_index].executable);
+    VR_CHECK(!compiled.Passes()[copyback_index].raster_pass.has_value());
+    VR_CHECK(static_cast<bool>(compiled.Passes()[copyback_index].execute));
+
+    recorder.ClearFramePacket();
 }
 
 VR_TEST_CASE(SceneRecorder3D_build_render_graph_inserts_sky_prepass_before_scene,

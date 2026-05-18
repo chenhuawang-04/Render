@@ -6,6 +6,7 @@
 #include "vr/render/appearance_prepare_bridge.hpp"
 #include "vr/render/pipeline_host.hpp"
 #include "vr/render/render_target_pass.hpp"
+#include "vr/render_graph/graph_command_context.hpp"
 
 #include <array>
 #include <cstddef>
@@ -80,6 +81,8 @@ public:
 
     void PrepareFrame(const render::GeometryRenderer2DPrepareView& prepare_view_);
     void Record(const render::FrameRecordContext& record_context_);
+    void RecordGraphColorPass(render_graph::GraphCommandContext& context_,
+                              render_graph::ResourceHandle color_target_);
     void OnSwapchainRecreated(std::uint32_t image_count_,
                               VkExtent2D extent_,
                               VkFormat format_);
@@ -126,6 +129,9 @@ private:
         render::PipelineHost& pipeline_host_,
         VkFormat color_format_,
         BlendMode blend_mode_);
+    void RecordDrawBatches(VkCommandBuffer command_buffer_,
+                           VkExtent2D render_extent_,
+                           VkFormat color_format_);
 private:
     GeometryRenderer2DCreateInfo create_info_cache{};
     GeometryRenderer2DStats stats{};

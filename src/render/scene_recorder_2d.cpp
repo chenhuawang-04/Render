@@ -1,9 +1,30 @@
 ﻿#include "vr/render/scene_recorder_2d.hpp"
 
+#include "vr/runtime/services/render_graph_runtime_service.hpp"
+
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace vr::render {
+
+namespace {
+
+[[nodiscard]] render_graph::TextureDesc BuildSceneConsumerOverlayIntermediateDesc(
+    const render_graph::FrameSnapshot2D& snapshot_) noexcept {
+    return render_graph::TextureDesc{
+        .dimension = render_graph::TextureDimension::image_2d,
+        .format = render_graph::TextureFormat::r8g8b8a8_unorm,
+        .extent = snapshot_.reference_extent,
+        .usage = render_graph::texture_usage_color_attachment_flag |
+                 render_graph::texture_usage_transfer_src_flag,
+        .mip_level_count = 1U,
+        .array_layer_count = 1U,
+        .sample_count = render_graph::SampleCount::x1,
+    };
+}
+
+} // namespace
 
 void SceneRecorder2D::Initialize(const SceneRecorder2DCreateInfo& create_info_) noexcept {
     create_info_cache = create_info_;
@@ -20,6 +41,7 @@ void SceneRecorder2D::Initialize(const SceneRecorder2DCreateInfo& create_info_) 
     context = nullptr;
     render_target_host = nullptr;
     render_target_pool = nullptr;
+    graph_runtime_service = nullptr;
     light_frame_coordinator = nullptr;
     shadow_frame_coordinator = nullptr;
     shadow_atlas_host = nullptr;
@@ -48,6 +70,7 @@ void SceneRecorder2D::Shutdown(VulkanContext& context_) noexcept {
     context = nullptr;
     render_target_host = nullptr;
     render_target_pool = nullptr;
+    graph_runtime_service = nullptr;
     light_frame_coordinator = nullptr;
     shadow_frame_coordinator = nullptr;
     shadow_atlas_host = nullptr;
@@ -67,12 +90,14 @@ void SceneRecorder2D::BindRuntimeResources(VulkanContext& context_,
     context = &context_;
     render_target_host = &render_target_host_;
     render_target_pool = render_target_pool_;
+    graph_runtime_service = nullptr;
 }
 
 void SceneRecorder2D::ClearRuntimeBinding() noexcept {
     context = nullptr;
     render_target_host = nullptr;
     render_target_pool = nullptr;
+    graph_runtime_service = nullptr;
 }
 
 void SceneRecorder2D::BindLightFrameCoordinator(
@@ -150,7 +175,8 @@ void SceneRecorder2D::PrepareFrame(const SceneRecorder2DPrepareView& prepare_vie
                                    IsPostProcessEnabledForSubmission();
     const bool overlay_enabled = IsOverlayEnabledForSubmission();
     const bool shadow_enabled = IsShadowEnabledForSubmission();
-    if (use_scene_targets) {
+    const bool prefer_graph_only_runtime_path = PreferGraphOnlyRuntimePath(prepare_view_.device);
+    if (use_scene_targets && !prefer_graph_only_runtime_path) {
         EnsureRuntimeBinding("PrepareFrame");
         (void)scene_targets.PrepareFrame(SceneRenderTargetSetPrepareView{
             .device = prepare_view_.device,
@@ -160,10 +186,15 @@ void SceneRecorder2D::PrepareFrame(const SceneRecorder2DPrepareView& prepare_vie
             .progress = prepare_view_.progress,
         });
     }
-    ConfigureBackgroundPassForTargets();
-    ConfigureSceneRenderersForTargets();
-    if (use_scene_targets) {
-        ConfigureSceneConsumerForTargets();
+    if (!prefer_graph_only_runtime_path) {
+        ConfigureBackgroundPassForTargets();
+        ConfigureSceneRenderersForTargets();
+        if (use_scene_targets) {
+            ConfigureSceneConsumerForTargets();
+        }
+    } else {
+        scene_targets.InvalidateFrameTargets();
+        background_pass.ResetOutputTargetConfig();
     }
 
     if (HasBackgroundPassForSubmission()) {
@@ -194,7 +225,8 @@ void SceneRecorder2D::PrepareFrame(const SceneRecorder2DPrepareView& prepare_vie
 
     if (use_scene_targets && scene_consumer_entry.renderer != nullptr &&
         IsLayerVisibleForSubmission(scene_consumer_entry.submission_layer_mask)) {
-        if (scene_consumer_entry.set_output_target_fn != nullptr) {
+        if (!prefer_graph_only_runtime_path &&
+            scene_consumer_entry.set_output_target_fn != nullptr) {
             scene_consumer_entry.set_output_target_fn(scene_consumer_entry.renderer,
                                                       BuildOverlayOutputConfig(scene_consumer_entry.output_target_config));
         }
@@ -207,7 +239,9 @@ void SceneRecorder2D::PrepareFrame(const SceneRecorder2DPrepareView& prepare_vie
         if (!overlay_enabled || !IsOverlayLayerVisibleForSubmission(entry.submission_layer_mask)) {
             continue;
         }
-        if (entry.renderer != nullptr && entry.set_output_target_fn != nullptr) {
+        if (!prefer_graph_only_runtime_path &&
+            entry.renderer != nullptr &&
+            entry.set_output_target_fn != nullptr) {
             entry.set_output_target_fn(entry.renderer, BuildOverlayOutputConfig(entry.output_target_config));
         }
         if (entry.prepare_fn != nullptr && entry.renderer != nullptr) {
@@ -222,6 +256,218 @@ void SceneRecorder2D::PrepareFrame(const SceneRecorder2DPrepareView& prepare_vie
                                    const RenderScenePacket2D& frame_packet_) {
     SetFramePacket(&frame_packet_);
     PrepareFrame(prepare_view_);
+}
+
+void SceneRecorder2D::BuildRenderGraph(
+    render_graph::RenderGraphBuilder& builder_,
+    const render_graph::FrameSnapshot2D& snapshot_,
+    const render_graph::MinimalFrameGraphBuildResult<ecs::Dim2>& build_result_,
+    render_graph::ResourceVersionHandle& color_chain_) {
+    if (!initialized) {
+        return;
+    }
+
+    if (HasExplicitSceneTargetForSubmission()) {
+        throw std::runtime_error(
+            "SceneRecorder2D::BuildRenderGraph does not support explicit scene targets");
+    }
+    if (HasExplicitOverlayTargetForSubmission()) {
+        throw std::runtime_error(
+            "SceneRecorder2D::BuildRenderGraph does not support explicit overlay targets");
+    }
+
+    const bool shadow_enabled = IsShadowEnabledForSubmission();
+    for (const PreSceneRendererEntry& entry : pre_scene_renderer_entries) {
+        if (!IsLayerVisibleForSubmission(entry.submission_layer_mask)) {
+            continue;
+        }
+        if (entry.kind == PreSceneRendererKind::shadow && !shadow_enabled) {
+            continue;
+        }
+        if (entry.renderer != nullptr) {
+            throw std::runtime_error(
+                "SceneRecorder2D::BuildRenderGraph does not yet support pre-scene renderer graph execution");
+        }
+    }
+
+    const bool scene_consumer_enabled =
+        scene_consumer_entry.renderer != nullptr &&
+        IsLayerVisibleForSubmission(scene_consumer_entry.submission_layer_mask) &&
+        IsPostProcessEnabledForSubmission();
+    if (scene_consumer_enabled) {
+        if (IsValidRenderTargetHandle(scene_consumer_entry.output_target_config.color_target)) {
+            throw std::runtime_error(
+                "SceneRecorder2D::BuildRenderGraph does not support explicit scene consumer output targets");
+        }
+        if (scene_consumer_entry.graph_record_fn == nullptr ||
+            scene_consumer_entry.build_graph_color_attachment_fn == nullptr) {
+            throw std::runtime_error(
+                "SceneRecorder2D::BuildRenderGraph encountered a scene consumer without graph record support");
+        }
+    }
+
+    std::vector<const SceneRendererEntry*> visible_scene_entries{};
+    visible_scene_entries.reserve(scene_renderer_entries.size());
+    for (const SceneRendererEntry& entry : scene_renderer_entries) {
+        if (!IsLayerVisibleForSubmission(entry.submission_layer_mask) ||
+            entry.renderer == nullptr) {
+            continue;
+        }
+        if (entry.graph_record_fn == nullptr) {
+            throw std::runtime_error(
+                "SceneRecorder2D::BuildRenderGraph encountered a scene renderer without graph record support");
+        }
+        visible_scene_entries.push_back(&entry);
+    }
+
+    const bool has_background_pass = HasBackgroundPassForSubmission() &&
+                                     scene_view != nullptr &&
+                                     frame_packet != nullptr;
+    if ((has_background_pass || !visible_scene_entries.empty()) &&
+        !IsValidPassHandle(build_result_.scene_pass)) {
+        throw std::runtime_error(
+            "SceneRecorder2D::BuildRenderGraph requires a valid scene pass for visible scene content");
+    }
+
+    if (IsValidPassHandle(build_result_.scene_pass)) {
+        builder_.SetRasterPassDesc(build_result_.scene_pass,
+                                   render_graph::RasterPassDesc{
+                                       .color_attachments = {
+                                           render_graph::RasterColorAttachmentDesc{
+                                               .target = build_result_.scene_color,
+                                               .load_op = render_graph::AttachmentLoadOp::clear,
+                                               .store_op = render_graph::AttachmentStoreOp::store,
+                                               .clear_value = {
+                                                   .red = create_info_cache.scene_target.clear_color.float32[0],
+                                                   .green = create_info_cache.scene_target.clear_color.float32[1],
+                                                   .blue = create_info_cache.scene_target.clear_color.float32[2],
+                                                   .alpha = create_info_cache.scene_target.clear_color.float32[3],
+                                               },
+                                           },
+                                       },
+                                   });
+
+        if (has_background_pass || !visible_scene_entries.empty()) {
+            const RenderView2D captured_view = has_background_pass ? *scene_view : RenderView2D{};
+            const scene::Background2DRenderState captured_background =
+                has_background_pass ? frame_packet->extra.background
+                                    : scene::Background2DRenderState{};
+            const auto scene_color = build_result_.scene_color;
+            builder_.SetExecuteCallback(
+                build_result_.scene_pass,
+                [this,
+                 has_background_pass,
+                 captured_view,
+                 captured_background,
+                 visible_scene_entries,
+                 scene_color](render_graph::GraphCommandContext& context_) {
+                    if (has_background_pass) {
+                        background_pass.RecordGraphPass(context_,
+                                                        captured_view,
+                                                        captured_background,
+                                                        scene_color);
+                    }
+                    for (const auto* entry : visible_scene_entries) {
+                        entry->graph_record_fn(entry->renderer, context_, scene_color);
+                    }
+                });
+        }
+    }
+
+    const bool graph_overlay_present = IsValidPassHandle(build_result_.overlay_pass) &&
+                                       IsValidResourceHandle(build_result_.scene_color);
+    if (scene_consumer_enabled) {
+        if (!IsValidResourceHandle(build_result_.scene_color) ||
+            !IsValidResourceHandle(build_result_.present_target) ||
+            !IsValidResourceVersionHandle(color_chain_)) {
+            throw std::runtime_error(
+                "SceneRecorder2D::BuildRenderGraph requires a valid scene color chain and present target for scene consumers");
+        }
+        if (scene_consumer_entry.set_output_target_fn != nullptr) {
+            scene_consumer_entry.set_output_target_fn(
+                scene_consumer_entry.renderer,
+                BuildOverlayOutputConfig(scene_consumer_entry.output_target_config));
+        }
+
+        const auto scene_consumer_output = graph_overlay_present
+            ? builder_.CreateTexture("scene_consumer_color",
+                                     BuildSceneConsumerOverlayIntermediateDesc(snapshot_),
+                                     render_graph::ResourceLifetime::transient)
+            : build_result_.present_target;
+        const auto scene_consumer_pass = builder_.AddPass("scene_consumer_pass");
+        (void)builder_.Read(scene_consumer_pass,
+                            color_chain_,
+                            render_graph::AccessDesc{.access = render_graph::AccessKind::shader_sample_read});
+        color_chain_ = builder_.Write(scene_consumer_pass,
+                                      scene_consumer_output,
+                                      render_graph::AccessDesc{.access = render_graph::AccessKind::color_attachment_write});
+        builder_.SetRasterPassDesc(scene_consumer_pass,
+                                   render_graph::RasterPassDesc{
+                                       .color_attachments = {
+                                           scene_consumer_entry.build_graph_color_attachment_fn(
+                                               scene_consumer_entry.renderer,
+                                               scene_consumer_output,
+                                               false),
+                                       },
+                                   });
+        const auto scene_source = build_result_.scene_color;
+        builder_.SetExecuteCallback(scene_consumer_pass,
+                                    [this, scene_source, scene_consumer_output](render_graph::GraphCommandContext& context_) {
+                                        scene_consumer_entry.graph_record_fn(scene_consumer_entry.renderer,
+                                                                             context_,
+                                                                             scene_source,
+                                                                             scene_consumer_output);
+                                    });
+
+        if (graph_overlay_present) {
+            const auto scene_consumer_copyback_pass = builder_.AddPass("scene_consumer_copyback");
+            (void)builder_.Read(scene_consumer_copyback_pass,
+                                color_chain_,
+                                render_graph::AccessDesc{.access = render_graph::AccessKind::transfer_read});
+            color_chain_ = builder_.Write(scene_consumer_copyback_pass,
+                                          build_result_.scene_color,
+                                          render_graph::AccessDesc{.access = render_graph::AccessKind::transfer_write});
+            builder_.SetExecuteCallback(
+                scene_consumer_copyback_pass,
+                [scene_consumer_output, scene_color = build_result_.scene_color](render_graph::GraphCommandContext& context_) {
+                    render_graph::detail::RecordMinimalPresentCopyPass(context_,
+                                                                       scene_consumer_output,
+                                                                       scene_color);
+                });
+        }
+    }
+
+    std::vector<const OverlayRendererEntry*> visible_overlay_entries{};
+    visible_overlay_entries.reserve(overlay_renderer_entries.size());
+    for (const OverlayRendererEntry& entry : overlay_renderer_entries) {
+        if (!IsOverlayLayerVisibleForSubmission(entry.submission_layer_mask) ||
+            entry.renderer == nullptr) {
+            continue;
+        }
+        if (entry.graph_record_fn == nullptr) {
+            throw std::runtime_error(
+                "SceneRecorder2D::BuildRenderGraph encountered an overlay renderer without graph record support");
+        }
+        visible_overlay_entries.push_back(&entry);
+    }
+
+    if (!visible_overlay_entries.empty() &&
+        !IsValidPassHandle(build_result_.overlay_pass)) {
+        throw std::runtime_error(
+            "SceneRecorder2D::BuildRenderGraph requires a dedicated overlay pass for visible overlay renderers");
+    }
+
+    if (!visible_overlay_entries.empty() &&
+        IsValidPassHandle(build_result_.overlay_pass)) {
+        const auto overlay_target = build_result_.scene_color;
+        builder_.SetExecuteCallback(
+            build_result_.overlay_pass,
+            [visible_overlay_entries, overlay_target](render_graph::GraphCommandContext& context_) {
+                for (const auto* entry : visible_overlay_entries) {
+                    entry->graph_record_fn(entry->renderer, context_, overlay_target);
+                }
+            });
+    }
 }
 
 void SceneRecorder2D::Record(const FrameRecordContext& record_context_) {
@@ -302,6 +548,8 @@ void SceneRecorder2D::OnSwapchainRecreated(std::uint32_t image_count_,
                                    IsPostProcessEnabledForSubmission();
     const bool overlay_enabled = IsOverlayEnabledForSubmission();
     const bool shadow_enabled = IsShadowEnabledForSubmission();
+    const bool prefer_graph_only_runtime_path =
+        (context != nullptr) ? PreferGraphOnlyRuntimePath(*context) : false;
 
     background_pass.OnSwapchainRecreated(image_count_,
                                          extent_,
@@ -366,7 +614,7 @@ void SceneRecorder2D::OnSwapchainRecreated(std::uint32_t image_count_,
         }
     }
 
-    if (use_scene_targets) {
+    if (use_scene_targets && !prefer_graph_only_runtime_path) {
         EnsureRuntimeBinding("OnSwapchainRecreated");
         (void)scene_targets.OnSwapchainRecreated(*context,
                                                  *render_target_host,
@@ -375,9 +623,14 @@ void SceneRecorder2D::OnSwapchainRecreated(std::uint32_t image_count_,
                                                  last_submitted_value_,
                                                  completed_submit_value_);
     }
-    ConfigureSceneRenderersForTargets();
-    if (use_scene_targets) {
-        ConfigureSceneConsumerForTargets();
+    if (!prefer_graph_only_runtime_path) {
+        ConfigureSceneRenderersForTargets();
+        if (use_scene_targets) {
+            ConfigureSceneConsumerForTargets();
+        }
+    } else {
+        scene_targets.InvalidateFrameTargets();
+        background_pass.ResetOutputTargetConfig();
     }
 
     stats.swapchain_recreate_count += 1U;
@@ -613,6 +866,11 @@ bool SceneRecorder2D::IsOverlayLayerVisibleForSubmission(std::uint32_t submissio
             (OverlayLayerMask() & submission_layer_mask_) != 0U);
 }
 
+bool SceneRecorder2D::PreferGraphOnlyRuntimePath(const VulkanContext& device_) const noexcept {
+    return graph_runtime_service != nullptr &&
+           graph_runtime_service->SupportsGraphOnlyRecord(device_);
+}
+
 void SceneRecorder2D::ConfigureBackgroundPassForTargets() {
     if (!HasBackgroundPassForSubmission()) {
         background_pass.ResetOutputTargetConfig();
@@ -648,16 +906,22 @@ void SceneRecorder2D::ConfigureSceneRenderersForTargets() {
                                            BuildExplicitSceneOutputConfig(entry.pass_role));
             }
         } else if (use_scene_targets) {
-            if (has_background_pass && entry.configure_direct_scene_fn != nullptr) {
+            if (entry.configure_direct_scene_fn != nullptr) {
+                const bool clear_color = !has_background_pass &&
+                                         (entry.pass_role == SceneRenderPassRole::single ||
+                                          entry.pass_role == SceneRenderPassRole::first);
                 const bool final_pass = entry.pass_role == SceneRenderPassRole::single ||
                                         entry.pass_role == SceneRenderPassRole::last;
                 const bool clear_depth = entry.pass_role == SceneRenderPassRole::single ||
                                          entry.pass_role == SceneRenderPassRole::first;
+                const auto color_output = scene_targets.BuildColorOutputConfig(clear_color, final_pass);
                 const RenderTargetDepthOutputConfig depth_output =
-                    scene_targets.BuildDepthOutputConfig(clear_depth);
+                    create_info_cache.scene_target.enable_depth
+                        ? scene_targets.BuildDepthOutputConfig(clear_depth)
+                        : RenderTargetDepthOutputConfig{};
                 entry.configure_direct_scene_fn(entry.renderer,
                                                 entry.pass_role,
-                                                scene_targets.BuildColorOutputConfig(false, final_pass),
+                                                color_output,
                                                 create_info_cache.scene_target.enable_depth ? &depth_output : nullptr,
                                                 false);
             } else if (entry.configure_scene_fn != nullptr) {

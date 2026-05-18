@@ -4,6 +4,7 @@
 #include "vr/render/render_target_pass.hpp"
 #include "vr/render/render_view.hpp"
 #include "vr/render/runtime_prepare_views.hpp"
+#include "vr/render_graph/graph_command_context.hpp"
 #include "vr/scene/background/sprite_background.hpp"
 
 #include <cstdint>
@@ -32,6 +33,10 @@ public:
     void Record(const FrameRecordContext& record_context_,
                 const RenderView2D& view_,
                 const scene::Background2DRenderState& background_state_);
+    void RecordGraphPass(render_graph::GraphCommandContext& context_,
+                         const RenderView2D& view_,
+                         const scene::Background2DRenderState& background_state_,
+                         render_graph::ResourceHandle color_target_);
 
     void OnSwapchainRecreated(std::uint32_t image_count_,
                               VkExtent2D extent_,

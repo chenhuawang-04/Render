@@ -128,7 +128,8 @@ template<ecs::DimensionTag DimensionT>
         .extent = ResolveGraphExtent(snapshot_.reference_extent),
         .usage = texture_usage_color_attachment_flag |
                  texture_usage_sampled_flag |
-                 texture_usage_transfer_src_flag,
+                 texture_usage_transfer_src_flag |
+                 texture_usage_transfer_dst_flag,
         .mip_level_count = 1U,
         .array_layer_count = 1U,
         .sample_count = SampleCount::x1,

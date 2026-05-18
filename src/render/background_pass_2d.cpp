@@ -125,6 +125,59 @@ void BackgroundPass2D::Record(const FrameRecordContext& record_context_,
     RecordEndColorPass(record_context_, output_target_config);
 }
 
+void BackgroundPass2D::RecordGraphPass(render_graph::GraphCommandContext& context_,
+                                       const RenderView2D& view_,
+                                       const scene::Background2DRenderState& background_state_,
+                                       render_graph::ResourceHandle color_target_) {
+    if (!initialized) {
+        throw std::runtime_error("BackgroundPass2D::RecordGraphPass called before Initialize");
+    }
+    if (context == nullptr || pipeline_host == nullptr) {
+        throw std::runtime_error("BackgroundPass2D::RecordGraphPass called before PrepareFrame");
+    }
+    if (context_.CommandBuffer() == VK_NULL_HANDLE) {
+        throw std::runtime_error("BackgroundPass2D::RecordGraphPass requires valid command buffer");
+    }
+    if (!SupportsFullscreenBackground(background_state_.mode)) {
+        ++stats.skipped_draw_count;
+        return;
+    }
+
+    const auto resolved_color = context_.ResolveTextureView(color_target_);
+    if (resolved_color.extent.width == 0U || resolved_color.extent.height == 0U) {
+        throw std::runtime_error("BackgroundPass2D::RecordGraphPass resolved zero-sized render extent");
+    }
+
+    EnsurePipelineObjects(*context, *pipeline_host, resolved_color.format);
+
+    const VkViewport viewport = ToVkViewport(view_.viewport);
+    const VkRect2D scissor = ToVkRect2D(view_.scissor);
+    vkCmdSetViewport(context_.CommandBuffer(), 0U, 1U, &viewport);
+    vkCmdSetScissor(context_.CommandBuffer(), 0U, 1U, &scissor);
+
+    vkCmdBindPipeline(context_.CommandBuffer(),
+                      VK_PIPELINE_BIND_POINT_GRAPHICS,
+                      pipeline_host->GetGraphicsPipeline(pipeline_id));
+
+    const PushBlock push_block{
+        .color0 = background_state_.color0,
+        .color1 = background_state_.color1,
+        .opacity = background_state_.opacity,
+        .mode = static_cast<std::uint32_t>(background_state_.mode),
+        .reserved0 = 0.0F,
+        .reserved1 = 0.0F,
+    };
+    vkCmdPushConstants(context_.CommandBuffer(),
+                       pipeline_host->GetPipelineLayout(pipeline_layout_id),
+                       VK_SHADER_STAGE_FRAGMENT_BIT,
+                       0U,
+                       sizeof(PushBlock),
+                       &push_block);
+
+    vkCmdDraw(context_.CommandBuffer(), 3U, 1U, 0U, 0U);
+    ++stats.draw_call_count;
+}
+
 void BackgroundPass2D::OnSwapchainRecreated(std::uint32_t,
                                             VkExtent2D extent_,
                                             VkFormat format_,

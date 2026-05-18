@@ -172,6 +172,10 @@ public:
                                                   render_graph::ResourceVersionHandle&)> callback_) {
         if constexpr (std::is_same_v<DimensionT, ecs::Dim2>) {
             graph_build_callback_2d = std::move(callback_);
+            if (graph_build_callback_2d) {
+                EnableRecordExecution(true);
+                EnableGraphOnlyRecordPath(true);
+            }
         } else {
             graph_build_callback_3d = std::move(callback_);
             if (graph_build_callback_3d) {
@@ -210,12 +214,18 @@ public:
         return graph_only_record_path_enabled;
     }
 
-    [[nodiscard]] bool CanExecuteGraphRecord(const VulkanContext& device_) const noexcept {
+    [[nodiscard]] bool SupportsGraphOnlyRecord(const VulkanContext& device_) const noexcept {
         return record_execution_enabled &&
-               has_compiled_graph &&
-               compiled_graph.HasExecutablePasses() &&
+               graph_only_record_path_enabled &&
                device_.EnabledVulkan13Features().synchronization2 == VK_TRUE &&
                device_.EnabledVulkan13Features().dynamicRendering == VK_TRUE;
+    }
+
+    [[nodiscard]] bool CanExecuteGraphRecord(const VulkanContext& device_) const noexcept {
+        return SupportsGraphOnlyRecord(device_) &&
+               has_compiled_graph &&
+               compiled_graph.HasExecutablePasses() &&
+               !compiled_graph.Passes().empty();
     }
 
     [[nodiscard]] const render_graph::VulkanBarrierPlan& PlannedVulkanBarriers() const noexcept {

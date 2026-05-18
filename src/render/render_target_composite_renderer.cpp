@@ -1,6 +1,7 @@
-﻿#include "vr/render/render_target_composite_renderer.hpp"
+#include "vr/render/render_target_composite_renderer.hpp"
 
 #include "vr/render/bindless_resource_system.hpp"
+#include "vr/render_graph/graph_command_context.hpp"
 #include "vr/render/generated/render_target_composite_frag_spv.hpp"
 #include "vr/render/generated/render_target_composite_vert_spv.hpp"
 
@@ -16,6 +17,49 @@ namespace {
         return 1.0F;
     }
     return 1.0F / gamma_;
+}
+
+[[nodiscard]] constexpr render_graph::AttachmentLoadOp ToGraphLoadOp(VkAttachmentLoadOp load_op_) noexcept {
+    switch (load_op_) {
+    case VK_ATTACHMENT_LOAD_OP_LOAD:
+        return render_graph::AttachmentLoadOp::load;
+    case VK_ATTACHMENT_LOAD_OP_CLEAR:
+        return render_graph::AttachmentLoadOp::clear;
+    case VK_ATTACHMENT_LOAD_OP_DONT_CARE:
+        return render_graph::AttachmentLoadOp::dont_care;
+    default:
+        break;
+    }
+    return render_graph::AttachmentLoadOp::load;
+}
+
+[[nodiscard]] constexpr render_graph::AttachmentStoreOp ToGraphStoreOp(VkAttachmentStoreOp store_op_) noexcept {
+    switch (store_op_) {
+    case VK_ATTACHMENT_STORE_OP_STORE:
+        return render_graph::AttachmentStoreOp::store;
+    case VK_ATTACHMENT_STORE_OP_DONT_CARE:
+        return render_graph::AttachmentStoreOp::dont_care;
+    default:
+        break;
+    }
+    return render_graph::AttachmentStoreOp::store;
+}
+
+void BindFullscreenViewportAndScissor(VkCommandBuffer command_buffer_,
+                                      VkExtent2D extent_) noexcept {
+    VkViewport viewport{};
+    viewport.x = 0.0F;
+    viewport.y = 0.0F;
+    viewport.width = static_cast<float>(extent_.width);
+    viewport.height = static_cast<float>(extent_.height);
+    viewport.minDepth = 0.0F;
+    viewport.maxDepth = 1.0F;
+    vkCmdSetViewport(command_buffer_, 0U, 1U, &viewport);
+
+    VkRect2D scissor{};
+    scissor.offset = VkOffset2D{0, 0};
+    scissor.extent = extent_;
+    vkCmdSetScissor(command_buffer_, 0U, 1U, &scissor);
 }
 
 } // namespace
@@ -150,68 +194,105 @@ void RenderTargetCompositeRenderer::Record(const FrameRecordContext& record_cont
                                                                     create_info_cache.clear_swapchain,
                                                                     create_info_cache.clear_color,
                                                                     false);
-    EnsurePipelineObjects(*context, *descriptor_host, *pipeline_host, color_pass.target.format);
-
     if (!source_texture_slot.IsValid() || !sampler_slot.IsValid()) {
         ++stats.skipped_draw_count;
         return;
     }
 
     vkCmdBeginRendering(record_context_.command_buffer, color_pass.rendering_info.VkInfoPtr());
-
-    VkViewport viewport{};
-    viewport.x = 0.0F;
-    viewport.y = 0.0F;
-    viewport.width = static_cast<float>(color_pass.target.extent.width);
-    viewport.height = static_cast<float>(color_pass.target.extent.height);
-    viewport.minDepth = 0.0F;
-    viewport.maxDepth = 1.0F;
-    vkCmdSetViewport(record_context_.command_buffer, 0U, 1U, &viewport);
-
-    VkRect2D scissor{};
-    scissor.offset = VkOffset2D{0, 0};
-    scissor.extent = color_pass.target.extent;
-    vkCmdSetScissor(record_context_.command_buffer, 0U, 1U, &scissor);
-
-    vkCmdBindPipeline(record_context_.command_buffer,
-                      VK_PIPELINE_BIND_POINT_GRAPHICS,
-                      pipeline_host->GetGraphicsPipeline(pipeline_id));
-    const VkDescriptorSet bindless_sets[] = {
-        bindless_resources->SampledImageSet(),
-        bindless_resources->SamplerSet()
-    };
-    vkCmdBindDescriptorSets(record_context_.command_buffer,
-                            VK_PIPELINE_BIND_POINT_GRAPHICS,
-                            pipeline_host->GetPipelineLayout(pipeline_layout_id),
-                            0U,
-                            2U,
-                            bindless_sets,
-                            0U,
-                            nullptr);
-    stats.descriptor_set_bind_count += 2U;
-
     const RenderTargetResolvedView source_view = render_target_host->ResolveView(source_target);
-    PushConstants push_constants{};
-    push_constants.exposure = create_info_cache.exposure;
-    push_constants.inv_gamma = SafeInvGamma(create_info_cache.output_gamma);
-    push_constants.flags = 0U;
-    push_constants.flags |= create_info_cache.enable_reinhard_tonemap ? 0x1U : 0U;
-    push_constants.flags |= create_info_cache.apply_manual_gamma ? 0x2U : 0U;
-    push_constants.flags |= (source_view.color_encoding == RenderTargetColorEncoding::srgb) ? 0x4U : 0U;
-    push_constants.texture_slot = source_texture_slot.index;
-    push_constants.sampler_slot = sampler_slot.index;
-    vkCmdPushConstants(record_context_.command_buffer,
-                       pipeline_host->GetPipelineLayout(pipeline_layout_id),
-                       VK_SHADER_STAGE_FRAGMENT_BIT,
-                       0U,
-                       sizeof(PushConstants),
-                       &push_constants);
-
-    vkCmdDraw(record_context_.command_buffer, 3U, 1U, 0U, 0U);
-    ++stats.draw_call_count;
-
+    BindAndDrawFullscreen(record_context_.command_buffer,
+                          source_view,
+                          color_pass.target.format,
+                          color_pass.target.extent,
+                          source_texture_slot,
+                          sampler_slot);
     vkCmdEndRendering(record_context_.command_buffer);
     RecordEndColorPass(record_context_, output_target_config);
+}
+
+render_graph::RasterColorAttachmentDesc RenderTargetCompositeRenderer::BuildGraphColorAttachmentDesc(
+    render_graph::ResourceHandle output_target_,
+    bool has_previous_content_) const noexcept {
+    const bool explicit_load = output_target_config.use_explicit_load_op;
+    render_graph::AttachmentLoadOp load_op = render_graph::AttachmentLoadOp::dont_care;
+    if (has_previous_content_) {
+        load_op = explicit_load
+            ? ToGraphLoadOp(output_target_config.load_op)
+            : (create_info_cache.clear_swapchain
+                ? render_graph::AttachmentLoadOp::clear
+                : render_graph::AttachmentLoadOp::load);
+    } else if (explicit_load && output_target_config.load_op == VK_ATTACHMENT_LOAD_OP_CLEAR) {
+        load_op = render_graph::AttachmentLoadOp::clear;
+    } else if (!explicit_load && create_info_cache.clear_swapchain) {
+        load_op = render_graph::AttachmentLoadOp::clear;
+    }
+
+    const auto clear_color = explicit_load
+        ? output_target_config.clear_color
+        : create_info_cache.clear_color;
+    return render_graph::RasterColorAttachmentDesc{
+        .target = output_target_,
+        .load_op = load_op,
+        .store_op = ToGraphStoreOp(output_target_config.store_op),
+        .clear_value = {
+            .red = clear_color.float32[0],
+            .green = clear_color.float32[1],
+            .blue = clear_color.float32[2],
+            .alpha = clear_color.float32[3],
+        },
+    };
+}
+
+void RenderTargetCompositeRenderer::RecordGraphPass(render_graph::GraphCommandContext& context_,
+                                                    render_graph::ResourceHandle source_color_,
+                                                    render_graph::ResourceHandle output_target_) {
+    if (!initialized) {
+        throw std::runtime_error("RenderTargetCompositeRenderer::RecordGraphPass called before Initialize");
+    }
+    if (context == nullptr ||
+        descriptor_host == nullptr ||
+        pipeline_host == nullptr ||
+        render_target_host == nullptr ||
+        bindless_resources == nullptr ||
+        !bindless_resources->IsInitialized()) {
+        throw std::runtime_error("RenderTargetCompositeRenderer::RecordGraphPass called before PrepareFrame");
+    }
+
+    const auto source_graph_target = context_.ResolveTextureTarget(source_color_);
+    const auto output_graph_target = context_.ResolveTextureTarget(output_target_);
+    if (!IsValidRenderTargetHandle(source_graph_target) || !render_target_host->IsValid(source_graph_target)) {
+        ++stats.skipped_draw_count;
+        return;
+    }
+    if (!IsValidRenderTargetHandle(output_graph_target) || !render_target_host->IsValid(output_graph_target)) {
+        throw std::runtime_error("RenderTargetCompositeRenderer::RecordGraphPass requires a valid output target");
+    }
+    if (output_graph_target.index == source_graph_target.index &&
+        output_graph_target.generation == source_graph_target.generation) {
+        throw std::runtime_error(
+            "RenderTargetCompositeRenderer::RecordGraphPass source target must differ from output target");
+    }
+
+    const auto source_view = context_.ResolveTextureView(source_color_);
+    const auto output_view = context_.ResolveTextureView(output_target_);
+    if (output_view.extent.width == 0U || output_view.extent.height == 0U) {
+        throw std::runtime_error("RenderTargetCompositeRenderer::RecordGraphPass resolved zero-sized render extent");
+    }
+
+    const auto source_graph_slot = render_target_host->EnsureBindlessImageSlot(source_graph_target);
+    const auto graph_sampler_slot = bindless_resources->DefaultSamplerSlot();
+    if (!source_graph_slot.IsValid() || !graph_sampler_slot.IsValid()) {
+        ++stats.skipped_draw_count;
+        return;
+    }
+
+    BindAndDrawFullscreen(context_.CommandBuffer(),
+                          source_view,
+                          output_view.format,
+                          VkExtent2D{output_view.extent.width, output_view.extent.height},
+                          source_graph_slot,
+                          graph_sampler_slot);
 }
 
 void RenderTargetCompositeRenderer::OnSwapchainRecreated(std::uint32_t image_count_,
@@ -311,5 +392,51 @@ void RenderTargetCompositeRenderer::EnsurePipelineObjects(VulkanContext& context
     pipeline_color_format = color_format_;
 }
 
-} // namespace vr::render
+void RenderTargetCompositeRenderer::BindAndDrawFullscreen(
+    VkCommandBuffer command_buffer_,
+    const RenderTargetResolvedView& source_view_,
+    VkFormat output_format_,
+    VkExtent2D output_extent_,
+    BindlessSlot source_texture_slot_,
+    BindlessSlot sampler_slot_) {
+    EnsurePipelineObjects(*context, *descriptor_host, *pipeline_host, output_format_);
+    BindFullscreenViewportAndScissor(command_buffer_, output_extent_);
 
+    vkCmdBindPipeline(command_buffer_,
+                      VK_PIPELINE_BIND_POINT_GRAPHICS,
+                      pipeline_host->GetGraphicsPipeline(pipeline_id));
+    const VkDescriptorSet bindless_sets[] = {
+        bindless_resources->SampledImageSet(),
+        bindless_resources->SamplerSet()
+    };
+    vkCmdBindDescriptorSets(command_buffer_,
+                            VK_PIPELINE_BIND_POINT_GRAPHICS,
+                            pipeline_host->GetPipelineLayout(pipeline_layout_id),
+                            0U,
+                            2U,
+                            bindless_sets,
+                            0U,
+                            nullptr);
+    stats.descriptor_set_bind_count += 2U;
+
+    PushConstants push_constants{};
+    push_constants.exposure = create_info_cache.exposure;
+    push_constants.inv_gamma = SafeInvGamma(create_info_cache.output_gamma);
+    push_constants.flags = 0U;
+    push_constants.flags |= create_info_cache.enable_reinhard_tonemap ? 0x1U : 0U;
+    push_constants.flags |= create_info_cache.apply_manual_gamma ? 0x2U : 0U;
+    push_constants.flags |= (source_view_.color_encoding == RenderTargetColorEncoding::srgb) ? 0x4U : 0U;
+    push_constants.texture_slot = source_texture_slot_.index;
+    push_constants.sampler_slot = sampler_slot_.index;
+    vkCmdPushConstants(command_buffer_,
+                       pipeline_host->GetPipelineLayout(pipeline_layout_id),
+                       VK_SHADER_STAGE_FRAGMENT_BIT,
+                       0U,
+                       sizeof(PushConstants),
+                       &push_constants);
+
+    vkCmdDraw(command_buffer_, 3U, 1U, 0U, 0U);
+    ++stats.draw_call_count;
+}
+
+} // namespace vr::render

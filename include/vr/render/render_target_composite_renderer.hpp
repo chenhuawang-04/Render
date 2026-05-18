@@ -7,6 +7,8 @@
 #include "vr/render/runtime_prepare_views.hpp"
 #include "vr/render/render_target_host.hpp"
 #include "vr/render/render_target_pass.hpp"
+#include "vr/render_graph/graph_command_context.hpp"
+#include "vr/render_graph/render_graph_types.hpp"
 #include "vr/resource/sampler_host.hpp"
 
 #include <cstdint>
@@ -46,6 +48,12 @@ public:
 
     void PrepareFrame(const RenderTargetCompositeRendererPrepareView& prepare_view_);
     void Record(const FrameRecordContext& record_context_);
+    [[nodiscard]] render_graph::RasterColorAttachmentDesc BuildGraphColorAttachmentDesc(
+        render_graph::ResourceHandle output_target_,
+        bool has_previous_content_) const noexcept;
+    void RecordGraphPass(render_graph::GraphCommandContext& context_,
+                         render_graph::ResourceHandle source_color_,
+                         render_graph::ResourceHandle output_target_);
     void OnSwapchainRecreated(std::uint32_t image_count_,
                               VkExtent2D extent_,
                               VkFormat format_);
@@ -68,6 +76,12 @@ private:
                                DescriptorHost& descriptor_host_,
                                PipelineHost& pipeline_host_,
                                VkFormat color_format_);
+    void BindAndDrawFullscreen(VkCommandBuffer command_buffer_,
+                               const RenderTargetResolvedView& source_view_,
+                               VkFormat output_format_,
+                               VkExtent2D output_extent_,
+                               BindlessSlot source_texture_slot_,
+                               BindlessSlot sampler_slot_);
 
 private:
     RenderTargetCompositeRendererCreateInfo create_info_cache{};

@@ -271,75 +271,121 @@ void GeometryRenderer2D::Record(const render::FrameRecordContext& record_context
     scissor.extent = color_pass.target.extent;
     vkCmdSetScissor(record_context_.command_buffer, 0U, 1U, &scissor);
 
-    if (primitive_range.buffer != VK_NULL_HANDLE &&
-        !runtime_scratch.draw_batches.empty()) {
-        PushConstants push_constants{};
-        push_constants.viewport_width = static_cast<float>(color_pass.target.extent.width);
-        push_constants.viewport_height = static_cast<float>(color_pass.target.extent.height);
-        push_constants.inv_viewport_width_2x = (color_pass.target.extent.width > 0U)
-            ? (2.0F / static_cast<float>(color_pass.target.extent.width))
-            : 0.0F;
-        push_constants.inv_viewport_height_2x = (color_pass.target.extent.height > 0U)
-            ? (2.0F / static_cast<float>(color_pass.target.extent.height))
-            : 0.0F;
-        push_constants.params = 0U;
-        push_constants.params |= create_info_cache.input_positions_pixel_space ? 0x1U : 0U;
-        push_constants.params |= create_info_cache.pixel_space_origin_top_left ? 0x2U : 0U;
-        push_constants.reserved0 = 0U;
-        push_constants.reserved1 = 0U;
-        push_constants.reserved2 = 0U;
-        vkCmdPushConstants(record_context_.command_buffer,
-                           pipeline_host->GetPipelineLayout(pipeline_layout_id),
-                           VK_SHADER_STAGE_VERTEX_BIT,
-                           0U,
-                           sizeof(PushConstants),
-                           &push_constants);
-    }
-
-    if (primitive_range.buffer != VK_NULL_HANDLE &&
-        !runtime_scratch.draw_batches.empty()) {
-        vkCmdBindVertexBuffers(record_context_.command_buffer,
-                               0U,
-                               1U,
-                               &primitive_range.buffer,
-                               &primitive_range.offset);
-
-        render::GraphicsPipelineId current_pipeline_id{};
-        for (const ecs::Geometry2DDrawBatch& batch : runtime_scratch.draw_batches) {
-            if (batch.primitive_count == 0U) {
-                ++stats.skipped_batch_count;
-                continue;
-            }
-
-            const BlendMode blend_mode = ResolveBlendModeFromBatchParams(batch.params);
-            const render::GraphicsPipelineId pipeline_id = EnsurePipelineForBlendMode(
-                *context,
-                *pipeline_host,
-                color_pass.target.format,
-                blend_mode);
-            if (!pipeline_id.IsValid()) {
-                ++stats.skipped_batch_count;
-                continue;
-            }
-            if (!current_pipeline_id.IsValid() || current_pipeline_id.value != pipeline_id.value) {
-                vkCmdBindPipeline(record_context_.command_buffer,
-                                  VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                  pipeline_host->GetGraphicsPipeline(pipeline_id));
-                current_pipeline_id = pipeline_id;
-            }
-
-            vkCmdDraw(record_context_.command_buffer,
-                      6U,
-                      batch.primitive_count,
-                      0U,
-                      batch.primitive_begin);
-            ++stats.draw_call_count;
-        }
-    }
+    RecordDrawBatches(record_context_.command_buffer,
+                      color_pass.target.extent,
+                      color_pass.target.format);
 
     vkCmdEndRendering(record_context_.command_buffer);
     render::RecordEndColorPass(record_context_, output_target_config);
     image_initialized[record_context_.image_index] = 1U;
+}
+
+void GeometryRenderer2D::RecordGraphColorPass(render_graph::GraphCommandContext& context_,
+                                              render_graph::ResourceHandle color_target_) {
+    if (!initialized) {
+        throw std::runtime_error("GeometryRenderer2D::RecordGraphColorPass called before Initialize");
+    }
+    if (context == nullptr || pipeline_host == nullptr) {
+        throw std::runtime_error("GeometryRenderer2D::RecordGraphColorPass called before PrepareFrame");
+    }
+    if (context_.CommandBuffer() == VK_NULL_HANDLE) {
+        throw std::runtime_error("GeometryRenderer2D::RecordGraphColorPass requires valid command buffer");
+    }
+
+    const auto resolved_color = context_.ResolveTextureView(color_target_);
+    const VkExtent2D render_extent{resolved_color.extent.width, resolved_color.extent.height};
+    if (render_extent.width == 0U || render_extent.height == 0U) {
+        throw std::runtime_error("GeometryRenderer2D::RecordGraphColorPass resolved zero-sized render extent");
+    }
+
+    EnsurePipelineObjects(*context, *pipeline_host, resolved_color.format);
+
+    VkViewport viewport{};
+    viewport.x = 0.0F;
+    viewport.y = 0.0F;
+    viewport.width = static_cast<float>(render_extent.width);
+    viewport.height = static_cast<float>(render_extent.height);
+    viewport.minDepth = 0.0F;
+    viewport.maxDepth = 1.0F;
+    vkCmdSetViewport(context_.CommandBuffer(), 0U, 1U, &viewport);
+
+    VkRect2D scissor{};
+    scissor.offset = VkOffset2D{0, 0};
+    scissor.extent = render_extent;
+    vkCmdSetScissor(context_.CommandBuffer(), 0U, 1U, &scissor);
+
+    RecordDrawBatches(context_.CommandBuffer(),
+                      render_extent,
+                      resolved_color.format);
+}
+
+void GeometryRenderer2D::RecordDrawBatches(VkCommandBuffer command_buffer_,
+                                           VkExtent2D render_extent_,
+                                           VkFormat color_format_) {
+    if (primitive_range.buffer == VK_NULL_HANDLE ||
+        runtime_scratch.draw_batches.empty()) {
+        return;
+    }
+
+    PushConstants push_constants{};
+    push_constants.viewport_width = static_cast<float>(render_extent_.width);
+    push_constants.viewport_height = static_cast<float>(render_extent_.height);
+    push_constants.inv_viewport_width_2x = (render_extent_.width > 0U)
+        ? (2.0F / static_cast<float>(render_extent_.width))
+        : 0.0F;
+    push_constants.inv_viewport_height_2x = (render_extent_.height > 0U)
+        ? (2.0F / static_cast<float>(render_extent_.height))
+        : 0.0F;
+    push_constants.params = 0U;
+    push_constants.params |= create_info_cache.input_positions_pixel_space ? 0x1U : 0U;
+    push_constants.params |= create_info_cache.pixel_space_origin_top_left ? 0x2U : 0U;
+    push_constants.reserved0 = 0U;
+    push_constants.reserved1 = 0U;
+    push_constants.reserved2 = 0U;
+    vkCmdPushConstants(command_buffer_,
+                       pipeline_host->GetPipelineLayout(pipeline_layout_id),
+                       VK_SHADER_STAGE_VERTEX_BIT,
+                       0U,
+                       sizeof(PushConstants),
+                       &push_constants);
+
+    vkCmdBindVertexBuffers(command_buffer_,
+                           0U,
+                           1U,
+                           &primitive_range.buffer,
+                           &primitive_range.offset);
+
+    render::GraphicsPipelineId current_pipeline_id{};
+    for (const ecs::Geometry2DDrawBatch& batch : runtime_scratch.draw_batches) {
+        if (batch.primitive_count == 0U) {
+            ++stats.skipped_batch_count;
+            continue;
+        }
+
+        const BlendMode blend_mode = ResolveBlendModeFromBatchParams(batch.params);
+        const render::GraphicsPipelineId pipeline_id = EnsurePipelineForBlendMode(
+            *context,
+            *pipeline_host,
+            color_format_,
+            blend_mode);
+        if (!pipeline_id.IsValid()) {
+            ++stats.skipped_batch_count;
+            continue;
+        }
+        if (!current_pipeline_id.IsValid() || current_pipeline_id.value != pipeline_id.value) {
+            vkCmdBindPipeline(command_buffer_,
+                              VK_PIPELINE_BIND_POINT_GRAPHICS,
+                              pipeline_host->GetGraphicsPipeline(pipeline_id));
+            current_pipeline_id = pipeline_id;
+        }
+
+        vkCmdDraw(command_buffer_,
+                  6U,
+                  batch.primitive_count,
+                  0U,
+                  batch.primitive_begin);
+        ++stats.draw_call_count;
+    }
 }
 
 void GeometryRenderer2D::OnSwapchainRecreated(std::uint32_t image_count_,
