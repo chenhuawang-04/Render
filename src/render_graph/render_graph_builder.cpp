@@ -756,6 +756,12 @@ void RenderGraphBuilder::AddPassDescriptorBinding(
                    existing_.binding == descriptor_binding_.binding;
         });
     if (duplicate != target_pass.descriptor_bindings.end()) {
+        if (duplicate->source == descriptor_binding_.source &&
+            duplicate->kind == descriptor_binding_.kind &&
+            duplicate->stage_flags == descriptor_binding_.stage_flags &&
+            duplicate->source_id == descriptor_binding_.source_id) {
+            return;
+        }
         throw std::invalid_argument(
             "RenderGraphBuilder::AddPassDescriptorBinding encountered duplicate set/binding in one pass");
     }
@@ -797,7 +803,40 @@ void RenderGraphBuilder::SetPassShaderContract(const PassHandle pass_,
                 "RenderGraphBuilder::SetPassShaderContract encountered duplicate set/binding");
         }
     }
-    target_pass.shader_contract = std::move(shader_contract_);
+    if (!target_pass.shader_contract.has_value()) {
+        target_pass.shader_contract = std::move(shader_contract_);
+        return;
+    }
+
+    auto& existing_contract = *target_pass.shader_contract;
+    for (const auto& binding_ : shader_contract_.bindings) {
+        const auto existing_it = std::find_if(
+            existing_contract.bindings.begin(),
+            existing_contract.bindings.end(),
+            [&](const ShaderContractBindingDesc& existing_) {
+                return existing_.set == binding_.set &&
+                       existing_.binding == binding_.binding;
+            });
+        if (existing_it == existing_contract.bindings.end()) {
+            existing_contract.bindings.push_back(binding_);
+            continue;
+        }
+        if (existing_it->kind != binding_.kind ||
+            existing_it->stage_flags != binding_.stage_flags ||
+            existing_it->descriptor_count != binding_.descriptor_count) {
+            throw std::invalid_argument(
+                "RenderGraphBuilder::SetPassShaderContract encountered conflicting set/binding requirements");
+        }
+    }
+    std::sort(existing_contract.bindings.begin(),
+              existing_contract.bindings.end(),
+              [](const ShaderContractBindingDesc& lhs_,
+                 const ShaderContractBindingDesc& rhs_) {
+                  if (lhs_.set != rhs_.set) {
+                      return lhs_.set < rhs_.set;
+                  }
+                  return lhs_.binding < rhs_.binding;
+              });
 }
 
 void RenderGraphBuilder::AddBindlessTableBinding(

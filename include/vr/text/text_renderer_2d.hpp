@@ -24,6 +24,7 @@ class UploadHost;
 
 namespace vr::render_graph {
 class GraphCommandContext;
+class RenderGraphBuilder;
 }
 
 namespace vr::text {
@@ -79,6 +80,8 @@ public:
     void ResetOutputTargetConfig() noexcept;
 
     void PrepareFrame(const render::TextRenderer2DPrepareView& prepare_view_);
+    void DescribeGraphDescriptorBindings(render_graph::RenderGraphBuilder& builder_,
+                                         render_graph::PassHandle pass_) const;
     void Record(const render::FrameRecordContext& record_context_);
     void RecordGraphOverlay(render_graph::GraphCommandContext& context_,
                             render_graph::ResourceHandle color_target_);

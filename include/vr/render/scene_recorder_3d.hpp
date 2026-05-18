@@ -99,6 +99,12 @@ concept SceneRecorder3DGraphOverlayRecordable =
     };
 
 template<typename RendererT>
+concept SceneRecorder3DGraphDescriptorBindable =
+    requires {
+        &RendererT::DescribeGraphDescriptorBindings;
+    };
+
+template<typename RendererT>
 struct SceneRecorder3DGraphSceneSupport : std::bool_constant<SceneRecorder3DGraphSceneRecordable<RendererT>> {};
 
 template<>
@@ -214,6 +220,7 @@ public:
             .prepare_fn = &PrepareRenderer<RendererT>,
             .record_fn = &RecordSceneRenderer<RendererT>,
             .graph_record_fn = ResolveGraphSceneRecordFn<RendererT>(),
+            .describe_graph_bindings_fn = ResolveGraphDescriptorBindingsFn<RendererT>(),
             .swapchain_recreated_fn = &OnSwapchainRecreatedRenderer<RendererT>,
             .configure_scene_fn = &ConfigureSceneRendererBinding<RendererT>,
             .configure_direct_scene_fn = &ConfigureDirectSceneRendererBinding<RendererT>,
@@ -250,6 +257,7 @@ public:
             .prepare_fn = &PrepareRenderer<RendererT>,
             .record_fn = &RecordRenderer<RendererT>,
             .graph_record_fn = ResolveGraphOverlayRecordFn<RendererT>(),
+            .describe_graph_bindings_fn = ResolveGraphDescriptorBindingsFn<RendererT>(),
             .swapchain_recreated_fn = &OptionalOnSwapchainRecreatedRenderer<RendererT>,
             .set_output_target_fn = &SetOverlayOutputTarget<RendererT>,
         };
@@ -301,6 +309,9 @@ private:
                                         SceneRenderStage,
                                         render_graph::ResourceHandle,
                                         render_graph::ResourceHandle);
+    using DescribeGraphBindingsFn = void (*)(void*,
+                                             render_graph::RenderGraphBuilder&,
+                                             render_graph::PassHandle);
     using SwapchainRecreatedFn = void (*)(void*,
                                           std::uint32_t,
                                           VkExtent2D,
@@ -359,6 +370,7 @@ private:
         PrepareFn prepare_fn = nullptr;
         SceneRecordFn record_fn = nullptr;
         GraphSceneRecordFn graph_record_fn = nullptr;
+        DescribeGraphBindingsFn describe_graph_bindings_fn = nullptr;
         SwapchainRecreatedFn swapchain_recreated_fn = nullptr;
         ConfigureSceneFn configure_scene_fn = nullptr;
         ConfigureDirectSceneFn configure_direct_scene_fn = nullptr;
@@ -373,6 +385,7 @@ private:
         PrepareFn prepare_fn = nullptr;
         RecordFn record_fn = nullptr;
         GraphOverlayRecordFn graph_record_fn = nullptr;
+        DescribeGraphBindingsFn describe_graph_bindings_fn = nullptr;
         SwapchainRecreatedFn swapchain_recreated_fn = nullptr;
         SetOverlayOutputFn set_output_target_fn = nullptr;
     };
@@ -500,6 +513,22 @@ private:
     static constexpr GraphOverlayRecordFn ResolveGraphOverlayRecordFn() noexcept {
         if constexpr (SceneRecorder3DGraphOverlaySupport<RendererT>::value) {
             return &RecordGraphOverlayRenderer<RendererT>;
+        } else {
+            return nullptr;
+        }
+    }
+
+    template<typename RendererT>
+    static void DescribeGraphBindings(void* renderer_,
+                                      render_graph::RenderGraphBuilder& builder_,
+                                      render_graph::PassHandle pass_) {
+        static_cast<RendererT*>(renderer_)->DescribeGraphDescriptorBindings(builder_, pass_);
+    }
+
+    template<typename RendererT>
+    static constexpr DescribeGraphBindingsFn ResolveGraphDescriptorBindingsFn() noexcept {
+        if constexpr (SceneRecorder3DGraphDescriptorBindable<RendererT>) {
+            return &DescribeGraphBindings<RendererT>;
         } else {
             return nullptr;
         }

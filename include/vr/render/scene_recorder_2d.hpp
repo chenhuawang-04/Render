@@ -189,6 +189,7 @@ public:
             .prepare_fn = &PrepareRenderer<RendererT>,
             .record_fn = &RecordRenderer<RendererT>,
             .graph_record_fn = ResolveGraphRecordFn<RendererT>(),
+            .describe_graph_bindings_fn = ResolveGraphDescriptorBindingsFn<RendererT>(),
             .swapchain_recreated_fn = &OnSwapchainRecreatedRenderer<RendererT>,
             .configure_scene_fn = &ConfigureSceneRendererBinding<RendererT>,
             .configure_direct_scene_fn = &ConfigureDirectSceneRendererBinding<RendererT>,
@@ -233,6 +234,7 @@ public:
             .prepare_fn = &PrepareRenderer<RendererT>,
             .record_fn = &RecordRenderer<RendererT>,
             .graph_record_fn = ResolveGraphRecordFn<RendererT>(),
+            .describe_graph_bindings_fn = ResolveGraphDescriptorBindingsFn<RendererT>(),
             .swapchain_recreated_fn = &OnSwapchainRecreatedRenderer<RendererT>,
             .set_output_target_fn = &SetOverlayOutputTarget<RendererT>,
         };
@@ -336,6 +338,7 @@ private:
         PrepareFn prepare_fn = nullptr;
         RecordFn record_fn = nullptr;
         GraphRecordFn graph_record_fn = nullptr;
+        DescribeGraphBindingsFn describe_graph_bindings_fn = nullptr;
         SwapchainRecreatedFn swapchain_recreated_fn = nullptr;
         ConfigureSceneFn configure_scene_fn = nullptr;
         ConfigureDirectSceneFn configure_direct_scene_fn = nullptr;
@@ -364,6 +367,7 @@ private:
         PrepareFn prepare_fn = nullptr;
         RecordFn record_fn = nullptr;
         GraphRecordFn graph_record_fn = nullptr;
+        DescribeGraphBindingsFn describe_graph_bindings_fn = nullptr;
         SwapchainRecreatedFn swapchain_recreated_fn = nullptr;
         SetOverlayOutputFn set_output_target_fn = nullptr;
     };

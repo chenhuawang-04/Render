@@ -2,6 +2,7 @@
 
 #include "vr/render/color_blend_state.hpp"
 #include "vr/render_graph/graph_command_context.hpp"
+#include "vr/render_graph/render_graph_builder.hpp"
 #include "vr/render/render_loop_host.hpp"
 #include "vr/render/render_target_pass.hpp"
 #include "vr/render/runtime_prepare_views.hpp"
@@ -18,6 +19,32 @@
 #include <stdexcept>
 
 namespace vr::text {
+
+namespace {
+
+[[nodiscard]] render::BindlessTableId ResolveSampledImageTableId(
+    const render::BindlessResourceSystem* bindless_resources_) noexcept {
+    if (bindless_resources_ != nullptr) {
+        const auto table_id = bindless_resources_->SampledImageTable();
+        if (table_id.IsValid()) {
+            return table_id;
+        }
+    }
+    return render::BindlessResourceSystem::SampledImageTableContractId();
+}
+
+[[nodiscard]] render::BindlessTableId ResolveSamplerTableId(
+    const render::BindlessResourceSystem* bindless_resources_) noexcept {
+    if (bindless_resources_ != nullptr) {
+        const auto table_id = bindless_resources_->SamplerTable();
+        if (table_id.IsValid()) {
+            return table_id;
+        }
+    }
+    return render::BindlessResourceSystem::SamplerTableContractId();
+}
+
+} // namespace
 
 std::uint32_t TextRenderer2D::PackRgba8(const ecs::Rgba8& color_) noexcept {
     return static_cast<std::uint32_t>(color_.r) |
@@ -309,6 +336,30 @@ void TextRenderer2D::PrepareFrame(const render::TextRenderer2DPrepareView& prepa
     stats.uploaded_bytes = required_bytes;
 }
 
+void TextRenderer2D::DescribeGraphDescriptorBindings(render_graph::RenderGraphBuilder& builder_,
+                                                     const render_graph::PassHandle pass_) const {
+    if (!initialized) {
+        throw std::runtime_error(
+            "TextRenderer2D::DescribeGraphDescriptorBindings called before Initialize");
+    }
+
+    const auto sampled_image_table = ResolveSampledImageTableId(bindless_resources);
+    const auto sampler_table = ResolveSamplerTableId(bindless_resources);
+    builder_.SetPassShaderContract(
+        pass_,
+        render_graph::MakeSharedBindlessFragmentShaderContract("text_2d.frag"));
+    builder_.AddBindlessTableBinding(pass_,
+                                     0U,
+                                     render_graph::DescriptorBindingKind::sampled_image_table,
+                                     sampled_image_table.value,
+                                     render_graph::shader_stage_fragment_flag);
+    builder_.AddBindlessTableBinding(pass_,
+                                     1U,
+                                     render_graph::DescriptorBindingKind::sampler_table,
+                                     sampler_table.value,
+                                     render_graph::shader_stage_fragment_flag);
+}
+
 void TextRenderer2D::RecordGraphOverlay(render_graph::GraphCommandContext& context_,
                                        render_graph::ResourceHandle color_target_) {
     RecordGraphInternal(context_, color_target_);
@@ -513,18 +564,10 @@ void TextRenderer2D::RecordGraphInternal(render_graph::GraphCommandContext& cont
     if (frame_index < frame_states.size()) {
         const PerFrameState& frame_state = frame_states[frame_index];
         if (frame_state.instance_count > 0U && frame_state.vertex_buffer.buffer != VK_NULL_HANDLE) {
-            const VkDescriptorSet bindless_sets[] = {
-                bindless_resources->SampledImageSet(),
-                bindless_resources->SamplerSet()
-            };
-            vkCmdBindDescriptorSets(context_.CommandBuffer(),
-                                    VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                    pipeline_layout,
-                                    0U,
-                                    2U,
-                                    bindless_sets,
-                                    0U,
-                                    nullptr);
+            context_.BindCurrentPassDescriptorSets(VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                                   pipeline_layout,
+                                                   0U,
+                                                   2U);
             stats.descriptor_set_bind_count += 2U;
 
             const VkBuffer vertex_buffer = frame_state.vertex_buffer.buffer;

@@ -347,6 +347,14 @@ void SceneRecorder2D::BuildRenderGraph(
                                        },
                                    });
 
+        for (const auto* entry : visible_scene_entries) {
+            if (entry->describe_graph_bindings_fn != nullptr) {
+                entry->describe_graph_bindings_fn(entry->renderer,
+                                                  builder_,
+                                                  build_result_.scene_pass);
+            }
+        }
+
         if (has_background_pass || !visible_scene_entries.empty()) {
             const RenderView2D captured_view = has_background_pass ? *scene_view : RenderView2D{};
             const scene::Background2DRenderState captured_background =
@@ -464,6 +472,13 @@ void SceneRecorder2D::BuildRenderGraph(
 
     if (!visible_overlay_entries.empty() &&
         IsValidPassHandle(build_result_.overlay_pass)) {
+        for (const auto* entry : visible_overlay_entries) {
+            if (entry->describe_graph_bindings_fn != nullptr) {
+                entry->describe_graph_bindings_fn(entry->renderer,
+                                                  builder_,
+                                                  build_result_.overlay_pass);
+            }
+        }
         const auto overlay_target = build_result_.scene_color;
         builder_.SetExecuteCallback(
             build_result_.overlay_pass,

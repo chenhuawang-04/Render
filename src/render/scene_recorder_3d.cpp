@@ -622,6 +622,13 @@ void SceneRecorder3D::BuildRenderGraph(
     }
     if (!opaque_visible_entries.empty() &&
         IsValidPassHandle(build_result_.scene_pass)) {
+        for (const auto* entry_ : opaque_visible_entries) {
+            if (entry_->describe_graph_bindings_fn != nullptr) {
+                entry_->describe_graph_bindings_fn(entry_->renderer,
+                                                   builder_,
+                                                   build_result_.scene_pass);
+            }
+        }
         const auto scene_color = build_result_.scene_color;
         const auto scene_depth = build_result_.scene_depth;
         builder_.SetExecuteCallback(build_result_.scene_pass,
@@ -685,6 +692,13 @@ void SceneRecorder3D::BuildRenderGraph(
                                            .read_only = true,
                                        },
                                    });
+        for (const auto* entry_ : transparent_visible_entries) {
+            if (entry_->describe_graph_bindings_fn != nullptr) {
+                entry_->describe_graph_bindings_fn(entry_->renderer,
+                                                   builder_,
+                                                   transparent_pass);
+            }
+        }
         const auto scene_color = build_result_.scene_color;
         const auto scene_depth = build_result_.scene_depth;
         builder_.SetExecuteCallback(transparent_pass,
@@ -845,6 +859,13 @@ void SceneRecorder3D::BuildRenderGraph(
             visible_overlay_entries.push_back(&entry_);
         }
         if (!visible_overlay_entries.empty()) {
+            for (const auto* entry_ : visible_overlay_entries) {
+                if (entry_->describe_graph_bindings_fn != nullptr) {
+                    entry_->describe_graph_bindings_fn(entry_->renderer,
+                                                       builder_,
+                                                       build_result_.overlay_pass);
+                }
+            }
             const auto overlay_target = build_result_.scene_color;
             builder_.SetExecuteCallback(build_result_.overlay_pass,
                                         [visible_overlay_entries, overlay_target](render_graph::GraphCommandContext& context_) {
