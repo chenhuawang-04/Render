@@ -269,6 +269,31 @@ void AppendJsonDescriptorBinding(std::ostringstream& oss_,
          << ", \"sourceId\": " << binding_.source_id << '}';
 }
 
+void AppendJsonDescriptorWrite(std::ostringstream& oss_,
+                               const DescriptorWriteDesc& write_) {
+    oss_ << "{\"set\": " << write_.set
+         << ", \"binding\": " << write_.binding
+         << ", \"source\": \"" << DescriptorBindingSourceToString(write_.source) << '"'
+         << ", \"kind\": \"" << DescriptorBindingKindToString(write_.kind) << '"'
+         << ", \"stageFlags\": \"" << BuildShaderStageFlagsString(write_.stage_flags) << '"'
+         << ", \"sourceId\": " << write_.source_id << '}';
+}
+
+void AppendJsonBindlessAllocation(std::ostringstream& oss_,
+                                  const BindlessAllocation& allocation_) {
+    oss_ << "{\"tableId\": " << allocation_.table_id
+         << ", \"kind\": \"" << DescriptorBindingKindToString(allocation_.kind) << '"'
+         << ", \"stageFlags\": \"" << BuildShaderStageFlagsString(allocation_.stage_flags) << "\"}";
+}
+
+[[nodiscard]] std::string BuildDescriptorLayoutDotLabel(const PassDescriptorBindingDesc& binding_) {
+    std::ostringstream oss{};
+    oss << "set " << binding_.set
+        << " binding " << binding_.binding
+        << "\\n" << DescriptorBindingKindToString(binding_.kind);
+    return oss.str();
+}
+
 [[nodiscard]] std::string BuildAccessDotLabel(const AccessDesc& access_,
                                               const ResourceKind kind_) {
     std::ostringstream oss{};
@@ -348,6 +373,9 @@ std::string CompiledRenderGraph::BuildDebugString() const {
     }
 
     oss << barrier_plan.BuildDebugString();
+    oss << "descriptor_plan_layouts=" << descriptor_plan.pass_layouts.size() << '\n';
+    oss << "descriptor_plan_write_batches=" << descriptor_plan.writes.size() << '\n';
+    oss << "descriptor_plan_bindless_allocations=" << descriptor_plan.bindless_allocations.size() << '\n';
     return oss.str();
 }
 
@@ -401,8 +429,7 @@ std::string CompiledRenderGraph::BuildDotGraph() const {
         }
         for (const auto& binding_ : pass_.descriptor_bindings) {
             oss << "  pass_" << pass_.handle.index << " -> pass_" << pass_.handle.index
-                << " [style=dotted,label=\"set " << binding_.set
-                << " " << DescriptorBindingKindToString(binding_.kind) << "\"];\n";
+                << " [style=dotted,label=\"" << BuildDescriptorLayoutDotLabel(binding_) << "\"];\n";
         }
     }
 
@@ -521,6 +548,48 @@ std::string CompiledRenderGraph::BuildJson() const {
         oss << '\n';
     }
     oss << "  ],\n";
+    oss << "  \"descriptorPlan\": {\n";
+    oss << "    \"passLayouts\": [";
+    for (std::size_t layout_index = 0; layout_index < descriptor_plan.pass_layouts.size(); ++layout_index) {
+        if (layout_index != 0U) {
+            oss << ", ";
+        }
+        const auto& layout_ = descriptor_plan.pass_layouts[layout_index];
+        oss << "{\"passIndex\": " << layout_.pass.index << ", \"bindings\": [";
+        for (std::size_t binding_index = 0; binding_index < layout_.bindings.size(); ++binding_index) {
+            if (binding_index != 0U) {
+                oss << ", ";
+            }
+            AppendJsonDescriptorBinding(oss, layout_.bindings[binding_index]);
+        }
+        oss << "]}";
+    }
+    oss << "],\n";
+    oss << "    \"writeBatches\": [";
+    for (std::size_t batch_index = 0; batch_index < descriptor_plan.writes.size(); ++batch_index) {
+        if (batch_index != 0U) {
+            oss << ", ";
+        }
+        const auto& batch_ = descriptor_plan.writes[batch_index];
+        oss << "{\"passIndex\": " << batch_.pass.index << ", \"writes\": [";
+        for (std::size_t write_index = 0; write_index < batch_.writes.size(); ++write_index) {
+            if (write_index != 0U) {
+                oss << ", ";
+            }
+            AppendJsonDescriptorWrite(oss, batch_.writes[write_index]);
+        }
+        oss << "]}";
+    }
+    oss << "],\n";
+    oss << "    \"bindlessAllocations\": [";
+    for (std::size_t allocation_index = 0; allocation_index < descriptor_plan.bindless_allocations.size(); ++allocation_index) {
+        if (allocation_index != 0U) {
+            oss << ", ";
+        }
+        AppendJsonBindlessAllocation(oss, descriptor_plan.bindless_allocations[allocation_index]);
+    }
+    oss << "]\n";
+    oss << "  },\n";
     oss << "  \"barrierPlan\": " << barrier_plan.BuildJson() << "\n";
     oss << "}\n";
     return oss.str();
@@ -694,6 +763,43 @@ void RenderGraphBuilder::AddPassDescriptorBinding(
     target_pass.descriptor_bindings.push_back(descriptor_binding_);
 }
 
+void RenderGraphBuilder::SetPassShaderContract(const PassHandle pass_,
+                                               PassShaderContractDesc shader_contract_) {
+    PassNode& target_pass = RequirePass(pass_);
+    if (shader_contract_.bindings.empty()) {
+        throw std::invalid_argument(
+            "RenderGraphBuilder::SetPassShaderContract requires at least one shader contract binding");
+    }
+    for (const auto& binding_ : shader_contract_.bindings) {
+        if (binding_.stage_flags == shader_stage_none_flag) {
+            throw std::invalid_argument(
+                "RenderGraphBuilder::SetPassShaderContract requires non-empty shader stage flags");
+        }
+        if (binding_.descriptor_count == 0U) {
+            throw std::invalid_argument(
+                "RenderGraphBuilder::SetPassShaderContract requires non-zero descriptor counts");
+        }
+    }
+    std::sort(shader_contract_.bindings.begin(),
+              shader_contract_.bindings.end(),
+              [](const ShaderContractBindingDesc& lhs_,
+                 const ShaderContractBindingDesc& rhs_) {
+                  if (lhs_.set != rhs_.set) {
+                      return lhs_.set < rhs_.set;
+                  }
+                  return lhs_.binding < rhs_.binding;
+              });
+    for (std::size_t index = 1U; index < shader_contract_.bindings.size(); ++index) {
+        const auto& previous = shader_contract_.bindings[index - 1U];
+        const auto& current = shader_contract_.bindings[index];
+        if (previous.set == current.set && previous.binding == current.binding) {
+            throw std::invalid_argument(
+                "RenderGraphBuilder::SetPassShaderContract encountered duplicate set/binding");
+        }
+    }
+    target_pass.shader_contract = std::move(shader_contract_);
+}
+
 void RenderGraphBuilder::AddBindlessTableBinding(
     const PassHandle pass_,
     const std::uint32_t set_,
@@ -863,10 +969,77 @@ CompiledRenderGraph RenderGraphBuilder::Compile() const {
                   [](const PassDescriptorBindingDesc& lhs_,
                      const PassDescriptorBindingDesc& rhs_) {
                       if (lhs_.set != rhs_.set) {
-                          return lhs_.set < rhs_.set;
-                      }
-                      return lhs_.binding < rhs_.binding;
+                      return lhs_.set < rhs_.set;
+                  }
+                  return lhs_.binding < rhs_.binding;
                   });
+        if (compiled_pass.descriptor_bindings.empty()) {
+            if (pass_.shader_contract.has_value() &&
+                !pass_.shader_contract->bindings.empty()) {
+                throw std::runtime_error(
+                    "RenderGraphBuilder::Compile pass '" + pass_.debug_name +
+                    "' declared a shader contract but did not declare descriptor bindings");
+            }
+        } else {
+            if (!pass_.shader_contract.has_value()) {
+                throw std::runtime_error(
+                    "RenderGraphBuilder::Compile pass '" + pass_.debug_name +
+                    "' declared descriptor bindings without a shader contract");
+            }
+
+            const auto& shader_contract = *pass_.shader_contract;
+            for (const auto& expected_binding : shader_contract.bindings) {
+                const auto actual_it = std::find_if(
+                    compiled_pass.descriptor_bindings.begin(),
+                    compiled_pass.descriptor_bindings.end(),
+                    [&](const PassDescriptorBindingDesc& actual_) {
+                        return actual_.set == expected_binding.set &&
+                               actual_.binding == expected_binding.binding;
+                    });
+                if (actual_it == compiled_pass.descriptor_bindings.end()) {
+                    throw std::runtime_error(
+                        "RenderGraphBuilder::Compile pass '" + pass_.debug_name +
+                        "' is missing shader-contract binding set=" +
+                        std::to_string(expected_binding.set) + " binding=" +
+                        std::to_string(expected_binding.binding) + " from contract '" +
+                        shader_contract.debug_name + "'");
+                }
+                if (actual_it->kind != expected_binding.kind) {
+                    throw std::runtime_error(
+                        "RenderGraphBuilder::Compile pass '" + pass_.debug_name +
+                        "' has descriptor binding kind mismatch at set=" +
+                        std::to_string(expected_binding.set) + " binding=" +
+                        std::to_string(expected_binding.binding) + " for contract '" +
+                        shader_contract.debug_name + "'");
+                }
+                if (actual_it->stage_flags != expected_binding.stage_flags) {
+                    throw std::runtime_error(
+                        "RenderGraphBuilder::Compile pass '" + pass_.debug_name +
+                        "' has descriptor stage mismatch at set=" +
+                        std::to_string(expected_binding.set) + " binding=" +
+                        std::to_string(expected_binding.binding) + " for contract '" +
+                        shader_contract.debug_name + "'");
+                }
+            }
+
+            for (const auto& actual_binding : compiled_pass.descriptor_bindings) {
+                const auto expected_it = std::find_if(
+                    shader_contract.bindings.begin(),
+                    shader_contract.bindings.end(),
+                    [&](const ShaderContractBindingDesc& expected_) {
+                        return expected_.set == actual_binding.set &&
+                               expected_.binding == actual_binding.binding;
+                    });
+                if (expected_it == shader_contract.bindings.end()) {
+                    throw std::runtime_error(
+                        "RenderGraphBuilder::Compile pass '" + pass_.debug_name +
+                        "' declared extra descriptor binding set=" +
+                        std::to_string(actual_binding.set) + " binding=" +
+                        std::to_string(actual_binding.binding) + " outside contract '" +
+                        shader_contract.debug_name + "'");
+                }
+            }
+        }
         for (const auto dependency_ : dependencies[handle_.index]) {
             if (active[dependency_.index]) {
                 compiled_pass.dependencies.push_back(dependency_);
@@ -875,8 +1048,60 @@ CompiledRenderGraph RenderGraphBuilder::Compile() const {
         for (const auto& write_ : pass_.writes) {
             compiled_pass.writes.push_back(write_.access);
         }
+        if (!compiled_pass.descriptor_bindings.empty()) {
+            compiled.descriptor_plan.pass_layouts.push_back(PassDescriptorLayout{
+                .pass = handle_,
+                .bindings = compiled_pass.descriptor_bindings,
+            });
+
+            DescriptorWriteBatch write_batch{};
+            write_batch.pass = handle_;
+            write_batch.writes.reserve(compiled_pass.descriptor_bindings.size());
+            for (const auto& binding_ : compiled_pass.descriptor_bindings) {
+                write_batch.writes.push_back(DescriptorWriteDesc{
+                    .set = binding_.set,
+                    .binding = binding_.binding,
+                    .source = binding_.source,
+                    .kind = binding_.kind,
+                    .stage_flags = binding_.stage_flags,
+                    .source_id = binding_.source_id,
+                });
+                if (binding_.source == DescriptorBindingSource::bindless_table) {
+                    const auto existing_allocation = std::find_if(
+                        compiled.descriptor_plan.bindless_allocations.begin(),
+                        compiled.descriptor_plan.bindless_allocations.end(),
+                        [&](const BindlessAllocation& allocation_) {
+                            return allocation_.table_id == binding_.source_id &&
+                                   allocation_.kind == binding_.kind &&
+                                   allocation_.stage_flags == binding_.stage_flags;
+                        });
+                    if (existing_allocation == compiled.descriptor_plan.bindless_allocations.end()) {
+                        compiled.descriptor_plan.bindless_allocations.push_back(BindlessAllocation{
+                            .table_id = binding_.source_id,
+                            .kind = binding_.kind,
+                            .stage_flags = binding_.stage_flags,
+                        });
+                    }
+                }
+            }
+            compiled.descriptor_plan.writes.push_back(std::move(write_batch));
+        }
         compiled.passes.push_back(std::move(compiled_pass));
     }
+
+    std::sort(compiled.descriptor_plan.bindless_allocations.begin(),
+              compiled.descriptor_plan.bindless_allocations.end(),
+              [](const BindlessAllocation& lhs_,
+                 const BindlessAllocation& rhs_) {
+                  if (lhs_.table_id != rhs_.table_id) {
+                      return lhs_.table_id < rhs_.table_id;
+                  }
+                  if (lhs_.kind != rhs_.kind) {
+                      return static_cast<std::uint32_t>(lhs_.kind) <
+                             static_cast<std::uint32_t>(rhs_.kind);
+                  }
+                  return lhs_.stage_flags < rhs_.stage_flags;
+              });
 
     for (std::uint32_t resource_index = 0U;
          resource_index < static_cast<std::uint32_t>(resources.size());

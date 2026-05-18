@@ -523,6 +523,9 @@ void RenderTargetBloomRenderer::DescribeGraphSingleSourceBindings(
     }
     const auto sampled_image_table = ResolveSampledImageTableId(bindless_resources);
     const auto sampler_table = ResolveSamplerTableId(bindless_resources);
+    builder_.SetPassShaderContract(
+        pass_,
+        render_graph::MakeSharedBindlessFragmentShaderContract("render_target_bloom_single_source.frag"));
     builder_.AddBindlessTableBinding(pass_,
                                      0U,
                                      render_graph::DescriptorBindingKind::sampled_image_table,
@@ -538,7 +541,21 @@ void RenderTargetBloomRenderer::DescribeGraphSingleSourceBindings(
 void RenderTargetBloomRenderer::DescribeGraphDualSourceBindings(
     render_graph::RenderGraphBuilder& builder_,
     const render_graph::PassHandle pass_) const {
-    DescribeGraphSingleSourceBindings(builder_, pass_);
+    const auto sampled_image_table = ResolveSampledImageTableId(bindless_resources);
+    const auto sampler_table = ResolveSamplerTableId(bindless_resources);
+    builder_.SetPassShaderContract(
+        pass_,
+        render_graph::MakeSharedBindlessFragmentShaderContract("render_target_bloom_dual_source.frag"));
+    builder_.AddBindlessTableBinding(pass_,
+                                     0U,
+                                     render_graph::DescriptorBindingKind::sampled_image_table,
+                                     sampled_image_table.value,
+                                     render_graph::shader_stage_fragment_flag);
+    builder_.AddBindlessTableBinding(pass_,
+                                     1U,
+                                     render_graph::DescriptorBindingKind::sampler_table,
+                                     sampler_table.value,
+                                     render_graph::shader_stage_fragment_flag);
 }
 
 void RenderTargetBloomRenderer::RecordGraphPrefilterPass(render_graph::GraphCommandContext& context_,

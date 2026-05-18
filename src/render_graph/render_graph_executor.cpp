@@ -15,7 +15,14 @@ namespace {
 
 void PrepareDescriptorSetsForPass(GraphCommandContext& context_,
                                   const CompiledPass& pass_) {
-    if (pass_.descriptor_bindings.empty()) {
+    const auto& descriptor_plan = context_.Graph().DescriptorPlan();
+    const auto write_batch_it = std::find_if(
+        descriptor_plan.writes.begin(),
+        descriptor_plan.writes.end(),
+        [&](const DescriptorWriteBatch& batch_) {
+            return batch_.pass.index == pass_.handle.index;
+        });
+    if (write_batch_it == descriptor_plan.writes.end()) {
         context_.SetCurrentPassDescriptorSets({});
         return;
     }
@@ -25,24 +32,24 @@ void PrepareDescriptorSetsForPass(GraphCommandContext& context_,
     }
 
     std::uint32_t max_set_index = 0U;
-    for (const auto& binding_ : pass_.descriptor_bindings) {
-        max_set_index = std::max(max_set_index, binding_.set);
+    for (const auto& write_ : write_batch_it->writes) {
+        max_set_index = std::max(max_set_index, write_.set);
     }
 
     std::vector<VkDescriptorSet> descriptor_sets(max_set_index + 1U, VK_NULL_HANDLE);
-    for (const auto& binding_ : pass_.descriptor_bindings) {
-        switch (binding_.source) {
+    for (const auto& write_ : write_batch_it->writes) {
+        switch (write_.source) {
         case DescriptorBindingSource::bindless_table:
-            descriptor_sets[binding_.set] =
+            descriptor_sets[write_.set] =
                 context_.Descriptors().GetBindlessDescriptorSet(
-                    render::BindlessTableId{.value = binding_.source_id});
+                    render::BindlessTableId{.value = write_.source_id});
             break;
         case DescriptorBindingSource::none:
         default:
             throw std::runtime_error(
                 "RenderGraphExecutor::Record encountered unsupported descriptor binding source");
         }
-        if (descriptor_sets[binding_.set] == VK_NULL_HANDLE) {
+        if (descriptor_sets[write_.set] == VK_NULL_HANDLE) {
             throw std::runtime_error(
                 "RenderGraphExecutor::Record resolved null descriptor set from descriptor binding plan");
         }

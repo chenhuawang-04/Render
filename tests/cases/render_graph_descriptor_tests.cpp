@@ -39,6 +39,9 @@ VR_TEST_CASE(RenderGraphDescriptor_pass_bindings_compile_into_compiled_graph,
         vr::render_graph::AccessDesc{
             .access = vr::render_graph::AccessKind::shader_sample_read,
         });
+    builder.SetPassShaderContract(
+        consumer,
+        vr::render_graph::MakeSharedBindlessFragmentShaderContract("test_bindless_contract"));
     builder.AddBindlessTableBinding(consumer,
                                     0U,
                                     vr::render_graph::DescriptorBindingKind::sampled_image_table,
@@ -65,9 +68,26 @@ VR_TEST_CASE(RenderGraphDescriptor_pass_bindings_compile_into_compiled_graph,
     VR_CHECK(consume_pass->descriptor_bindings[1U].kind ==
              vr::render_graph::DescriptorBindingKind::sampler_table);
     VR_CHECK(consume_pass->descriptor_bindings[1U].source_id == 12U);
+    VR_REQUIRE(compiled.DescriptorPlan().pass_layouts.size() == 1U);
+    VR_REQUIRE(compiled.DescriptorPlan().writes.size() == 1U);
+    VR_REQUIRE(compiled.DescriptorPlan().bindless_allocations.size() == 2U);
+    VR_CHECK(compiled.DescriptorPlan().pass_layouts[0U].pass.index == consumer.index);
+    VR_REQUIRE(compiled.DescriptorPlan().pass_layouts[0U].bindings.size() == 2U);
+    VR_CHECK(compiled.DescriptorPlan().writes[0U].pass.index == consumer.index);
+    VR_REQUIRE(compiled.DescriptorPlan().writes[0U].writes.size() == 2U);
+    VR_CHECK(compiled.DescriptorPlan().writes[0U].writes[0U].source ==
+             vr::render_graph::DescriptorBindingSource::bindless_table);
+    VR_CHECK(compiled.DescriptorPlan().writes[0U].writes[0U].source_id == 11U);
+    VR_CHECK(compiled.DescriptorPlan().writes[0U].writes[1U].source_id == 12U);
+    VR_CHECK(compiled.DescriptorPlan().bindless_allocations[0U].table_id == 11U);
+    VR_CHECK(compiled.DescriptorPlan().bindless_allocations[1U].table_id == 12U);
 
     const std::string json = compiled.BuildJson();
     VR_CHECK(json.find("\"descriptorBindings\"") != std::string::npos);
+    VR_CHECK(json.find("\"descriptorPlan\"") != std::string::npos);
+    VR_CHECK(json.find("\"passLayouts\"") != std::string::npos);
+    VR_CHECK(json.find("\"writeBatches\"") != std::string::npos);
+    VR_CHECK(json.find("\"bindlessAllocations\"") != std::string::npos);
     VR_CHECK(json.find("\"source\": \"bindless_table\"") != std::string::npos);
     VR_CHECK(json.find("\"kind\": \"sampled_image_table\"") != std::string::npos);
     VR_CHECK(json.find("\"kind\": \"sampler_table\"") != std::string::npos);
@@ -77,6 +97,9 @@ VR_TEST_CASE(RenderGraphDescriptor_duplicate_set_binding_is_rejected,
              "unit;core;render_graph;descriptor") {
     vr::render_graph::RenderGraphBuilder builder{};
     const auto pass = builder.AddPass("consume_color", true);
+    builder.SetPassShaderContract(
+        pass,
+        vr::render_graph::MakeSharedBindlessFragmentShaderContract("test_bindless_contract"));
     builder.AddBindlessTableBinding(pass,
                                     0U,
                                     vr::render_graph::DescriptorBindingKind::sampled_image_table,
@@ -88,6 +111,42 @@ VR_TEST_CASE(RenderGraphDescriptor_duplicate_set_binding_is_rejected,
                                         vr::render_graph::DescriptorBindingKind::sampler_table,
                                         22U,
                                         vr::render_graph::shader_stage_fragment_flag);
+    }));
+}
+
+VR_TEST_CASE(RenderGraphDescriptor_missing_shader_contract_is_rejected,
+             "unit;core;render_graph;descriptor") {
+    vr::render_graph::RenderGraphBuilder builder{};
+    const auto pass = builder.AddPass("consume_color", true);
+    builder.AddBindlessTableBinding(pass,
+                                    0U,
+                                    vr::render_graph::DescriptorBindingKind::sampled_image_table,
+                                    31U,
+                                    vr::render_graph::shader_stage_fragment_flag);
+    VR_CHECK(ThrowsAnyException([&]() {
+        (void)builder.Compile();
+    }));
+}
+
+VR_TEST_CASE(RenderGraphDescriptor_shader_contract_mismatch_is_rejected,
+             "unit;core;render_graph;descriptor") {
+    vr::render_graph::RenderGraphBuilder builder{};
+    const auto pass = builder.AddPass("consume_color", true);
+    auto contract = vr::render_graph::MakeSharedBindlessFragmentShaderContract("test_bindless_contract");
+    contract.bindings[0U].kind = vr::render_graph::DescriptorBindingKind::sampler_table;
+    builder.SetPassShaderContract(pass, std::move(contract));
+    builder.AddBindlessTableBinding(pass,
+                                    0U,
+                                    vr::render_graph::DescriptorBindingKind::sampled_image_table,
+                                    41U,
+                                    vr::render_graph::shader_stage_fragment_flag);
+    builder.AddBindlessTableBinding(pass,
+                                    1U,
+                                    vr::render_graph::DescriptorBindingKind::sampler_table,
+                                    42U,
+                                    vr::render_graph::shader_stage_fragment_flag);
+    VR_CHECK(ThrowsAnyException([&]() {
+        (void)builder.Compile();
     }));
 }
 

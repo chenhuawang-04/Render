@@ -2,6 +2,8 @@
 
 #include <cstdint>
 #include <limits>
+#include <string>
+#include <string_view>
 #include <type_traits>
 #include <vector>
 
@@ -237,6 +239,73 @@ struct PassDescriptorBindingDesc final {
     std::uint32_t source_id = 0U;
 };
 
+struct ShaderContractBindingDesc final {
+    std::uint32_t set = 0U;
+    std::uint32_t binding = 0U;
+    DescriptorBindingKind kind = DescriptorBindingKind::sampled_image_table;
+    std::uint32_t stage_flags = shader_stage_none_flag;
+    std::uint32_t descriptor_count = 1U;
+};
+
+struct PassShaderContractDesc final {
+    std::string debug_name{};
+    std::vector<ShaderContractBindingDesc> bindings{};
+};
+
+struct PassDescriptorLayout final {
+    PassHandle pass{};
+    std::vector<PassDescriptorBindingDesc> bindings{};
+};
+
+struct DescriptorWriteDesc final {
+    std::uint32_t set = 0U;
+    std::uint32_t binding = 0U;
+    DescriptorBindingSource source = DescriptorBindingSource::none;
+    DescriptorBindingKind kind = DescriptorBindingKind::sampled_image_table;
+    std::uint32_t stage_flags = shader_stage_none_flag;
+    std::uint32_t source_id = 0U;
+};
+
+struct DescriptorWriteBatch final {
+    PassHandle pass{};
+    std::vector<DescriptorWriteDesc> writes{};
+};
+
+struct BindlessAllocation final {
+    std::uint32_t table_id = 0U;
+    DescriptorBindingKind kind = DescriptorBindingKind::sampled_image_table;
+    std::uint32_t stage_flags = shader_stage_none_flag;
+};
+
+struct DescriptorBindingPlan final {
+    std::vector<PassDescriptorLayout> pass_layouts{};
+    std::vector<DescriptorWriteBatch> writes{};
+    std::vector<BindlessAllocation> bindless_allocations{};
+};
+
+[[nodiscard]] inline PassShaderContractDesc MakeSharedBindlessFragmentShaderContract(
+    std::string_view debug_name_ = "shared_bindless_fragment") {
+    PassShaderContractDesc contract{};
+    contract.debug_name = std::string(debug_name_);
+    contract.bindings = {
+        ShaderContractBindingDesc{
+            .set = 0U,
+            .binding = 0U,
+            .kind = DescriptorBindingKind::sampled_image_table,
+            .stage_flags = shader_stage_fragment_flag,
+            .descriptor_count = 3U,
+        },
+        ShaderContractBindingDesc{
+            .set = 1U,
+            .binding = 0U,
+            .kind = DescriptorBindingKind::sampler_table,
+            .stage_flags = shader_stage_fragment_flag,
+            .descriptor_count = 1U,
+        },
+    };
+    return contract;
+}
+
 [[nodiscard]] constexpr bool IsValidResourceHandle(const ResourceHandle handle_) noexcept {
     return handle_.index != invalid_render_graph_index &&
            handle_.generation != 0U;
@@ -280,5 +349,8 @@ static_assert(std::is_standard_layout_v<ClearDepthStencilValue>);
 static_assert(std::is_standard_layout_v<RasterColorAttachmentDesc>);
 static_assert(std::is_standard_layout_v<RasterDepthAttachmentDesc>);
 static_assert(std::is_standard_layout_v<PassDescriptorBindingDesc>);
+static_assert(std::is_standard_layout_v<ShaderContractBindingDesc>);
+static_assert(std::is_standard_layout_v<DescriptorWriteDesc>);
+static_assert(std::is_standard_layout_v<BindlessAllocation>);
 
 } // namespace vr::render_graph

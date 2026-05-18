@@ -49,6 +49,7 @@ public:
     void AddDependency(PassHandle pass_, PassHandle dependency_);
     void AddPassDescriptorBinding(PassHandle pass_,
                                   const PassDescriptorBindingDesc& descriptor_binding_);
+    void SetPassShaderContract(PassHandle pass_, PassShaderContractDesc shader_contract_);
     void AddBindlessTableBinding(PassHandle pass_,
                                  std::uint32_t set_,
                                  DescriptorBindingKind kind_,
@@ -101,6 +102,7 @@ private:
         std::vector<AccessDesc> reads{};
         std::vector<WriteRecord> writes{};
         std::vector<PassDescriptorBindingDesc> descriptor_bindings{};
+        std::optional<PassShaderContractDesc> shader_contract{};
     };
 
     [[nodiscard]] ResourceNode& RequireResource(ResourceHandle handle_);

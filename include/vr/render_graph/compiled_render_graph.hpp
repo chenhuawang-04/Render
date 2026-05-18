@@ -71,6 +71,10 @@ public:
         return barrier_plan;
     }
 
+    [[nodiscard]] const DescriptorBindingPlan& DescriptorPlan() const noexcept {
+        return descriptor_plan;
+    }
+
     [[nodiscard]] bool HasExecutablePasses() const noexcept {
         for (const auto& pass_ : passes) {
             if (pass_.executable) {
@@ -94,6 +98,7 @@ private:
     std::vector<PassHandle> execution_order{};
     std::vector<CompiledResourceVersionLiveness> liveness_ranges{};
     BarrierPlan barrier_plan{};
+    DescriptorBindingPlan descriptor_plan{};
 };
 
 } // namespace vr::render_graph

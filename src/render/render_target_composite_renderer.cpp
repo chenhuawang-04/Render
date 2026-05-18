@@ -243,6 +243,9 @@ void RenderTargetCompositeRenderer::DescribeGraphDescriptorBindings(
     }
     const auto sampled_image_table = ResolveSampledImageTableId(bindless_resources);
     const auto sampler_table = ResolveSamplerTableId(bindless_resources);
+    builder_.SetPassShaderContract(
+        pass_,
+        render_graph::MakeSharedBindlessFragmentShaderContract("render_target_composite.frag"));
     builder_.AddBindlessTableBinding(pass_,
                                      0U,
                                      render_graph::DescriptorBindingKind::sampled_image_table,
