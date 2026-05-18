@@ -98,6 +98,7 @@ public:
 
     [[nodiscard]] const IblEnvironmentAssetDesc* FindEnvironment(IblEnvironmentId environment_id_) const noexcept;
     [[nodiscard]] VkDescriptorSet ActiveParamsDescriptorSet(std::uint32_t frame_index_) const;
+    [[nodiscard]] DescriptorBufferBindingView ActiveParamsBufferBinding(std::uint32_t frame_index_) const;
     [[nodiscard]] DescriptorSetLayoutId ParamsDescriptorLayoutId() const noexcept;
     [[nodiscard]] const IblGpuParams& ActiveParams() const noexcept;
     [[nodiscard]] asset::TextureId BrdfLut() const noexcept;

@@ -47,6 +47,8 @@ public:
     [[nodiscard]] CompiledRenderGraph Compile() const;
 
     void AddDependency(PassHandle pass_, PassHandle dependency_);
+    [[nodiscard]] std::uint32_t RegisterExternalBufferBindingResolver(
+        ExternalBufferBindingResolver resolver_);
     void AddPassDescriptorBinding(PassHandle pass_,
                                   const PassDescriptorBindingDesc& descriptor_binding_);
     void SetPassShaderContract(PassHandle pass_, PassShaderContractDesc shader_contract_);
@@ -56,6 +58,15 @@ public:
                                  std::uint32_t bindless_table_id_,
                                  std::uint32_t stage_flags_ = shader_stage_fragment_flag,
                                  std::uint32_t binding_ = 0U);
+    void AddExternalBufferBinding(PassHandle pass_,
+                                  std::uint32_t set_,
+                                  std::uint32_t binding_,
+                                  DescriptorBindingKind kind_,
+                                  std::uint32_t resolver_id_,
+                                  std::uint32_t stage_flags_ = shader_stage_fragment_flag);
+    [[nodiscard]] bool HasPassDescriptorBinding(PassHandle pass_,
+                                                std::uint32_t set_,
+                                                std::uint32_t binding_) const noexcept;
     void SetRasterPassDesc(PassHandle pass_, RasterPassDesc raster_pass_);
     void SetExecuteCallback(PassHandle pass_, PassExecutionThunk execute_);
 
@@ -117,6 +128,7 @@ private:
 private:
     std::vector<ResourceNode> resources{};
     std::vector<PassNode> passes{};
+    std::vector<ExternalBufferBindingResolver> external_buffer_binding_resolvers{};
 };
 
 } // namespace vr::render_graph

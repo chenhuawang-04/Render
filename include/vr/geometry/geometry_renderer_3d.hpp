@@ -48,6 +48,7 @@ class BindlessResourceSystem;
 
 namespace vr::render_graph {
 class GraphCommandContext;
+class RenderGraphBuilder;
 }
 
 namespace vr::geometry {
@@ -198,6 +199,8 @@ public:
     void ResetDepthTargetConfig() noexcept;
 
     void PrepareFrame(const render::GeometryRenderer3DPrepareView& prepare_view_);
+    void DescribeGraphDescriptorBindings(render_graph::RenderGraphBuilder& builder_,
+                                         render_graph::PassHandle pass_) const;
     void Record(const render::FrameRecordContext& record_context_);
     void RecordSceneStage(const render::FrameRecordContext& record_context_,
                           render::SceneRenderStage stage_);
@@ -363,6 +366,24 @@ private:
                                                           const ecs::Geometry3DDrawBatch& batch_) noexcept;
     [[nodiscard]] static CullMode ResolveCullMode(const ecs::Geometry3DDrawBatch& batch_) noexcept;
     [[nodiscard]] static BlendMode ResolveBlendMode(const ecs::Geometry3DDrawBatch& batch_) noexcept;
+    [[nodiscard]] static render_graph::ExternalBufferBindingPayload ResolveLightRecordsExternalBufferBinding(
+        const void* user_data_);
+    [[nodiscard]] static render_graph::ExternalBufferBindingPayload ResolveClusterHeadersExternalBufferBinding(
+        const void* user_data_);
+    [[nodiscard]] static render_graph::ExternalBufferBindingPayload ResolveClusterIndicesExternalBufferBinding(
+        const void* user_data_);
+    [[nodiscard]] static render_graph::ExternalBufferBindingPayload ResolveShadowViewsExternalBufferBinding(
+        const void* user_data_);
+    [[nodiscard]] static render_graph::ExternalBufferBindingPayload ResolveLightingUniformExternalBufferBinding(
+        const void* user_data_);
+    [[nodiscard]] static render_graph::ExternalBufferBindingPayload ResolveSkeletalComponentsExternalBufferBinding(
+        const void* user_data_);
+    [[nodiscard]] static render_graph::ExternalBufferBindingPayload ResolveSkeletalMatricesExternalBufferBinding(
+        const void* user_data_);
+    [[nodiscard]] static render_graph::ExternalBufferBindingPayload ResolveAppearanceExternalBufferBinding(
+        const void* user_data_);
+    [[nodiscard]] static render_graph::ExternalBufferBindingPayload ResolveIblParamsExternalBufferBinding(
+        const void* user_data_);
 
     void EnsurePipelineObjects(VulkanContext& context_,
                                render::PipelineHost& pipeline_host_,

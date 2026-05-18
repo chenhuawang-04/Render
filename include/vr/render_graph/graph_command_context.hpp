@@ -44,6 +44,7 @@ class CompiledRenderGraph;
 class GraphCommandContext final {
 public:
     GraphCommandContext(VulkanContext& device_,
+                        const std::uint32_t frame_index_,
                         const VkCommandBuffer command_buffer_,
                         const CompiledRenderGraph& compiled_graph_,
                         const VulkanResourceTable& physical_resources_,
@@ -52,6 +53,7 @@ public:
                         const VulkanBarrierPlan& lowered_vulkan_barriers_,
                         const VulkanCommandReadyPlan& command_ready_vulkan_barriers_) noexcept
         : device(&device_),
+          frame_index(frame_index_),
           command_buffer(command_buffer_),
           compiled_graph(&compiled_graph_),
           physical_resources(&physical_resources_),
@@ -66,6 +68,10 @@ public:
 
     [[nodiscard]] VkCommandBuffer CommandBuffer() const noexcept {
         return command_buffer;
+    }
+
+    [[nodiscard]] std::uint32_t FrameIndex() const noexcept {
+        return frame_index;
     }
 
     [[nodiscard]] const CompiledRenderGraph& Graph() const noexcept {
@@ -264,6 +270,7 @@ public:
 
 private:
     VulkanContext* device = nullptr;
+    std::uint32_t frame_index = 0U;
     VkCommandBuffer command_buffer = VK_NULL_HANDLE;
     const CompiledRenderGraph* compiled_graph = nullptr;
     const VulkanResourceTable* physical_resources = nullptr;

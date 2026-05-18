@@ -15,6 +15,18 @@ template<typename FnT>
     return false;
 }
 
+[[nodiscard]] vr::render_graph::ExternalBufferBindingPayload ResolveTestExternalBufferBinding(
+    const void*) noexcept {
+    return vr::render_graph::ExternalBufferBindingPayload{
+        .native_buffer = 0x1234U,
+        .offset_bytes = 32U,
+        .size_bytes = 256U,
+    };
+}
+
+const int g_external_buffer_resolver_cookie_a = 0;
+const int g_external_buffer_resolver_cookie_b = 0;
+
 void CheckSharedBindlessBindings(vr::test::TestContext& test_context_,
                                  const vr::render_graph::CompiledPass& pass_) {
     test_context_.Require(pass_.descriptor_bindings.size() == 2U,
@@ -126,6 +138,128 @@ VR_TEST_CASE(RenderGraphDescriptor_pass_bindings_compile_into_compiled_graph,
     VR_CHECK(json.find("\"source\": \"bindless_table\"") != std::string::npos);
     VR_CHECK(json.find("\"kind\": \"sampled_image_table\"") != std::string::npos);
     VR_CHECK(json.find("\"kind\": \"sampler_table\"") != std::string::npos);
+}
+
+VR_TEST_CASE(RenderGraphDescriptor_external_buffer_binding_compiles_into_descriptor_plan,
+             "unit;core;render_graph;descriptor") {
+    vr::render_graph::RenderGraphBuilder builder{};
+    const auto pass = builder.AddPass("surface_like_pass", true);
+    auto contract = vr::render_graph::MakeSharedBindlessFragmentShaderContract("surface_like_contract");
+    contract.bindings.push_back({
+        .set = 2U,
+        .binding = 0U,
+        .kind = vr::render_graph::DescriptorBindingKind::storage_buffer,
+        .stage_flags = vr::render_graph::shader_stage_fragment_flag,
+        .descriptor_count = 1U,
+    });
+    builder.SetPassShaderContract(pass, std::move(contract));
+    builder.AddBindlessTableBinding(pass,
+                                    0U,
+                                    vr::render_graph::DescriptorBindingKind::sampled_image_table,
+                                    11U,
+                                    vr::render_graph::shader_stage_fragment_flag);
+    builder.AddBindlessTableBinding(pass,
+                                    1U,
+                                    vr::render_graph::DescriptorBindingKind::sampler_table,
+                                    12U,
+                                    vr::render_graph::shader_stage_fragment_flag);
+    const std::uint32_t resolver_id =
+        builder.RegisterExternalBufferBindingResolver({
+            .user_data = &g_external_buffer_resolver_cookie_a,
+            .resolve_fn = &ResolveTestExternalBufferBinding,
+            .debug_name = "test.external_buffer",
+        });
+    builder.AddExternalBufferBinding(pass,
+                                     2U,
+                                     0U,
+                                     vr::render_graph::DescriptorBindingKind::storage_buffer,
+                                     resolver_id,
+                                     vr::render_graph::shader_stage_fragment_flag);
+
+    const auto compiled = builder.Compile();
+    const auto* compiled_pass = compiled.FindPass(pass);
+    VR_REQUIRE(compiled_pass != nullptr);
+    VR_REQUIRE(compiled_pass->descriptor_bindings.size() == 3U);
+    VR_CHECK(compiled_pass->descriptor_bindings[2U].set == 2U);
+    VR_CHECK(compiled_pass->descriptor_bindings[2U].binding == 0U);
+    VR_CHECK(compiled_pass->descriptor_bindings[2U].source ==
+             vr::render_graph::DescriptorBindingSource::external_buffer);
+    VR_CHECK(compiled_pass->descriptor_bindings[2U].kind ==
+             vr::render_graph::DescriptorBindingKind::storage_buffer);
+    VR_REQUIRE(compiled.DescriptorPlan().writes.size() == 1U);
+    VR_REQUIRE(compiled.DescriptorPlan().writes[0U].writes.size() == 3U);
+    VR_CHECK(compiled.DescriptorPlan().writes[0U].writes[2U].source ==
+             vr::render_graph::DescriptorBindingSource::external_buffer);
+    VR_CHECK(compiled.DescriptorPlan().writes[0U].writes[2U].source_id == resolver_id);
+    VR_REQUIRE(compiled.DescriptorPlan().bindless_allocations.size() == 2U);
+    const auto* resolver = compiled.FindExternalBufferBindingResolver(resolver_id);
+    VR_REQUIRE(resolver != nullptr);
+    VR_CHECK(resolver->debug_name == "test.external_buffer");
+    const std::string json = compiled.BuildJson();
+    VR_CHECK(json.find("\"source\": \"external_buffer\"") != std::string::npos);
+    VR_CHECK(json.find("\"kind\": \"storage_buffer\"") != std::string::npos);
+}
+
+VR_TEST_CASE(RenderGraphDescriptor_pass_layout_can_exceed_actual_descriptor_writes,
+             "unit;core;render_graph;descriptor") {
+    vr::render_graph::RenderGraphBuilder builder{};
+    const auto pass = builder.AddPass("layout_superset_pass", true);
+    auto contract = vr::render_graph::MakeSharedBindlessFragmentShaderContract("layout_superset_contract");
+    contract.bindings.push_back({
+        .set = 2U,
+        .binding = 0U,
+        .kind = vr::render_graph::DescriptorBindingKind::storage_buffer,
+        .stage_flags = vr::render_graph::shader_stage_fragment_flag,
+        .descriptor_count = 1U,
+    });
+    contract.bindings.push_back({
+        .set = 2U,
+        .binding = 1U,
+        .kind = vr::render_graph::DescriptorBindingKind::storage_buffer,
+        .stage_flags = vr::render_graph::shader_stage_fragment_flag,
+        .descriptor_count = 1U,
+    });
+    builder.SetPassShaderContract(pass, std::move(contract));
+    builder.AddBindlessTableBinding(pass,
+                                    0U,
+                                    vr::render_graph::DescriptorBindingKind::sampled_image_table,
+                                    71U,
+                                    vr::render_graph::shader_stage_fragment_flag);
+    builder.AddBindlessTableBinding(pass,
+                                    1U,
+                                    vr::render_graph::DescriptorBindingKind::sampler_table,
+                                    72U,
+                                    vr::render_graph::shader_stage_fragment_flag);
+    const std::uint32_t resolver_id =
+        builder.RegisterExternalBufferBindingResolver({
+            .user_data = &g_external_buffer_resolver_cookie_a,
+            .resolve_fn = &ResolveTestExternalBufferBinding,
+            .debug_name = "test.layout_superset",
+        });
+    builder.AddExternalBufferBinding(pass,
+                                     2U,
+                                     1U,
+                                     vr::render_graph::DescriptorBindingKind::storage_buffer,
+                                     resolver_id,
+                                     vr::render_graph::shader_stage_fragment_flag);
+
+    const auto compiled = builder.Compile();
+    const auto* compiled_pass = compiled.FindPass(pass);
+    VR_REQUIRE(compiled_pass != nullptr);
+    VR_REQUIRE(compiled_pass->descriptor_bindings.size() == 3U);
+    VR_CHECK(compiled_pass->descriptor_bindings[2U].set == 2U);
+    VR_CHECK(compiled_pass->descriptor_bindings[2U].binding == 1U);
+    VR_REQUIRE(compiled.DescriptorPlan().pass_layouts.size() == 1U);
+    VR_REQUIRE(compiled.DescriptorPlan().pass_layouts[0U].bindings.size() == 4U);
+    VR_CHECK(compiled.DescriptorPlan().pass_layouts[0U].bindings[2U].set == 2U);
+    VR_CHECK(compiled.DescriptorPlan().pass_layouts[0U].bindings[2U].binding == 0U);
+    VR_CHECK(compiled.DescriptorPlan().pass_layouts[0U].bindings[2U].source ==
+             vr::render_graph::DescriptorBindingSource::none);
+    VR_CHECK(compiled.DescriptorPlan().pass_layouts[0U].bindings[3U].set == 2U);
+    VR_CHECK(compiled.DescriptorPlan().pass_layouts[0U].bindings[3U].binding == 1U);
+    VR_REQUIRE(compiled.DescriptorPlan().writes.size() == 1U);
+    VR_REQUIRE(compiled.DescriptorPlan().writes[0U].writes.size() == 3U);
+    VR_CHECK(compiled.DescriptorPlan().writes[0U].writes[2U].binding == 1U);
 }
 
 VR_TEST_CASE(RenderGraphDescriptor_duplicate_identical_binding_is_accepted,
@@ -296,6 +430,46 @@ VR_TEST_CASE(RenderGraphDescriptor_shader_contract_mismatch_is_rejected,
                                     vr::render_graph::DescriptorBindingKind::sampler_table,
                                     42U,
                                     vr::render_graph::shader_stage_fragment_flag);
+    VR_CHECK(ThrowsAnyException([&]() {
+        (void)builder.Compile();
+    }));
+}
+
+VR_TEST_CASE(RenderGraphDescriptor_external_buffer_shader_contract_mismatch_is_rejected,
+             "unit;core;render_graph;descriptor") {
+    vr::render_graph::RenderGraphBuilder builder{};
+    const auto pass = builder.AddPass("consume_buffer", true);
+    auto contract = vr::render_graph::MakeSharedBindlessFragmentShaderContract("surface_like_contract");
+    contract.bindings.push_back({
+        .set = 2U,
+        .binding = 0U,
+        .kind = vr::render_graph::DescriptorBindingKind::uniform_buffer,
+        .stage_flags = vr::render_graph::shader_stage_fragment_flag,
+        .descriptor_count = 1U,
+    });
+    builder.SetPassShaderContract(pass, std::move(contract));
+    builder.AddBindlessTableBinding(pass,
+                                    0U,
+                                    vr::render_graph::DescriptorBindingKind::sampled_image_table,
+                                    41U,
+                                    vr::render_graph::shader_stage_fragment_flag);
+    builder.AddBindlessTableBinding(pass,
+                                    1U,
+                                    vr::render_graph::DescriptorBindingKind::sampler_table,
+                                    42U,
+                                    vr::render_graph::shader_stage_fragment_flag);
+    const std::uint32_t resolver_id =
+        builder.RegisterExternalBufferBindingResolver({
+            .user_data = &g_external_buffer_resolver_cookie_b,
+            .resolve_fn = &ResolveTestExternalBufferBinding,
+            .debug_name = "test.external_buffer_mismatch",
+        });
+    builder.AddExternalBufferBinding(pass,
+                                     2U,
+                                     0U,
+                                     vr::render_graph::DescriptorBindingKind::storage_buffer,
+                                     resolver_id,
+                                     vr::render_graph::shader_stage_fragment_flag);
     VR_CHECK(ThrowsAnyException([&]() {
         (void)builder.Compile();
     }));

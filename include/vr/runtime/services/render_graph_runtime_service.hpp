@@ -205,6 +205,7 @@ public:
         auto& services = vr::runtime::detail::ResolveServices(context_);
         auto graph_context = render_graph::GraphCommandContext{
             device,
+            frame_index,
             command_buffer,
             compiled_graph,
             physical_resources,

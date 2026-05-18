@@ -522,13 +522,14 @@ void SceneRecorder3D::BuildRenderGraph(
                                            },
                                        },
                                    });
+        sky_environment_pass.DescribeGraphDescriptorBindings(builder_, sky_pass);
         const RenderView3D captured_view = *scene_view;
         const scene::SkyEnvironmentRenderState captured_state = frame_packet->extra.environment;
         const auto scene_color = build_result_.scene_color;
         builder_.SetExecuteCallback(sky_pass,
                                     [this, captured_view, captured_state, scene_color](render_graph::GraphCommandContext& context_) {
                                         const auto color_view = context_.ResolveTextureView(scene_color);
-                                        sky_environment_pass.RecordGraphPass(context_.CommandBuffer(),
+                                        sky_environment_pass.RecordGraphPass(context_,
                                                                              captured_view,
                                                                              captured_state,
                                                                              color_view.format,
@@ -592,6 +593,7 @@ void SceneRecorder3D::BuildRenderGraph(
                                            .read_only = true,
                                        },
                                    });
+        sky_environment_pass.DescribeGraphDescriptorBindings(builder_, sky_pass);
         const RenderView3D captured_view = *scene_view;
         const scene::SkyEnvironmentRenderState captured_state = frame_packet->extra.environment;
         const auto scene_color = build_result_.scene_color;
@@ -600,7 +602,7 @@ void SceneRecorder3D::BuildRenderGraph(
                                     [this, captured_view, captured_state, scene_color, scene_depth](render_graph::GraphCommandContext& context_) {
                                         const auto color_view = context_.ResolveTextureView(scene_color);
                                         const auto depth_view = context_.ResolveTextureView(scene_depth);
-                                        sky_environment_pass.RecordGraphPass(context_.CommandBuffer(),
+                                        sky_environment_pass.RecordGraphPass(context_,
                                                                              captured_view,
                                                                              captured_state,
                                                                              color_view.format,

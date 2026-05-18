@@ -75,6 +75,18 @@ public:
         return descriptor_plan;
     }
 
+    [[nodiscard]] const ExternalBufferBindingResolver* FindExternalBufferBindingResolver(
+        const std::uint32_t resolver_id_) const noexcept {
+        if (resolver_id_ == 0U) {
+            return nullptr;
+        }
+        const std::size_t resolver_index = static_cast<std::size_t>(resolver_id_ - 1U);
+        if (resolver_index >= external_buffer_binding_resolvers.size()) {
+            return nullptr;
+        }
+        return &external_buffer_binding_resolvers[resolver_index];
+    }
+
     [[nodiscard]] bool HasExecutablePasses() const noexcept {
         for (const auto& pass_ : passes) {
             if (pass_.executable) {
@@ -99,6 +111,7 @@ private:
     std::vector<CompiledResourceVersionLiveness> liveness_ranges{};
     BarrierPlan barrier_plan{};
     DescriptorBindingPlan descriptor_plan{};
+    std::vector<ExternalBufferBindingResolver> external_buffer_binding_resolvers{};
 };
 
 } // namespace vr::render_graph

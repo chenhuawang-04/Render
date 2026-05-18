@@ -304,6 +304,7 @@ VR_TEST_CASE(RuntimeIntegration_surface_renderer_2d_bindless_scene_packet_smoke,
         std::uint32_t max_descriptor_binds = 0U;
         std::uint32_t max_light_descriptor_binds = 0U;
         std::uint32_t max_descriptor_updates = 0U;
+        std::uint64_t max_transient_descriptor_updates = 0U;
         std::uint32_t min_bindless_slot_index = std::numeric_limits<std::uint32_t>::max();
         bool graph_only_active = false;
         std::array<std::uint32_t, 1U> dirty_indices{1U};
@@ -333,6 +334,9 @@ VR_TEST_CASE(RuntimeIntegration_surface_renderer_2d_bindless_scene_packet_smoke,
             max_descriptor_binds = std::max(max_descriptor_binds, stats.descriptor_set_bind_count);
             max_light_descriptor_binds = std::max(max_light_descriptor_binds, stats.light_descriptor_set_bind_count);
             max_descriptor_updates = std::max(max_descriptor_updates, stats.descriptor_set_update_count);
+            max_transient_descriptor_updates = std::max(
+                max_transient_descriptor_updates,
+                runtime.Descriptor().Stats().transient_update_call_count);
             if (!surface_renderer.Stats().skipped_upload && !surface_renderer.Stats().cache_reused) {
                 const auto slot_a = surface_image_host.ResolveBindlessImageSlot(7101U);
                 const auto slot_b = surface_image_host.ResolveBindlessImageSlot(7102U);
@@ -353,7 +357,8 @@ VR_TEST_CASE(RuntimeIntegration_surface_renderer_2d_bindless_scene_packet_smoke,
         VR_CHECK(max_instances > 0U);
         VR_CHECK(max_descriptor_binds > 0U);
         VR_CHECK(max_light_descriptor_binds > 0U);
-        VR_CHECK(max_descriptor_updates > 0U);
+        VR_CHECK(max_descriptor_updates == 0U);
+        VR_CHECK(max_transient_descriptor_updates > 0U);
         VR_CHECK(max_descriptor_binds <= max_draw_batches);
         VR_CHECK(surface_image_host.Stats().image_count >= 2U);
         VR_CHECK(surface_image_host.ResolveBindlessImageSlot(7101U).IsValid());

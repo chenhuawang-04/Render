@@ -33,10 +33,10 @@ template<typename FnT>
     return false;
 }
 
-void CheckSharedBindlessBindings(vr::test::TestContext& test_context_,
-                                 const vr::render_graph::CompiledPass& pass_) {
-    test_context_.Require(pass_.descriptor_bindings.size() == 2U,
-                          "pass_.descriptor_bindings.size() == 2U",
+void CheckSharedBindlessBindingPrefix(vr::test::TestContext& test_context_,
+                                      const vr::render_graph::CompiledPass& pass_) {
+    test_context_.Require(pass_.descriptor_bindings.size() >= 2U,
+                          "pass_.descriptor_bindings.size() >= 2U",
                           {__FILE__, static_cast<std::uint32_t>(__LINE__)});
     test_context_.Check(pass_.descriptor_bindings[0U].set == 0U,
                         "pass_.descriptor_bindings[0U].set == 0U",
@@ -73,6 +73,188 @@ void CheckSharedBindlessBindings(vr::test::TestContext& test_context_,
     test_context_.Check(pass_.descriptor_bindings[1U].source_id ==
                             vr::render::BindlessResourceSystem::SamplerTableContractId().value,
                         "pass_.descriptor_bindings[1U].source_id == SamplerTableContractId()",
+                        {__FILE__, static_cast<std::uint32_t>(__LINE__)});
+}
+
+void CheckSharedBindlessBindings(vr::test::TestContext& test_context_,
+                                 const vr::render_graph::CompiledPass& pass_) {
+    test_context_.Require(pass_.descriptor_bindings.size() == 2U,
+                          "pass_.descriptor_bindings.size() == 2U",
+                          {__FILE__, static_cast<std::uint32_t>(__LINE__)});
+    CheckSharedBindlessBindingPrefix(test_context_, pass_);
+}
+
+void CheckSurface2DGraphBindings(vr::test::TestContext& test_context_,
+                                 const vr::render_graph::CompiledPass& pass_) {
+    test_context_.Require(pass_.descriptor_bindings.size() == 7U,
+                          "pass_.descriptor_bindings.size() == 7U",
+                          {__FILE__, static_cast<std::uint32_t>(__LINE__)});
+    CheckSharedBindlessBindingPrefix(test_context_, pass_);
+    for (std::uint32_t binding_index = 2U; binding_index < 6U; ++binding_index) {
+        const auto& binding = pass_.descriptor_bindings[binding_index];
+        test_context_.Check(binding.set == 2U,
+                            "binding.set == 2U",
+                            {__FILE__, static_cast<std::uint32_t>(__LINE__)});
+        test_context_.Check(binding.binding == binding_index - 2U,
+                            "binding.binding == binding_index - 2U",
+                            {__FILE__, static_cast<std::uint32_t>(__LINE__)});
+        test_context_.Check(binding.source ==
+                                vr::render_graph::DescriptorBindingSource::external_buffer,
+                            "binding.source == DescriptorBindingSource::external_buffer",
+                            {__FILE__, static_cast<std::uint32_t>(__LINE__)});
+        test_context_.Check(binding.kind ==
+                                vr::render_graph::DescriptorBindingKind::storage_buffer,
+                            "binding.kind == DescriptorBindingKind::storage_buffer",
+                            {__FILE__, static_cast<std::uint32_t>(__LINE__)});
+        test_context_.Check(binding.source_id != 0U,
+                            "binding.source_id != 0U",
+                            {__FILE__, static_cast<std::uint32_t>(__LINE__)});
+    }
+    const auto& uniform_binding = pass_.descriptor_bindings[6U];
+    test_context_.Check(uniform_binding.set == 2U,
+                        "uniform_binding.set == 2U",
+                        {__FILE__, static_cast<std::uint32_t>(__LINE__)});
+    test_context_.Check(uniform_binding.binding == 4U,
+                        "uniform_binding.binding == 4U",
+                        {__FILE__, static_cast<std::uint32_t>(__LINE__)});
+    test_context_.Check(uniform_binding.source ==
+                            vr::render_graph::DescriptorBindingSource::external_buffer,
+                        "uniform_binding.source == DescriptorBindingSource::external_buffer",
+                        {__FILE__, static_cast<std::uint32_t>(__LINE__)});
+    test_context_.Check(uniform_binding.kind ==
+                            vr::render_graph::DescriptorBindingKind::uniform_buffer,
+                        "uniform_binding.kind == DescriptorBindingKind::uniform_buffer",
+                        {__FILE__, static_cast<std::uint32_t>(__LINE__)});
+    test_context_.Check(uniform_binding.source_id != 0U,
+                        "uniform_binding.source_id != 0U",
+                        {__FILE__, static_cast<std::uint32_t>(__LINE__)});
+}
+
+void CheckSurface3DGraphBindings(vr::test::TestContext& test_context_,
+                                 const vr::render_graph::CompiledPass& pass_) {
+    test_context_.Require(pass_.descriptor_bindings.size() == 4U,
+                          "pass_.descriptor_bindings.size() == 4U",
+                          {__FILE__, static_cast<std::uint32_t>(__LINE__)});
+    CheckSharedBindlessBindingPrefix(test_context_, pass_);
+    const auto& appearance_binding = pass_.descriptor_bindings[2U];
+    test_context_.Check(appearance_binding.set == 2U,
+                        "appearance_binding.set == 2U",
+                        {__FILE__, static_cast<std::uint32_t>(__LINE__)});
+    test_context_.Check(appearance_binding.binding == 8U,
+                        "appearance_binding.binding == 8U",
+                        {__FILE__, static_cast<std::uint32_t>(__LINE__)});
+    test_context_.Check(appearance_binding.source ==
+                            vr::render_graph::DescriptorBindingSource::external_buffer,
+                        "appearance_binding.source == DescriptorBindingSource::external_buffer",
+                        {__FILE__, static_cast<std::uint32_t>(__LINE__)});
+    test_context_.Check(appearance_binding.kind ==
+                            vr::render_graph::DescriptorBindingKind::storage_buffer,
+                        "appearance_binding.kind == DescriptorBindingKind::storage_buffer",
+                        {__FILE__, static_cast<std::uint32_t>(__LINE__)});
+    test_context_.Check(appearance_binding.source_id != 0U,
+                        "appearance_binding.source_id != 0U",
+                        {__FILE__, static_cast<std::uint32_t>(__LINE__)});
+    const auto& ibl_binding = pass_.descriptor_bindings[3U];
+    test_context_.Check(ibl_binding.set == 3U,
+                        "ibl_binding.set == 3U",
+                        {__FILE__, static_cast<std::uint32_t>(__LINE__)});
+    test_context_.Check(ibl_binding.binding == 0U,
+                        "ibl_binding.binding == 0U",
+                        {__FILE__, static_cast<std::uint32_t>(__LINE__)});
+    test_context_.Check(ibl_binding.source ==
+                            vr::render_graph::DescriptorBindingSource::external_buffer,
+                        "ibl_binding.source == DescriptorBindingSource::external_buffer",
+                        {__FILE__, static_cast<std::uint32_t>(__LINE__)});
+    test_context_.Check(ibl_binding.kind ==
+                            vr::render_graph::DescriptorBindingKind::uniform_buffer,
+                        "ibl_binding.kind == DescriptorBindingKind::uniform_buffer",
+                        {__FILE__, static_cast<std::uint32_t>(__LINE__)});
+    test_context_.Check(ibl_binding.source_id != 0U,
+                        "ibl_binding.source_id != 0U",
+                        {__FILE__, static_cast<std::uint32_t>(__LINE__)});
+}
+
+void CheckGeometry3DGraphBindings(vr::test::TestContext& test_context_,
+                                  const vr::render_graph::CompiledPass& pass_) {
+    test_context_.Require(pass_.descriptor_bindings.size() == 11U,
+                          "pass_.descriptor_bindings.size() == 11U",
+                          {__FILE__, static_cast<std::uint32_t>(__LINE__)});
+    CheckSharedBindlessBindingPrefix(test_context_, pass_);
+
+    for (std::uint32_t binding_index = 0U; binding_index < 4U; ++binding_index) {
+        const auto& binding = pass_.descriptor_bindings[2U + binding_index];
+        test_context_.Check(binding.set == 2U,
+                            "binding.set == 2U",
+                            {__FILE__, static_cast<std::uint32_t>(__LINE__)});
+        test_context_.Check(binding.binding == binding_index,
+                            "binding.binding == binding_index",
+                            {__FILE__, static_cast<std::uint32_t>(__LINE__)});
+        test_context_.Check(binding.source ==
+                                vr::render_graph::DescriptorBindingSource::external_buffer,
+                            "binding.source == DescriptorBindingSource::external_buffer",
+                            {__FILE__, static_cast<std::uint32_t>(__LINE__)});
+        test_context_.Check(binding.kind ==
+                                vr::render_graph::DescriptorBindingKind::storage_buffer,
+                            "binding.kind == DescriptorBindingKind::storage_buffer",
+                            {__FILE__, static_cast<std::uint32_t>(__LINE__)});
+        test_context_.Check(binding.source_id != 0U,
+                            "binding.source_id != 0U",
+                            {__FILE__, static_cast<std::uint32_t>(__LINE__)});
+    }
+
+    const auto& lighting_uniform_binding = pass_.descriptor_bindings[6U];
+    test_context_.Check(lighting_uniform_binding.set == 2U,
+                        "lighting_uniform_binding.set == 2U",
+                        {__FILE__, static_cast<std::uint32_t>(__LINE__)});
+    test_context_.Check(lighting_uniform_binding.binding == 4U,
+                        "lighting_uniform_binding.binding == 4U",
+                        {__FILE__, static_cast<std::uint32_t>(__LINE__)});
+    test_context_.Check(lighting_uniform_binding.kind ==
+                            vr::render_graph::DescriptorBindingKind::uniform_buffer,
+                        "lighting_uniform_binding.kind == DescriptorBindingKind::uniform_buffer",
+                        {__FILE__, static_cast<std::uint32_t>(__LINE__)});
+    test_context_.Check(lighting_uniform_binding.source_id != 0U,
+                        "lighting_uniform_binding.source_id != 0U",
+                        {__FILE__, static_cast<std::uint32_t>(__LINE__)});
+
+    for (std::uint32_t binding_index = 5U; binding_index <= 7U; ++binding_index) {
+        const auto& binding = pass_.descriptor_bindings[2U + binding_index];
+        test_context_.Check(binding.set == 2U,
+                            "binding.set == 2U",
+                            {__FILE__, static_cast<std::uint32_t>(__LINE__)});
+        test_context_.Check(binding.binding == binding_index,
+                            "binding.binding == binding_index",
+                            {__FILE__, static_cast<std::uint32_t>(__LINE__)});
+        test_context_.Check(binding.source ==
+                                vr::render_graph::DescriptorBindingSource::external_buffer,
+                            "binding.source == DescriptorBindingSource::external_buffer",
+                            {__FILE__, static_cast<std::uint32_t>(__LINE__)});
+        test_context_.Check(binding.kind ==
+                                vr::render_graph::DescriptorBindingKind::storage_buffer,
+                            "binding.kind == DescriptorBindingKind::storage_buffer",
+                            {__FILE__, static_cast<std::uint32_t>(__LINE__)});
+        test_context_.Check(binding.source_id != 0U,
+                            "binding.source_id != 0U",
+                            {__FILE__, static_cast<std::uint32_t>(__LINE__)});
+    }
+
+    const auto& ibl_binding = pass_.descriptor_bindings[10U];
+    test_context_.Check(ibl_binding.set == 3U,
+                        "ibl_binding.set == 3U",
+                        {__FILE__, static_cast<std::uint32_t>(__LINE__)});
+    test_context_.Check(ibl_binding.binding == 0U,
+                        "ibl_binding.binding == 0U",
+                        {__FILE__, static_cast<std::uint32_t>(__LINE__)});
+    test_context_.Check(ibl_binding.source ==
+                            vr::render_graph::DescriptorBindingSource::external_buffer,
+                        "ibl_binding.source == DescriptorBindingSource::external_buffer",
+                        {__FILE__, static_cast<std::uint32_t>(__LINE__)});
+    test_context_.Check(ibl_binding.kind ==
+                            vr::render_graph::DescriptorBindingKind::uniform_buffer,
+                        "ibl_binding.kind == DescriptorBindingKind::uniform_buffer",
+                        {__FILE__, static_cast<std::uint32_t>(__LINE__)});
+    test_context_.Check(ibl_binding.source_id != 0U,
+                        "ibl_binding.source_id != 0U",
                         {__FILE__, static_cast<std::uint32_t>(__LINE__)});
 }
 
@@ -627,6 +809,7 @@ VR_TEST_CASE(SceneRecorder2D_build_render_graph_routes_geometry_scene_to_scene_p
     VR_CHECK(compiled.Passes()[0].executable);
     VR_REQUIRE(compiled.Passes()[0].raster_pass.has_value());
     VR_CHECK(static_cast<bool>(compiled.Passes()[0].execute));
+    CheckSharedBindlessBindings(test_context_, compiled.Passes()[0]);
 
     recorder.ClearFramePacket();
 }
@@ -767,7 +950,7 @@ VR_TEST_CASE(SceneRecorder2D_build_render_graph_routes_overlay_surface_to_overla
     VR_CHECK(compiled.Passes()[1].executable);
     VR_REQUIRE(compiled.Passes()[1].raster_pass.has_value());
     VR_CHECK(static_cast<bool>(compiled.Passes()[1].execute));
-    CheckSharedBindlessBindings(test_context_, compiled.Passes()[1]);
+    CheckSurface2DGraphBindings(test_context_, compiled.Passes()[1]);
 
     recorder.ClearFramePacket();
 }
@@ -1135,6 +1318,7 @@ VR_TEST_CASE(SceneRecorder3D_build_render_graph_routes_single_geometry_opaque_sl
     VR_CHECK(compiled.Passes()[0].executable);
     VR_REQUIRE(compiled.Passes()[0].raster_pass.has_value());
     VR_CHECK(static_cast<bool>(compiled.Passes()[0].execute));
+    CheckGeometry3DGraphBindings(test_context_, compiled.Passes()[0]);
 
     recorder.ClearFramePacket();
 }
@@ -1186,6 +1370,12 @@ VR_TEST_CASE(SceneRecorder3D_build_render_graph_routes_mixed_geometry_surface_te
     VR_CHECK(compiled.Passes()[0].executable);
     VR_REQUIRE(compiled.Passes()[0].raster_pass.has_value());
     VR_CHECK(static_cast<bool>(compiled.Passes()[0].execute));
+    VR_REQUIRE(compiled.Passes()[0].descriptor_bindings.size() == 12U);
+    CheckSharedBindlessBindingPrefix(test_context_, compiled.Passes()[0]);
+    VR_CHECK(compiled.Passes()[0].descriptor_bindings[10U].set == 2U);
+    VR_CHECK(compiled.Passes()[0].descriptor_bindings[10U].binding == 8U);
+    VR_CHECK(compiled.Passes()[0].descriptor_bindings[11U].set == 3U);
+    VR_CHECK(compiled.Passes()[0].descriptor_bindings[11U].binding == 0U);
 
     recorder.ClearFramePacket();
 }
@@ -1234,6 +1424,7 @@ VR_TEST_CASE(SceneRecorder3D_build_render_graph_routes_mixed_surface_text_transp
     VR_CHECK(compiled.Passes()[1].executable);
     VR_REQUIRE(compiled.Passes()[1].raster_pass.has_value());
     VR_CHECK(static_cast<bool>(compiled.Passes()[1].execute));
+    CheckSurface3DGraphBindings(test_context_, compiled.Passes()[1]);
 
     recorder.ClearFramePacket();
 }
@@ -1338,7 +1529,7 @@ VR_TEST_CASE(SceneRecorder3D_build_render_graph_inserts_transparent_scene_pass_b
     VR_CHECK(compiled.Passes()[1].reads[0].access == vr::render_graph::AccessKind::color_attachment_read);
     VR_REQUIRE(compiled.Passes()[1].writes.size() == 1U);
     VR_CHECK(compiled.Passes()[1].writes[0].access == vr::render_graph::AccessKind::color_attachment_write);
-    CheckSharedBindlessBindings(test_context_, compiled.Passes()[1]);
+    CheckSurface3DGraphBindings(test_context_, compiled.Passes()[1]);
     VR_CHECK(compiled.Passes()[2].debug_name == "overlay_pass");
     VR_CHECK(compiled.Passes()[3].debug_name == "present_to_swapchain");
     VR_CHECK(compiled.Passes()[4].debug_name == "present_transition");
@@ -1568,7 +1759,7 @@ VR_TEST_CASE(SceneRecorder3D_build_render_graph_routes_mixed_surface_text_partic
     VR_CHECK(compiled.Passes()[1].executable);
     VR_REQUIRE(compiled.Passes()[1].raster_pass.has_value());
     VR_CHECK(static_cast<bool>(compiled.Passes()[1].execute));
-    CheckSharedBindlessBindings(test_context_, compiled.Passes()[1]);
+    CheckSurface3DGraphBindings(test_context_, compiled.Passes()[1]);
 
     recorder.ClearFramePacket();
 }
@@ -1718,7 +1909,7 @@ VR_TEST_CASE(SceneRecorder3D_build_render_graph_routes_single_surface_opaque_sli
     VR_CHECK(compiled.Passes()[0].executable);
     VR_REQUIRE(compiled.Passes()[0].raster_pass.has_value());
     VR_CHECK(static_cast<bool>(compiled.Passes()[0].execute));
-    CheckSharedBindlessBindings(test_context_, compiled.Passes()[0]);
+    CheckSurface3DGraphBindings(test_context_, compiled.Passes()[0]);
 
     recorder.ClearFramePacket();
 }

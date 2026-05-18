@@ -490,6 +490,7 @@ VR_TEST_CASE(RenderGraphExecutor_invokes_pass_execute_thunks,
     const VkCommandBuffer command_buffer = host.Context().BeginSingleTimeCommands();
     auto graph_context = vr::render_graph::GraphCommandContext{
         host.Context(),
+        0U,
         command_buffer,
         compiled,
         table,
@@ -564,6 +565,7 @@ VR_TEST_CASE(RenderGraphExecutor_records_minimal_graph_barrier_batches,
     const VkCommandBuffer command_buffer = host.Context().BeginSingleTimeCommands();
     auto graph_context = vr::render_graph::GraphCommandContext{
         host.Context(),
+        0U,
         command_buffer,
         compiled,
         table,

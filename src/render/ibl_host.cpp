@@ -393,6 +393,21 @@ VkDescriptorSet IblHost::ActiveParamsDescriptorSet(std::uint32_t frame_index_) c
     return frame_resources[frame_index_].params_descriptor_set;
 }
 
+DescriptorBufferBindingView IblHost::ActiveParamsBufferBinding(std::uint32_t frame_index_) const {
+    if (!initialized) {
+        throw std::runtime_error("IblHost::ActiveParamsBufferBinding called before Initialize");
+    }
+    if (frame_index_ >= frame_resources.size()) {
+        throw std::out_of_range("IblHost::ActiveParamsBufferBinding frame index out of range");
+    }
+    const FrameResources& frame = frame_resources[frame_index_];
+    return DescriptorBufferBindingView{
+        .buffer = frame.gpu_params_buffer.buffer,
+        .offset = 0U,
+        .range = sizeof(IblGpuParams),
+    };
+}
+
 DescriptorSetLayoutId IblHost::ParamsDescriptorLayoutId() const noexcept {
     return params_descriptor_layout_id;
 }

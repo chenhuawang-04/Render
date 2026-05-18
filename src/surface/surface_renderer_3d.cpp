@@ -9,6 +9,7 @@
 #include "vr/render/color_blend_state.hpp"
 #include "vr/render/ibl_host.hpp"
 #include "vr/render/render_loop_host.hpp"
+#include "vr/render/scene_3d_descriptor_contract.hpp"
 #include "vr/render/runtime_prepare_views.hpp"
 #include "vr/render/upload_host.hpp"
 #include "vr/resource/gpu_memory_host.hpp"
@@ -23,6 +24,7 @@
 #include <cstring>
 #include <cstdint>
 #include <stdexcept>
+#include <type_traits>
 #include <utility>
 
 namespace vr::surface {
@@ -49,6 +51,26 @@ namespace {
         }
     }
     return render::BindlessResourceSystem::SamplerTableContractId();
+}
+
+template<typename HandleT>
+[[nodiscard]] std::uintptr_t HandleBits(const HandleT handle_) noexcept {
+    if constexpr (std::is_pointer_v<HandleT>) {
+        return reinterpret_cast<std::uintptr_t>(handle_);
+    } else {
+        return static_cast<std::uintptr_t>(handle_);
+    }
+}
+
+[[nodiscard]] render_graph::ExternalBufferBindingPayload MakeExternalBufferBindingPayload(
+    const VkBuffer buffer_,
+    const VkDeviceSize offset_,
+    const VkDeviceSize range_) noexcept {
+    return render_graph::ExternalBufferBindingPayload{
+        .native_buffer = HandleBits(buffer_),
+        .offset_bytes = static_cast<std::uint64_t>(offset_),
+        .size_bytes = static_cast<std::uint64_t>(range_),
+    };
 }
 
 } // namespace
@@ -140,6 +162,46 @@ SurfaceRenderer3D::BlendMode SurfaceRenderer3D::ResolveBlendMode(std::uint32_t b
         break;
     }
     return BlendMode::opaque;
+}
+
+render_graph::ExternalBufferBindingPayload SurfaceRenderer3D::ResolveAppearanceExternalBufferBinding(
+    const void* user_data_) {
+    const auto* renderer = static_cast<const SurfaceRenderer3D*>(user_data_);
+    if (renderer == nullptr ||
+        renderer->active_frame_index >= renderer->frame_appearance_resources.size()) {
+        throw std::runtime_error(
+            "SurfaceRenderer3D graph appearance descriptor resolver requires prepared frame resources");
+    }
+
+    const FrameAppearanceResources& frame_resources =
+        renderer->frame_appearance_resources[renderer->active_frame_index];
+    if (frame_resources.appearance_records.buffer == VK_NULL_HANDLE ||
+        frame_resources.appearance_record_count == 0U) {
+        throw std::runtime_error(
+            "SurfaceRenderer3D graph appearance descriptor resolver requires uploaded appearance records");
+    }
+
+    return MakeExternalBufferBindingPayload(
+        frame_resources.appearance_records.buffer,
+        0U,
+        static_cast<VkDeviceSize>(frame_resources.appearance_record_count) *
+            sizeof(ecs::AppearanceGpuRecord<ecs::Dim3>));
+}
+
+render_graph::ExternalBufferBindingPayload SurfaceRenderer3D::ResolveIblParamsExternalBufferBinding(
+    const void* user_data_) {
+    const auto* renderer = static_cast<const SurfaceRenderer3D*>(user_data_);
+    if (renderer == nullptr || renderer->ibl_host == nullptr) {
+        throw std::runtime_error(
+            "SurfaceRenderer3D graph IBL descriptor resolver requires initialized IBL host");
+    }
+    const render::DescriptorBufferBindingView binding =
+        renderer->ibl_host->ActiveParamsBufferBinding(renderer->active_frame_index);
+    if (binding.buffer == VK_NULL_HANDLE || binding.range == 0U) {
+        throw std::runtime_error(
+            "SurfaceRenderer3D graph IBL descriptor resolver requires prepared IBL params buffer");
+    }
+    return MakeExternalBufferBindingPayload(binding.buffer, binding.offset, binding.range);
 }
 
 std::uint64_t SurfaceRenderer3D::ComposeBindlessUploadRevision(
@@ -695,17 +757,45 @@ void SurfaceRenderer3D::DescribeGraphDescriptorBindings(render_graph::RenderGrap
     const auto sampler_table = ResolveSamplerTableId(bindless_resources);
     builder_.SetPassShaderContract(
         pass_,
-        render_graph::MakeSharedBindlessFragmentShaderContract("surface_3d.frag"));
+        render::BuildSharedScene3DShaderContract("surface_3d.frag"));
     builder_.AddBindlessTableBinding(pass_,
-                                     0U,
+                                     render::scene_3d_sampled_image_set,
                                      render_graph::DescriptorBindingKind::sampled_image_table,
                                      sampled_image_table.value,
                                      render_graph::shader_stage_fragment_flag);
     builder_.AddBindlessTableBinding(pass_,
-                                     1U,
+                                     render::scene_3d_sampler_set,
                                      render_graph::DescriptorBindingKind::sampler_table,
                                      sampler_table.value,
                                      render_graph::shader_stage_fragment_flag);
+    const std::uint32_t appearance_resolver_id =
+        builder_.RegisterExternalBufferBindingResolver({
+            .user_data = this,
+            .resolve_fn = &SurfaceRenderer3D::ResolveAppearanceExternalBufferBinding,
+            .debug_name = "surface_3d.appearance_records",
+        });
+    builder_.AddExternalBufferBinding(pass_,
+                                      render::scene_3d_shared_buffer_set,
+                                      render::scene_3d_surface_appearance_binding,
+                                      render_graph::DescriptorBindingKind::storage_buffer,
+                                      appearance_resolver_id,
+                                      render_graph::shader_stage_fragment_flag);
+    if (!builder_.HasPassDescriptorBinding(pass_,
+                                           render::scene_3d_ibl_set,
+                                           render::scene_3d_ibl_params_binding)) {
+        const std::uint32_t ibl_params_resolver_id =
+            builder_.RegisterExternalBufferBindingResolver({
+                .user_data = this,
+                .resolve_fn = &SurfaceRenderer3D::ResolveIblParamsExternalBufferBinding,
+                .debug_name = "surface_3d.ibl_params",
+            });
+        builder_.AddExternalBufferBinding(pass_,
+                                          render::scene_3d_ibl_set,
+                                          render::scene_3d_ibl_params_binding,
+                                          render_graph::DescriptorBindingKind::uniform_buffer,
+                                          ibl_params_resolver_id,
+                                          render_graph::shader_stage_fragment_flag);
+    }
 }
 
 void SurfaceRenderer3D::Record(const render::FrameRecordContext& record_context_) {
@@ -905,6 +995,7 @@ void SurfaceRenderer3D::RecordInternal(const render::FrameRecordContext& record_
         push_constants.ibl_brdf_lut_texture_slot = active_ibl_brdf_lut_texture_slot;
         push_constants.ibl_sampler_slot = active_ibl_sampler_slot;
 
+        PrepareAppearanceDescriptorSetForFrame(active_frame_index);
         const VkDescriptorSet appearance_descriptor_set =
             (active_frame_index < frame_appearance_resources.size())
                 ? frame_appearance_resources[active_frame_index].descriptor_set
@@ -1093,21 +1184,6 @@ void SurfaceRenderer3D::RecordGraphInternal(render_graph::GraphCommandContext& c
         push_constants.ibl_brdf_lut_texture_slot = active_ibl_brdf_lut_texture_slot;
         push_constants.ibl_sampler_slot = active_ibl_sampler_slot;
 
-        const VkDescriptorSet appearance_descriptor_set =
-            (active_frame_index < frame_appearance_resources.size())
-                ? frame_appearance_resources[active_frame_index].descriptor_set
-                : VK_NULL_HANDLE;
-        const std::array<VkDescriptorSet, 2U> local_descriptor_sets{
-            appearance_descriptor_set,
-            active_ibl_params_descriptor_set
-        };
-        if (local_descriptor_sets[0U] == VK_NULL_HANDLE) {
-            throw std::runtime_error("SurfaceRenderer3D::RecordGraphSceneStage requires valid appearance descriptor set");
-        }
-        if (local_descriptor_sets[1U] == VK_NULL_HANDLE) {
-            throw std::runtime_error("SurfaceRenderer3D::RecordGraphSceneStage requires valid IBL params descriptor set");
-        }
-
         render::GraphicsPipelineId bound_pipeline{};
         bool shared_state_bound = false;
         for (const ecs::Surface3DDrawBatch& batch : runtime_scratch.draw_batches) {
@@ -1153,15 +1229,7 @@ void SurfaceRenderer3D::RecordGraphInternal(render_graph::GraphCommandContext& c
                 context_.BindCurrentPassDescriptorSets(VK_PIPELINE_BIND_POINT_GRAPHICS,
                                                        pipeline_layout,
                                                        0U,
-                                                       2U);
-                vkCmdBindDescriptorSets(context_.CommandBuffer(),
-                                        VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                        pipeline_layout,
-                                        2U,
-                                        static_cast<std::uint32_t>(local_descriptor_sets.size()),
-                                        local_descriptor_sets.data(),
-                                        0U,
-                                        nullptr);
+                                                       4U);
                 shared_state_bound = true;
                 ++stats.descriptor_set_bind_count;
                 ++stats.ibl_descriptor_set_bind_count;
@@ -1445,15 +1513,8 @@ void SurfaceRenderer3D::EnsureAppearanceDescriptorObjects(
         return;
     }
 
-    render::DescriptorSetLayoutDesc layout_desc{};
-    VkDescriptorSetLayoutBinding binding{};
-    binding.binding = 0U;
-    binding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    binding.descriptorCount = 1U;
-    binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-    binding.pImmutableSamplers = nullptr;
-    layout_desc.bindings.push_back(binding);
-
+    const render::DescriptorSetLayoutDesc layout_desc =
+        render::BuildSharedScene3DBufferLayoutDesc();
     appearance_descriptor_layout_id = descriptor_host_.RegisterLayout(context_, layout_desc);
 }
 
@@ -1651,8 +1712,6 @@ void SurfaceRenderer3D::EnsureAppearanceResourcesForFrame(std::uint64_t bindless
     descriptor_signature ^= static_cast<std::uint64_t>(appearance_record_bytes);
     descriptor_signature *= 1099511628211ULL;
     frame_resources.descriptor_payload_signature = descriptor_signature;
-
-    PrepareAppearanceDescriptorSetForFrame(active_frame_index);
 }
 
 void SurfaceRenderer3D::PrepareAppearanceDescriptorSetForFrame(std::uint32_t frame_index_) {
@@ -1684,7 +1743,7 @@ void SurfaceRenderer3D::PrepareAppearanceDescriptorSetForFrame(std::uint32_t fra
     descriptor_buffer_write_scratch.clear();
     descriptor_image_write_scratch.clear();
     descriptor_buffer_write_scratch.push_back({
-        .binding = 0U,
+        .binding = render::scene_3d_surface_appearance_binding,
         .array_element = 0U,
         .descriptor_type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
         .buffer = frame_resources.appearance_records.buffer,

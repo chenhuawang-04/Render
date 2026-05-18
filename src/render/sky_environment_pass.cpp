@@ -8,7 +8,10 @@
 #include "vr/render/generated/sky_environment_frag_spv.hpp"
 #include "vr/render/generated/sky_environment_equirect_frag_spv.hpp"
 #include "vr/render/generated/sky_environment_image_frag_spv.hpp"
+#include "vr/render/scene_3d_descriptor_contract.hpp"
 #include "vr/render/ibl_host.hpp"
+#include "vr/render_graph/graph_command_context.hpp"
+#include "vr/render_graph/render_graph_builder.hpp"
 #include "vr/resource/sampler_host.hpp"
 
 #include <algorithm>
@@ -34,6 +37,28 @@ namespace {
 
 [[nodiscard]] bool SupportsProceduralAtmosphereMode(scene::SkyEnvironmentMode mode_) noexcept {
     return mode_ == scene::SkyEnvironmentMode::procedural_atmosphere;
+}
+
+[[nodiscard]] render::BindlessTableId ResolveSampledImageTableId(
+    const render::BindlessResourceSystem* bindless_resources_) noexcept {
+    if (bindless_resources_ != nullptr) {
+        const auto table_id = bindless_resources_->SampledImageTable();
+        if (table_id.IsValid()) {
+            return table_id;
+        }
+    }
+    return render::BindlessResourceSystem::SampledImageTableContractId();
+}
+
+[[nodiscard]] render::BindlessTableId ResolveSamplerTableId(
+    const render::BindlessResourceSystem* bindless_resources_) noexcept {
+    if (bindless_resources_ != nullptr) {
+        const auto table_id = bindless_resources_->SamplerTable();
+        if (table_id.IsValid()) {
+            return table_id;
+        }
+    }
+    return render::BindlessResourceSystem::SamplerTableContractId();
 }
 
 [[nodiscard]] ecs::Float3 NormalizeOrFallback(const ecs::Float3& value_,
@@ -266,6 +291,30 @@ void SkyEnvironmentPass::PrepareFrame(const SkyEnvironmentPassPrepareView& prepa
     ++stats.prepare_count;
 }
 
+void SkyEnvironmentPass::DescribeGraphDescriptorBindings(render_graph::RenderGraphBuilder& builder_,
+                                                         const render_graph::PassHandle pass_) const {
+    if (!initialized) {
+        throw std::runtime_error(
+            "SkyEnvironmentPass::DescribeGraphDescriptorBindings called before Initialize");
+    }
+
+    const auto sampled_image_table = ResolveSampledImageTableId(bindless_resources);
+    const auto sampler_table = ResolveSamplerTableId(bindless_resources);
+    builder_.SetPassShaderContract(
+        pass_,
+        render_graph::MakeSharedBindlessFragmentShaderContract("sky_environment.bindless"));
+    builder_.AddBindlessTableBinding(pass_,
+                                     render::scene_3d_sampled_image_set,
+                                     render_graph::DescriptorBindingKind::sampled_image_table,
+                                     sampled_image_table.value,
+                                     render_graph::shader_stage_fragment_flag);
+    builder_.AddBindlessTableBinding(pass_,
+                                     render::scene_3d_sampler_set,
+                                     render_graph::DescriptorBindingKind::sampler_table,
+                                     sampler_table.value,
+                                     render_graph::shader_stage_fragment_flag);
+}
+
 void SkyEnvironmentPass::Record(const FrameRecordContext& record_context_,
                                 const RenderView3D& view_,
                                 const scene::SkyEnvironmentRenderState& state_,
@@ -318,12 +367,43 @@ void SkyEnvironmentPass::Record(const FrameRecordContext& record_context_,
     });
 }
 
+void SkyEnvironmentPass::RecordGraphPass(render_graph::GraphCommandContext& context_,
+                                         const RenderView3D& view_,
+                                         const scene::SkyEnvironmentRenderState& state_,
+                                         const VkFormat color_format_,
+                                         const bool depth_tested_,
+                                         const VkFormat depth_format_) {
+    RecordGraphPassInternal(context_.CommandBuffer(),
+                            &context_,
+                            view_,
+                            state_,
+                            color_format_,
+                            depth_tested_,
+                            depth_format_);
+}
+
 void SkyEnvironmentPass::RecordGraphPass(VkCommandBuffer command_buffer_,
                                          const RenderView3D& view_,
                                          const scene::SkyEnvironmentRenderState& state_,
                                          const VkFormat color_format_,
                                          const bool depth_tested_,
                                          const VkFormat depth_format_) {
+    RecordGraphPassInternal(command_buffer_,
+                            nullptr,
+                            view_,
+                            state_,
+                            color_format_,
+                            depth_tested_,
+                            depth_format_);
+}
+
+void SkyEnvironmentPass::RecordGraphPassInternal(VkCommandBuffer command_buffer_,
+                                                 render_graph::GraphCommandContext* graph_context_,
+                                                 const RenderView3D& view_,
+                                                 const scene::SkyEnvironmentRenderState& state_,
+                                                 const VkFormat color_format_,
+                                                 const bool depth_tested_,
+                                                 const VkFormat depth_format_) {
     if (!initialized) {
         throw std::runtime_error("SkyEnvironmentPass::RecordGraphPass called before Initialize");
     }
@@ -427,18 +507,26 @@ void SkyEnvironmentPass::RecordGraphPass(VkCommandBuffer command_buffer_,
         vkCmdBindPipeline(command_buffer_,
                           VK_PIPELINE_BIND_POINT_GRAPHICS,
                           pipeline_host->GetGraphicsPipeline(pipeline_id));
-        const std::array<VkDescriptorSet, 2U> descriptor_sets{
-            bindless_resources->SampledImageSet(),
-            bindless_resources->SamplerSet()
-        };
-        vkCmdBindDescriptorSets(command_buffer_,
-                                VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                pipeline_host->GetPipelineLayout(equirect_pipeline_layout_id),
-                                0U,
-                                static_cast<std::uint32_t>(descriptor_sets.size()),
-                                descriptor_sets.data(),
-                                0U,
-                                nullptr);
+        if (graph_context_ != nullptr) {
+            graph_context_->BindCurrentPassDescriptorSets(VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                                          pipeline_host->GetPipelineLayout(
+                                                              equirect_pipeline_layout_id),
+                                                          0U,
+                                                          2U);
+        } else {
+            const std::array<VkDescriptorSet, 2U> descriptor_sets{
+                bindless_resources->SampledImageSet(),
+                bindless_resources->SamplerSet()
+            };
+            vkCmdBindDescriptorSets(command_buffer_,
+                                    VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                    pipeline_host->GetPipelineLayout(equirect_pipeline_layout_id),
+                                    0U,
+                                    static_cast<std::uint32_t>(descriptor_sets.size()),
+                                    descriptor_sets.data(),
+                                    0U,
+                                    nullptr);
+        }
         ++stats.descriptor_set_bind_count;
 
         const EquirectPushBlock push_block =
@@ -479,18 +567,26 @@ void SkyEnvironmentPass::RecordGraphPass(VkCommandBuffer command_buffer_,
         vkCmdBindPipeline(command_buffer_,
                           VK_PIPELINE_BIND_POINT_GRAPHICS,
                           pipeline_host->GetGraphicsPipeline(pipeline_id));
-        const std::array<VkDescriptorSet, 2U> descriptor_sets{
-            bindless_resources->SampledImageSet(),
-            bindless_resources->SamplerSet()
-        };
-        vkCmdBindDescriptorSets(command_buffer_,
-                                VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                pipeline_host->GetPipelineLayout(environment_image_pipeline_layout_id),
-                                0U,
-                                static_cast<std::uint32_t>(descriptor_sets.size()),
-                                descriptor_sets.data(),
-                                0U,
-                                nullptr);
+        if (graph_context_ != nullptr) {
+            graph_context_->BindCurrentPassDescriptorSets(
+                VK_PIPELINE_BIND_POINT_GRAPHICS,
+                pipeline_host->GetPipelineLayout(environment_image_pipeline_layout_id),
+                0U,
+                2U);
+        } else {
+            const std::array<VkDescriptorSet, 2U> descriptor_sets{
+                bindless_resources->SampledImageSet(),
+                bindless_resources->SamplerSet()
+            };
+            vkCmdBindDescriptorSets(command_buffer_,
+                                    VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                    pipeline_host->GetPipelineLayout(environment_image_pipeline_layout_id),
+                                    0U,
+                                    static_cast<std::uint32_t>(descriptor_sets.size()),
+                                    descriptor_sets.data(),
+                                    0U,
+                                    nullptr);
+        }
         ++stats.descriptor_set_bind_count;
 
         const EnvironmentImagePushBlock push_block = BuildEnvironmentImagePushBlock(

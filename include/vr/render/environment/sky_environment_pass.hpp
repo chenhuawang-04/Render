@@ -6,10 +6,16 @@
 #include "vr/render/render_target_pass.hpp"
 #include "vr/render/render_view.hpp"
 #include "vr/render/runtime_prepare_views.hpp"
+#include "vr/render_graph/render_graph_types.hpp"
 #include "vr/resource/sampler_host.hpp"
 #include "vr/scene/background/sky_environment.hpp"
 
 #include <cstdint>
+
+namespace vr::render_graph {
+class GraphCommandContext;
+class RenderGraphBuilder;
+}
 
 namespace vr::render {
 
@@ -37,10 +43,18 @@ public:
     void PrepareFrame(const SkyEnvironmentPassPrepareView& prepare_view_,
                       const scene::SkyEnvironmentRenderState& state_,
                       scene::SkyEnvironmentGpuHandle gpu_handle_);
+    void DescribeGraphDescriptorBindings(render_graph::RenderGraphBuilder& builder_,
+                                         render_graph::PassHandle pass_) const;
     void Record(const FrameRecordContext& record_context_,
                 const RenderView3D& view_,
                 const scene::SkyEnvironmentRenderState& state_,
                 scene::SkyEnvironmentGpuHandle gpu_handle_);
+    void RecordGraphPass(render_graph::GraphCommandContext& context_,
+                         const RenderView3D& view_,
+                         const scene::SkyEnvironmentRenderState& state_,
+                         VkFormat color_format_,
+                         bool depth_tested_ = false,
+                         VkFormat depth_format_ = VK_FORMAT_UNDEFINED);
     void RecordGraphPass(VkCommandBuffer command_buffer_,
                          const RenderView3D& view_,
                          const scene::SkyEnvironmentRenderState& state_,
@@ -143,6 +157,13 @@ private:
     [[nodiscard]] static AtmospherePushBlock BuildAtmospherePushBlock(
         const RenderView3D& view_,
         const scene::SkyEnvironmentRenderState& state_) noexcept;
+    void RecordGraphPassInternal(VkCommandBuffer command_buffer_,
+                                 render_graph::GraphCommandContext* graph_context_,
+                                 const RenderView3D& view_,
+                                 const scene::SkyEnvironmentRenderState& state_,
+                                 VkFormat color_format_,
+                                 bool depth_tested_ = false,
+                                 VkFormat depth_format_ = VK_FORMAT_UNDEFINED);
 
 private:
     SkyEnvironmentPassCreateInfo create_info_cache{};

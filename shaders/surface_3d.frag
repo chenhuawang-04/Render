@@ -30,7 +30,7 @@ struct AppearanceGpuRecord {
     uvec4 textures1_u32;
 };
 
-layout(set = 2, binding = 0, std430) readonly buffer AppearanceRecordBuffer {
+layout(set = 2, binding = 8, std430) readonly buffer AppearanceRecordBuffer {
     AppearanceGpuRecord appearance_records[];
 };
 

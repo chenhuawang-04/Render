@@ -1035,6 +1035,8 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_graph_only_record_path_smok
 
         std::uint32_t submitted_frames = 0U;
         std::uint32_t executed_graph_frames = 0U;
+        std::uint32_t max_descriptor_updates = 0U;
+        std::uint64_t max_transient_descriptor_updates = 0U;
         bool saw_executable_scene_pass = false;
         constexpr std::uint32_t max_ticks = 6U;
         for (std::uint32_t tick_index = 0U; tick_index < max_ticks && runtime.IsRunning(); ++tick_index) {
@@ -1053,6 +1055,12 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_graph_only_record_path_smok
             if (service.LastRecordStats().pass_count > 0U) {
                 ++executed_graph_frames;
             }
+            const vr::geometry::GeometryRenderer3DStats renderer_stats = geometry_renderer.Stats();
+            max_descriptor_updates =
+                std::max(max_descriptor_updates, renderer_stats.descriptor_set_update_count);
+            max_transient_descriptor_updates = std::max(
+                max_transient_descriptor_updates,
+                runtime.Descriptor().Stats().transient_update_call_count);
             if (const auto* compiled_graph = service.TryGetCompiledGraph();
                 compiled_graph != nullptr &&
                 !compiled_graph->Passes().empty()) {
@@ -1069,6 +1077,8 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_graph_only_record_path_smok
         VR_CHECK(saw_executable_scene_pass);
         VR_CHECK(service.RecordExecutionEnabled());
         VR_CHECK(service.GraphOnlyRecordPathEnabled());
+        VR_CHECK(max_descriptor_updates == 0U);
+        VR_CHECK(max_transient_descriptor_updates > 0U);
     } catch (const std::exception& exception_) {
         if (IsEnvironmentSkipError(exception_.what())) {
             VR_SKIP(exception_.what());
@@ -1420,6 +1430,7 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_bloom_post_stack_smoke,
         std::uint32_t max_ibl_descriptor_binds = 0U;
         std::uint32_t max_shadow_draw_calls = 0U;
         std::uint32_t max_shadow_atlas_passes = 0U;
+        std::uint64_t max_transient_descriptor_updates = 0U;
         bool observed_bounds_culling = false;
 
         constexpr std::uint32_t max_ticks = 16U;
@@ -1490,6 +1501,9 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_bloom_post_stack_smoke,
                                               bloom_stats.combine_draw_call_count);
             max_bloom_descriptor_updates = std::max(max_bloom_descriptor_updates,
                                                     bloom_stats.descriptor_set_update_count);
+            max_transient_descriptor_updates = std::max(
+                max_transient_descriptor_updates,
+                runtime.Descriptor().Stats().transient_update_call_count);
             max_visible_light_count = std::max(max_visible_light_count,
                                                renderer_stats.visible_light_count);
             max_shadow_view_count = std::max(max_shadow_view_count,
@@ -1514,7 +1528,6 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_bloom_post_stack_smoke,
         VR_CHECK(max_instances > 0U);
         VR_CHECK(max_depth_test_batches > 0U);
         VR_CHECK(max_depth_write_batches > 0U);
-        VR_CHECK(max_descriptor_updates > 0U);
         VR_CHECK(max_appearance_push_constant_updates > 0U);
         VR_CHECK(max_appearance_sets == 0U);
         VR_CHECK(max_prefilter_draw_calls > 0U);
@@ -1536,6 +1549,12 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_bloom_post_stack_smoke,
         VR_CHECK(geometry_image_host.Stats().image_count >= 2U);
         VR_CHECK(geometry_appearance_host.Stats().appearance_count >= 2U);
         const bool graph_only_record_active = vr::test::IsGraphOnlyScene3DRecordActive(runtime);
+        if (graph_only_record_active) {
+            VR_CHECK(max_descriptor_updates == 0U);
+            VR_CHECK(max_transient_descriptor_updates > 0U);
+        } else {
+            VR_CHECK(max_descriptor_updates > 0U);
+        }
         VR_CHECK(recorder.Stats().pre_scene_renderer_count == 1U);
         VR_CHECK(recorder.Stats().frame_packet_prepare_count > 0U);
         VR_CHECK(graph_only_record_active

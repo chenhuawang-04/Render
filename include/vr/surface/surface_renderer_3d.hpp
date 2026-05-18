@@ -225,6 +225,10 @@ private:
                                                           bool use_depth_) noexcept;
     [[nodiscard]] static CullMode ResolveCullMode(std::uint32_t batch_params_) noexcept;
     [[nodiscard]] static BlendMode ResolveBlendMode(std::uint32_t batch_params_) noexcept;
+    [[nodiscard]] static render_graph::ExternalBufferBindingPayload ResolveAppearanceExternalBufferBinding(
+        const void* user_data_);
+    [[nodiscard]] static render_graph::ExternalBufferBindingPayload ResolveIblParamsExternalBufferBinding(
+        const void* user_data_);
     [[nodiscard]] static std::uint64_t ComposeBindlessUploadRevision(
         const ecs::Surface3DRuntimeBuildStats& runtime_stats_,
         std::uint32_t image_revision_) noexcept;

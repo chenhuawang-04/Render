@@ -67,11 +67,29 @@ enum ShaderStageFlags : std::uint32_t {
 enum class DescriptorBindingSource : std::uint8_t {
     none = 0U,
     bindless_table = 1U,
+    external_buffer = 2U,
 };
 
 enum class DescriptorBindingKind : std::uint8_t {
     sampled_image_table = 0U,
     sampler_table = 1U,
+    storage_buffer = 2U,
+    uniform_buffer = 3U,
+};
+
+struct ExternalBufferBindingPayload final {
+    std::uintptr_t native_buffer = 0U;
+    std::uint64_t offset_bytes = 0U;
+    std::uint64_t size_bytes = 0U;
+};
+
+using ExternalBufferBindingResolveFn =
+    ExternalBufferBindingPayload (*)(const void* user_data);
+
+struct ExternalBufferBindingResolver final {
+    const void* user_data = nullptr;
+    ExternalBufferBindingResolveFn resolve_fn = nullptr;
+    std::string debug_name{};
 };
 
 enum TextureUsageFlags : std::uint32_t {
@@ -352,5 +370,6 @@ static_assert(std::is_standard_layout_v<PassDescriptorBindingDesc>);
 static_assert(std::is_standard_layout_v<ShaderContractBindingDesc>);
 static_assert(std::is_standard_layout_v<DescriptorWriteDesc>);
 static_assert(std::is_standard_layout_v<BindlessAllocation>);
+static_assert(std::is_standard_layout_v<ExternalBufferBindingPayload>);
 
 } // namespace vr::render_graph

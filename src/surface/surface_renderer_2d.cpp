@@ -22,6 +22,7 @@
 #include <cstdint>
 #include <limits>
 #include <stdexcept>
+#include <type_traits>
 #include <utility>
 
 namespace vr::surface {
@@ -48,6 +49,33 @@ namespace {
         }
     }
     return render::BindlessResourceSystem::SamplerTableContractId();
+}
+
+template<typename HandleT>
+[[nodiscard]] std::uintptr_t HandleBits(const HandleT handle_) noexcept {
+    if constexpr (std::is_pointer_v<HandleT>) {
+        return reinterpret_cast<std::uintptr_t>(handle_);
+    } else {
+        return static_cast<std::uintptr_t>(handle_);
+    }
+}
+
+[[nodiscard]] render_graph::ExternalBufferBindingPayload MakeExternalBufferBindingPayload(
+    const VkBuffer buffer_,
+    const VkDeviceSize offset_,
+    const VkDeviceSize range_) noexcept {
+    return render_graph::ExternalBufferBindingPayload{
+        .native_buffer = HandleBits(buffer_),
+        .offset_bytes = static_cast<std::uint64_t>(offset_),
+        .size_bytes = static_cast<std::uint64_t>(range_),
+    };
+}
+
+[[nodiscard]] render_graph::ExternalBufferBindingPayload MakeExternalBufferBindingPayload(
+    const light::LightShadowBufferRange& range_) noexcept {
+    return MakeExternalBufferBindingPayload(range_.buffer,
+                                            range_.offset,
+                                            range_.size_bytes);
 }
 
 } // namespace
@@ -77,6 +105,86 @@ SurfaceRenderer2D::BlendModeKind SurfaceRenderer2D::ResolveBlendModeFromBatchPar
     default: break;
     }
     return premultiplied_alpha ? BlendModeKind::premultiplied_alpha : BlendModeKind::alpha;
+}
+
+render_graph::ExternalBufferBindingPayload SurfaceRenderer2D::ResolveLightRecordsExternalBufferBinding(
+    const void* user_data_) {
+    const auto* renderer = static_cast<const SurfaceRenderer2D*>(user_data_);
+    if (renderer == nullptr ||
+        renderer->active_frame_index >= renderer->frame_lighting_resources.size()) {
+        throw std::runtime_error(
+            "SurfaceRenderer2D graph lighting resolver requires prepared frame resources");
+    }
+    const FrameLightingResources& frame = renderer->frame_lighting_resources[renderer->active_frame_index];
+    if (frame.light_records.buffer == VK_NULL_HANDLE || frame.light_records.size_bytes == 0U) {
+        throw std::runtime_error(
+            "SurfaceRenderer2D graph light-record resolver requires uploaded light buffers");
+    }
+    return MakeExternalBufferBindingPayload(frame.light_records);
+}
+
+render_graph::ExternalBufferBindingPayload SurfaceRenderer2D::ResolveClusterHeadersExternalBufferBinding(
+    const void* user_data_) {
+    const auto* renderer = static_cast<const SurfaceRenderer2D*>(user_data_);
+    if (renderer == nullptr ||
+        renderer->active_frame_index >= renderer->frame_lighting_resources.size()) {
+        throw std::runtime_error(
+            "SurfaceRenderer2D graph cluster-header resolver requires prepared frame resources");
+    }
+    const FrameLightingResources& frame = renderer->frame_lighting_resources[renderer->active_frame_index];
+    if (frame.cluster_headers.buffer == VK_NULL_HANDLE || frame.cluster_headers.size_bytes == 0U) {
+        throw std::runtime_error(
+            "SurfaceRenderer2D graph cluster-header resolver requires uploaded cluster headers");
+    }
+    return MakeExternalBufferBindingPayload(frame.cluster_headers);
+}
+
+render_graph::ExternalBufferBindingPayload SurfaceRenderer2D::ResolveClusterIndicesExternalBufferBinding(
+    const void* user_data_) {
+    const auto* renderer = static_cast<const SurfaceRenderer2D*>(user_data_);
+    if (renderer == nullptr ||
+        renderer->active_frame_index >= renderer->frame_lighting_resources.size()) {
+        throw std::runtime_error(
+            "SurfaceRenderer2D graph cluster-index resolver requires prepared frame resources");
+    }
+    const FrameLightingResources& frame = renderer->frame_lighting_resources[renderer->active_frame_index];
+    if (frame.cluster_indices.buffer == VK_NULL_HANDLE || frame.cluster_indices.size_bytes == 0U) {
+        throw std::runtime_error(
+            "SurfaceRenderer2D graph cluster-index resolver requires uploaded cluster indices");
+    }
+    return MakeExternalBufferBindingPayload(frame.cluster_indices);
+}
+
+render_graph::ExternalBufferBindingPayload SurfaceRenderer2D::ResolveShadowViewsExternalBufferBinding(
+    const void* user_data_) {
+    const auto* renderer = static_cast<const SurfaceRenderer2D*>(user_data_);
+    if (renderer == nullptr ||
+        renderer->active_frame_index >= renderer->frame_lighting_resources.size()) {
+        throw std::runtime_error(
+            "SurfaceRenderer2D graph shadow-view resolver requires prepared frame resources");
+    }
+    const FrameLightingResources& frame = renderer->frame_lighting_resources[renderer->active_frame_index];
+    if (frame.shadow_views.buffer == VK_NULL_HANDLE || frame.shadow_views.size_bytes == 0U) {
+        throw std::runtime_error(
+            "SurfaceRenderer2D graph shadow-view resolver requires uploaded shadow views");
+    }
+    return MakeExternalBufferBindingPayload(frame.shadow_views);
+}
+
+render_graph::ExternalBufferBindingPayload SurfaceRenderer2D::ResolveLightingUniformExternalBufferBinding(
+    const void* user_data_) {
+    const auto* renderer = static_cast<const SurfaceRenderer2D*>(user_data_);
+    if (renderer == nullptr ||
+        renderer->active_frame_index >= renderer->frame_lighting_resources.size()) {
+        throw std::runtime_error(
+            "SurfaceRenderer2D graph lighting-uniform resolver requires prepared frame resources");
+    }
+    const FrameLightingResources& frame = renderer->frame_lighting_resources[renderer->active_frame_index];
+    if (frame.lighting_uniform.buffer == VK_NULL_HANDLE || frame.lighting_uniform.size_bytes == 0U) {
+        throw std::runtime_error(
+            "SurfaceRenderer2D graph lighting-uniform resolver requires uploaded uniform buffer");
+    }
+    return MakeExternalBufferBindingPayload(frame.lighting_uniform);
 }
 
 void SurfaceRenderer2D::Initialize(const SurfaceRenderer2DCreateInfo& create_info_) {
@@ -538,7 +646,6 @@ void SurfaceRenderer2D::PrepareFrame(const render::SurfaceRenderer2DPrepareView&
                                         last_submitted_value_seen,
                                         completed_submit_value_seen);
     EnsureLightingResourcesForFrame(*context);
-    PrepareLightingDescriptorSetForFrame(active_frame_index);
 
     pending_dirty_component_indices = nullptr;
     pending_dirty_component_count = 0U;
@@ -553,9 +660,44 @@ void SurfaceRenderer2D::DescribeGraphDescriptorBindings(render_graph::RenderGrap
 
     const auto sampled_image_table = ResolveSampledImageTableId(bindless_resources);
     const auto sampler_table = ResolveSamplerTableId(bindless_resources);
-    builder_.SetPassShaderContract(
-        pass_,
-        render_graph::MakeSharedBindlessFragmentShaderContract("surface_2d.frag"));
+    auto shader_contract =
+        render_graph::MakeSharedBindlessFragmentShaderContract("surface_2d.frag");
+    shader_contract.bindings.push_back({
+        .set = 2U,
+        .binding = 0U,
+        .kind = render_graph::DescriptorBindingKind::storage_buffer,
+        .stage_flags = render_graph::shader_stage_fragment_flag,
+        .descriptor_count = 1U,
+    });
+    shader_contract.bindings.push_back({
+        .set = 2U,
+        .binding = 1U,
+        .kind = render_graph::DescriptorBindingKind::storage_buffer,
+        .stage_flags = render_graph::shader_stage_fragment_flag,
+        .descriptor_count = 1U,
+    });
+    shader_contract.bindings.push_back({
+        .set = 2U,
+        .binding = 2U,
+        .kind = render_graph::DescriptorBindingKind::storage_buffer,
+        .stage_flags = render_graph::shader_stage_fragment_flag,
+        .descriptor_count = 1U,
+    });
+    shader_contract.bindings.push_back({
+        .set = 2U,
+        .binding = 3U,
+        .kind = render_graph::DescriptorBindingKind::storage_buffer,
+        .stage_flags = render_graph::shader_stage_fragment_flag,
+        .descriptor_count = 1U,
+    });
+    shader_contract.bindings.push_back({
+        .set = 2U,
+        .binding = 4U,
+        .kind = render_graph::DescriptorBindingKind::uniform_buffer,
+        .stage_flags = render_graph::shader_stage_fragment_flag,
+        .descriptor_count = 1U,
+    });
+    builder_.SetPassShaderContract(pass_, std::move(shader_contract));
     builder_.AddBindlessTableBinding(pass_,
                                      0U,
                                      render_graph::DescriptorBindingKind::sampled_image_table,
@@ -566,6 +708,66 @@ void SurfaceRenderer2D::DescribeGraphDescriptorBindings(render_graph::RenderGrap
                                      render_graph::DescriptorBindingKind::sampler_table,
                                      sampler_table.value,
                                      render_graph::shader_stage_fragment_flag);
+    const std::uint32_t light_records_resolver_id =
+        builder_.RegisterExternalBufferBindingResolver({
+            .user_data = this,
+            .resolve_fn = &SurfaceRenderer2D::ResolveLightRecordsExternalBufferBinding,
+            .debug_name = "surface_2d.light_records",
+        });
+    builder_.AddExternalBufferBinding(pass_,
+                                      2U,
+                                      0U,
+                                      render_graph::DescriptorBindingKind::storage_buffer,
+                                      light_records_resolver_id,
+                                      render_graph::shader_stage_fragment_flag);
+    const std::uint32_t cluster_headers_resolver_id =
+        builder_.RegisterExternalBufferBindingResolver({
+            .user_data = this,
+            .resolve_fn = &SurfaceRenderer2D::ResolveClusterHeadersExternalBufferBinding,
+            .debug_name = "surface_2d.cluster_headers",
+        });
+    builder_.AddExternalBufferBinding(pass_,
+                                      2U,
+                                      1U,
+                                      render_graph::DescriptorBindingKind::storage_buffer,
+                                      cluster_headers_resolver_id,
+                                      render_graph::shader_stage_fragment_flag);
+    const std::uint32_t cluster_indices_resolver_id =
+        builder_.RegisterExternalBufferBindingResolver({
+            .user_data = this,
+            .resolve_fn = &SurfaceRenderer2D::ResolveClusterIndicesExternalBufferBinding,
+            .debug_name = "surface_2d.cluster_indices",
+        });
+    builder_.AddExternalBufferBinding(pass_,
+                                      2U,
+                                      2U,
+                                      render_graph::DescriptorBindingKind::storage_buffer,
+                                      cluster_indices_resolver_id,
+                                      render_graph::shader_stage_fragment_flag);
+    const std::uint32_t shadow_views_resolver_id =
+        builder_.RegisterExternalBufferBindingResolver({
+            .user_data = this,
+            .resolve_fn = &SurfaceRenderer2D::ResolveShadowViewsExternalBufferBinding,
+            .debug_name = "surface_2d.shadow_views",
+        });
+    builder_.AddExternalBufferBinding(pass_,
+                                      2U,
+                                      3U,
+                                      render_graph::DescriptorBindingKind::storage_buffer,
+                                      shadow_views_resolver_id,
+                                      render_graph::shader_stage_fragment_flag);
+    const std::uint32_t lighting_uniform_resolver_id =
+        builder_.RegisterExternalBufferBindingResolver({
+            .user_data = this,
+            .resolve_fn = &SurfaceRenderer2D::ResolveLightingUniformExternalBufferBinding,
+            .debug_name = "surface_2d.lighting_uniform",
+        });
+    builder_.AddExternalBufferBinding(pass_,
+                                      2U,
+                                      4U,
+                                      render_graph::DescriptorBindingKind::uniform_buffer,
+                                      lighting_uniform_resolver_id,
+                                      render_graph::shader_stage_fragment_flag);
 }
 
 void SurfaceRenderer2D::Record(const render::FrameRecordContext& record_context_) {
@@ -713,6 +915,9 @@ void SurfaceRenderer2D::RecordDrawBatches(VkCommandBuffer command_buffer_,
     push_constants.reserved1 = 0U;
     push_constants.reserved2 = 0U;
 
+    if (graph_context_ == nullptr) {
+        PrepareLightingDescriptorSetForFrame(active_frame_index);
+    }
     VkDescriptorSet frame_lighting_descriptor_set = VK_NULL_HANDLE;
     if (active_frame_index < frame_lighting_resources.size()) {
         frame_lighting_descriptor_set = frame_lighting_resources[active_frame_index].descriptor_set;
@@ -726,15 +931,19 @@ void SurfaceRenderer2D::RecordDrawBatches(VkCommandBuffer command_buffer_,
         throw std::runtime_error("SurfaceRenderer2D::RecordDrawBatches requires valid bindless descriptor sets");
     }
 
-    if (frame_lighting_descriptor_set == VK_NULL_HANDLE) {
+    if (graph_context_ == nullptr && frame_lighting_descriptor_set == VK_NULL_HANDLE) {
         stats.skipped_batch_count += static_cast<std::uint32_t>(runtime_scratch.draw_batches.size());
         return;
     }
+    const std::array<VkDescriptorSet, 3U> local_descriptor_sets{
+        bindless_sets[0U],
+        bindless_sets[1U],
+        frame_lighting_descriptor_set,
+    };
 
     const VkPipelineLayout pipeline_layout = pipeline_host->GetPipelineLayout(pipeline_layout_id);
     render::GraphicsPipelineId bound_pipeline{};
-    bool bindless_sets_bound = false;
-    bool lighting_set_bound = false;
+    bool descriptor_sets_bound = false;
     for (const ecs::Surface2DDrawBatch& batch : runtime_scratch.draw_batches) {
         if (batch.instance_count == 0U) {
             ++stats.skipped_batch_count;
@@ -763,40 +972,27 @@ void SurfaceRenderer2D::RecordDrawBatches(VkCommandBuffer command_buffer_,
                                sizeof(PushConstants),
                                &push_constants);
             bound_pipeline = pipeline_id;
-            bindless_sets_bound = false;
-            lighting_set_bound = false;
+            descriptor_sets_bound = false;
         }
 
-        if (!bindless_sets_bound) {
+        if (!descriptor_sets_bound) {
             if (graph_context_ != nullptr) {
                 graph_context_->BindCurrentPassDescriptorSets(VK_PIPELINE_BIND_POINT_GRAPHICS,
                                                               pipeline_layout,
                                                               0U,
-                                                              2U);
+                                                              3U);
             } else {
                 vkCmdBindDescriptorSets(command_buffer_,
                                         VK_PIPELINE_BIND_POINT_GRAPHICS,
                                         pipeline_layout,
                                         0U,
-                                        static_cast<std::uint32_t>(bindless_sets.size()),
-                                        bindless_sets.data(),
+                                        static_cast<std::uint32_t>(local_descriptor_sets.size()),
+                                        local_descriptor_sets.data(),
                                         0U,
                                         nullptr);
             }
-            bindless_sets_bound = true;
+            descriptor_sets_bound = true;
             ++stats.descriptor_set_bind_count;
-        }
-
-        if (!lighting_set_bound) {
-            vkCmdBindDescriptorSets(command_buffer_,
-                                    VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                    pipeline_layout,
-                                    2U,
-                                    1U,
-                                    &frame_lighting_descriptor_set,
-                                    0U,
-                                    nullptr);
-            lighting_set_bound = true;
             ++stats.light_descriptor_set_bind_count;
         }
 

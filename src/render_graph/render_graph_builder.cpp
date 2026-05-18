@@ -61,6 +61,8 @@ namespace {
         return "none";
     case DescriptorBindingSource::bindless_table:
         return "bindless_table";
+    case DescriptorBindingSource::external_buffer:
+        return "external_buffer";
     default:
         break;
     }
@@ -74,6 +76,10 @@ namespace {
         return "sampled_image_table";
     case DescriptorBindingKind::sampler_table:
         return "sampler_table";
+    case DescriptorBindingKind::storage_buffer:
+        return "storage_buffer";
+    case DescriptorBindingKind::uniform_buffer:
+        return "uniform_buffer";
     default:
         break;
     }
@@ -731,6 +737,25 @@ void RenderGraphBuilder::AddDependency(const PassHandle pass_,
     AppendUnique(target_pass.explicit_dependencies, dependency_);
 }
 
+std::uint32_t RenderGraphBuilder::RegisterExternalBufferBindingResolver(
+    ExternalBufferBindingResolver resolver_) {
+    if (resolver_.user_data == nullptr) {
+        throw std::invalid_argument(
+            "RenderGraphBuilder::RegisterExternalBufferBindingResolver requires non-null user data");
+    }
+    if (resolver_.resolve_fn == nullptr) {
+        throw std::invalid_argument(
+            "RenderGraphBuilder::RegisterExternalBufferBindingResolver requires a valid resolve function");
+    }
+    if (external_buffer_binding_resolvers.size() >=
+        static_cast<std::size_t>((std::numeric_limits<std::uint32_t>::max)() - 1U)) {
+        throw std::overflow_error(
+            "RenderGraphBuilder::RegisterExternalBufferBindingResolver overflowed resolver ids");
+    }
+    external_buffer_binding_resolvers.push_back(std::move(resolver_));
+    return static_cast<std::uint32_t>(external_buffer_binding_resolvers.size());
+}
+
 void RenderGraphBuilder::AddPassDescriptorBinding(
     const PassHandle pass_,
     const PassDescriptorBindingDesc& descriptor_binding_) {
@@ -857,8 +882,46 @@ void RenderGraphBuilder::AddBindlessTableBinding(
                              });
 }
 
+void RenderGraphBuilder::AddExternalBufferBinding(
+    const PassHandle pass_,
+    const std::uint32_t set_,
+    const std::uint32_t binding_,
+    const DescriptorBindingKind kind_,
+    const std::uint32_t resolver_id_,
+    const std::uint32_t stage_flags_) {
+    if (kind_ != DescriptorBindingKind::storage_buffer &&
+        kind_ != DescriptorBindingKind::uniform_buffer) {
+        throw std::invalid_argument(
+            "RenderGraphBuilder::AddExternalBufferBinding requires storage/uniform buffer kinds");
+    }
+    AddPassDescriptorBinding(pass_,
+                             PassDescriptorBindingDesc{
+                                 .set = set_,
+                                 .binding = binding_,
+                                 .source = DescriptorBindingSource::external_buffer,
+                                 .kind = kind_,
+                                 .stage_flags = stage_flags_,
+                             .source_id = resolver_id_,
+                         });
+}
+
+bool RenderGraphBuilder::HasPassDescriptorBinding(const PassHandle pass_,
+                                                  const std::uint32_t set_,
+                                                  const std::uint32_t binding_) const noexcept {
+    if (pass_.index >= passes.size()) {
+        return false;
+    }
+    const auto& target_pass = passes[pass_.index];
+    return std::any_of(target_pass.descriptor_bindings.begin(),
+                       target_pass.descriptor_bindings.end(),
+                       [&](const PassDescriptorBindingDesc& binding_desc_) {
+                           return binding_desc_.set == set_ &&
+                                  binding_desc_.binding == binding_;
+                       });
+}
+
 void RenderGraphBuilder::SetRasterPassDesc(const PassHandle pass_,
-                                          RasterPassDesc raster_pass_) {
+                                           RasterPassDesc raster_pass_) {
     PassNode& target_pass = RequirePass(pass_);
     target_pass.raster_pass = std::move(raster_pass_);
 }
@@ -1027,40 +1090,6 @@ CompiledRenderGraph RenderGraphBuilder::Compile() const {
             }
 
             const auto& shader_contract = *pass_.shader_contract;
-            for (const auto& expected_binding : shader_contract.bindings) {
-                const auto actual_it = std::find_if(
-                    compiled_pass.descriptor_bindings.begin(),
-                    compiled_pass.descriptor_bindings.end(),
-                    [&](const PassDescriptorBindingDesc& actual_) {
-                        return actual_.set == expected_binding.set &&
-                               actual_.binding == expected_binding.binding;
-                    });
-                if (actual_it == compiled_pass.descriptor_bindings.end()) {
-                    throw std::runtime_error(
-                        "RenderGraphBuilder::Compile pass '" + pass_.debug_name +
-                        "' is missing shader-contract binding set=" +
-                        std::to_string(expected_binding.set) + " binding=" +
-                        std::to_string(expected_binding.binding) + " from contract '" +
-                        shader_contract.debug_name + "'");
-                }
-                if (actual_it->kind != expected_binding.kind) {
-                    throw std::runtime_error(
-                        "RenderGraphBuilder::Compile pass '" + pass_.debug_name +
-                        "' has descriptor binding kind mismatch at set=" +
-                        std::to_string(expected_binding.set) + " binding=" +
-                        std::to_string(expected_binding.binding) + " for contract '" +
-                        shader_contract.debug_name + "'");
-                }
-                if (actual_it->stage_flags != expected_binding.stage_flags) {
-                    throw std::runtime_error(
-                        "RenderGraphBuilder::Compile pass '" + pass_.debug_name +
-                        "' has descriptor stage mismatch at set=" +
-                        std::to_string(expected_binding.set) + " binding=" +
-                        std::to_string(expected_binding.binding) + " for contract '" +
-                        shader_contract.debug_name + "'");
-                }
-            }
-
             for (const auto& actual_binding : compiled_pass.descriptor_bindings) {
                 const auto expected_it = std::find_if(
                     shader_contract.bindings.begin(),
@@ -1077,6 +1106,22 @@ CompiledRenderGraph RenderGraphBuilder::Compile() const {
                         std::to_string(actual_binding.binding) + " outside contract '" +
                         shader_contract.debug_name + "'");
                 }
+                if (expected_it->kind != actual_binding.kind) {
+                    throw std::runtime_error(
+                        "RenderGraphBuilder::Compile pass '" + pass_.debug_name +
+                        "' has descriptor binding kind mismatch at set=" +
+                        std::to_string(actual_binding.set) + " binding=" +
+                        std::to_string(actual_binding.binding) + " for contract '" +
+                        shader_contract.debug_name + "'");
+                }
+                if (expected_it->stage_flags != actual_binding.stage_flags) {
+                    throw std::runtime_error(
+                        "RenderGraphBuilder::Compile pass '" + pass_.debug_name +
+                        "' has descriptor stage mismatch at set=" +
+                        std::to_string(actual_binding.set) + " binding=" +
+                        std::to_string(actual_binding.binding) + " for contract '" +
+                        shader_contract.debug_name + "'");
+                }
             }
         }
         for (const auto dependency_ : dependencies[handle_.index]) {
@@ -1088,9 +1133,25 @@ CompiledRenderGraph RenderGraphBuilder::Compile() const {
             compiled_pass.writes.push_back(write_.access);
         }
         if (!compiled_pass.descriptor_bindings.empty()) {
+            std::vector<PassDescriptorBindingDesc> layout_bindings{};
+            if (pass_.shader_contract.has_value()) {
+                layout_bindings.reserve(pass_.shader_contract->bindings.size());
+                for (const auto& contract_binding : pass_.shader_contract->bindings) {
+                    layout_bindings.push_back({
+                        .set = contract_binding.set,
+                        .binding = contract_binding.binding,
+                        .source = DescriptorBindingSource::none,
+                        .kind = contract_binding.kind,
+                        .stage_flags = contract_binding.stage_flags,
+                        .source_id = 0U,
+                    });
+                }
+            } else {
+                layout_bindings = compiled_pass.descriptor_bindings;
+            }
             compiled.descriptor_plan.pass_layouts.push_back(PassDescriptorLayout{
                 .pass = handle_,
-                .bindings = compiled_pass.descriptor_bindings,
+                .bindings = std::move(layout_bindings),
             });
 
             DescriptorWriteBatch write_batch{};
@@ -1203,6 +1264,7 @@ CompiledRenderGraph RenderGraphBuilder::Compile() const {
         }
     }
 
+    compiled.external_buffer_binding_resolvers = external_buffer_binding_resolvers;
     compiled.barrier_plan = BuildBarrierPlan(compiled);
     return compiled;
 }
@@ -1210,6 +1272,7 @@ CompiledRenderGraph RenderGraphBuilder::Compile() const {
 void RenderGraphBuilder::Reset() noexcept {
     resources.clear();
     passes.clear();
+    external_buffer_binding_resolvers.clear();
 }
 
 RenderGraphBuilder::ResourceNode& RenderGraphBuilder::RequireResource(

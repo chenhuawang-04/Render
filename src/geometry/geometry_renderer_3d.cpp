@@ -2,6 +2,7 @@
 
 #include "vr/asset/texture_host.hpp"
 #include "vr/render_graph/graph_command_context.hpp"
+#include "vr/render_graph/render_graph_builder.hpp"
 #include "vr/ecs/system/transparency_render_policy.hpp"
 #include "vr/geometry/geometry_appearance_resolver.hpp"
 #include "vr/geometry/generated/geometry_3d_frag_spv.hpp"
@@ -10,6 +11,7 @@
 #include "vr/render/ibl_host.hpp"
 #include "vr/render/color_blend_state.hpp"
 #include "vr/render/render_loop_host.hpp"
+#include "vr/render/scene_3d_descriptor_contract.hpp"
 #include "vr/render/runtime_prepare_views.hpp"
 #include "vr/render/upload_host.hpp"
 #include "vr/resource/gpu_memory_host.hpp"
@@ -23,6 +25,7 @@
 #include <cstdint>
 #include <limits>
 #include <stdexcept>
+#include <type_traits>
 #include <utility>
 
 namespace vr::geometry {
@@ -33,6 +36,55 @@ void HashCombine64(std::uint64_t& hash_, std::uint64_t value_) noexcept {
     constexpr std::uint64_t k_hash_prime = 1099511628211ULL;
     hash_ ^= value_;
     hash_ *= k_hash_prime;
+}
+
+template<typename HandleT>
+[[nodiscard]] std::uintptr_t HandleBits(const HandleT handle_) noexcept {
+    if constexpr (std::is_pointer_v<HandleT>) {
+        return reinterpret_cast<std::uintptr_t>(handle_);
+    } else {
+        return static_cast<std::uintptr_t>(handle_);
+    }
+}
+
+[[nodiscard]] render_graph::ExternalBufferBindingPayload MakeExternalBufferBindingPayload(
+    const VkBuffer buffer_,
+    const VkDeviceSize offset_,
+    const VkDeviceSize range_) noexcept {
+    return render_graph::ExternalBufferBindingPayload{
+        .native_buffer = HandleBits(buffer_),
+        .offset_bytes = static_cast<std::uint64_t>(offset_),
+        .size_bytes = static_cast<std::uint64_t>(range_),
+    };
+}
+
+[[nodiscard]] render_graph::ExternalBufferBindingPayload MakeExternalBufferBindingPayload(
+    const light::LightShadowBufferRange& range_) noexcept {
+    return MakeExternalBufferBindingPayload(range_.buffer,
+                                            range_.offset,
+                                            range_.size_bytes);
+}
+
+[[nodiscard]] render::BindlessTableId ResolveSampledImageTableId(
+    const render::BindlessResourceSystem* bindless_resources_) noexcept {
+    if (bindless_resources_ != nullptr) {
+        const auto table_id = bindless_resources_->SampledImageTable();
+        if (table_id.IsValid()) {
+            return table_id;
+        }
+    }
+    return render::BindlessResourceSystem::SampledImageTableContractId();
+}
+
+[[nodiscard]] render::BindlessTableId ResolveSamplerTableId(
+    const render::BindlessResourceSystem* bindless_resources_) noexcept {
+    if (bindless_resources_ != nullptr) {
+        const auto table_id = bindless_resources_->SamplerTable();
+        if (table_id.IsValid()) {
+            return table_id;
+        }
+    }
+    return render::BindlessResourceSystem::SamplerTableContractId();
 }
 
 [[nodiscard]] render::AppearanceSampledSurfaceBinding3D
@@ -278,6 +330,160 @@ GeometryRenderer3D::BlendMode GeometryRenderer3D::ResolveBlendMode(
         break;
     }
     return BlendMode::opaque;
+}
+
+render_graph::ExternalBufferBindingPayload GeometryRenderer3D::ResolveLightRecordsExternalBufferBinding(
+    const void* user_data_) {
+    const auto* renderer = static_cast<const GeometryRenderer3D*>(user_data_);
+    if (renderer == nullptr ||
+        renderer->active_frame_index >= renderer->frame_lighting_resources.size()) {
+        throw std::runtime_error(
+            "GeometryRenderer3D graph light-record resolver requires prepared frame resources");
+    }
+    const FrameLightingResources& frame = renderer->frame_lighting_resources[renderer->active_frame_index];
+    if (frame.light_records.buffer == VK_NULL_HANDLE || frame.light_records.size_bytes == 0U) {
+        throw std::runtime_error(
+            "GeometryRenderer3D graph light-record resolver requires uploaded light buffers");
+    }
+    return MakeExternalBufferBindingPayload(frame.light_records);
+}
+
+render_graph::ExternalBufferBindingPayload GeometryRenderer3D::ResolveClusterHeadersExternalBufferBinding(
+    const void* user_data_) {
+    const auto* renderer = static_cast<const GeometryRenderer3D*>(user_data_);
+    if (renderer == nullptr ||
+        renderer->active_frame_index >= renderer->frame_lighting_resources.size()) {
+        throw std::runtime_error(
+            "GeometryRenderer3D graph cluster-header resolver requires prepared frame resources");
+    }
+    const FrameLightingResources& frame = renderer->frame_lighting_resources[renderer->active_frame_index];
+    if (frame.cluster_headers.buffer == VK_NULL_HANDLE || frame.cluster_headers.size_bytes == 0U) {
+        throw std::runtime_error(
+            "GeometryRenderer3D graph cluster-header resolver requires uploaded cluster headers");
+    }
+    return MakeExternalBufferBindingPayload(frame.cluster_headers);
+}
+
+render_graph::ExternalBufferBindingPayload GeometryRenderer3D::ResolveClusterIndicesExternalBufferBinding(
+    const void* user_data_) {
+    const auto* renderer = static_cast<const GeometryRenderer3D*>(user_data_);
+    if (renderer == nullptr ||
+        renderer->active_frame_index >= renderer->frame_lighting_resources.size()) {
+        throw std::runtime_error(
+            "GeometryRenderer3D graph cluster-index resolver requires prepared frame resources");
+    }
+    const FrameLightingResources& frame = renderer->frame_lighting_resources[renderer->active_frame_index];
+    if (frame.cluster_indices.buffer == VK_NULL_HANDLE || frame.cluster_indices.size_bytes == 0U) {
+        throw std::runtime_error(
+            "GeometryRenderer3D graph cluster-index resolver requires uploaded cluster indices");
+    }
+    return MakeExternalBufferBindingPayload(frame.cluster_indices);
+}
+
+render_graph::ExternalBufferBindingPayload GeometryRenderer3D::ResolveShadowViewsExternalBufferBinding(
+    const void* user_data_) {
+    const auto* renderer = static_cast<const GeometryRenderer3D*>(user_data_);
+    if (renderer == nullptr ||
+        renderer->active_frame_index >= renderer->frame_lighting_resources.size()) {
+        throw std::runtime_error(
+            "GeometryRenderer3D graph shadow-view resolver requires prepared frame resources");
+    }
+    const FrameLightingResources& frame = renderer->frame_lighting_resources[renderer->active_frame_index];
+    if (frame.shadow_views.buffer == VK_NULL_HANDLE || frame.shadow_views.size_bytes == 0U) {
+        throw std::runtime_error(
+            "GeometryRenderer3D graph shadow-view resolver requires uploaded shadow views");
+    }
+    return MakeExternalBufferBindingPayload(frame.shadow_views);
+}
+
+render_graph::ExternalBufferBindingPayload GeometryRenderer3D::ResolveLightingUniformExternalBufferBinding(
+    const void* user_data_) {
+    const auto* renderer = static_cast<const GeometryRenderer3D*>(user_data_);
+    if (renderer == nullptr ||
+        renderer->active_frame_index >= renderer->frame_lighting_resources.size()) {
+        throw std::runtime_error(
+            "GeometryRenderer3D graph lighting-uniform resolver requires prepared frame resources");
+    }
+    const FrameLightingResources& frame = renderer->frame_lighting_resources[renderer->active_frame_index];
+    if (frame.lighting_uniform.buffer == VK_NULL_HANDLE || frame.lighting_uniform.size_bytes == 0U) {
+        throw std::runtime_error(
+            "GeometryRenderer3D graph lighting-uniform resolver requires uploaded uniform buffer");
+    }
+    return MakeExternalBufferBindingPayload(frame.lighting_uniform);
+}
+
+render_graph::ExternalBufferBindingPayload GeometryRenderer3D::ResolveSkeletalComponentsExternalBufferBinding(
+    const void* user_data_) {
+    const auto* renderer = static_cast<const GeometryRenderer3D*>(user_data_);
+    if (renderer == nullptr ||
+        renderer->active_frame_index >= renderer->frame_lighting_resources.size()) {
+        throw std::runtime_error(
+            "GeometryRenderer3D graph skeletal-component resolver requires prepared frame resources");
+    }
+    const FrameLightingResources& frame = renderer->frame_lighting_resources[renderer->active_frame_index];
+    if (frame.skeletal_components.buffer == VK_NULL_HANDLE || frame.skeletal_component_count == 0U) {
+        throw std::runtime_error(
+            "GeometryRenderer3D graph skeletal-component resolver requires uploaded skeletal components");
+    }
+    return MakeExternalBufferBindingPayload(
+        frame.skeletal_components.buffer,
+        0U,
+        static_cast<VkDeviceSize>(frame.skeletal_component_count) * sizeof(GeometrySkeletalComponentGpu));
+}
+
+render_graph::ExternalBufferBindingPayload GeometryRenderer3D::ResolveSkeletalMatricesExternalBufferBinding(
+    const void* user_data_) {
+    const auto* renderer = static_cast<const GeometryRenderer3D*>(user_data_);
+    if (renderer == nullptr ||
+        renderer->active_frame_index >= renderer->frame_lighting_resources.size()) {
+        throw std::runtime_error(
+            "GeometryRenderer3D graph skeletal-matrix resolver requires prepared frame resources");
+    }
+    const FrameLightingResources& frame = renderer->frame_lighting_resources[renderer->active_frame_index];
+    if (frame.skeletal_matrices.buffer == VK_NULL_HANDLE || frame.skeletal_matrix_count == 0U) {
+        throw std::runtime_error(
+            "GeometryRenderer3D graph skeletal-matrix resolver requires uploaded skeletal matrices");
+    }
+    return MakeExternalBufferBindingPayload(
+        frame.skeletal_matrices.buffer,
+        0U,
+        static_cast<VkDeviceSize>(frame.skeletal_matrix_count) * sizeof(GeometrySkeletalMatrixGpu));
+}
+
+render_graph::ExternalBufferBindingPayload GeometryRenderer3D::ResolveAppearanceExternalBufferBinding(
+    const void* user_data_) {
+    const auto* renderer = static_cast<const GeometryRenderer3D*>(user_data_);
+    if (renderer == nullptr ||
+        renderer->active_frame_index >= renderer->frame_lighting_resources.size()) {
+        throw std::runtime_error(
+            "GeometryRenderer3D graph appearance resolver requires prepared frame resources");
+    }
+    const FrameLightingResources& frame = renderer->frame_lighting_resources[renderer->active_frame_index];
+    if (frame.appearance_records.buffer == VK_NULL_HANDLE || frame.appearance_record_count == 0U) {
+        throw std::runtime_error(
+            "GeometryRenderer3D graph appearance resolver requires uploaded appearance records");
+    }
+    return MakeExternalBufferBindingPayload(
+        frame.appearance_records.buffer,
+        0U,
+        static_cast<VkDeviceSize>(frame.appearance_record_count) *
+            sizeof(ecs::AppearanceGpuRecord<ecs::Dim3>));
+}
+
+render_graph::ExternalBufferBindingPayload GeometryRenderer3D::ResolveIblParamsExternalBufferBinding(
+    const void* user_data_) {
+    const auto* renderer = static_cast<const GeometryRenderer3D*>(user_data_);
+    if (renderer == nullptr || renderer->ibl_host == nullptr) {
+        throw std::runtime_error(
+            "GeometryRenderer3D graph IBL resolver requires initialized IBL host");
+    }
+    const render::DescriptorBufferBindingView binding =
+        renderer->ibl_host->ActiveParamsBufferBinding(renderer->active_frame_index);
+    if (binding.buffer == VK_NULL_HANDLE || binding.range == 0U) {
+        throw std::runtime_error(
+            "GeometryRenderer3D graph IBL resolver requires prepared IBL params buffer");
+    }
+    return MakeExternalBufferBindingPayload(binding.buffer, binding.offset, binding.range);
 }
 
 void GeometryRenderer3D::Initialize(const GeometryRenderer3DCreateInfo& create_info_) {
@@ -788,7 +994,6 @@ void GeometryRenderer3D::PrepareFrame(const render::GeometryRenderer3DPrepareVie
     if (geometry_components == nullptr || component_count == 0U) {
         appearance_source_record_scratch.clear();
         EnsureLightingResourcesForFrame(*context);
-        PrepareLightingDescriptorSetForFrame(active_frame_index);
         runtime_scratch.instances.clear();
         runtime_scratch.draw_batches.clear();
         runtime_stats = {};
@@ -876,7 +1081,6 @@ void GeometryRenderer3D::PrepareFrame(const render::GeometryRenderer3DPrepareVie
     }
 
     EnsureLightingResourcesForFrame(*context);
-    PrepareLightingDescriptorSetForFrame(active_frame_index);
 
     VkFormat active_color_format = swapchain_format;
     if (prepare_view_.render_target != nullptr &&
@@ -909,6 +1113,151 @@ void GeometryRenderer3D::PrepareFrame(const render::GeometryRenderer3DPrepareVie
         }
     }
 
+}
+
+void GeometryRenderer3D::DescribeGraphDescriptorBindings(render_graph::RenderGraphBuilder& builder_,
+                                                         const render_graph::PassHandle pass_) const {
+    if (!initialized) {
+        throw std::runtime_error(
+            "GeometryRenderer3D::DescribeGraphDescriptorBindings called before Initialize");
+    }
+
+    const auto sampled_image_table = ResolveSampledImageTableId(bindless_resources);
+    const auto sampler_table = ResolveSamplerTableId(bindless_resources);
+    builder_.SetPassShaderContract(
+        pass_,
+        render::BuildSharedScene3DShaderContract("geometry_3d.frag"));
+    builder_.AddBindlessTableBinding(pass_,
+                                     render::scene_3d_sampled_image_set,
+                                     render_graph::DescriptorBindingKind::sampled_image_table,
+                                     sampled_image_table.value,
+                                     render_graph::shader_stage_fragment_flag);
+    builder_.AddBindlessTableBinding(pass_,
+                                     render::scene_3d_sampler_set,
+                                     render_graph::DescriptorBindingKind::sampler_table,
+                                     sampler_table.value,
+                                     render_graph::shader_stage_fragment_flag);
+
+    const std::uint32_t light_records_resolver_id =
+        builder_.RegisterExternalBufferBindingResolver({
+            .user_data = this,
+            .resolve_fn = &GeometryRenderer3D::ResolveLightRecordsExternalBufferBinding,
+            .debug_name = "geometry_3d.light_records",
+        });
+    builder_.AddExternalBufferBinding(pass_,
+                                      render::scene_3d_shared_buffer_set,
+                                      render::scene_3d_light_records_binding,
+                                      render_graph::DescriptorBindingKind::storage_buffer,
+                                      light_records_resolver_id,
+                                      render_graph::shader_stage_fragment_flag);
+
+    const std::uint32_t cluster_headers_resolver_id =
+        builder_.RegisterExternalBufferBindingResolver({
+            .user_data = this,
+            .resolve_fn = &GeometryRenderer3D::ResolveClusterHeadersExternalBufferBinding,
+            .debug_name = "geometry_3d.cluster_headers",
+        });
+    builder_.AddExternalBufferBinding(pass_,
+                                      render::scene_3d_shared_buffer_set,
+                                      render::scene_3d_cluster_headers_binding,
+                                      render_graph::DescriptorBindingKind::storage_buffer,
+                                      cluster_headers_resolver_id,
+                                      render_graph::shader_stage_fragment_flag);
+
+    const std::uint32_t cluster_indices_resolver_id =
+        builder_.RegisterExternalBufferBindingResolver({
+            .user_data = this,
+            .resolve_fn = &GeometryRenderer3D::ResolveClusterIndicesExternalBufferBinding,
+            .debug_name = "geometry_3d.cluster_indices",
+        });
+    builder_.AddExternalBufferBinding(pass_,
+                                      render::scene_3d_shared_buffer_set,
+                                      render::scene_3d_cluster_indices_binding,
+                                      render_graph::DescriptorBindingKind::storage_buffer,
+                                      cluster_indices_resolver_id,
+                                      render_graph::shader_stage_fragment_flag);
+
+    const std::uint32_t shadow_views_resolver_id =
+        builder_.RegisterExternalBufferBindingResolver({
+            .user_data = this,
+            .resolve_fn = &GeometryRenderer3D::ResolveShadowViewsExternalBufferBinding,
+            .debug_name = "geometry_3d.shadow_views",
+        });
+    builder_.AddExternalBufferBinding(pass_,
+                                      render::scene_3d_shared_buffer_set,
+                                      render::scene_3d_shadow_views_binding,
+                                      render_graph::DescriptorBindingKind::storage_buffer,
+                                      shadow_views_resolver_id,
+                                      render_graph::shader_stage_fragment_flag);
+
+    const std::uint32_t lighting_uniform_resolver_id =
+        builder_.RegisterExternalBufferBindingResolver({
+            .user_data = this,
+            .resolve_fn = &GeometryRenderer3D::ResolveLightingUniformExternalBufferBinding,
+            .debug_name = "geometry_3d.lighting_uniform",
+        });
+    builder_.AddExternalBufferBinding(pass_,
+                                      render::scene_3d_shared_buffer_set,
+                                      render::scene_3d_lighting_uniform_binding,
+                                      render_graph::DescriptorBindingKind::uniform_buffer,
+                                      lighting_uniform_resolver_id,
+                                      render_graph::shader_stage_fragment_flag);
+
+    const std::uint32_t skeletal_components_resolver_id =
+        builder_.RegisterExternalBufferBindingResolver({
+            .user_data = this,
+            .resolve_fn = &GeometryRenderer3D::ResolveSkeletalComponentsExternalBufferBinding,
+            .debug_name = "geometry_3d.skeletal_components",
+        });
+    builder_.AddExternalBufferBinding(pass_,
+                                      render::scene_3d_shared_buffer_set,
+                                      render::scene_3d_skeletal_components_binding,
+                                      render_graph::DescriptorBindingKind::storage_buffer,
+                                      skeletal_components_resolver_id,
+                                      render_graph::shader_stage_vertex_flag);
+
+    const std::uint32_t skeletal_matrices_resolver_id =
+        builder_.RegisterExternalBufferBindingResolver({
+            .user_data = this,
+            .resolve_fn = &GeometryRenderer3D::ResolveSkeletalMatricesExternalBufferBinding,
+            .debug_name = "geometry_3d.skeletal_matrices",
+        });
+    builder_.AddExternalBufferBinding(pass_,
+                                      render::scene_3d_shared_buffer_set,
+                                      render::scene_3d_skeletal_matrices_binding,
+                                      render_graph::DescriptorBindingKind::storage_buffer,
+                                      skeletal_matrices_resolver_id,
+                                      render_graph::shader_stage_vertex_flag);
+
+    const std::uint32_t appearance_resolver_id =
+        builder_.RegisterExternalBufferBindingResolver({
+            .user_data = this,
+            .resolve_fn = &GeometryRenderer3D::ResolveAppearanceExternalBufferBinding,
+            .debug_name = "geometry_3d.appearance_records",
+        });
+    builder_.AddExternalBufferBinding(pass_,
+                                      render::scene_3d_shared_buffer_set,
+                                      render::scene_3d_geometry_appearance_binding,
+                                      render_graph::DescriptorBindingKind::storage_buffer,
+                                      appearance_resolver_id,
+                                      render_graph::shader_stage_fragment_flag);
+
+    if (!builder_.HasPassDescriptorBinding(pass_,
+                                           render::scene_3d_ibl_set,
+                                           render::scene_3d_ibl_params_binding)) {
+        const std::uint32_t ibl_params_resolver_id =
+            builder_.RegisterExternalBufferBindingResolver({
+                .user_data = this,
+                .resolve_fn = &GeometryRenderer3D::ResolveIblParamsExternalBufferBinding,
+                .debug_name = "geometry_3d.ibl_params",
+            });
+        builder_.AddExternalBufferBinding(pass_,
+                                          render::scene_3d_ibl_set,
+                                          render::scene_3d_ibl_params_binding,
+                                          render_graph::DescriptorBindingKind::uniform_buffer,
+                                          ibl_params_resolver_id,
+                                          render_graph::shader_stage_fragment_flag);
+    }
 }
 
 void GeometryRenderer3D::Record(const render::FrameRecordContext& record_context_) {
@@ -1103,6 +1452,8 @@ void GeometryRenderer3D::RecordInternal(const render::FrameRecordContext& record
                            sizeof(FramePushConstants),
                            &frame_push_constants);
     }
+
+    PrepareLightingDescriptorSetForFrame(active_frame_index);
 
     render::GraphicsPipelineId active_pipeline_id{};
     VkBuffer active_vertex_buffer = VK_NULL_HANDLE;
@@ -1379,18 +1730,6 @@ void GeometryRenderer3D::RecordGraphInternal(render_graph::GraphCommandContext& 
     AppearancePushConstants cached_sampling_push_constants{};
     std::uint32_t cached_geometry_id = 0U;
     const GeometryResourceHost::MeshRecord* cached_mesh = nullptr;
-    const VkDescriptorSet frame_lighting_descriptor_set =
-        (active_frame_index < frame_lighting_resources.size())
-            ? frame_lighting_resources[active_frame_index].descriptor_set
-            : VK_NULL_HANDLE;
-    const VkDescriptorSet frame_ibl_descriptor_set =
-        (ibl_host != nullptr) ? ibl_host->ActiveParamsDescriptorSet(active_frame_index) : VK_NULL_HANDLE;
-    const std::array<VkDescriptorSet, 4U> global_descriptor_sets{
-        bindless_resources != nullptr ? bindless_resources->SampledImageSet() : VK_NULL_HANDLE,
-        bindless_resources != nullptr ? bindless_resources->SamplerSet() : VK_NULL_HANDLE,
-        frame_lighting_descriptor_set,
-        frame_ibl_descriptor_set,
-    };
     bool shared_state_bound = false;
 
     if (instance_range.buffer != VK_NULL_HANDLE && !runtime_scratch.draw_batches.empty()) {
@@ -1477,19 +1816,10 @@ void GeometryRenderer3D::RecordGraphInternal(render_graph::GraphCommandContext& 
                 if (pipeline_layout == VK_NULL_HANDLE) {
                     throw std::runtime_error("GeometryRenderer3D::RecordGraphSceneStage requires valid pipeline layout");
                 }
-                for (const VkDescriptorSet descriptor_set : global_descriptor_sets) {
-                    if (descriptor_set == VK_NULL_HANDLE) {
-                        throw std::runtime_error("GeometryRenderer3D::RecordGraphSceneStage requires valid bindless, lighting, and IBL descriptor sets");
-                    }
-                }
-                vkCmdBindDescriptorSets(context_.CommandBuffer(),
-                                        VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                        pipeline_layout,
-                                        0U,
-                                        static_cast<std::uint32_t>(global_descriptor_sets.size()),
-                                        global_descriptor_sets.data(),
-                                        0U,
-                                        nullptr);
+                context_.BindCurrentPassDescriptorSets(VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                                       pipeline_layout,
+                                                       0U,
+                                                       4U);
                 shared_state_bound = true;
                 ++stats.descriptor_set_bind_count;
                 ++stats.light_descriptor_set_bind_count;
@@ -1599,47 +1929,8 @@ void GeometryRenderer3D::EnsureLightingDescriptorObjects(VulkanContext& context_
         return;
     }
 
-    render::DescriptorSetLayoutDesc layout_desc{};
-    VkDescriptorSetLayoutBinding binding{};
-    binding.descriptorCount = 1U;
-    binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-    binding.pImmutableSamplers = nullptr;
-
-    binding.binding = 0U;
-    binding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    layout_desc.bindings.push_back(binding);
-
-    binding.binding = 1U;
-    binding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    layout_desc.bindings.push_back(binding);
-
-    binding.binding = 2U;
-    binding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    layout_desc.bindings.push_back(binding);
-
-    binding.binding = 3U;
-    binding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    layout_desc.bindings.push_back(binding);
-
-    binding.binding = 4U;
-    binding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    layout_desc.bindings.push_back(binding);
-
-    binding.binding = 5U;
-    binding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    binding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
-    layout_desc.bindings.push_back(binding);
-
-    binding.binding = 6U;
-    binding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    binding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
-    layout_desc.bindings.push_back(binding);
-
-    binding.binding = 7U;
-    binding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-    layout_desc.bindings.push_back(binding);
-
+    const render::DescriptorSetLayoutDesc layout_desc =
+        render::BuildSharedScene3DBufferLayoutDesc();
     lighting_descriptor_layout_id = descriptor_host_.RegisterLayout(context_, layout_desc);
 }
 

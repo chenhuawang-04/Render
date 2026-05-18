@@ -37,6 +37,12 @@ struct DescriptorSetLayoutDesc {
     VkDescriptorSetLayoutCreateFlags flags = 0U;
 };
 
+struct DescriptorBufferBindingView {
+    VkBuffer buffer = VK_NULL_HANDLE;
+    VkDeviceSize offset = 0U;
+    VkDeviceSize range = 0U;
+};
+
 struct DescriptorBufferWrite {
     uint32_t binding = 0U;
     uint32_t array_element = 0U;

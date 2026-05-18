@@ -226,6 +226,16 @@ private:
 
     [[nodiscard]] static std::size_t BlendModeIndex(BlendModeKind mode_) noexcept;
     [[nodiscard]] static BlendModeKind ResolveBlendModeFromBatchParams(std::uint32_t params_) noexcept;
+    [[nodiscard]] static render_graph::ExternalBufferBindingPayload ResolveLightRecordsExternalBufferBinding(
+        const void* user_data_);
+    [[nodiscard]] static render_graph::ExternalBufferBindingPayload ResolveClusterHeadersExternalBufferBinding(
+        const void* user_data_);
+    [[nodiscard]] static render_graph::ExternalBufferBindingPayload ResolveClusterIndicesExternalBufferBinding(
+        const void* user_data_);
+    [[nodiscard]] static render_graph::ExternalBufferBindingPayload ResolveShadowViewsExternalBufferBinding(
+        const void* user_data_);
+    [[nodiscard]] static render_graph::ExternalBufferBindingPayload ResolveLightingUniformExternalBufferBinding(
+        const void* user_data_);
 
     void EnsurePipelineObjects(VulkanContext& context_,
                                render::DescriptorHost& descriptor_host_,
