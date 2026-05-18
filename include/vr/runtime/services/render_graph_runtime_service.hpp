@@ -64,6 +64,7 @@ public:
         has_compiled_graph = false;
         frame_snapshot = std::monostate{};
         direct_imported_textures.clear();
+        strict_graph_only_record_required = false;
     }
 
     template<typename ContextT>
@@ -303,6 +304,14 @@ public:
         return graph_only_record_path_enabled;
     }
 
+    void RequireStrictGraphOnlyRecord(const bool value_ = true) noexcept {
+        strict_graph_only_record_required = value_;
+    }
+
+    [[nodiscard]] bool StrictGraphOnlyRecordRequired() const noexcept {
+        return strict_graph_only_record_required;
+    }
+
     [[nodiscard]] bool SupportsGraphOnlyRecord(const VulkanContext& device_) const noexcept {
         return record_execution_enabled &&
                graph_only_record_path_enabled &&
@@ -431,6 +440,7 @@ private:
     bool has_compiled_graph = false;
     bool record_execution_enabled = false;
     bool graph_only_record_path_enabled = false;
+    bool strict_graph_only_record_required = false;
     FrameSnapshotVariant frame_snapshot{};
     std::vector<ImportedTextureBinding> direct_imported_textures{};
 };
