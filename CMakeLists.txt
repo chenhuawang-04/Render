@@ -504,6 +504,7 @@ add_library(vulkan_init STATIC
     src/animation/animation_skeletal_host.cpp
     src/animation/animation_vertex_deform_host.cpp
     src/asset/texture_host.cpp
+    src/render_graph/alias_allocator.cpp
     src/render_graph/barrier_plan.cpp
     src/render_graph/render_graph_builder.cpp
     src/render_graph/render_graph_executor.cpp

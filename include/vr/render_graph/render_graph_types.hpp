@@ -150,8 +150,9 @@ struct TextureDesc final {
     std::uint32_t mip_level_count = 1U;
     std::uint32_t array_layer_count = 1U;
     SampleCount sample_count = SampleCount::x1;
-    bool allow_alias = true;
+    bool allow_alias = false;
     bool clear_on_first_use = false;
+    bool prefer_lazy_memory = false;
 };
 
 struct BufferDesc final {

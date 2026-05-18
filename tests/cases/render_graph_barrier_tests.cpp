@@ -195,6 +195,7 @@ VR_TEST_CASE(RenderGraphBarrierPlanner_reports_alias_candidates_for_non_overlapp
             .format = vr::render_graph::TextureFormat::r8g8b8a8_unorm,
             .extent = {.width = 128U, .height = 128U, .depth = 1U},
             .usage = vr::render_graph::texture_usage_color_attachment_flag,
+            .allow_alias = true,
         });
     const auto temp_b = builder.CreateTexture(
         "temp_b",
@@ -202,6 +203,7 @@ VR_TEST_CASE(RenderGraphBarrierPlanner_reports_alias_candidates_for_non_overlapp
             .format = vr::render_graph::TextureFormat::r8g8b8a8_unorm,
             .extent = {.width = 128U, .height = 128U, .depth = 1U},
             .usage = vr::render_graph::texture_usage_color_attachment_flag,
+            .allow_alias = true,
         });
 
     const auto pass_a = builder.AddPass("pass_a");

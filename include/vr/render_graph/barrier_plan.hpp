@@ -1,5 +1,6 @@
 #pragma once
 
+#include "vr/render_graph/alias_allocator.hpp"
 #include "vr/render_graph/render_graph_types.hpp"
 
 #include <string>
@@ -53,26 +54,6 @@ struct QueueSubmitBatch final {
     std::vector<std::uint32_t> signal_dependency_indices{};
     std::vector<std::uint32_t> barrier_batch_indices{};
     bool contains_host_boundary = false;
-};
-
-struct AliasCandidate final {
-    ResourceHandle first{};
-    ResourceHandle second{};
-    std::string first_debug_name{};
-    std::string second_debug_name{};
-    ResourceKind kind = ResourceKind::buffer;
-    bool same_compatibility_class = false;
-    bool overlapping_liveness = false;
-    bool aliasable = false;
-};
-
-struct AliasBarrierDecision final {
-    ResourceHandle previous{};
-    ResourceHandle next{};
-    std::string previous_debug_name{};
-    std::string next_debug_name{};
-    bool required = false;
-    bool realized = false;
 };
 
 struct BarrierPlan final {

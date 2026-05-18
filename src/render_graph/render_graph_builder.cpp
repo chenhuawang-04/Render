@@ -317,6 +317,114 @@ void AppendJsonBindlessAllocation(std::ostringstream& oss_,
     return oss.str();
 }
 
+void AppendTransientAllocationJson(std::ostringstream& oss_,
+                                   const TransientAllocationPlan& plan_) {
+    oss_ << "{\n";
+    oss_ << "    \"records\": [";
+    for (std::size_t record_index = 0; record_index < plan_.records.size(); ++record_index) {
+        if (record_index != 0U) {
+            oss_ << ", ";
+        }
+        const auto& record_ = plan_.records[record_index];
+        oss_ << "{\"resourceIndex\": " << record_.resource.index
+             << ", \"name\": \"" << EscapeJsonString(record_.debug_name) << "\""
+             << ", \"kind\": \"" << ResourceKindToString(record_.kind) << "\""
+             << ", \"lifetime\": \"" << ResourceLifetimeToString(record_.lifetime) << "\""
+             << ", \"eligible\": " << (record_.eligible ? "true" : "false")
+             << ", \"firstPassOrder\": " << record_.first_pass_order
+             << ", \"lastPassOrder\": " << record_.last_pass_order
+             << ", \"pageIndex\": " << record_.page_index
+             << ", \"pageOffsetBytes\": " << record_.page_offset_bytes
+             << ", \"aliasGroup\": " << record_.alias_group
+             << ", \"aliased\": " << (record_.aliased ? "true" : "false")
+             << ", \"footprint\": {"
+             << "\"sizeBytes\": " << record_.footprint.size_bytes
+             << ", \"alignmentBytes\": " << record_.footprint.alignment_bytes
+             << ", \"memoryTypeBits\": " << record_.footprint.memory_type_bits
+             << "}"
+             << ", \"rejectionReason\": \"" << EscapeJsonString(record_.rejection_reason) << "\"}";
+    }
+    oss_ << "],\n";
+
+    oss_ << "    \"pages\": [";
+    for (std::size_t page_index = 0; page_index < plan_.pages.size(); ++page_index) {
+        if (page_index != 0U) {
+            oss_ << ", ";
+        }
+        const auto& page_ = plan_.pages[page_index];
+        oss_ << "{\"pageIndex\": " << page_.page_index
+             << ", \"kind\": \"" << ResourceKindToString(page_.kind) << "\""
+             << ", \"sizeBytes\": " << page_.size_bytes
+             << ", \"alignmentBytes\": " << page_.alignment_bytes
+             << ", \"resources\": [";
+        for (std::size_t resource_index = 0; resource_index < page_.resources.size(); ++resource_index) {
+            if (resource_index != 0U) {
+                oss_ << ", ";
+            }
+            oss_ << page_.resources[resource_index].index;
+        }
+        oss_ << "]}";
+    }
+    oss_ << "],\n";
+
+    oss_ << "    \"timeline\": {\n";
+    oss_ << "      \"logicalTotalBytes\": " << plan_.timeline.logical_total_bytes << ",\n";
+    oss_ << "      \"physicalTotalBytes\": " << plan_.timeline.physical_total_bytes << ",\n";
+    oss_ << "      \"peakLogicalLiveBytes\": " << plan_.timeline.peak_logical_live_bytes << ",\n";
+    oss_ << "      \"peakLiveBytes\": " << plan_.timeline.peak_live_bytes << ",\n";
+    oss_ << "      \"savedBytes\": " << plan_.timeline.saved_bytes << ",\n";
+    oss_ << "      \"transientResourceCount\": " << plan_.timeline.transient_resource_count << ",\n";
+    oss_ << "      \"eligibleResourceCount\": " << plan_.timeline.eligible_resource_count << ",\n";
+    oss_ << "      \"aliasedResourceCount\": " << plan_.timeline.aliased_resource_count << ",\n";
+    oss_ << "      \"pageCount\": " << plan_.timeline.page_count << ",\n";
+    oss_ << "      \"aliasBarrierCount\": " << plan_.timeline.alias_barrier_count << ",\n";
+    oss_ << "      \"samples\": [";
+    for (std::size_t sample_index = 0; sample_index < plan_.timeline.samples.size(); ++sample_index) {
+        if (sample_index != 0U) {
+            oss_ << ", ";
+        }
+        const auto& sample_ = plan_.timeline.samples[sample_index];
+        oss_ << "{\"passOrder\": " << sample_.pass_order
+             << ", \"logicalLiveBytes\": " << sample_.logical_live_bytes
+             << ", \"physicalLiveBytes\": " << sample_.physical_live_bytes
+             << ", \"livePageCount\": " << sample_.live_page_count << "}";
+    }
+    oss_ << "]\n";
+    oss_ << "    },\n";
+
+    oss_ << "    \"aliasCandidates\": [";
+    for (std::size_t candidate_index = 0; candidate_index < plan_.alias_candidates.size(); ++candidate_index) {
+        if (candidate_index != 0U) {
+            oss_ << ", ";
+        }
+        const auto& candidate_ = plan_.alias_candidates[candidate_index];
+        oss_ << "{\"firstResourceIndex\": " << candidate_.first.index
+             << ", \"secondResourceIndex\": " << candidate_.second.index
+             << ", \"aliasable\": " << (candidate_.aliasable ? "true" : "false")
+             << ", \"sameCompatibilityClass\": " << (candidate_.same_compatibility_class ? "true" : "false")
+             << ", \"overlappingLiveness\": " << (candidate_.overlapping_liveness ? "true" : "false")
+             << ", \"nonAliasReason\": \"" << EscapeJsonString(candidate_.non_alias_reason) << "\"}";
+    }
+    oss_ << "],\n";
+
+    oss_ << "    \"aliasBarriers\": [";
+    for (std::size_t barrier_index = 0; barrier_index < plan_.alias_barriers.size(); ++barrier_index) {
+        if (barrier_index != 0U) {
+            oss_ << ", ";
+        }
+        const auto& barrier_ = plan_.alias_barriers[barrier_index];
+        oss_ << "{\"previousResourceIndex\": " << barrier_.previous.index
+             << ", \"nextResourceIndex\": " << barrier_.next.index
+             << ", \"pageIndex\": " << barrier_.page_index
+             << ", \"previousLastPassOrder\": " << barrier_.previous_last_pass_order
+             << ", \"nextFirstPassOrder\": " << barrier_.next_first_pass_order
+             << ", \"required\": " << (barrier_.required ? "true" : "false")
+             << ", \"realized\": " << (barrier_.realized ? "true" : "false") << "}";
+    }
+    oss_ << "]\n";
+    oss_ << "  }";
+}
+
 } // namespace
 
 const CompiledPass* CompiledRenderGraph::FindPass(const PassHandle handle_) const noexcept {
@@ -376,6 +484,27 @@ std::string CompiledRenderGraph::BuildDebugString() const {
         oss << "resource=" << range_.debug_name
             << " first=" << range_.first_pass_order
             << " last=" << range_.last_pass_order << '\n';
+    }
+
+    oss << "transient_allocation_records=" << transient_allocation_plan.records.size() << '\n';
+    oss << "transient_allocation_pages=" << transient_allocation_plan.pages.size() << '\n';
+    oss << "transient_logical_total_bytes=" << transient_allocation_plan.timeline.logical_total_bytes << '\n';
+    oss << "transient_physical_total_bytes=" << transient_allocation_plan.timeline.physical_total_bytes << '\n';
+    oss << "transient_peak_live_bytes=" << transient_allocation_plan.timeline.peak_live_bytes << '\n';
+    oss << "transient_saved_bytes=" << transient_allocation_plan.timeline.saved_bytes << '\n';
+    for (const auto& page_ : transient_allocation_plan.pages) {
+        oss << "transient_page=" << page_.page_index
+            << " kind=" << ResourceKindToString(page_.kind)
+            << " size=" << page_.size_bytes
+            << " alignment=" << page_.alignment_bytes
+            << " resources=";
+        for (std::size_t index = 0; index < page_.resources.size(); ++index) {
+            if (index != 0U) {
+                oss << ',';
+            }
+            oss << page_.resources[index].index;
+        }
+        oss << '\n';
     }
 
     oss << barrier_plan.BuildDebugString();
@@ -596,6 +725,9 @@ std::string CompiledRenderGraph::BuildJson() const {
     }
     oss << "]\n";
     oss << "  },\n";
+    oss << "  \"transientAllocationPlan\": ";
+    AppendTransientAllocationJson(oss, transient_allocation_plan);
+    oss << ",\n";
     oss << "  \"barrierPlan\": " << barrier_plan.BuildJson() << "\n";
     oss << "}\n";
     return oss.str();
@@ -1265,6 +1397,7 @@ CompiledRenderGraph RenderGraphBuilder::Compile() const {
     }
 
     compiled.external_buffer_binding_resolvers = external_buffer_binding_resolvers;
+    compiled.transient_allocation_plan = BuildTransientAllocationPlan(compiled);
     compiled.barrier_plan = BuildBarrierPlan(compiled);
     return compiled;
 }

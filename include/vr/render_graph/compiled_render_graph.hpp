@@ -1,5 +1,6 @@
 #pragma once
 
+#include "vr/render_graph/alias_allocator.hpp"
 #include "vr/render_graph/barrier_plan.hpp"
 #include "vr/render_graph/render_graph_types.hpp"
 
@@ -71,6 +72,10 @@ public:
         return barrier_plan;
     }
 
+    [[nodiscard]] const TransientAllocationPlan& TransientAllocations() const noexcept {
+        return transient_allocation_plan;
+    }
+
     [[nodiscard]] const DescriptorBindingPlan& DescriptorPlan() const noexcept {
         return descriptor_plan;
     }
@@ -109,6 +114,7 @@ private:
     std::vector<CompiledResource> resources{};
     std::vector<PassHandle> execution_order{};
     std::vector<CompiledResourceVersionLiveness> liveness_ranges{};
+    TransientAllocationPlan transient_allocation_plan{};
     BarrierPlan barrier_plan{};
     DescriptorBindingPlan descriptor_plan{};
     std::vector<ExternalBufferBindingResolver> external_buffer_binding_resolvers{};

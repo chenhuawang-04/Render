@@ -163,6 +163,22 @@ VR_TEST_CASE(RenderGraphVulkanBackend_builds_vulkan_create_infos_from_graph_desc
     VR_CHECK(buffer_create_info.persistently_mapped);
 }
 
+VR_TEST_CASE(RenderGraphVulkanBackend_lazy_memory_preference_does_not_fake_backend_policy,
+             "unit;core;render_graph;vulkan") {
+    const vr::render_graph::TextureDesc texture_desc{
+        .dimension = vr::render_graph::TextureDimension::image_2d,
+        .format = vr::render_graph::TextureFormat::r16g16b16a16_sfloat,
+        .extent = {.width = 320U, .height = 180U, .depth = 1U},
+        .usage = vr::render_graph::texture_usage_sampled_flag |
+                 vr::render_graph::texture_usage_color_attachment_flag,
+        .prefer_lazy_memory = true,
+    };
+
+    const auto target_desc = vr::render_graph::VulkanResourceTable::BuildRenderTargetDesc(texture_desc);
+
+    VR_CHECK(target_desc.memory_policy == vr::render::RenderTargetMemoryPolicy::auto_select);
+}
+
 VR_TEST_CASE(RenderGraphVulkanBackend_maps_access_kinds_to_sync2_metadata,
              "unit;core;render_graph;vulkan") {
     const vr::render_graph::CompiledResource color_resource{

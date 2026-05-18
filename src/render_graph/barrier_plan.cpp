@@ -16,12 +16,6 @@ struct LastAccessState final {
     bool valid = false;
 };
 
-struct ResourceAggregateLiveness final {
-    std::uint32_t first_pass_order = invalid_render_graph_index;
-    std::uint32_t last_pass_order = invalid_render_graph_index;
-    bool valid = false;
-};
-
 [[nodiscard]] const char* QueueClassToString(const QueueClass queue_) noexcept {
     switch (queue_) {
     case QueueClass::graphics:
@@ -246,70 +240,6 @@ void AppendUniqueIndex(std::vector<std::uint32_t>& values_,
     }
 }
 
-[[nodiscard]] bool TextureCompatibilityClassMatches(const CompiledResource& lhs_,
-                                                    const CompiledResource& rhs_) noexcept {
-    return lhs_.texture.dimension == rhs_.texture.dimension &&
-           lhs_.texture.format == rhs_.texture.format &&
-           lhs_.texture.extent.width == rhs_.texture.extent.width &&
-           lhs_.texture.extent.height == rhs_.texture.extent.height &&
-           lhs_.texture.extent.depth == rhs_.texture.extent.depth &&
-           lhs_.texture.mip_level_count == rhs_.texture.mip_level_count &&
-           lhs_.texture.array_layer_count == rhs_.texture.array_layer_count &&
-           lhs_.texture.sample_count == rhs_.texture.sample_count;
-}
-
-[[nodiscard]] bool BufferCompatibilityClassMatches(const CompiledResource& lhs_,
-                                                   const CompiledResource& rhs_) noexcept {
-    return lhs_.buffer.size_bytes == rhs_.buffer.size_bytes;
-}
-
-[[nodiscard]] bool CompatibilityClassMatches(const CompiledResource& lhs_,
-                                             const CompiledResource& rhs_) noexcept {
-    if (lhs_.kind != rhs_.kind) {
-        return false;
-    }
-    if (lhs_.kind == ResourceKind::texture) {
-        return TextureCompatibilityClassMatches(lhs_, rhs_);
-    }
-    return BufferCompatibilityClassMatches(lhs_, rhs_);
-}
-
-[[nodiscard]] bool ResourceAllowsAlias(const CompiledResource& resource_) noexcept {
-    if (resource_.kind == ResourceKind::texture) {
-        return resource_.texture.allow_alias;
-    }
-    return resource_.buffer.allow_alias;
-}
-
-[[nodiscard]] ResourceAggregateLiveness ResolveAggregateLiveness(
-    const CompiledRenderGraph& compiled_graph_,
-    const ResourceHandle resource_) noexcept {
-    ResourceAggregateLiveness aggregate{};
-    for (const auto& range_ : compiled_graph_.LivenessRanges()) {
-        if (range_.version.resource_index != resource_.index) {
-            continue;
-        }
-        if (!aggregate.valid) {
-            aggregate.first_pass_order = range_.first_pass_order;
-            aggregate.last_pass_order = range_.last_pass_order;
-            aggregate.valid = true;
-            continue;
-        }
-        aggregate.first_pass_order = (std::min)(aggregate.first_pass_order, range_.first_pass_order);
-        aggregate.last_pass_order = (std::max)(aggregate.last_pass_order, range_.last_pass_order);
-    }
-    return aggregate;
-}
-
-[[nodiscard]] bool LivenessOverlaps(const ResourceAggregateLiveness& lhs_,
-                                    const ResourceAggregateLiveness& rhs_) noexcept {
-    if (!lhs_.valid || !rhs_.valid) {
-        return false;
-    }
-    return !(lhs_.last_pass_order < rhs_.first_pass_order ||
-             rhs_.last_pass_order < lhs_.first_pass_order);
-}
-
 } // namespace
 
 std::string BarrierPlan::BuildDebugString() const {
@@ -372,13 +302,20 @@ std::string BarrierPlan::BuildDebugString() const {
             << " kind=" << ResourceKindToString(candidate_.kind)
             << " same_class=" << (candidate_.same_compatibility_class ? 1 : 0)
             << " overlap=" << (candidate_.overlapping_liveness ? 1 : 0)
-            << " aliasable=" << (candidate_.aliasable ? 1 : 0) << '\n';
+            << " aliasable=" << (candidate_.aliasable ? 1 : 0);
+        if (!candidate_.non_alias_reason.empty()) {
+            oss << " reason=" << candidate_.non_alias_reason;
+        }
+        oss << '\n';
     }
 
     oss << "alias_barriers=" << alias_barriers.size() << '\n';
     for (const auto& alias_barrier_ : alias_barriers) {
         oss << "alias_barrier=" << alias_barrier_.previous_debug_name
             << " -> " << alias_barrier_.next_debug_name
+            << " page=" << alias_barrier_.page_index
+            << " last=" << alias_barrier_.previous_last_pass_order
+            << " next_first=" << alias_barrier_.next_first_pass_order
             << " required=" << (alias_barrier_.required ? 1 : 0)
             << " realized=" << (alias_barrier_.realized ? 1 : 0) << '\n';
     }
@@ -525,7 +462,8 @@ std::string BarrierPlan::BuildJson() const {
         oss << "      \"kind\": \"" << ResourceKindToString(candidate_.kind) << "\",\n";
         oss << "      \"sameCompatibilityClass\": " << (candidate_.same_compatibility_class ? "true" : "false") << ",\n";
         oss << "      \"overlappingLiveness\": " << (candidate_.overlapping_liveness ? "true" : "false") << ",\n";
-        oss << "      \"aliasable\": " << (candidate_.aliasable ? "true" : "false") << '\n';
+        oss << "      \"aliasable\": " << (candidate_.aliasable ? "true" : "false") << ",\n";
+        oss << "      \"nonAliasReason\": \"" << candidate_.non_alias_reason << "\"\n";
         oss << "    }";
         if (candidate_index + 1U != alias_candidates.size()) {
             oss << ',';
@@ -542,6 +480,9 @@ std::string BarrierPlan::BuildJson() const {
         oss << "      \"nextResourceIndex\": " << alias_barrier_.next.index << ",\n";
         oss << "      \"previousName\": \"" << alias_barrier_.previous_debug_name << "\",\n";
         oss << "      \"nextName\": \"" << alias_barrier_.next_debug_name << "\",\n";
+        oss << "      \"previousLastPassOrder\": " << alias_barrier_.previous_last_pass_order << ",\n";
+        oss << "      \"nextFirstPassOrder\": " << alias_barrier_.next_first_pass_order << ",\n";
+        oss << "      \"pageIndex\": " << alias_barrier_.page_index << ",\n";
         oss << "      \"required\": " << (alias_barrier_.required ? "true" : "false") << ",\n";
         oss << "      \"realized\": " << (alias_barrier_.realized ? "true" : "false") << '\n';
         oss << "    }";
@@ -727,48 +668,8 @@ BarrierPlan BuildBarrierPlan(const CompiledRenderGraph& compiled_graph_) {
         }
     }
 
-    for (std::size_t lhs_index = 0U; lhs_index < compiled_graph_.Resources().size(); ++lhs_index) {
-        const auto& lhs_resource = compiled_graph_.Resources()[lhs_index];
-        if (lhs_resource.lifetime != ResourceLifetime::transient ||
-            !ResourceAllowsAlias(lhs_resource)) {
-            continue;
-        }
-        const auto lhs_liveness = ResolveAggregateLiveness(compiled_graph_, lhs_resource.handle);
-        for (std::size_t rhs_index = lhs_index + 1U;
-             rhs_index < compiled_graph_.Resources().size();
-             ++rhs_index) {
-            const auto& rhs_resource = compiled_graph_.Resources()[rhs_index];
-            if (rhs_resource.lifetime != ResourceLifetime::transient ||
-                !ResourceAllowsAlias(rhs_resource)) {
-                continue;
-            }
-
-            const bool same_class = CompatibilityClassMatches(lhs_resource, rhs_resource);
-            const bool overlapping = LivenessOverlaps(lhs_liveness,
-                                                      ResolveAggregateLiveness(compiled_graph_, rhs_resource.handle));
-            const bool aliasable = same_class && !overlapping;
-            plan.alias_candidates.push_back(AliasCandidate{
-                .first = lhs_resource.handle,
-                .second = rhs_resource.handle,
-                .first_debug_name = lhs_resource.debug_name,
-                .second_debug_name = rhs_resource.debug_name,
-                .kind = lhs_resource.kind,
-                .same_compatibility_class = same_class,
-                .overlapping_liveness = overlapping,
-                .aliasable = aliasable,
-            });
-            if (aliasable) {
-                plan.alias_barriers.push_back(AliasBarrierDecision{
-                    .previous = lhs_resource.handle,
-                    .next = rhs_resource.handle,
-                    .previous_debug_name = lhs_resource.debug_name,
-                    .next_debug_name = rhs_resource.debug_name,
-                    .required = true,
-                    .realized = false,
-                });
-            }
-        }
-    }
+    plan.alias_candidates = compiled_graph_.TransientAllocations().alias_candidates;
+    plan.alias_barriers = compiled_graph_.TransientAllocations().alias_barriers;
 
     return plan;
 }

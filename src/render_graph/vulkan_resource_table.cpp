@@ -18,7 +18,8 @@ namespace {
            lhs_.array_layer_count == rhs_.array_layer_count &&
            lhs_.sample_count == rhs_.sample_count &&
            lhs_.allow_alias == rhs_.allow_alias &&
-           lhs_.clear_on_first_use == rhs_.clear_on_first_use;
+           lhs_.clear_on_first_use == rhs_.clear_on_first_use &&
+           lhs_.prefer_lazy_memory == rhs_.prefer_lazy_memory;
 }
 
 [[nodiscard]] bool BufferDescsEqual(const BufferDesc& lhs_,
@@ -396,6 +397,9 @@ render::RenderTargetDesc VulkanResourceTable::BuildRenderTargetDesc(
     target_desc.mip_levels = desc_.mip_level_count;
     target_desc.array_layers = desc_.array_layer_count;
     target_desc.color_encoding = render::RenderTargetColorEncoding::linear;
+    // prefer_lazy_memory currently stays as render-graph allocation intent only.
+    // Do not lower it into backend memory_policy until RenderTargetHost can
+    // realize or explicitly diagnose that policy during actual image allocation.
     target_desc.memory_policy = render::RenderTargetMemoryPolicy::auto_select;
     target_desc.allow_uav = HasTextureUsageFlag(desc_.usage, texture_usage_storage_flag);
     target_desc.allow_alias = desc_.allow_alias;
