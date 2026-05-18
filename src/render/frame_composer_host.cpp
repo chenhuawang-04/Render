@@ -6,6 +6,41 @@
 
 namespace vr::render {
 
+namespace {
+
+[[nodiscard]] constexpr render_graph::TextureFormat ResolveGraphTextureFormat(
+    const VkFormat format_) noexcept {
+    switch (format_) {
+    case VK_FORMAT_R8G8B8A8_UNORM:
+        return render_graph::TextureFormat::r8g8b8a8_unorm;
+    case VK_FORMAT_R16G16B16A16_SFLOAT:
+        return render_graph::TextureFormat::r16g16b16a16_sfloat;
+    case VK_FORMAT_D32_SFLOAT:
+        return render_graph::TextureFormat::d32_sfloat;
+    default:
+        break;
+    }
+    return render_graph::TextureFormat::unknown;
+}
+
+[[nodiscard]] constexpr render_graph::SampleCount ResolveGraphSampleCount(
+    const VkSampleCountFlagBits samples_) noexcept {
+    switch (samples_) {
+    case VK_SAMPLE_COUNT_2_BIT:
+        return render_graph::SampleCount::x2;
+    case VK_SAMPLE_COUNT_4_BIT:
+        return render_graph::SampleCount::x4;
+    case VK_SAMPLE_COUNT_8_BIT:
+        return render_graph::SampleCount::x8;
+    case VK_SAMPLE_COUNT_1_BIT:
+    default:
+        break;
+    }
+    return render_graph::SampleCount::x1;
+}
+
+} // namespace
+
 void FrameComposerHost::Initialize(const FrameComposerHostCreateInfo& create_info_) {
     create_info_cache = create_info_;
     stats = {};
@@ -139,19 +174,107 @@ void FrameComposerHost::ResetTonemapOutputTargetConfig() noexcept {
     tonemap_output_override = false;
 }
 
+void FrameComposerHost::BuildRenderGraph(
+    render_graph::RenderGraphBuilder& builder_,
+    const render_graph::ResourceHandle present_target_,
+    const render_graph::Extent3D& reference_extent_,
+    render_graph::ResourceVersionHandle& present_ready_version_,
+    const ImportedTextureRegisterFn& register_imported_texture_) {
+    (void)reference_extent_;
+    if (!initialized) {
+        throw std::runtime_error("FrameComposerHost::BuildRenderGraph called before Initialize");
+    }
+    if (render_target_host == nullptr) {
+        throw std::runtime_error(
+            "FrameComposerHost::BuildRenderGraph requires RenderTargetHost from PrepareFrame");
+    }
+    if (!scene_targets.IsReady() ||
+        !IsValidRenderTargetHandle(scene_targets.ColorTarget())) {
+        throw std::runtime_error(
+            "FrameComposerHost::BuildRenderGraph requires ready scene targets from PrepareFrame");
+    }
+    if (!register_imported_texture_) {
+        throw std::runtime_error(
+            "FrameComposerHost::BuildRenderGraph requires imported texture registration callback");
+    }
+    if (tonemap_output_override &&
+        IsValidRenderTargetHandle(tonemap_output_target_config.color_target)) {
+        throw std::runtime_error(
+            "FrameComposerHost::BuildRenderGraph does not support explicit tonemap output targets");
+    }
+
+    const RenderTargetHandle hdr_color_target = scene_targets.ColorTarget();
+    const auto hdr_color_view = render_target_host->ResolveView(hdr_color_target);
+    if (hdr_color_view.image == VK_NULL_HANDLE ||
+        hdr_color_view.image_view == VK_NULL_HANDLE) {
+        throw std::runtime_error(
+            "FrameComposerHost::BuildRenderGraph resolved invalid HDR source target view");
+    }
+    if (hdr_color_view.extent.width == 0U || hdr_color_view.extent.height == 0U) {
+        throw std::runtime_error(
+            "FrameComposerHost::BuildRenderGraph resolved zero-sized HDR source target");
+    }
+
+    const auto hdr_color_resource = builder_.CreateTexture(
+        "frame_composer_hdr_color",
+        render_graph::TextureDesc{
+            .dimension = render_graph::TextureDimension::image_2d,
+            .format = ResolveGraphTextureFormat(hdr_color_view.format),
+            .extent = {
+                .width = hdr_color_view.extent.width,
+                .height = hdr_color_view.extent.height,
+                .depth = hdr_color_view.extent.depth,
+            },
+            .usage = render_graph::texture_usage_sampled_flag |
+                     render_graph::texture_usage_color_attachment_flag,
+            .mip_level_count = 1U,
+            .array_layer_count = 1U,
+            .sample_count = ResolveGraphSampleCount(hdr_color_view.samples),
+        },
+        render_graph::ResourceLifetime::imported);
+    register_imported_texture_(hdr_color_resource, hdr_color_target);
+
+    const auto tonemap_pass = builder_.AddPass("frame_composer_tonemap");
+    (void)builder_.Read(tonemap_pass,
+                        hdr_color_resource,
+                        render_graph::AccessDesc{
+                            .access = render_graph::AccessKind::shader_sample_read,
+                        });
+    present_ready_version_ = builder_.Write(
+        tonemap_pass,
+        present_target_,
+        render_graph::AccessDesc{
+            .access = render_graph::AccessKind::color_attachment_write,
+        });
+    builder_.SetRasterPassDesc(
+        tonemap_pass,
+        render_graph::RasterPassDesc{
+            .color_attachments = {
+                tonemap_renderer.BuildGraphColorAttachmentDesc(present_target_, false),
+            },
+        });
+    builder_.SetExecuteCallback(
+        tonemap_pass,
+        [this, hdr_color_resource, present_target_](render_graph::GraphCommandContext& context_) {
+            const auto previous_draw_call_count = tonemap_renderer.Stats().draw_call_count;
+            const auto previous_skipped_draw_count = tonemap_renderer.Stats().skipped_draw_count;
+            tonemap_renderer.RecordGraphPass(context_,
+                                             hdr_color_resource,
+                                             present_target_);
+            AccumulateTonemapStats(previous_draw_call_count,
+                                   previous_skipped_draw_count);
+        });
+}
+
 void FrameComposerHost::RecordTonemapPass(const FrameRecordContext& record_context_) {
     if (!initialized) {
         throw std::runtime_error("FrameComposerHost::RecordTonemapPass called before Initialize");
     }
+    const auto previous_draw_call_count = tonemap_renderer.Stats().draw_call_count;
+    const auto previous_skipped_draw_count = tonemap_renderer.Stats().skipped_draw_count;
     tonemap_renderer.Record(record_context_);
-    const auto& tonemap_stats = tonemap_renderer.Stats();
-    if (tonemap_stats.draw_call_count > 0U) {
-        ++stats.tonemap_record_count;
-    }
-    if (tonemap_stats.skipped_draw_count > 0U) {
-        ++stats.tonemap_skipped_count;
-    }
-    ++stats.revision;
+    AccumulateTonemapStats(previous_draw_call_count,
+                           previous_skipped_draw_count);
 }
 
 const FrameComposerTargets& FrameComposerHost::Targets(std::uint32_t frame_index_) const {
@@ -244,6 +367,19 @@ void FrameComposerHost::DestroyOwnedTargets(VulkanContext& context_) noexcept {
                                                 completed_submit_value,
                                                 completed_submit_value);
     }
+}
+
+void FrameComposerHost::AccumulateTonemapStats(
+    const std::uint32_t previous_draw_call_count_,
+    const std::uint32_t previous_skipped_draw_count_) noexcept {
+    const auto& tonemap_stats = tonemap_renderer.Stats();
+    if (tonemap_stats.draw_call_count > previous_draw_call_count_) {
+        ++stats.tonemap_record_count;
+    }
+    if (tonemap_stats.skipped_draw_count > previous_skipped_draw_count_) {
+        ++stats.tonemap_skipped_count;
+    }
+    ++stats.revision;
 }
 
 } // namespace vr::render

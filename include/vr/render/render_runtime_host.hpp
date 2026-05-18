@@ -1779,6 +1779,33 @@ private:
                 .frame = frame,
                 .progress = progress,
             });
+            if constexpr (requires(RecorderT& recorder_ref_,
+                                   render_graph::RenderGraphBuilder& builder_ref_,
+                                   render_graph::ResourceHandle present_target_ref_,
+                                   const render_graph::Extent3D& reference_extent_ref_,
+                                   render_graph::ResourceVersionHandle& present_ready_version_ref_,
+                                   const runtime::services::RenderGraphRuntimeService::ImportedTextureRegisterFn& register_imported_texture_ref_) {
+                              recorder_ref_.BuildRenderGraph(builder_ref_,
+                                                             present_target_ref_,
+                                                             reference_extent_ref_,
+                                                             present_ready_version_ref_,
+                                                             register_imported_texture_ref_);
+                          }) {
+                auto& render_graph_service =
+                    services_ref.template Get<runtime::services::RenderGraphRuntimeService>();
+                render_graph_service.SetDirectGraphBuildCallback(
+                    [&recorder_](render_graph::RenderGraphBuilder& builder_ref_,
+                                 const render_graph::ResourceHandle present_target_ref_,
+                                 const render_graph::Extent3D& reference_extent_ref_,
+                                 render_graph::ResourceVersionHandle& present_ready_version_ref_,
+                                 const runtime::services::RenderGraphRuntimeService::ImportedTextureRegisterFn& register_imported_texture_ref_) {
+                        recorder_.BuildRenderGraph(builder_ref_,
+                                                   present_target_ref_,
+                                                   reference_extent_ref_,
+                                                   present_ready_version_ref_,
+                                                   register_imported_texture_ref_);
+                    });
+            }
         } else if constexpr (requires(RecorderT& recorder_ref_,
                                       const SceneRenderTargetSetPrepareView& prepare_view_) {
                                  recorder_ref_.PrepareFrame(prepare_view_);

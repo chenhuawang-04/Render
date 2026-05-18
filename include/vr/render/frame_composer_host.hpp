@@ -3,8 +3,10 @@
 #include "Center/Memory/Container/Vector/McVector.hpp"
 #include "vr/render/render_target_composite_renderer.hpp"
 #include "vr/render/scene_render_target_set.hpp"
+#include "vr/render_graph/render_graph_builder.hpp"
 
 #include <cstdint>
+#include <functional>
 
 namespace vr {
 class VulkanContext;
@@ -57,6 +59,10 @@ struct FrameComposerHostStats final {
 
 class FrameComposerHost final {
 public:
+    using ImportedTextureRegisterFn = std::function<void(
+        render_graph::ResourceHandle,
+        RenderTargetHandle)>;
+
     void Initialize(const FrameComposerHostCreateInfo& create_info_ = {});
     void Shutdown(VulkanContext& context_);
 
@@ -82,6 +88,11 @@ public:
     void SetTonemapOutputTargetConfig(const RenderTargetColorOutputConfig& output_target_config_) noexcept;
     void ResetTonemapOutputTargetConfig() noexcept;
 
+    void BuildRenderGraph(render_graph::RenderGraphBuilder& builder_,
+                          render_graph::ResourceHandle present_target_,
+                          const render_graph::Extent3D& reference_extent_,
+                          render_graph::ResourceVersionHandle& present_ready_version_,
+                          const ImportedTextureRegisterFn& register_imported_texture_);
     void RecordTonemapPass(const FrameRecordContext& record_context_);
 
     [[nodiscard]] const FrameComposerTargets& Targets(std::uint32_t frame_index_) const;
@@ -95,6 +106,8 @@ private:
     void RefreshFrameTargets(std::uint32_t frame_index_) noexcept;
     void ClearFrameTargets() noexcept;
     void DestroyOwnedTargets(VulkanContext& context_) noexcept;
+    void AccumulateTonemapStats(std::uint32_t previous_draw_call_count_,
+                                std::uint32_t previous_skipped_draw_count_) noexcept;
 
 private:
     FrameComposerHostCreateInfo create_info_cache{};

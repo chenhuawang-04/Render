@@ -12,12 +12,15 @@
 #include "vr/runtime/services/render_target_service.hpp"
 
 #include <cstdint>
+#include <algorithm>
 #include <functional>
 #include <limits>
+#include <stdexcept>
 #include <string_view>
 #include <type_traits>
 #include <utility>
 #include <variant>
+#include <vector>
 
 namespace vr::runtime::services {
 
@@ -28,6 +31,15 @@ public:
     static constexpr std::string_view Name = "RenderGraphRuntimeService";
     static constexpr std::uint32_t invalid_frame_index =
         (std::numeric_limits<std::uint32_t>::max)();
+    using ImportedTextureRegisterFn = std::function<void(
+        render_graph::ResourceHandle,
+        render::RenderTargetHandle)>;
+    using DirectGraphBuildCallback = std::function<void(
+        render_graph::RenderGraphBuilder&,
+        render_graph::ResourceHandle,
+        const render_graph::Extent3D&,
+        render_graph::ResourceVersionHandle&,
+        const ImportedTextureRegisterFn&)>;
 
     template<typename ContextT>
     void BeginFrame(ContextT& context_) {
@@ -48,8 +60,10 @@ public:
         record_stats = {};
         graph_build_callback_2d = {};
         graph_build_callback_3d = {};
+        direct_graph_build_callback = {};
         has_compiled_graph = false;
         frame_snapshot = std::monostate{};
+        direct_imported_textures.clear();
     }
 
     template<typename ContextT>
@@ -63,6 +77,7 @@ public:
         command_ready_vulkan_barriers = {};
         record_stats = {};
         has_compiled_graph = false;
+        direct_imported_textures.clear();
 
         if (const auto* snapshot_2d = TryGetFrameSnapshot<ecs::Dim2>();
             snapshot_2d != nullptr) {
@@ -92,6 +107,72 @@ public:
                     }
                 });
             (void)build_result;
+        } else if (direct_graph_build_callback) {
+            const auto& frame_context = vr::runtime::detail::ResolveFrameContext(context_);
+            render_graph::Extent3D reference_extent{
+                .width = 0U,
+                .height = 0U,
+                .depth = 1U,
+            };
+            if constexpr (requires { frame_context.frame.swapchain_extent; }) {
+                reference_extent.width = frame_context.frame.swapchain_extent.width;
+                reference_extent.height = frame_context.frame.swapchain_extent.height;
+            }
+            if constexpr (requires { frame_context.swapchain_targets; frame_context.frame.image_index; }) {
+                if (reference_extent.width == 0U || reference_extent.height == 0U) {
+                    if (frame_context.swapchain_targets != nullptr) {
+                        const render::RenderTargetHandle imported_target =
+                            frame_context.swapchain_targets->Get(frame_context.frame.image_index);
+                        if (render::IsValidRenderTargetHandle(imported_target)) {
+                            auto& services = vr::runtime::detail::ResolveServices(context_);
+                            const auto imported_view =
+                                services.template Get<RenderTargetService>().Host().ResolveView(imported_target);
+                            reference_extent.width = imported_view.extent.width;
+                            reference_extent.height = imported_view.extent.height;
+                            reference_extent.depth = imported_view.extent.depth;
+                        }
+                    }
+                }
+            }
+            const auto present_target = builder.CreateTexture(
+                "present_target",
+                render_graph::TextureDesc{
+                    .dimension = render_graph::TextureDimension::image_2d,
+                    .format = render_graph::TextureFormat::unknown,
+                    .extent = reference_extent,
+                    .usage = render_graph::texture_usage_color_attachment_flag |
+                             render_graph::texture_usage_present_flag,
+                    .mip_level_count = 1U,
+                    .array_layer_count = 1U,
+                    .sample_count = render_graph::SampleCount::x1,
+                },
+                render_graph::ResourceLifetime::imported);
+
+            render_graph::ResourceVersionHandle present_ready_version =
+                render_graph::invalid_resource_version;
+            const ImportedTextureRegisterFn register_imported_texture =
+                [this](const render_graph::ResourceHandle logical_,
+                       const render::RenderTargetHandle render_target_) {
+                    RegisterDirectImportedTexture(logical_, render_target_);
+                };
+
+            direct_graph_build_callback(builder,
+                                        present_target,
+                                        reference_extent,
+                                        present_ready_version,
+                                        register_imported_texture);
+
+            if (!render_graph::IsValidResourceVersionHandle(present_ready_version)) {
+                throw std::runtime_error(
+                    "RenderGraphRuntimeService direct graph build callback did not produce a present-ready resource version");
+            }
+
+            const auto present_transition = builder.AddPass("present_transition", true);
+            (void)builder.Read(present_transition,
+                               present_ready_version,
+                               render_graph::AccessDesc{
+                                   .access = render_graph::AccessKind::present,
+                               });
         }
 
         if (builder.PassCount() != 0U) {
@@ -185,6 +266,14 @@ public:
         }
     }
 
+    void SetDirectGraphBuildCallback(DirectGraphBuildCallback callback_) {
+        direct_graph_build_callback = std::move(callback_);
+        if (direct_graph_build_callback) {
+            EnableRecordExecution(true);
+            EnableGraphOnlyRecordPath(true);
+        }
+    }
+
     template<ecs::DimensionTag DimensionT>
     [[nodiscard]] const render_graph::FrameSnapshot<DimensionT>* TryGetFrameSnapshot() const noexcept {
         if constexpr (std::is_same_v<DimensionT, ecs::Dim2>) {
@@ -245,6 +334,7 @@ private:
     void ResolvePhysicalResources(ContextT& context_) {
         auto& services = vr::runtime::detail::ResolveServices(context_);
         RegisterImportedPresentTarget(context_);
+        RegisterPendingImportedTextures();
         physical_resources.Resolve(vr::runtime::detail::ResolveDevice(context_),
                                    services.template Get<GpuMemoryService>().Host(),
                                    services.template Get<RenderTargetService>().Host(),
@@ -275,11 +365,48 @@ private:
         }
     }
 
+    void RegisterDirectImportedTexture(const render_graph::ResourceHandle logical_,
+                                       const render::RenderTargetHandle render_target_) {
+        if (!render_graph::IsValidResourceHandle(logical_)) {
+            return;
+        }
+        const auto existing = std::find_if(
+            direct_imported_textures.begin(),
+            direct_imported_textures.end(),
+            [&](const ImportedTextureBinding& binding_) {
+                return binding_.logical.index == logical_.index;
+            });
+        if (existing != direct_imported_textures.end()) {
+            existing->logical = logical_;
+            existing->render_target = render_target_;
+            return;
+        }
+        direct_imported_textures.push_back(ImportedTextureBinding{
+            .logical = logical_,
+            .render_target = render_target_,
+        });
+    }
+
+    void RegisterPendingImportedTextures() {
+        for (const ImportedTextureBinding& binding_ : direct_imported_textures) {
+            if (!render::IsValidRenderTargetHandle(binding_.render_target)) {
+                continue;
+            }
+            physical_resources.RegisterImportedTexture(binding_.logical,
+                                                       binding_.render_target);
+        }
+    }
+
 private:
     using FrameSnapshotVariant = std::variant<
         std::monostate,
         render_graph::FrameSnapshot2D,
         render_graph::FrameSnapshot3D>;
+    struct ImportedTextureBinding final {
+        render_graph::ResourceHandle logical{};
+        render::RenderTargetHandle render_target =
+            render::invalid_render_target_handle;
+    };
     using GraphBuildCallback2D = std::function<void(
         render_graph::RenderGraphBuilder&,
         const render_graph::FrameSnapshot2D&,
@@ -299,11 +426,13 @@ private:
     render_graph::RenderGraphRecordStats record_stats{};
     GraphBuildCallback2D graph_build_callback_2d{};
     GraphBuildCallback3D graph_build_callback_3d{};
+    DirectGraphBuildCallback direct_graph_build_callback{};
     render_graph::VulkanResourceTable physical_resources{};
     bool has_compiled_graph = false;
     bool record_execution_enabled = false;
     bool graph_only_record_path_enabled = false;
     FrameSnapshotVariant frame_snapshot{};
+    std::vector<ImportedTextureBinding> direct_imported_textures{};
 };
 
 } // namespace vr::runtime::services

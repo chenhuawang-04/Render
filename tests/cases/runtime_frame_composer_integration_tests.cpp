@@ -65,6 +65,23 @@ public:
         ++prepare_count;
     }
 
+    void BuildRenderGraph(
+        vr::render_graph::RenderGraphBuilder& builder_,
+        const vr::render_graph::ResourceHandle present_target_,
+        const vr::render_graph::Extent3D& reference_extent_,
+        vr::render_graph::ResourceVersionHandle& present_ready_version_,
+        const vr::render::FrameComposerHost::ImportedTextureRegisterFn& register_imported_texture_) {
+        if (composer == nullptr) {
+            throw std::runtime_error(
+                "FrameComposerRecorder::BuildRenderGraph called before binding composer");
+        }
+        composer->BuildRenderGraph(builder_,
+                                   present_target_,
+                                   reference_extent_,
+                                   present_ready_version_,
+                                   register_imported_texture_);
+    }
+
     void Record(const vr::render::FrameRecordContext& record_context_) {
         if (composer == nullptr) {
             throw std::runtime_error("FrameComposerRecorder::Record called before binding composer");
@@ -107,24 +124,31 @@ VR_TEST_CASE(RuntimeIntegration_frame_composer_prepare_and_tonemap_smoke,
 
         VR_REQUIRE(runtime.HasFrameComposerHost());
         recorder.Bind(runtime.FrameComposer());
+        auto& graph_service =
+            runtime.Services().Get<vr::runtime::services::RenderGraphRuntimeService>();
 
         const auto first_tick = runtime.Tick(recorder);
         VR_CHECK(first_tick.running);
         VR_CHECK(recorder.prepared);
         VR_CHECK(recorder.prepare_count == 1U);
-        VR_CHECK(recorder.record_count == 1U);
+        VR_CHECK(recorder.record_count == 0U);
         VR_CHECK(recorder.captured_targets.ready);
         VR_CHECK(vr::render::IsValidRenderTargetHandle(recorder.captured_targets.hdr_color_target));
         VR_CHECK(vr::render::IsValidRenderTargetHandle(recorder.captured_targets.depth_target));
         VR_CHECK(first_tick.diagnostics.collected);
         VR_CHECK(first_tick.diagnostics.frame_composer.prepared_frame_count >= 1U);
         VR_CHECK(first_tick.diagnostics.frame_composer.tonemap_record_count >= 1U);
+        VR_CHECK(graph_service.GraphOnlyRecordPathEnabled());
+        VR_CHECK(graph_service.LastRecordStats().pass_count >= 1U);
+        VR_CHECK(graph_service.LastRecordStats().command_batch_count >= 1U);
 
         const auto second_tick = runtime.Tick(recorder);
         VR_CHECK(second_tick.running);
         VR_CHECK(second_tick.diagnostics.frame_composer.prepared_frame_count >= 2U);
         VR_CHECK(second_tick.diagnostics.frame_composer.ready_frame_count >= 2U);
         VR_CHECK(second_tick.diagnostics.frame_composer.tonemap_record_count >= 2U);
+        VR_CHECK(graph_service.LastRecordStats().pass_count >= 1U);
+        VR_CHECK(recorder.record_count == 0U);
 
         runtime.Shutdown();
         runtime_initialized = false;

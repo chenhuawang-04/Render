@@ -215,18 +215,11 @@ render_graph::RasterColorAttachmentDesc RenderTargetCompositeRenderer::BuildGrap
     render_graph::ResourceHandle output_target_,
     bool has_previous_content_) const noexcept {
     const bool explicit_load = output_target_config.use_explicit_load_op;
-    render_graph::AttachmentLoadOp load_op = render_graph::AttachmentLoadOp::dont_care;
-    if (has_previous_content_) {
-        load_op = explicit_load
-            ? ToGraphLoadOp(output_target_config.load_op)
-            : (create_info_cache.clear_swapchain
-                ? render_graph::AttachmentLoadOp::clear
-                : render_graph::AttachmentLoadOp::load);
-    } else if (explicit_load && output_target_config.load_op == VK_ATTACHMENT_LOAD_OP_CLEAR) {
-        load_op = render_graph::AttachmentLoadOp::clear;
-    } else if (!explicit_load && create_info_cache.clear_swapchain) {
-        load_op = render_graph::AttachmentLoadOp::clear;
-    }
+    const render_graph::AttachmentLoadOp load_op = explicit_load
+        ? ToGraphLoadOp(output_target_config.load_op)
+        : ((create_info_cache.clear_swapchain || !has_previous_content_)
+            ? render_graph::AttachmentLoadOp::clear
+            : render_graph::AttachmentLoadOp::load);
 
     const auto clear_color = explicit_load
         ? output_target_config.clear_color

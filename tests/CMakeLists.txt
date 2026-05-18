@@ -69,6 +69,7 @@ add_executable(${VR_TEST_TARGET}
     cases/runtime_configuration_tests.cpp
     cases/runtime_ibl_bake_host_integration_tests.cpp
     cases/runtime_ibl_host_integration_tests.cpp
+    cases/runtime_frame_composer_integration_tests.cpp
     cases/runtime_integration_tests.cpp
     cases/runtime_text_renderer_integration_tests.cpp
     cases/runtime_text_renderer_3d_integration_tests.cpp
