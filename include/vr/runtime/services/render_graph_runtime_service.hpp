@@ -12,6 +12,7 @@
 #include "vr/runtime/services/render_target_service.hpp"
 
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <string_view>
 #include <type_traits>
@@ -45,6 +46,8 @@ public:
         lowered_vulkan_barriers = {};
         command_ready_vulkan_barriers = {};
         record_stats = {};
+        graph_build_callback_2d = {};
+        graph_build_callback_3d = {};
         has_compiled_graph = false;
         frame_snapshot = std::monostate{};
     }
@@ -63,10 +66,32 @@ public:
 
         if (const auto* snapshot_2d = TryGetFrameSnapshot<ecs::Dim2>();
             snapshot_2d != nullptr) {
-            (void)render_graph::BuildMinimalFrameGraph(builder, *snapshot_2d);
+            const auto build_result = render_graph::BuildMinimalFrameGraph(
+                builder,
+                *snapshot_2d,
+                [this](render_graph::RenderGraphBuilder& builder_ref_,
+                       const render_graph::FrameSnapshot2D& snapshot_ref_,
+                       render_graph::MinimalFrameGraphBuildResult<ecs::Dim2>& build_result_ref_,
+                       render_graph::ResourceVersionHandle& color_chain_ref_) {
+                    if (graph_build_callback_2d) {
+                        graph_build_callback_2d(builder_ref_, snapshot_ref_, build_result_ref_, color_chain_ref_);
+                    }
+                });
+            (void)build_result;
         } else if (const auto* snapshot_3d = TryGetFrameSnapshot<ecs::Dim3>();
                    snapshot_3d != nullptr) {
-            (void)render_graph::BuildMinimalFrameGraph(builder, *snapshot_3d);
+            const auto build_result = render_graph::BuildMinimalFrameGraph(
+                builder,
+                *snapshot_3d,
+                [this](render_graph::RenderGraphBuilder& builder_ref_,
+                       const render_graph::FrameSnapshot3D& snapshot_ref_,
+                       render_graph::MinimalFrameGraphBuildResult<ecs::Dim3>& build_result_ref_,
+                       render_graph::ResourceVersionHandle& color_chain_ref_) {
+                    if (graph_build_callback_3d) {
+                        graph_build_callback_3d(builder_ref_, snapshot_ref_, build_result_ref_, color_chain_ref_);
+                    }
+                });
+            (void)build_result;
         }
 
         if (builder.PassCount() != 0U) {
@@ -141,6 +166,22 @@ public:
     }
 
     template<ecs::DimensionTag DimensionT>
+    void SetGraphBuildCallback(std::function<void(render_graph::RenderGraphBuilder&,
+                                                  const render_graph::FrameSnapshot<DimensionT>&,
+                                                  const render_graph::MinimalFrameGraphBuildResult<DimensionT>&,
+                                                  render_graph::ResourceVersionHandle&)> callback_) {
+        if constexpr (std::is_same_v<DimensionT, ecs::Dim2>) {
+            graph_build_callback_2d = std::move(callback_);
+        } else {
+            graph_build_callback_3d = std::move(callback_);
+            if (graph_build_callback_3d) {
+                EnableRecordExecution(true);
+                EnableGraphOnlyRecordPath(true);
+            }
+        }
+    }
+
+    template<ecs::DimensionTag DimensionT>
     [[nodiscard]] const render_graph::FrameSnapshot<DimensionT>* TryGetFrameSnapshot() const noexcept {
         if constexpr (std::is_same_v<DimensionT, ecs::Dim2>) {
             return std::get_if<render_graph::FrameSnapshot2D>(&frame_snapshot);
@@ -157,8 +198,16 @@ public:
         record_execution_enabled = value_;
     }
 
+    void EnableGraphOnlyRecordPath(const bool value_ = true) noexcept {
+        graph_only_record_path_enabled = value_;
+    }
+
     [[nodiscard]] bool RecordExecutionEnabled() const noexcept {
         return record_execution_enabled;
+    }
+
+    [[nodiscard]] bool GraphOnlyRecordPathEnabled() const noexcept {
+        return graph_only_record_path_enabled;
     }
 
     [[nodiscard]] bool CanExecuteGraphRecord(const VulkanContext& device_) const noexcept {
@@ -221,6 +270,16 @@ private:
         std::monostate,
         render_graph::FrameSnapshot2D,
         render_graph::FrameSnapshot3D>;
+    using GraphBuildCallback2D = std::function<void(
+        render_graph::RenderGraphBuilder&,
+        const render_graph::FrameSnapshot2D&,
+        const render_graph::MinimalFrameGraphBuildResult<ecs::Dim2>&,
+        render_graph::ResourceVersionHandle&)>;
+    using GraphBuildCallback3D = std::function<void(
+        render_graph::RenderGraphBuilder&,
+        const render_graph::FrameSnapshot3D&,
+        const render_graph::MinimalFrameGraphBuildResult<ecs::Dim3>&,
+        render_graph::ResourceVersionHandle&)>;
 
     std::uint32_t frame_index = invalid_frame_index;
     render_graph::RenderGraphBuilder builder{};
@@ -228,9 +287,12 @@ private:
     render_graph::VulkanBarrierPlan lowered_vulkan_barriers{};
     render_graph::VulkanCommandReadyPlan command_ready_vulkan_barriers{};
     render_graph::RenderGraphRecordStats record_stats{};
+    GraphBuildCallback2D graph_build_callback_2d{};
+    GraphBuildCallback3D graph_build_callback_3d{};
     render_graph::VulkanResourceTable physical_resources{};
     bool has_compiled_graph = false;
     bool record_execution_enabled = false;
+    bool graph_only_record_path_enabled = false;
     FrameSnapshotVariant frame_snapshot{};
 };
 

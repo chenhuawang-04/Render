@@ -1,6 +1,7 @@
 #include "vr/surface/surface_renderer_3d.hpp"
 
 #include "vr/asset/texture_host.hpp"
+#include "vr/render_graph/graph_command_context.hpp"
 #include "vr/ecs/system/transparency_render_policy.hpp"
 #include "vr/ecs/system/spatial_math.hpp"
 #include "vr/render/bindless_resource_system.hpp"
@@ -665,6 +666,17 @@ void SurfaceRenderer3D::RecordSceneStage(const render::FrameRecordContext& recor
     RecordInternal(record_context_, render::SceneRenderStagePassHintValue(stage_), true);
 }
 
+void SurfaceRenderer3D::RecordGraphSceneStage(render_graph::GraphCommandContext& context_,
+                                              render::SceneRenderStage stage_,
+                                              render_graph::ResourceHandle color_target_,
+                                              render_graph::ResourceHandle depth_target_) {
+    RecordGraphInternal(context_,
+                        render::SceneRenderStagePassHintValue(stage_),
+                        true,
+                        color_target_,
+                        depth_target_);
+}
+
 void SurfaceRenderer3D::RecordInternal(const render::FrameRecordContext& record_context_,
                                        std::uint32_t pass_bucket_,
                                        bool filter_by_pass_bucket_) {
@@ -945,6 +957,187 @@ void SurfaceRenderer3D::RecordInternal(const render::FrameRecordContext& record_
         depth_image_initialized[record_context_.image_index] = 1U;
     }
     image_initialized[record_context_.image_index] = 1U;
+}
+
+void SurfaceRenderer3D::RecordGraphInternal(render_graph::GraphCommandContext& context_,
+                                            std::uint32_t pass_bucket_,
+                                            bool filter_by_pass_bucket_,
+                                            render_graph::ResourceHandle color_target_,
+                                            render_graph::ResourceHandle depth_target_) {
+    if (!initialized) {
+        throw std::runtime_error("SurfaceRenderer3D::RecordGraphSceneStage called before Initialize");
+    }
+    if (context == nullptr || pipeline_host == nullptr || gpu_memory_host == nullptr) {
+        throw std::runtime_error("SurfaceRenderer3D::RecordGraphSceneStage called before PrepareFrame");
+    }
+    if (bindless_resources == nullptr || !bindless_resources->IsInitialized()) {
+        throw std::runtime_error("SurfaceRenderer3D::RecordGraphSceneStage requires initialized BindlessResourceSystem");
+    }
+    if (context_.CommandBuffer() == VK_NULL_HANDLE) {
+        throw std::runtime_error("SurfaceRenderer3D::RecordGraphSceneStage requires valid command buffer");
+    }
+
+    const auto resolved_color = context_.ResolveTextureView(color_target_);
+    const VkExtent2D render_extent{resolved_color.extent.width, resolved_color.extent.height};
+    if (render_extent.width == 0U || render_extent.height == 0U) {
+        throw std::runtime_error("SurfaceRenderer3D::RecordGraphSceneStage resolved zero-sized render extent");
+    }
+
+    const bool use_depth_attachment = render_graph::IsValidResourceHandle(depth_target_);
+    const VkFormat active_depth_format = use_depth_attachment
+        ? context_.ResolveTextureView(depth_target_).format
+        : VK_FORMAT_UNDEFINED;
+
+    EnsurePipelineObjects(*context,
+                          *bindless_resources,
+                          *pipeline_host,
+                          resolved_color.format,
+                          active_depth_format);
+
+    VkViewport viewport{};
+    viewport.x = 0.0F;
+    viewport.y = 0.0F;
+    viewport.width = static_cast<float>(render_extent.width);
+    viewport.height = static_cast<float>(render_extent.height);
+    viewport.minDepth = 0.0F;
+    viewport.maxDepth = 1.0F;
+    vkCmdSetViewport(context_.CommandBuffer(), 0U, 1U, &viewport);
+
+    VkRect2D scissor{};
+    scissor.offset = VkOffset2D{0, 0};
+    scissor.extent = render_extent;
+    vkCmdSetScissor(context_.CommandBuffer(), 0U, 1U, &scissor);
+
+    if (last_upload_result.upload.buffer != VK_NULL_HANDLE &&
+        !runtime_scratch.draw_batches.empty()) {
+        std::uint32_t stage_draw_call_count = 0U;
+        std::uint32_t stage_filtered_batch_count = 0U;
+        const VkBuffer vertex_buffer = last_upload_result.upload.buffer;
+        const VkDeviceSize vertex_offset = last_upload_result.upload.offset;
+        vkCmdBindVertexBuffers(context_.CommandBuffer(),
+                               0U,
+                               1U,
+                               &vertex_buffer,
+                               &vertex_offset);
+        const VkPipelineLayout pipeline_layout = pipeline_host->GetPipelineLayout(pipeline_layout_id);
+
+        PushConstants push_constants{};
+        if (camera_component != nullptr) {
+            push_constants.view_projection = camera_component->runtime.view_projection_matrix;
+        } else {
+            push_constants.view_projection = ecs::spatial_math::IdentityMatrix4x4();
+        }
+        if (camera_transform != nullptr) {
+            push_constants.camera_position = ecs::Float4{
+                .x = camera_transform->runtime.world_matrix.m[12],
+                .y = camera_transform->runtime.world_matrix.m[13],
+                .z = camera_transform->runtime.world_matrix.m[14],
+                .w = 1.0F
+            };
+        } else {
+            push_constants.camera_position = ecs::Float4{.x = 0.0F, .y = 0.0F, .z = 0.0F, .w = 1.0F};
+        }
+        push_constants.params = 0U;
+        push_constants.ibl_specular_texture_slot = active_ibl_specular_texture_slot;
+        push_constants.ibl_brdf_lut_texture_slot = active_ibl_brdf_lut_texture_slot;
+        push_constants.ibl_sampler_slot = active_ibl_sampler_slot;
+
+        const VkDescriptorSet appearance_descriptor_set =
+            (active_frame_index < frame_appearance_resources.size())
+                ? frame_appearance_resources[active_frame_index].descriptor_set
+                : VK_NULL_HANDLE;
+        const std::array<VkDescriptorSet, 4U> descriptor_sets{
+            bindless_resources->SampledImageSet(),
+            bindless_resources->SamplerSet(),
+            appearance_descriptor_set,
+            active_ibl_params_descriptor_set
+        };
+        if (descriptor_sets[0U] == VK_NULL_HANDLE || descriptor_sets[1U] == VK_NULL_HANDLE) {
+            throw std::runtime_error("SurfaceRenderer3D::RecordGraphSceneStage requires valid bindless descriptor sets");
+        }
+        if (descriptor_sets[2U] == VK_NULL_HANDLE) {
+            throw std::runtime_error("SurfaceRenderer3D::RecordGraphSceneStage requires valid appearance descriptor set");
+        }
+        if (descriptor_sets[3U] == VK_NULL_HANDLE) {
+            throw std::runtime_error("SurfaceRenderer3D::RecordGraphSceneStage requires valid IBL params descriptor set");
+        }
+
+        render::GraphicsPipelineId bound_pipeline{};
+        bool shared_state_bound = false;
+        for (const ecs::Surface3DDrawBatch& batch : runtime_scratch.draw_batches) {
+            if (filter_by_pass_bucket_ &&
+                ecs::SurfaceSystem<ecs::Dim3>::ExtractPassBucket(batch.sort_key) != pass_bucket_) {
+                ++stage_filtered_batch_count;
+                continue;
+            }
+            if (batch.instance_count == 0U) {
+                ++stats.skipped_batch_count;
+                continue;
+            }
+
+            const BlendMode blend_mode = ResolveBlendMode(batch.params);
+            const PipelineMode mode = ResolvePipelineMode(batch.params, active_depth_format != VK_FORMAT_UNDEFINED);
+            const CullMode cull_mode = ResolveCullMode(batch.params);
+            const render::GraphicsPipelineId pipeline_id = EnsurePipelineForMode(*context,
+                                                                                 *pipeline_host,
+                                                                                 resolved_color.format,
+                                                                                 active_depth_format,
+                                                                                 blend_mode,
+                                                                                 mode,
+                                                                                 cull_mode);
+            if (!pipeline_id.IsValid()) {
+                ++stats.skipped_batch_count;
+                continue;
+            }
+
+            if (bound_pipeline.value != pipeline_id.value) {
+                vkCmdBindPipeline(context_.CommandBuffer(),
+                                  VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                  pipeline_host->GetGraphicsPipeline(pipeline_id));
+                bound_pipeline = pipeline_id;
+            }
+
+            if (!shared_state_bound) {
+                vkCmdPushConstants(context_.CommandBuffer(),
+                                   pipeline_layout,
+                                   VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                                   0U,
+                                   sizeof(PushConstants),
+                                   &push_constants);
+                vkCmdBindDescriptorSets(context_.CommandBuffer(),
+                                        VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                        pipeline_layout,
+                                        0U,
+                                        static_cast<std::uint32_t>(descriptor_sets.size()),
+                                        descriptor_sets.data(),
+                                        0U,
+                                        nullptr);
+                shared_state_bound = true;
+                ++stats.descriptor_set_bind_count;
+                ++stats.ibl_descriptor_set_bind_count;
+            }
+
+            vkCmdDraw(context_.CommandBuffer(),
+                      6U,
+                      batch.instance_count,
+                      0U,
+                      batch.instance_begin);
+            ++stats.draw_call_count;
+            ++stage_draw_call_count;
+        }
+
+        if (filter_by_pass_bucket_) {
+            stats.stage_filtered_batch_count += stage_filtered_batch_count;
+            if (stage_draw_call_count == 0U) {
+                ++stats.empty_stage_pass_count;
+            }
+            if (pass_bucket_ == static_cast<std::uint32_t>(ecs::SurfaceRenderPassHint::opaque)) {
+                stats.opaque_draw_call_count += stage_draw_call_count;
+            } else if (pass_bucket_ == static_cast<std::uint32_t>(ecs::SurfaceRenderPassHint::transparent)) {
+                stats.transparent_draw_call_count += stage_draw_call_count;
+            }
+        }
+    }
 }
 
 void SurfaceRenderer3D::OnSwapchainRecreated(std::uint32_t image_count_,

@@ -1,4 +1,5 @@
-﻿#include "support/test_framework.hpp"
+#include "support/test_framework.hpp"
+#include "support/render_graph_test_utils.hpp"
 #include "vr/ecs/system/appearance_system.hpp"
 #include "vr/ecs/system/bounds_system.hpp"
 #include "vr/ecs/system/camera_system.hpp"
@@ -79,6 +80,7 @@ using CameraSystem3D = vr::ecs::CameraSystem<vr::ecs::Dim3>;
     }
     return false;
 }
+
 
 void ConfigureSurface3DRuntimeCreateInfo(Runtime::CreateInfo& create_info_,
                                          const char* window_title_) {
@@ -466,16 +468,21 @@ VR_TEST_CASE(RuntimeIntegration_surface_renderer_3d_bloom_post_stack_smoke,
         VR_CHECK(max_prefilter_draw_calls > 0U);
         VR_CHECK(max_blur_draw_calls > 0U);
         VR_CHECK(max_combine_draw_calls > 0U);
+        const bool graph_only_record_active = vr::test::IsGraphOnlyScene3DRecordActive(runtime);
         VR_CHECK(max_bloom_descriptor_updates == 0U);
         VR_CHECK(recorder.Stats().frame_packet_prepare_count > 0U);
-        VR_CHECK(recorder.Stats().frame_packet_record_count > 0U);
+        VR_CHECK(graph_only_record_active
+                     ? (recorder.Stats().frame_packet_record_count == 0U)
+                     : (recorder.Stats().frame_packet_record_count > 0U));
         VR_CHECK(recorder.ActiveView() == &main_view);
         VR_CHECK(recorder.ActiveView() != nullptr);
         VR_CHECK(recorder.ActiveView()->camera == &camera);
-        VR_CHECK(runtime.RenderTarget().ResolveView(recorder.PostStack().Targets().ColorTarget()).state ==
-                 vr::render::RenderTargetStateKind::shader_read);
-        VR_CHECK(runtime.RenderTarget().ResolveView(recorder.PostStack().Targets().DepthTarget()).state ==
-                 vr::render::RenderTargetStateKind::depth_attachment);
+        if (!graph_only_record_active) {
+            VR_CHECK(runtime.RenderTarget().ResolveView(recorder.PostStack().Targets().ColorTarget()).state ==
+                     vr::render::RenderTargetStateKind::shader_read);
+            VR_CHECK(runtime.RenderTarget().ResolveView(recorder.PostStack().Targets().DepthTarget()).state ==
+                     vr::render::RenderTargetStateKind::depth_attachment);
+        }
         VR_CHECK(surface_image_host.Stats().image_count >= 2U);
         VR_CHECK(runtime.TargetPool().Stats().acquire_count > 0U);
         VR_CHECK(runtime.TargetPool().Stats().reuse_hit_count > 0U);

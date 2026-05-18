@@ -11,7 +11,6 @@
 #include "vr/render/scene_submission.hpp"
 #include "vr/render/shadow_atlas_binding_coordinator.hpp"
 #include "vr/render/shadow_frame_coordinator.hpp"
-#include "vr/render_graph/frame_graph_build.hpp"
 #include "vr/render_graph/graph_command_context.hpp"
 #include "vr/shadow/shadow_atlas_host.hpp"
 #include "vr/shadow/shadow_renderer_3d.hpp"

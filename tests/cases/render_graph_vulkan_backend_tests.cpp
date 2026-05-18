@@ -1,5 +1,9 @@
 #include "support/test_framework.hpp"
+#include "vr/ecs/system/camera_system.hpp"
+#include "vr/ecs/system/transform_system.hpp"
 #include "vr/render/render_runtime_host.hpp"
+#include "vr/render/render_view_submission_utils.hpp"
+#include "vr/render/scene_recorder_3d.hpp"
 #include "vr/render_graph/frame_snapshot.hpp"
 #include "vr/render_graph/render_graph_executor.hpp"
 #include "vr/render_graph/vulkan_barrier_plan.hpp"
@@ -577,6 +581,104 @@ VR_TEST_CASE(RenderGraphExecutor_records_minimal_graph_barrier_batches,
     table.Shutdown(host.Context(), host.RenderTarget(), 0U, 0U);
 }
 
+VR_TEST_CASE(RenderGraphRuntimeService_builds_bloom_chain_from_scene_recorder_3d_in_pre_record,
+             "integration;render_graph;runtime;postprocess;vulkan") {
+    Host host{};
+    try {
+        host.Initialize(MakeMinimalRenderTargetRuntimeCreateInfo());
+    } catch (const std::exception& exception_) {
+        if (IsEnvironmentSkipError(exception_.what())) {
+            VR_SKIP(exception_.what());
+        }
+        throw;
+    }
+
+    vr::render::SceneRecorder3D recorder{};
+    recorder.Initialize();
+    recorder.BindRuntime(host);
+
+    struct GraphAwareRecorder final {
+        vr::render::SceneRecorder3D& inner;
+        const vr::render::RenderScenePacket3D* frame_packet = nullptr;
+
+        void PrepareFrame(const vr::render::SceneRecorder3DPrepareView&) noexcept {}
+        void Record(const vr::render::FrameRecordContext&) noexcept {}
+        void BuildRenderGraph(vr::render_graph::RenderGraphBuilder& builder_,
+                              const vr::render_graph::FrameSnapshot3D& snapshot_,
+                              const vr::render_graph::MinimalFrameGraphBuildResult<vr::ecs::Dim3>& build_result_,
+                              vr::render_graph::ResourceVersionHandle& color_chain_) {
+            inner.BuildRenderGraph(builder_, snapshot_, build_result_, color_chain_);
+        }
+        [[nodiscard]] const vr::render::RenderScenePacket3D* FramePacket() const noexcept {
+            return frame_packet;
+        }
+    } graph_recorder{.inner = recorder};
+
+    vr::ecs::Camera<vr::ecs::Dim3> camera{};
+    camera.style.viewport = {.origin_x = 0.0F, .origin_y = 0.0F, .width = 256.0F, .height = 144.0F};
+    camera.runtime.revision = 1U;
+    camera.runtime.culling_mask = 0xFFU;
+    vr::render::RenderView3D main_view{};
+    vr::render::RenderScenePacket3D main_scene_packet{};
+    vr::ecs::Transform<vr::ecs::Dim3> camera_transform{};
+    vr::ecs::TransformSystem<vr::ecs::Dim3>::Initialize(camera_transform);
+    vr::ecs::TransformSystem<vr::ecs::Dim3>::SetLocalPosition(camera_transform, vr::ecs::Float3{.x = 0.0F, .y = 0.0F, .z = 4.2F});
+    vr::ecs::TransformSystem<vr::ecs::Dim3>::UpdateHierarchy(&camera_transform, 1U);
+    vr::ecs::CameraSystem<vr::ecs::Dim3>::Initialize(camera);
+    vr::ecs::CameraSystem<vr::ecs::Dim3>::SetAspectRatio(camera, 256.0F / 144.0F);
+    vr::ecs::CameraSystem<vr::ecs::Dim3>::SetNearFar(camera, 0.05F, 256.0F);
+    vr::ecs::CameraSystem<vr::ecs::Dim3>::SetVerticalFovRadians(camera, 60.0F * 0.01745329251994329577F);
+    vr::render::RefreshExtentBoundWorldSceneSubmission(main_view,
+                                                       main_scene_packet,
+                                                       camera,
+                                                       camera_transform,
+                                                       host.Swapchain().Extent(),
+                                                       1234U);
+    recorder.SetFramePacket(&main_scene_packet);
+    graph_recorder.frame_packet = &main_scene_packet;
+
+    host.EnsureSwapchainTargetsForFrame(0U, 0U);
+    host.PrepareTickFrame(graph_recorder, 0U);
+
+    struct MockPhaseContext final {
+        struct FrameContext final {
+            vr::VulkanContext& device;
+            Host::RuntimeServicesType& services;
+            struct FrameInfo final {
+                std::uint32_t frame_index = 0U;
+                std::uint32_t image_index = 0U;
+            } frame{};
+            struct ProgressInfo final {
+                std::uint64_t graphics_submitted = 0U;
+                std::uint64_t graphics_completed = 0U;
+            } progress{};
+            VkCommandBuffer command_buffer = VK_NULL_HANDLE;
+            vr::render::SwapchainTargetSet* swapchain_targets = nullptr;
+        } frame_context;
+    };
+
+    auto& service = host.Services().Get<RenderGraphRuntimeService>();
+    MockPhaseContext context{
+        .frame_context = {
+            .device = host.Context(),
+            .services = host.Services(),
+            .frame = {.frame_index = 0U, .image_index = 0U},
+            .progress = {.graphics_submitted = 0U, .graphics_completed = 0U},
+            .command_buffer = VK_NULL_HANDLE,
+            .swapchain_targets = &host.SwapchainTargets(),
+        },
+    };
+    service.PreRecord(context);
+
+    const auto* compiled = service.TryGetCompiledGraph();
+    VR_REQUIRE(compiled != nullptr);
+    VR_CHECK(!compiled->Passes().empty());
+    VR_CHECK(compiled->HasExecutablePasses());
+
+    recorder.ClearFramePacket();
+    host.Shutdown();
+}
+
 VR_TEST_CASE(RenderGraphRuntimeService_records_barrier_batches_when_execution_enabled,
              "integration;render_graph;executor;runtime;vulkan") {
     Host host{};
@@ -622,6 +724,7 @@ VR_TEST_CASE(RenderGraphRuntimeService_records_barrier_batches_when_execution_en
 
     auto& service = host.Services().Get<RenderGraphRuntimeService>();
     service.EnableRecordExecution();
+    service.EnableGraphOnlyRecordPath();
     const VkCommandBuffer command_buffer = host.Context().BeginSingleTimeCommands();
     MockPhaseContext context{
         .frame_context = {
@@ -692,6 +795,7 @@ VR_TEST_CASE(RenderGraphRuntimeService_executes_minimal_graph_during_runtime_tic
 
     auto& service = host.Services().Get<RenderGraphRuntimeService>();
     service.EnableRecordExecution();
+    service.EnableGraphOnlyRecordPath();
 
     const bool graph_execution_supported =
         host.Context().EnabledVulkan13Features().synchronization2 == VK_TRUE &&
@@ -772,6 +876,7 @@ VR_TEST_CASE(RenderGraphRuntimeService_handles_swapchain_recreate_with_graph_exe
 
     auto& service = host.Services().Get<RenderGraphRuntimeService>();
     service.EnableRecordExecution();
+    service.EnableGraphOnlyRecordPath();
 
     auto tick_result = host.Tick(recorder);
     VR_CHECK(tick_result.render.code == vr::render::TickCode::Submitted ||
@@ -844,6 +949,7 @@ VR_TEST_CASE(RenderGraphRuntimeService_validation_enabled_minimal_tick_and_resiz
 
     auto& service = host.Services().Get<RenderGraphRuntimeService>();
     service.EnableRecordExecution();
+    service.EnableGraphOnlyRecordPath();
 
     std::uint32_t submitted_frames = 0U;
     const auto first_tick = host.Tick(recorder);

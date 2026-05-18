@@ -559,6 +559,7 @@ VR_TEST_CASE(SceneRecorder3D_build_render_graph_inserts_sky_prepass_before_scene
         vr::render::RenderViewKind::world,
         0U);
     auto packet = vr::render::MakeSingleViewScenePacket(world_view, 500U);
+    packet.postprocess_policy = vr::render::RenderPostProcessPolicy::disabled;
     packet.extra.environment.mode = vr::scene::SkyEnvironmentMode::gradient;
     packet.extra.environment.draw_order = vr::scene::SkyEnvironmentDrawOrder::before_opaque;
     recorder.SetFramePacket(&packet);
@@ -611,6 +612,7 @@ VR_TEST_CASE(SceneRecorder3D_build_render_graph_inserts_sky_post_opaque_before_o
         0U,
         502U,
         vr::render::RenderScenePacketKind::mixed);
+    packet.postprocess_policy = vr::render::RenderPostProcessPolicy::disabled;
     packet.extra.environment.mode = vr::scene::SkyEnvironmentMode::gradient;
     packet.extra.environment.draw_order = vr::scene::SkyEnvironmentDrawOrder::after_opaque_depth_tested;
     recorder.SetFramePacket(&packet);
@@ -664,6 +666,7 @@ VR_TEST_CASE(SceneRecorder3D_build_render_graph_routes_single_geometry_opaque_sl
         vr::render::RenderViewKind::world,
         0U);
     auto packet = vr::render::MakeSingleViewScenePacket(world_view, 777U);
+    packet.postprocess_policy = vr::render::RenderPostProcessPolicy::disabled;
     recorder.SetFramePacket(&packet);
 
     const auto snapshot = vr::render_graph::MakeFrameSnapshot(packet, 10U);
@@ -714,6 +717,7 @@ VR_TEST_CASE(SceneRecorder3D_build_render_graph_routes_mixed_geometry_surface_te
         vr::render::RenderViewKind::world,
         0U);
     auto packet = vr::render::MakeSingleViewScenePacket(world_view, 779U);
+    packet.postprocess_policy = vr::render::RenderPostProcessPolicy::disabled;
     recorder.SetFramePacket(&packet);
 
     const auto snapshot = vr::render_graph::MakeFrameSnapshot(packet, 15U);
@@ -761,6 +765,7 @@ VR_TEST_CASE(SceneRecorder3D_build_render_graph_routes_mixed_surface_text_transp
         vr::render::RenderViewKind::world,
         0U);
     auto packet = vr::render::MakeSingleViewScenePacket(world_view, 892U);
+    packet.postprocess_policy = vr::render::RenderPostProcessPolicy::disabled;
     recorder.SetFramePacket(&packet);
 
     const auto snapshot = vr::render_graph::MakeFrameSnapshot(packet, 20U);
@@ -805,6 +810,7 @@ VR_TEST_CASE(SceneRecorder3D_build_render_graph_routes_single_text_opaque_slice_
         vr::render::RenderViewKind::world,
         0U);
     auto packet = vr::render::MakeSingleViewScenePacket(world_view, 780U);
+    packet.postprocess_policy = vr::render::RenderPostProcessPolicy::disabled;
     recorder.SetFramePacket(&packet);
 
     const auto snapshot = vr::render_graph::MakeFrameSnapshot(packet, 16U);
@@ -860,6 +866,7 @@ VR_TEST_CASE(SceneRecorder3D_build_render_graph_inserts_transparent_scene_pass_b
         0U,
         890U,
         vr::render::RenderScenePacketKind::mixed);
+    packet.postprocess_policy = vr::render::RenderPostProcessPolicy::disabled;
     recorder.SetFramePacket(&packet);
 
     const auto snapshot = vr::render_graph::MakeFrameSnapshot(packet, 18U);
@@ -933,6 +940,76 @@ VR_TEST_CASE(SceneRecorder3D_build_render_graph_inserts_bloom_chain_before_prese
     recorder.ClearFramePacket();
 }
 
+VR_TEST_CASE(SceneRecorder3D_build_render_graph_routes_bloom_chain_before_overlay_then_present,
+             "unit;core;render_graph;runtime") {
+    vr::render::SceneRecorder3D recorder{};
+    recorder.Initialize();
+
+    vr::ecs::Camera<vr::ecs::Dim3> world_camera{};
+    world_camera.style.viewport = {.origin_x = 0.0F, .origin_y = 0.0F, .width = 320.0F, .height = 180.0F};
+    world_camera.runtime.revision = 1U;
+    world_camera.runtime.culling_mask = 0x1U;
+    auto world_view = vr::render::MakeRenderViewFromCamera(
+        world_camera,
+        static_cast<const vr::ecs::Transform<vr::ecs::Dim3>*>(nullptr),
+        vr::render::RenderViewKind::world,
+        0U);
+    auto overlay_view = vr::render::MakeRenderViewFromCamera(
+        world_camera,
+        static_cast<const vr::ecs::Transform<vr::ecs::Dim3>*>(nullptr),
+        vr::render::RenderViewKind::ui,
+        1U);
+    const std::array views{world_view, overlay_view};
+    auto packet = vr::render::MakeScenePacketFromViewRange(
+        views.data(),
+        static_cast<std::uint32_t>(views.size()),
+        0U,
+        895U,
+        vr::render::RenderScenePacketKind::mixed);
+    recorder.SetFramePacket(&packet);
+
+    const auto snapshot = vr::render_graph::MakeFrameSnapshot(packet, 23U);
+    vr::render_graph::RenderGraphBuilder builder{};
+    auto color_chain = vr::render_graph::invalid_resource_version;
+    const auto build_result = vr::render_graph::BuildMinimalFrameGraph(
+        builder,
+        snapshot,
+        [&recorder](vr::render_graph::RenderGraphBuilder& builder_ref_,
+                    const vr::render_graph::FrameSnapshot3D& snapshot_ref_,
+                    vr::render_graph::MinimalFrameGraphBuildResult<vr::ecs::Dim3>& build_result_ref_,
+                    vr::render_graph::ResourceVersionHandle& color_chain_ref_) {
+            recorder.BuildRenderGraph(builder_ref_, snapshot_ref_, build_result_ref_, color_chain_ref_);
+        });
+    const auto compiled = builder.Compile();
+
+    auto find_pass_index = [&compiled](const std::string_view name_) -> std::size_t {
+        for (std::size_t i = 0; i < compiled.Passes().size(); ++i) {
+            if (compiled.Passes()[i].debug_name == name_) {
+                return i;
+            }
+        }
+        return compiled.Passes().size();
+    };
+
+    VR_CHECK(build_result.built);
+    const std::size_t bloom_prefilter_index = find_pass_index("bloom_prefilter");
+    const std::size_t bloom_combine_index = find_pass_index("bloom_combine");
+    const std::size_t overlay_index = find_pass_index("overlay_pass");
+    const std::size_t present_index = find_pass_index("present_to_swapchain");
+    const std::size_t transition_index = find_pass_index("present_transition");
+    VR_REQUIRE(bloom_prefilter_index < compiled.Passes().size());
+    VR_REQUIRE(bloom_combine_index < compiled.Passes().size());
+    VR_REQUIRE(overlay_index < compiled.Passes().size());
+    VR_REQUIRE(present_index < compiled.Passes().size());
+    VR_REQUIRE(transition_index < compiled.Passes().size());
+    VR_CHECK(bloom_prefilter_index < bloom_combine_index);
+    VR_CHECK(bloom_combine_index < overlay_index);
+    VR_CHECK(overlay_index < present_index);
+    VR_CHECK(present_index < transition_index);
+
+    recorder.ClearFramePacket();
+}
+
 VR_TEST_CASE(SceneRecorder3D_build_render_graph_routes_single_text_transparent_slice_to_transparent_pass,
              "unit;core;render_graph;runtime") {
     vr::render::SceneRecorder3D recorder{};
@@ -951,6 +1028,7 @@ VR_TEST_CASE(SceneRecorder3D_build_render_graph_routes_single_text_transparent_s
         vr::render::RenderViewKind::world,
         0U);
     auto packet = vr::render::MakeSingleViewScenePacket(world_view, 891U);
+    packet.postprocess_policy = vr::render::RenderPostProcessPolicy::disabled;
     recorder.SetFramePacket(&packet);
 
     const auto snapshot = vr::render_graph::MakeFrameSnapshot(packet, 19U);
@@ -1001,6 +1079,7 @@ VR_TEST_CASE(SceneRecorder3D_build_render_graph_routes_mixed_surface_text_partic
         vr::render::RenderViewKind::world,
         0U);
     auto packet = vr::render::MakeSingleViewScenePacket(world_view, 893U);
+    packet.postprocess_policy = vr::render::RenderPostProcessPolicy::disabled;
     recorder.SetFramePacket(&packet);
 
     const auto snapshot = vr::render_graph::MakeFrameSnapshot(packet, 21U);
@@ -1056,6 +1135,7 @@ VR_TEST_CASE(SceneRecorder3D_build_render_graph_routes_overlay_text_to_overlay_p
         1U,
         895U,
         vr::render::RenderScenePacketKind::mixed);
+    packet.postprocess_policy = vr::render::RenderPostProcessPolicy::disabled;
     packet.flags = vr::render::render_scene_packet_allow_overlay_flag;
     recorder.SetFramePacket(&packet);
 
@@ -1101,6 +1181,7 @@ VR_TEST_CASE(SceneRecorder3D_build_render_graph_routes_single_surface_opaque_sli
         vr::render::RenderViewKind::world,
         0U);
     auto packet = vr::render::MakeSingleViewScenePacket(world_view, 778U);
+    packet.postprocess_policy = vr::render::RenderPostProcessPolicy::disabled;
     recorder.SetFramePacket(&packet);
 
     const auto snapshot = vr::render_graph::MakeFrameSnapshot(packet, 14U);
@@ -1145,6 +1226,7 @@ VR_TEST_CASE(SceneRecorder3D_build_render_graph_inserts_shadow_prepass_before_sc
         vr::render::RenderViewKind::world,
         0U);
     auto packet = vr::render::MakeSingleViewScenePacket(world_view, 501U);
+    packet.postprocess_policy = vr::render::RenderPostProcessPolicy::disabled;
     recorder.SetFramePacket(&packet);
 
     const auto snapshot = vr::render_graph::MakeFrameSnapshot(packet, 12U);

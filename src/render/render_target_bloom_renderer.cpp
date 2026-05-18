@@ -1,5 +1,6 @@
 ﻿#include "vr/render/render_target_bloom_renderer.hpp"
 
+#include "vr/render_graph/graph_command_context.hpp"
 #include "vr/render/generated/render_target_bloom_blur_frag_spv.hpp"
 #include "vr/render/generated/render_target_bloom_combine_frag_spv.hpp"
 #include "vr/render/generated/render_target_bloom_prefilter_frag_spv.hpp"
@@ -490,6 +491,184 @@ void RenderTargetBloomRenderer::Record(const FrameRecordContext& record_context_
     ++stats.pass_count;
 }
 
+void RenderTargetBloomRenderer::RecordGraphPrefilterPass(render_graph::GraphCommandContext& context_,
+                                                     render_graph::ResourceHandle scene_source_,
+                                                     render_graph::ResourceHandle bloom_target_) {
+    if (!initialized || context == nullptr || descriptor_host == nullptr || pipeline_host == nullptr ||
+        render_target_host == nullptr || bindless_resources == nullptr) {
+        throw std::runtime_error("RenderTargetBloomRenderer::RecordGraphPrefilterPass requires prepared runtime state");
+    }
+    const auto source_target = context_.ResolveTextureTarget(scene_source_);
+    const auto bloom_target = context_.ResolveTextureTarget(bloom_target_);
+    const auto source_view = context_.ResolveTextureView(scene_source_);
+    const auto bloom_view = context_.ResolveTextureView(bloom_target_);
+    EnsurePipelineObjects(*context,
+                          *descriptor_host,
+                          *pipeline_host,
+                          bloom_view.format,
+                          bloom_view.format);
+
+    const auto scene_slot = render_target_host->EnsureBindlessImageSlot(source_target);
+    const auto sampler = bindless_resources->DefaultSamplerSlot();
+    const VkDescriptorSet bindless_sets[] = {
+        bindless_resources->SampledImageSet(),
+        bindless_resources->SamplerSet(),
+    };
+    vkCmdBindPipeline(context_.CommandBuffer(),
+                      VK_PIPELINE_BIND_POINT_GRAPHICS,
+                      pipeline_host->GetGraphicsPipeline(prefilter_pipeline_id));
+    vkCmdBindDescriptorSets(context_.CommandBuffer(),
+                            VK_PIPELINE_BIND_POINT_GRAPHICS,
+                            pipeline_host->GetPipelineLayout(single_source_pipeline_layout_id),
+                            0U,
+                            2U,
+                            bindless_sets,
+                            0U,
+                            nullptr);
+    ++stats.descriptor_set_bind_count;
+    BindFullscreenViewportAndScissor(context_.CommandBuffer(), VkExtent2D{bloom_view.extent.width, bloom_view.extent.height});
+
+    const PrefilterPushConstants push_constants{
+        .threshold = std::max(create_info_cache.bloom_threshold, 0.0F),
+        .knee = std::max(create_info_cache.bloom_knee, 0.0001F),
+        .texture_slot = scene_slot.index,
+        .sampler_slot = sampler.index,
+        .reserved0 = 0.0F,
+        .reserved1 = 0U,
+    };
+    vkCmdPushConstants(context_.CommandBuffer(),
+                       pipeline_host->GetPipelineLayout(single_source_pipeline_layout_id),
+                       VK_SHADER_STAGE_FRAGMENT_BIT,
+                       0U,
+                       sizeof(PrefilterPushConstants),
+                       &push_constants);
+    vkCmdDraw(context_.CommandBuffer(), 3U, 1U, 0U, 0U);
+    ++stats.prefilter_draw_call_count;
+    ++stats.pass_count;
+}
+
+void RenderTargetBloomRenderer::RecordGraphBlurPass(render_graph::GraphCommandContext& context_,
+                                                    render_graph::ResourceHandle input_target_,
+                                                    render_graph::ResourceHandle output_target_) {
+    if (!initialized || context == nullptr || descriptor_host == nullptr || pipeline_host == nullptr ||
+        render_target_host == nullptr || bindless_resources == nullptr) {
+        throw std::runtime_error("RenderTargetBloomRenderer::RecordGraphBlurPass requires prepared runtime state");
+    }
+    const auto input_target = context_.ResolveTextureTarget(input_target_);
+    const auto input_view = context_.ResolveTextureView(input_target_);
+    const auto output_view = context_.ResolveTextureView(output_target_);
+    EnsurePipelineObjects(*context,
+                          *descriptor_host,
+                          *pipeline_host,
+                          output_view.format,
+                          output_view.format);
+
+    const auto input_slot = render_target_host->EnsureBindlessImageSlot(input_target);
+    const auto sampler = bindless_resources->DefaultSamplerSlot();
+    const VkDescriptorSet bindless_sets[] = {
+        bindless_resources->SampledImageSet(),
+        bindless_resources->SamplerSet(),
+    };
+    vkCmdBindPipeline(context_.CommandBuffer(),
+                      VK_PIPELINE_BIND_POINT_GRAPHICS,
+                      pipeline_host->GetGraphicsPipeline(blur_pipeline_id));
+    vkCmdBindDescriptorSets(context_.CommandBuffer(),
+                            VK_PIPELINE_BIND_POINT_GRAPHICS,
+                            pipeline_host->GetPipelineLayout(single_source_pipeline_layout_id),
+                            0U,
+                            2U,
+                            bindless_sets,
+                            0U,
+                            nullptr);
+    ++stats.descriptor_set_bind_count;
+    BindFullscreenViewportAndScissor(context_.CommandBuffer(), VkExtent2D{output_view.extent.width, output_view.extent.height});
+
+    const BlurPushConstants push_constants{
+        .texel_offset_x = (input_view.extent.width > 0U)
+            ? (1.0F / static_cast<float>(input_view.extent.width))
+            : 0.0F,
+        .texel_offset_y = (input_view.extent.height > 0U)
+            ? (1.0F / static_cast<float>(input_view.extent.height))
+            : 0.0F,
+        .filter_scale = std::max(create_info_cache.blur_filter_scale, 0.0F),
+        .texture_slot = input_slot.index,
+        .sampler_slot = sampler.index,
+        .reserved0 = 0U,
+    };
+    vkCmdPushConstants(context_.CommandBuffer(),
+                       pipeline_host->GetPipelineLayout(single_source_pipeline_layout_id),
+                       VK_SHADER_STAGE_FRAGMENT_BIT,
+                       0U,
+                       sizeof(BlurPushConstants),
+                       &push_constants);
+    vkCmdDraw(context_.CommandBuffer(), 3U, 1U, 0U, 0U);
+    ++stats.blur_draw_call_count;
+    ++stats.pass_count;
+}
+
+void RenderTargetBloomRenderer::RecordGraphCombinePass(render_graph::GraphCommandContext& context_,
+                                                       render_graph::ResourceHandle scene_source_,
+                                                       render_graph::ResourceHandle bloom_target_,
+                                                       render_graph::ResourceHandle output_target_) {
+    if (!initialized || context == nullptr || descriptor_host == nullptr || pipeline_host == nullptr ||
+        render_target_host == nullptr || bindless_resources == nullptr) {
+        throw std::runtime_error("RenderTargetBloomRenderer::RecordGraphCombinePass requires prepared runtime state");
+    }
+    const auto scene_target = context_.ResolveTextureTarget(scene_source_);
+    const auto bloom_target = context_.ResolveTextureTarget(bloom_target_);
+    const auto output_view = context_.ResolveTextureView(output_target_);
+    const auto scene_view = context_.ResolveTextureView(scene_source_);
+    const auto bloom_view = context_.ResolveTextureView(bloom_target_);
+    EnsurePipelineObjects(*context,
+                          *descriptor_host,
+                          *pipeline_host,
+                          bloom_view.format,
+                          output_view.format);
+
+    const auto scene_slot = render_target_host->EnsureBindlessImageSlot(scene_target);
+    const auto bloom_slot = render_target_host->EnsureBindlessImageSlot(bloom_target);
+    const auto sampler = bindless_resources->DefaultSamplerSlot();
+    const VkDescriptorSet bindless_sets[] = {
+        bindless_resources->SampledImageSet(),
+        bindless_resources->SamplerSet(),
+    };
+    vkCmdBindPipeline(context_.CommandBuffer(),
+                      VK_PIPELINE_BIND_POINT_GRAPHICS,
+                      pipeline_host->GetGraphicsPipeline(combine_pipeline_id));
+    vkCmdBindDescriptorSets(context_.CommandBuffer(),
+                            VK_PIPELINE_BIND_POINT_GRAPHICS,
+                            pipeline_host->GetPipelineLayout(dual_source_pipeline_layout_id),
+                            0U,
+                            2U,
+                            bindless_sets,
+                            0U,
+                            nullptr);
+    ++stats.descriptor_set_bind_count;
+    BindFullscreenViewportAndScissor(context_.CommandBuffer(), VkExtent2D{output_view.extent.width, output_view.extent.height});
+
+    CombinePushConstants push_constants{};
+    push_constants.exposure = std::max(create_info_cache.exposure, 0.0F);
+    push_constants.inv_gamma = SafeInvGamma(create_info_cache.output_gamma);
+    push_constants.bloom_intensity = std::max(create_info_cache.bloom_intensity, 0.0F);
+    push_constants.flags = 0U;
+    push_constants.flags |= create_info_cache.enable_reinhard_tonemap ? 0x1U : 0U;
+    push_constants.flags |= create_info_cache.apply_manual_gamma ? 0x2U : 0U;
+    push_constants.flags |= (scene_view.color_encoding == RenderTargetColorEncoding::srgb) ? 0x4U : 0U;
+    push_constants.flags |= (bloom_view.color_encoding == RenderTargetColorEncoding::srgb) ? 0x8U : 0U;
+    push_constants.scene_texture_slot = scene_slot.index;
+    push_constants.bloom_texture_slot = bloom_slot.index;
+    push_constants.sampler_slot = sampler.index;
+    vkCmdPushConstants(context_.CommandBuffer(),
+                       pipeline_host->GetPipelineLayout(dual_source_pipeline_layout_id),
+                       VK_SHADER_STAGE_FRAGMENT_BIT,
+                       0U,
+                       sizeof(CombinePushConstants),
+                       &push_constants);
+    vkCmdDraw(context_.CommandBuffer(), 3U, 1U, 0U, 0U);
+    ++stats.combine_draw_call_count;
+    ++stats.pass_count;
+}
+
 void RenderTargetBloomRenderer::OnSwapchainRecreated(std::uint32_t image_count_,
                                                      VkExtent2D extent_,
                                                      VkFormat format_) {
@@ -504,6 +683,10 @@ bool RenderTargetBloomRenderer::IsInitialized() const noexcept {
 
 const RenderTargetBloomRendererStats& RenderTargetBloomRenderer::Stats() const noexcept {
     return stats;
+}
+
+const RenderTargetBloomRendererCreateInfo& RenderTargetBloomRenderer::CreateInfo() const noexcept {
+    return create_info_cache;
 }
 
 void RenderTargetBloomRenderer::EnsurePipelineObjects(VulkanContext& context_,
@@ -686,4 +869,3 @@ float RenderTargetBloomRenderer::SafeInvGamma(float gamma_) noexcept {
 }
 
 } // namespace vr::render
-

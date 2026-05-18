@@ -3,7 +3,6 @@
 #include "vr/render/environment/sky_environment_gpu_host.hpp"
 #include "vr/render/ibl_bake_host.hpp"
 
-#include <cmath>
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
@@ -53,6 +52,21 @@ constexpr float k_max_bloom_downsample_scale = 1.0F;
         .extent = {.width = width, .height = height, .depth = 1U},
         .usage = render_graph::texture_usage_color_attachment_flag |
                  render_graph::texture_usage_sampled_flag,
+        .mip_level_count = 1U,
+        .array_layer_count = 1U,
+        .sample_count = render_graph::SampleCount::x1,
+    };
+}
+
+[[nodiscard]] render_graph::TextureDesc BuildPostprocessOverlayIntermediateDesc(
+    const render_graph::FrameSnapshot3D& snapshot_) noexcept {
+    return render_graph::TextureDesc{
+        .dimension = render_graph::TextureDimension::image_2d,
+        .format = render_graph::TextureFormat::r16g16b16a16_sfloat,
+        .extent = snapshot_.reference_extent,
+        .usage = render_graph::texture_usage_color_attachment_flag |
+                 render_graph::texture_usage_sampled_flag |
+                 render_graph::texture_usage_transfer_src_flag,
         .mip_level_count = 1U,
         .array_layer_count = 1U,
         .sample_count = render_graph::SampleCount::x1,
@@ -689,7 +703,6 @@ void SceneRecorder3D::BuildRenderGraph(
     }
 
     if (graph_post_stack_enabled &&
-        !graph_overlay_present &&
         IsValidResourceHandle(build_result_.scene_color) &&
         IsValidResourceHandle(build_result_.present_target) &&
         IsValidResourceVersionHandle(color_chain_)) {
@@ -698,6 +711,11 @@ void SceneRecorder3D::BuildRenderGraph(
         const auto bloom_desc = BuildBloomIntermediateDesc(snapshot_, bloom_create_info);
         const auto bloom_target_a = builder_.CreateTexture("bloom_target_a", bloom_desc);
         const auto bloom_target_b = builder_.CreateTexture("bloom_target_b", bloom_desc);
+        const auto postprocess_output_target = graph_overlay_present
+            ? builder_.CreateTexture("postprocess_color",
+                                     BuildPostprocessOverlayIntermediateDesc(snapshot_),
+                                     render_graph::ResourceLifetime::transient)
+            : build_result_.present_target;
 
         const auto prefilter_pass = builder_.AddPass("bloom_prefilter");
         (void)builder_.Read(prefilter_pass,
@@ -778,16 +796,19 @@ void SceneRecorder3D::BuildRenderGraph(
                             bloom_chain,
                             render_graph::AccessDesc{.access = render_graph::AccessKind::shader_sample_read});
         color_chain_ = builder_.Write(combine_pass,
-                                      build_result_.present_target,
+                                      postprocess_output_target,
                                       render_graph::AccessDesc{.access = render_graph::AccessKind::color_attachment_write});
+        const auto combine_output_load_op = graph_overlay_present
+            ? render_graph::AttachmentLoadOp::dont_care
+            : (bloom_create_info.clear_swapchain
+                ? render_graph::AttachmentLoadOp::clear
+                : render_graph::AttachmentLoadOp::load);
         builder_.SetRasterPassDesc(combine_pass,
                                    render_graph::RasterPassDesc{
                                        .color_attachments = {
                                            render_graph::RasterColorAttachmentDesc{
-                                               .target = build_result_.present_target,
-                                               .load_op = bloom_create_info.clear_swapchain
-                                                   ? render_graph::AttachmentLoadOp::clear
-                                                   : render_graph::AttachmentLoadOp::load,
+                                               .target = postprocess_output_target,
+                                               .load_op = combine_output_load_op,
                                                .store_op = render_graph::AttachmentStoreOp::store,
                                                .clear_value = {
                                                    .red = bloom_create_info.clear_color.float32[0],
@@ -799,11 +820,11 @@ void SceneRecorder3D::BuildRenderGraph(
                                        },
                                    });
         builder_.SetExecuteCallback(combine_pass,
-                                    [this, scene_color, bloom_target_a, build_result_](render_graph::GraphCommandContext& context_) {
+                                    [this, scene_color, bloom_target_a, postprocess_output_target](render_graph::GraphCommandContext& context_) {
                                         post_stack.Bloom().RecordGraphCombinePass(context_,
                                                                                   scene_color,
                                                                                   bloom_target_a,
-                                                                                  build_result_.present_target);
+                                                                                  postprocess_output_target);
                                     });
     }
 

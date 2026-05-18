@@ -2,6 +2,7 @@
 
 #include "Center/Memory/Container/Vector/McVector.hpp"
 #include "vr/render/bindless_resource_system.hpp"
+#include "vr/render_graph/render_graph_types.hpp"
 #include "vr/render/descriptor_host.hpp"
 #include "vr/render/pipeline_host.hpp"
 #include "vr/render/render_target_host.hpp"
@@ -14,6 +15,10 @@
 
 namespace vr {
 class VulkanContext;
+}
+
+namespace vr::render_graph {
+class GraphCommandContext;
 }
 
 namespace vr::render {
@@ -60,12 +65,23 @@ public:
 
     void PrepareFrame(const RenderTargetBloomRendererPrepareView& prepare_view_);
     void Record(const FrameRecordContext& record_context_);
+    void RecordGraphPrefilterPass(render_graph::GraphCommandContext& context_,
+                                  render_graph::ResourceHandle scene_source_,
+                                  render_graph::ResourceHandle bloom_target_);
+    void RecordGraphBlurPass(render_graph::GraphCommandContext& context_,
+                             render_graph::ResourceHandle input_target_,
+                             render_graph::ResourceHandle output_target_);
+    void RecordGraphCombinePass(render_graph::GraphCommandContext& context_,
+                                render_graph::ResourceHandle scene_source_,
+                                render_graph::ResourceHandle bloom_target_,
+                                render_graph::ResourceHandle output_target_);
     void OnSwapchainRecreated(std::uint32_t image_count_,
                               VkExtent2D extent_,
                               VkFormat format_);
 
     [[nodiscard]] bool IsInitialized() const noexcept;
     [[nodiscard]] const RenderTargetBloomRendererStats& Stats() const noexcept;
+    [[nodiscard]] const RenderTargetBloomRendererCreateInfo& CreateInfo() const noexcept;
 
 private:
     struct PrefilterPushConstants final {

@@ -306,88 +306,101 @@ void SkyEnvironmentPass::Record(const FrameRecordContext& record_context_,
         RecordEndColorPass(record_context_, output_target_config);
     };
 
+    begin_rendering([&](const ResolvedColorRenderPass& color_pass) {
+        vkCmdBeginRendering(record_context_.command_buffer, color_pass.rendering_info.VkInfoPtr());
+        RecordGraphPass(record_context_.command_buffer,
+                        view_,
+                        state_,
+                        color_pass.target.format,
+                        depth_tested,
+                        color_pass.depth_target.format);
+        vkCmdEndRendering(record_context_.command_buffer);
+    });
+}
+
+void SkyEnvironmentPass::RecordGraphPass(VkCommandBuffer command_buffer_,
+                                         const RenderView3D& view_,
+                                         const scene::SkyEnvironmentRenderState& state_,
+                                         const VkFormat color_format_,
+                                         const bool depth_tested_,
+                                         const VkFormat depth_format_) {
+    if (!initialized) {
+        throw std::runtime_error("SkyEnvironmentPass::RecordGraphPass called before Initialize");
+    }
+    if (context == nullptr || pipeline_host == nullptr || command_buffer_ == VK_NULL_HANDLE) {
+        throw std::runtime_error("SkyEnvironmentPass::RecordGraphPass requires prepared pipeline state and command buffer");
+    }
+
     if (SupportsGradientMode(state_.mode)) {
-        begin_rendering([&](const ResolvedColorRenderPass& color_pass) {
-            EnsureGradientPipelineObjects(*context,
-                                          *pipeline_host,
-                                          color_pass.target.format,
-                                          depth_tested,
-                                          color_pass.depth_target.format);
+        EnsureGradientPipelineObjects(*context,
+                                      *pipeline_host,
+                                      color_format_,
+                                      depth_tested_,
+                                      depth_format_);
 
-            vkCmdBeginRendering(record_context_.command_buffer, color_pass.rendering_info.VkInfoPtr());
+        const VkViewport viewport = ToVkViewport(view_.viewport);
+        const VkRect2D scissor = ToVkRect2D(view_.scissor);
+        vkCmdSetViewport(command_buffer_, 0U, 1U, &viewport);
+        vkCmdSetScissor(command_buffer_, 0U, 1U, &scissor);
 
-            const VkViewport viewport = ToVkViewport(view_.viewport);
-            const VkRect2D scissor = ToVkRect2D(view_.scissor);
-            vkCmdSetViewport(record_context_.command_buffer, 0U, 1U, &viewport);
-            vkCmdSetScissor(record_context_.command_buffer, 0U, 1U, &scissor);
+        const GraphicsPipelineId pipeline_id = depth_tested_
+            ? gradient_depth_tested_pipeline_id
+            : gradient_pipeline_id;
+        vkCmdBindPipeline(command_buffer_,
+                          VK_PIPELINE_BIND_POINT_GRAPHICS,
+                          pipeline_host->GetGraphicsPipeline(pipeline_id));
 
-            const GraphicsPipelineId pipeline_id = depth_tested
-                ? gradient_depth_tested_pipeline_id
-                : gradient_pipeline_id;
-            vkCmdBindPipeline(record_context_.command_buffer,
-                              VK_PIPELINE_BIND_POINT_GRAPHICS,
-                              pipeline_host->GetGraphicsPipeline(pipeline_id));
+        const GradientPushBlock push_block{
+            .color0 = state_.zenith_color,
+            .color1 = state_.horizon_color,
+            .exposure = state_.exposure,
+            .mode = static_cast<std::uint32_t>(state_.mode),
+            .reserved0 = 0.0F,
+            .reserved1 = 0.0F,
+        };
+        vkCmdPushConstants(command_buffer_,
+                           pipeline_host->GetPipelineLayout(gradient_pipeline_layout_id),
+                           VK_SHADER_STAGE_FRAGMENT_BIT,
+                           0U,
+                           sizeof(GradientPushBlock),
+                           &push_block);
 
-            const GradientPushBlock push_block{
-                .color0 = state_.zenith_color,
-                .color1 = state_.horizon_color,
-                .exposure = state_.exposure,
-                .mode = static_cast<std::uint32_t>(state_.mode),
-                .reserved0 = 0.0F,
-                .reserved1 = 0.0F,
-            };
-            vkCmdPushConstants(record_context_.command_buffer,
-                               pipeline_host->GetPipelineLayout(gradient_pipeline_layout_id),
-                               VK_SHADER_STAGE_FRAGMENT_BIT,
-                               0U,
-                               sizeof(GradientPushBlock),
-                               &push_block);
-
-            vkCmdDraw(record_context_.command_buffer, 3U, 1U, 0U, 0U);
-            ++stats.draw_call_count;
-
-            vkCmdEndRendering(record_context_.command_buffer);
-        });
+        vkCmdDraw(command_buffer_, 3U, 1U, 0U, 0U);
+        ++stats.draw_call_count;
         return;
     }
 
     if (SupportsProceduralAtmosphereMode(state_.mode) &&
         view_.camera != nullptr &&
         view_.camera_transform != nullptr) {
-        begin_rendering([&](const ResolvedColorRenderPass& color_pass) {
-            EnsureAtmospherePipelineObjects(*context,
-                                            *pipeline_host,
-                                            color_pass.target.format,
-                                            depth_tested,
-                                            color_pass.depth_target.format);
+        EnsureAtmospherePipelineObjects(*context,
+                                        *pipeline_host,
+                                        color_format_,
+                                        depth_tested_,
+                                        depth_format_);
 
-            vkCmdBeginRendering(record_context_.command_buffer, color_pass.rendering_info.VkInfoPtr());
+        const VkViewport viewport = ToVkViewport(view_.viewport);
+        const VkRect2D scissor = ToVkRect2D(view_.scissor);
+        vkCmdSetViewport(command_buffer_, 0U, 1U, &viewport);
+        vkCmdSetScissor(command_buffer_, 0U, 1U, &scissor);
 
-            const VkViewport viewport = ToVkViewport(view_.viewport);
-            const VkRect2D scissor = ToVkRect2D(view_.scissor);
-            vkCmdSetViewport(record_context_.command_buffer, 0U, 1U, &viewport);
-            vkCmdSetScissor(record_context_.command_buffer, 0U, 1U, &scissor);
+        const GraphicsPipelineId pipeline_id = depth_tested_
+            ? atmosphere_depth_tested_pipeline_id
+            : atmosphere_pipeline_id;
+        vkCmdBindPipeline(command_buffer_,
+                          VK_PIPELINE_BIND_POINT_GRAPHICS,
+                          pipeline_host->GetGraphicsPipeline(pipeline_id));
 
-            const GraphicsPipelineId pipeline_id = depth_tested
-                ? atmosphere_depth_tested_pipeline_id
-                : atmosphere_pipeline_id;
-            vkCmdBindPipeline(record_context_.command_buffer,
-                              VK_PIPELINE_BIND_POINT_GRAPHICS,
-                              pipeline_host->GetGraphicsPipeline(pipeline_id));
+        const AtmospherePushBlock push_block = BuildAtmospherePushBlock(view_, state_);
+        vkCmdPushConstants(command_buffer_,
+                           pipeline_host->GetPipelineLayout(atmosphere_pipeline_layout_id),
+                           VK_SHADER_STAGE_FRAGMENT_BIT,
+                           0U,
+                           sizeof(AtmospherePushBlock),
+                           &push_block);
 
-            const AtmospherePushBlock push_block = BuildAtmospherePushBlock(view_, state_);
-            vkCmdPushConstants(record_context_.command_buffer,
-                               pipeline_host->GetPipelineLayout(atmosphere_pipeline_layout_id),
-                               VK_SHADER_STAGE_FRAGMENT_BIT,
-                               0U,
-                               sizeof(AtmospherePushBlock),
-                               &push_block);
-
-            vkCmdDraw(record_context_.command_buffer, 3U, 1U, 0U, 0U);
-            ++stats.draw_call_count;
-
-            vkCmdEndRendering(record_context_.command_buffer);
-        });
+        vkCmdDraw(command_buffer_, 3U, 1U, 0U, 0U);
+        ++stats.draw_call_count;
         return;
     }
 
@@ -396,55 +409,49 @@ void SkyEnvironmentPass::Record(const FrameRecordContext& record_context_,
         bindless_resources != nullptr &&
         view_.camera != nullptr &&
         view_.camera_transform != nullptr) {
-        begin_rendering([&](const ResolvedColorRenderPass& color_pass) {
-            EnsureEquirectPipelineObjects(*context,
-                                          *descriptor_host,
-                                          *pipeline_host,
-                                          color_pass.target.format,
-                                          depth_tested,
-                                          color_pass.depth_target.format);
+        EnsureEquirectPipelineObjects(*context,
+                                      *descriptor_host,
+                                      *pipeline_host,
+                                      color_format_,
+                                      depth_tested_,
+                                      depth_format_);
 
-            vkCmdBeginRendering(record_context_.command_buffer, color_pass.rendering_info.VkInfoPtr());
+        const VkViewport viewport = ToVkViewport(view_.viewport);
+        const VkRect2D scissor = ToVkRect2D(view_.scissor);
+        vkCmdSetViewport(command_buffer_, 0U, 1U, &viewport);
+        vkCmdSetScissor(command_buffer_, 0U, 1U, &scissor);
 
-            const VkViewport viewport = ToVkViewport(view_.viewport);
-            const VkRect2D scissor = ToVkRect2D(view_.scissor);
-            vkCmdSetViewport(record_context_.command_buffer, 0U, 1U, &viewport);
-            vkCmdSetScissor(record_context_.command_buffer, 0U, 1U, &scissor);
+        const GraphicsPipelineId pipeline_id = depth_tested_
+            ? equirect_depth_tested_pipeline_id
+            : equirect_pipeline_id;
+        vkCmdBindPipeline(command_buffer_,
+                          VK_PIPELINE_BIND_POINT_GRAPHICS,
+                          pipeline_host->GetGraphicsPipeline(pipeline_id));
+        const std::array<VkDescriptorSet, 2U> descriptor_sets{
+            bindless_resources->SampledImageSet(),
+            bindless_resources->SamplerSet()
+        };
+        vkCmdBindDescriptorSets(command_buffer_,
+                                VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                pipeline_host->GetPipelineLayout(equirect_pipeline_layout_id),
+                                0U,
+                                static_cast<std::uint32_t>(descriptor_sets.size()),
+                                descriptor_sets.data(),
+                                0U,
+                                nullptr);
+        ++stats.descriptor_set_bind_count;
 
-            const GraphicsPipelineId pipeline_id = depth_tested
-                ? equirect_depth_tested_pipeline_id
-                : equirect_pipeline_id;
-            vkCmdBindPipeline(record_context_.command_buffer,
-                              VK_PIPELINE_BIND_POINT_GRAPHICS,
-                              pipeline_host->GetGraphicsPipeline(pipeline_id));
-            const std::array<VkDescriptorSet, 2U> descriptor_sets{
-                bindless_resources->SampledImageSet(),
-                bindless_resources->SamplerSet()
-            };
-            vkCmdBindDescriptorSets(record_context_.command_buffer,
-                                    VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                    pipeline_host->GetPipelineLayout(equirect_pipeline_layout_id),
-                                    0U,
-                                    static_cast<std::uint32_t>(descriptor_sets.size()),
-                                    descriptor_sets.data(),
-                                    0U,
-                                    nullptr);
-            ++stats.descriptor_set_bind_count;
+        const EquirectPushBlock push_block =
+            BuildEquirectPushBlock(view_, state_, active_equirect_texture_slot, active_equirect_sampler_slot);
+        vkCmdPushConstants(command_buffer_,
+                           pipeline_host->GetPipelineLayout(equirect_pipeline_layout_id),
+                           VK_SHADER_STAGE_FRAGMENT_BIT,
+                           0U,
+                           sizeof(EquirectPushBlock),
+                           &push_block);
 
-            const EquirectPushBlock push_block =
-                BuildEquirectPushBlock(view_, state_, active_equirect_texture_slot, active_equirect_sampler_slot);
-            vkCmdPushConstants(record_context_.command_buffer,
-                               pipeline_host->GetPipelineLayout(equirect_pipeline_layout_id),
-                               VK_SHADER_STAGE_FRAGMENT_BIT,
-                               0U,
-                               sizeof(EquirectPushBlock),
-                               &push_block);
-
-            vkCmdDraw(record_context_.command_buffer, 3U, 1U, 0U, 0U);
-            ++stats.draw_call_count;
-
-            vkCmdEndRendering(record_context_.command_buffer);
-        });
+        vkCmdDraw(command_buffer_, 3U, 1U, 0U, 0U);
+        ++stats.draw_call_count;
         return;
     }
 
@@ -454,58 +461,52 @@ void SkyEnvironmentPass::Record(const FrameRecordContext& record_context_,
         ibl_host != nullptr &&
         view_.camera != nullptr &&
         view_.camera_transform != nullptr) {
-        begin_rendering([&](const ResolvedColorRenderPass& color_pass) {
-            EnsureImageEnvironmentPipelineObjects(*context,
-                                                  *descriptor_host,
-                                                  *pipeline_host,
-                                                  color_pass.target.format,
-                                                  depth_tested,
-                                                  color_pass.depth_target.format);
+        EnsureImageEnvironmentPipelineObjects(*context,
+                                              *descriptor_host,
+                                              *pipeline_host,
+                                              color_format_,
+                                              depth_tested_,
+                                              depth_format_);
 
-            vkCmdBeginRendering(record_context_.command_buffer, color_pass.rendering_info.VkInfoPtr());
+        const VkViewport viewport = ToVkViewport(view_.viewport);
+        const VkRect2D scissor = ToVkRect2D(view_.scissor);
+        vkCmdSetViewport(command_buffer_, 0U, 1U, &viewport);
+        vkCmdSetScissor(command_buffer_, 0U, 1U, &scissor);
 
-            const VkViewport viewport = ToVkViewport(view_.viewport);
-            const VkRect2D scissor = ToVkRect2D(view_.scissor);
-            vkCmdSetViewport(record_context_.command_buffer, 0U, 1U, &viewport);
-            vkCmdSetScissor(record_context_.command_buffer, 0U, 1U, &scissor);
+        const GraphicsPipelineId pipeline_id = depth_tested_
+            ? environment_image_depth_tested_pipeline_id
+            : environment_image_pipeline_id;
+        vkCmdBindPipeline(command_buffer_,
+                          VK_PIPELINE_BIND_POINT_GRAPHICS,
+                          pipeline_host->GetGraphicsPipeline(pipeline_id));
+        const std::array<VkDescriptorSet, 2U> descriptor_sets{
+            bindless_resources->SampledImageSet(),
+            bindless_resources->SamplerSet()
+        };
+        vkCmdBindDescriptorSets(command_buffer_,
+                                VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                pipeline_host->GetPipelineLayout(environment_image_pipeline_layout_id),
+                                0U,
+                                static_cast<std::uint32_t>(descriptor_sets.size()),
+                                descriptor_sets.data(),
+                                0U,
+                                nullptr);
+        ++stats.descriptor_set_bind_count;
 
-            const GraphicsPipelineId pipeline_id = depth_tested
-                ? environment_image_depth_tested_pipeline_id
-                : environment_image_pipeline_id;
-            vkCmdBindPipeline(record_context_.command_buffer,
-                              VK_PIPELINE_BIND_POINT_GRAPHICS,
-                              pipeline_host->GetGraphicsPipeline(pipeline_id));
-            const std::array<VkDescriptorSet, 2U> descriptor_sets{
-                bindless_resources->SampledImageSet(),
-                bindless_resources->SamplerSet()
-            };
-            vkCmdBindDescriptorSets(record_context_.command_buffer,
-                                    VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                    pipeline_host->GetPipelineLayout(environment_image_pipeline_layout_id),
-                                    0U,
-                                    static_cast<std::uint32_t>(descriptor_sets.size()),
-                                    descriptor_sets.data(),
-                                    0U,
-                                    nullptr);
-            ++stats.descriptor_set_bind_count;
+        const EnvironmentImagePushBlock push_block = BuildEnvironmentImagePushBlock(
+            view_,
+            ibl_host->ActiveParams(),
+            active_environment_texture_slot,
+            active_environment_sampler_slot);
+        vkCmdPushConstants(command_buffer_,
+                           pipeline_host->GetPipelineLayout(environment_image_pipeline_layout_id),
+                           VK_SHADER_STAGE_FRAGMENT_BIT,
+                           0U,
+                           sizeof(EnvironmentImagePushBlock),
+                           &push_block);
 
-            const EnvironmentImagePushBlock push_block = BuildEnvironmentImagePushBlock(
-                view_,
-                ibl_host->ActiveParams(),
-                active_environment_texture_slot,
-                active_environment_sampler_slot);
-            vkCmdPushConstants(record_context_.command_buffer,
-                               pipeline_host->GetPipelineLayout(environment_image_pipeline_layout_id),
-                               VK_SHADER_STAGE_FRAGMENT_BIT,
-                               0U,
-                               sizeof(EnvironmentImagePushBlock),
-                               &push_block);
-
-            vkCmdDraw(record_context_.command_buffer, 3U, 1U, 0U, 0U);
-            ++stats.draw_call_count;
-
-            vkCmdEndRendering(record_context_.command_buffer);
-        });
+        vkCmdDraw(command_buffer_, 3U, 1U, 0U, 0U);
+        ++stats.draw_call_count;
         return;
     }
 

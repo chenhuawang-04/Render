@@ -1,4 +1,5 @@
-﻿#include "support/test_framework.hpp"
+#include "support/test_framework.hpp"
+#include "support/render_graph_test_utils.hpp"
 #include "vr/asset/texture_host.hpp"
 #include "vr/ecs/system/animation_evaluation_context.hpp"
 #include "vr/ecs/system/appearance_system.hpp"
@@ -118,6 +119,7 @@ constexpr float kUnifiedHdrEnvironmentRotationY = 0.42F;
     }
     return false;
 }
+
 
 void ConfigureUnifiedScene3DRuntimeCreateInfo(Runtime::CreateInfo& create_info_) {
     create_info_.platform.window.title = "vr_tests_runtime_unified_scene_3d";
@@ -1145,15 +1147,20 @@ VR_TEST_CASE(RuntimeIntegration_unified_scene_3d_bloom_post_stack_smoke,
         VR_CHECK(max_text_instances > 0U);
         VR_CHECK(max_geometry_skeletal_instances > 0U);
         VR_CHECK(max_geometry_vertex_deform_instances > 0U);
+        const bool graph_only_record_active = vr::test::IsGraphOnlyScene3DRecordActive(runtime);
         VR_CHECK(max_geometry_morph_instances > 0U);
         VR_CHECK(max_shadow_morph_draw_calls > 0U);
         VR_CHECK(recorder.Stats().pre_scene_renderer_count == 1U);
         VR_CHECK(recorder.Stats().environment_prepare_count > 0U);
-        VR_CHECK(recorder.Stats().environment_record_count > 0U);
+        VR_CHECK(graph_only_record_active
+                     ? (recorder.Stats().environment_record_count == 0U)
+                     : (recorder.Stats().environment_record_count > 0U));
         VR_CHECK(recorder.Stats().animation_binding_refresh_count > 0U);
         VR_CHECK(recorder.Stats().frame_packet_bind_count >= 1U);
         VR_CHECK(recorder.Stats().frame_packet_prepare_count > 0U);
-        VR_CHECK(recorder.Stats().frame_packet_record_count > 0U);
+        VR_CHECK(graph_only_record_active
+                     ? (recorder.Stats().frame_packet_record_count == 0U)
+                     : (recorder.Stats().frame_packet_record_count > 0U));
         VR_CHECK(recorder.FramePacket() == &main_scene_packet);
         VR_CHECK(recorder.ActiveView() == &main_view);
         VR_CHECK(recorder.ActiveView() != nullptr);
@@ -1180,10 +1187,12 @@ VR_TEST_CASE(RuntimeIntegration_unified_scene_3d_bloom_post_stack_smoke,
         VR_CHECK(main_scene_packet.extra.ibl_environment_id == 0U);
         VR_CHECK(main_scene_packet.extra.environment.prefiltered_texture_id == 0U);
         VR_CHECK(main_scene_packet.extra.environment.brdf_lut_texture_id == 0U);
-        VR_CHECK(runtime.RenderTarget().ResolveView(recorder.PostStack().Targets().ColorTarget()).state ==
-                 vr::render::RenderTargetStateKind::shader_read);
-        VR_CHECK(runtime.RenderTarget().ResolveView(recorder.PostStack().Targets().DepthTarget()).state ==
-                 vr::render::RenderTargetStateKind::depth_attachment);
+        if (!graph_only_record_active) {
+            VR_CHECK(runtime.RenderTarget().ResolveView(recorder.PostStack().Targets().ColorTarget()).state ==
+                     vr::render::RenderTargetStateKind::shader_read);
+            VR_CHECK(runtime.RenderTarget().ResolveView(recorder.PostStack().Targets().DepthTarget()).state ==
+                     vr::render::RenderTargetStateKind::depth_attachment);
+        }
         VR_CHECK(runtime.GlyphUpload().Stats().uploaded_rect_count > 0U);
         VR_CHECK(animation_frame_coordinator.Stats().apply_scene_call_count > 0U);
         VR_CHECK(animation_frame_coordinator.Stats().apply_shadow_call_count > 0U);

@@ -1,4 +1,5 @@
-﻿#include "support/test_framework.hpp"
+#include "support/test_framework.hpp"
+#include "support/render_graph_test_utils.hpp"
 #include "vr/ecs/system/appearance_runtime_system.hpp"
 #include "vr/ecs/system/appearance_system.hpp"
 #include "vr/ecs/system/bounds_system.hpp"
@@ -121,6 +122,7 @@ void ApplyGeometryAppearanceBridge(Geometry3D& component_,
     }
     return false;
 }
+
 
 void InitializeGeometryComponent(Geometry3D& component_,
                                  std::uint32_t geometry_id_,
@@ -822,6 +824,278 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_appearance_updates_reuse_de
     }
 }
 
+VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_graph_only_record_path_smoke,
+             "integration;gpu;sdl;runtime;geometry;render_graph") {
+    Runtime runtime{};
+    vr::geometry::GeometryResourceHost geometry_resource_host{};
+    vr::geometry::GeometryUploadHost geometry_upload_host{};
+    vr::geometry::GeometryImageHost geometry_image_host{};
+    vr::geometry::GeometryAppearanceHost geometry_appearance_host{};
+    vr::render::SceneRecorder3D recorder{};
+    vr::geometry::GeometryRenderer3D geometry_renderer{};
+
+    bool runtime_initialized = false;
+    bool geometry_resource_host_initialized = false;
+    bool geometry_upload_host_initialized = false;
+    bool geometry_image_host_initialized = false;
+    bool geometry_appearance_host_initialized = false;
+    bool geometry_renderer_initialized = false;
+
+    std::array<vr::geometry::GeometryMeshVertex, 4U> vertices{
+        vr::geometry::GeometryMeshVertex{.position_x = -0.5F, .position_y = -0.5F, .position_z = 0.0F, .normal_x = 0.0F, .normal_y = 0.0F, .normal_z = 1.0F, .uv_u = 0.0F, .uv_v = 0.0F},
+        vr::geometry::GeometryMeshVertex{.position_x = 0.5F, .position_y = -0.5F, .position_z = 0.0F, .normal_x = 0.0F, .normal_y = 0.0F, .normal_z = 1.0F, .uv_u = 1.0F, .uv_v = 0.0F},
+        vr::geometry::GeometryMeshVertex{.position_x = 0.5F, .position_y = 0.5F, .position_z = 0.0F, .normal_x = 0.0F, .normal_y = 0.0F, .normal_z = 1.0F, .uv_u = 1.0F, .uv_v = 1.0F},
+        vr::geometry::GeometryMeshVertex{.position_x = -0.5F, .position_y = 0.5F, .position_z = 0.0F, .normal_x = 0.0F, .normal_y = 0.0F, .normal_z = 1.0F, .uv_u = 0.0F, .uv_v = 1.0F}
+    };
+    std::array<std::uint32_t, 6U> indices{0U, 1U, 2U, 2U, 3U, 0U};
+    std::array<vr::geometry::GeometrySubmeshRange, 1U> submeshes{
+        vr::geometry::GeometrySubmeshRange{.first_index = 0U, .index_count = 6U, .vertex_offset = 0, .reserved0 = 0U}
+    };
+    std::array<std::uint32_t, 16U> pixels{};
+    for (std::uint32_t y = 0U; y < 4U; ++y) {
+        for (std::uint32_t x = 0U; x < 4U; ++x) {
+            const std::size_t index = static_cast<std::size_t>(y) * 4U + x;
+            const bool checker = ((x ^ y) & 1U) != 0U;
+            pixels[index] = checker ? 0xFFBFA57BU : 0xFFF4E9D0U;
+        }
+    }
+
+    vr::geometry::GeometryMeshUploadInfo mesh_upload_info{};
+    mesh_upload_info.geometry_id = 1U;
+    mesh_upload_info.vertices = vertices.data();
+    mesh_upload_info.vertex_count = static_cast<std::uint32_t>(vertices.size());
+    mesh_upload_info.indices = indices.data();
+    mesh_upload_info.index_count = static_cast<std::uint32_t>(indices.size());
+    mesh_upload_info.submeshes = submeshes.data();
+    mesh_upload_info.submesh_count = static_cast<std::uint32_t>(submeshes.size());
+    mesh_upload_info.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    mesh_upload_info.bounds_min = vr::ecs::Float3{.x = -0.5F, .y = -0.5F, .z = -0.05F};
+    mesh_upload_info.bounds_max = vr::ecs::Float3{.x = 0.5F, .y = 0.5F, .z = 0.05F};
+
+    Geometry3D geometry_component{};
+    InitializeGeometryComponent(geometry_component,
+                                1U,
+                                11U,
+                                vr::ecs::Float3{.x = -0.5F, .y = -0.5F, .z = -0.05F},
+                                vr::ecs::Float3{.x = 0.5F, .y = 0.5F, .z = 0.05F},
+                                true,
+                                true,
+                                false,
+                                false,
+                                false,
+                                vr::ecs::AppearanceShadingModel3D::lit_pbr,
+                                vr::ecs::Rgba8{235U, 208U, 160U, 255U});
+    Transform3D transform{};
+    TransformSystem3D::Initialize(transform);
+    TransformSystem3D::UpdateHierarchy(&transform, 1U);
+    Bounds3D bounds{};
+    BoundsSystem3D::Initialize(bounds);
+    BoundsSystem3D::SetLocalAabb(bounds,
+                                 vr::ecs::Float3{.x = -0.5F, .y = -0.5F, .z = -0.05F},
+                                 vr::ecs::Float3{.x = 0.5F, .y = 0.5F, .z = 0.05F});
+    (void)BoundsSystem3D::UpdateAligned(&bounds, &transform, 1U);
+
+    Camera3D camera{};
+    CameraSystem3D::Initialize(camera);
+    CameraSystem3D::SetAspectRatio(camera, 1280.0F / 720.0F);
+    CameraSystem3D::SetNearFar(camera, 0.05F, 256.0F);
+    CameraSystem3D::SetVerticalFovRadians(camera, 60.0F * 0.01745329251994329577F);
+    Transform3D camera_transform{};
+    TransformSystem3D::Initialize(camera_transform);
+    TransformSystem3D::SetLocalPosition(camera_transform, vr::ecs::Float3{.x = 0.0F, .y = 0.0F, .z = 4.2F});
+    TransformSystem3D::UpdateHierarchy(&camera_transform, 1U);
+    CameraSystem3D::MarkViewDirty(camera);
+    CameraSystem3D::Update(camera, camera_transform);
+
+    struct GraphAwareRecorder final {
+        vr::render::SceneRecorder3D& inner;
+        std::uint32_t legacy_record_count = 0U;
+
+        void PrepareFrame(const vr::render::SceneRecorder3DPrepareView& prepare_view_) {
+            inner.PrepareFrame(prepare_view_);
+        }
+        void BuildRenderGraph(vr::render_graph::RenderGraphBuilder& builder_,
+                              const vr::render_graph::FrameSnapshot3D& snapshot_,
+                              const vr::render_graph::MinimalFrameGraphBuildResult<vr::ecs::Dim3>& build_result_,
+                              vr::render_graph::ResourceVersionHandle& color_chain_) {
+            inner.BuildRenderGraph(builder_, snapshot_, build_result_, color_chain_);
+        }
+        void Record(const vr::render::FrameRecordContext& record_context_) {
+            legacy_record_count += 1U;
+            inner.Record(record_context_);
+        }
+        [[nodiscard]] const vr::render::RenderScenePacket3D* FramePacket() const noexcept {
+            return inner.FramePacket();
+        }
+    } graph_recorder{.inner = recorder};
+
+    try {
+        Runtime::CreateInfo create_info{};
+        create_info.platform.window.title = "vr_tests_runtime_geometry_3d_graph_only";
+        create_info.platform.window.width = 640;
+        create_info.platform.window.height = 360;
+        create_info.platform.window.resizable = true;
+        create_info.platform.window.high_pixel_density = true;
+        create_info.platform.instance.enable_validation = false;
+        create_info.platform.device.required_vulkan13_features.dynamicRendering = VK_TRUE;
+        create_info.platform.device.required_vulkan13_features.synchronization2 = VK_TRUE;
+        create_info.render_loop.swapchain.enable_vsync = false;
+        create_info.render_loop.swapchain.preferred_image_count = 2U;
+        create_info.render_loop.commands.initial_primary_per_frame = 2U;
+        create_info.render_loop.commands.primary_growth_chunk = 2U;
+        create_info.poll_events_each_tick = true;
+        runtime.Initialize(create_info);
+        runtime_initialized = true;
+
+        recorder.Initialize(BuildGeometryRecorderCreateInfo());
+        recorder.BindRuntime(runtime);
+
+        vr::geometry::GeometryResourceHostCreateInfo resource_create_info{};
+        resource_create_info.reserve_mesh_count = 32U;
+        resource_create_info.reserve_submesh_count = 64U;
+        geometry_resource_host.Initialize(runtime.Context(), runtime.GpuMemory(), resource_create_info);
+        geometry_resource_host_initialized = true;
+
+        vr::geometry::GeometryUploadHostCreateInfo upload_create_info{};
+        upload_create_info.frames_in_flight = 2U;
+        upload_create_info.initial_3d_instance_buffer_bytes = 256U * 1024U;
+        geometry_upload_host.Initialize(runtime.Context(), runtime.GpuMemory(), upload_create_info);
+        geometry_upload_host_initialized = true;
+
+        vr::geometry::GeometryImageHostCreateInfo image_create_info{};
+        image_create_info.reserve_image_count = 32U;
+        image_create_info.reserve_retired_image_count = 32U;
+        geometry_image_host.Initialize(runtime.Context(), runtime.GpuMemory(), image_create_info);
+        geometry_image_host_initialized = true;
+
+        vr::geometry::GeometryAppearanceHostCreateInfo appearance_create_info{};
+        appearance_create_info.reserve_appearance_count = 64U;
+        geometry_appearance_host.Initialize(appearance_create_info);
+        geometry_appearance_host_initialized = true;
+
+        runtime.Upload().BeginFrame(runtime.Context(), 0U);
+        geometry_resource_host.UploadMesh(runtime.Context(),
+                                          runtime.Upload(),
+                                          0U,
+                                          0U,
+                                          0U,
+                                          mesh_upload_info);
+        vr::geometry::GeometryImageUploadInfo upload_image{};
+        upload_image.image_id = 101U;
+        upload_image.pixels = pixels.data();
+        upload_image.width = 4U;
+        upload_image.height = 4U;
+        upload_image.format = VK_FORMAT_R8G8B8A8_UNORM;
+        upload_image.bytes_per_pixel = 4U;
+        upload_image.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        upload_image.shader_read_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        upload_image.aspect_mask = VK_IMAGE_ASPECT_COLOR_BIT;
+        geometry_image_host.UploadImage(runtime.Context(), runtime.Upload(), 0U, 0U, 0U, upload_image);
+        const auto upload_end = runtime.Upload().EndFrameAndSubmit(runtime.Context(), 0U);
+        if (upload_end.submitted) {
+            runtime.Upload().WaitFrame(runtime.Context(), 0U);
+        }
+        geometry_resource_host.BeginFrame(runtime.Context(), 0U);
+        geometry_image_host.BeginFrame(runtime.Context(), 0U);
+
+        vr::geometry::GeometryAppearanceDesc appearance{};
+        appearance.appearance_id = 11U;
+        appearance.sampled_surface_binding.base_color_surface.surface_id = 101U;
+        appearance.uv_scale_u = 1.0F;
+        appearance.uv_scale_v = 1.0F;
+        geometry_appearance_host.UpsertAppearance(appearance);
+
+        vr::geometry::GeometryRenderer3DCreateInfo renderer_create_info{};
+        renderer_create_info.reserve_component_count = 1U;
+        renderer_create_info.reserve_instance_count = 64U;
+        renderer_create_info.enable_depth = true;
+        geometry_renderer.Initialize(renderer_create_info);
+        geometry_renderer_initialized = true;
+        geometry_renderer.SetHosts(&geometry_resource_host, &geometry_upload_host);
+        geometry_renderer.SetAppearanceHosts(&geometry_appearance_host, &geometry_image_host);
+        geometry_renderer.SetSceneData(&geometry_component,
+                                       &transform,
+                                       1U,
+                                       &camera,
+                                       &camera_transform,
+                                       &bounds);
+        recorder.RegisterOpaqueSceneRenderer(geometry_renderer, vr::render::SceneRenderPassRole::single);
+
+        vr::render::RenderView3D main_view{};
+        vr::render::RenderScenePacket3D main_scene_packet{};
+        vr::render::RefreshExtentBoundWorldSceneSubmission(main_view,
+                                                           main_scene_packet,
+                                                           camera,
+                                                           camera_transform,
+                                                           runtime.Swapchain().Extent(),
+                                                           0U);
+        recorder.SetFramePacket(&main_scene_packet);
+
+        auto& service = runtime.Services().Get<vr::runtime::services::RenderGraphRuntimeService>();
+
+        std::uint32_t submitted_frames = 0U;
+        std::uint32_t executed_graph_frames = 0U;
+        bool saw_executable_scene_pass = false;
+        constexpr std::uint32_t max_ticks = 6U;
+        for (std::uint32_t tick_index = 0U; tick_index < max_ticks && runtime.IsRunning(); ++tick_index) {
+            vr::render::RefreshExtentBoundWorldSceneSubmission(main_view,
+                                                               main_scene_packet,
+                                                               camera,
+                                                               camera_transform,
+                                                               runtime.Swapchain().Extent(),
+                                                               tick_index);
+            recorder.SetFramePacket(&main_scene_packet);
+            const Runtime::RuntimeTickResult tick_result = runtime.Tick(graph_recorder);
+            if (tick_result.render.code == vr::render::TickCode::Submitted ||
+                tick_result.render.code == vr::render::TickCode::RecreateRequested) {
+                ++submitted_frames;
+            }
+            if (service.LastRecordStats().pass_count > 0U) {
+                ++executed_graph_frames;
+            }
+            if (const auto* compiled_graph = service.TryGetCompiledGraph();
+                compiled_graph != nullptr &&
+                !compiled_graph->Passes().empty()) {
+                saw_executable_scene_pass = saw_executable_scene_pass ||
+                    (compiled_graph->Passes()[0].debug_name == "main_scene_pass" &&
+                     compiled_graph->Passes()[0].executable);
+            }
+            SDL_Delay(1U);
+        }
+
+        VR_REQUIRE(submitted_frames > 0U);
+        VR_CHECK(executed_graph_frames > 0U);
+        VR_CHECK(graph_recorder.legacy_record_count == 0U);
+        VR_CHECK(saw_executable_scene_pass);
+        VR_CHECK(service.RecordExecutionEnabled());
+        VR_CHECK(service.GraphOnlyRecordPathEnabled());
+    } catch (const std::exception& exception_) {
+        if (IsEnvironmentSkipError(exception_.what())) {
+            VR_SKIP(exception_.what());
+        }
+        throw;
+    }
+
+    if (geometry_renderer_initialized) {
+        geometry_renderer.Shutdown(runtime.Context());
+    }
+    if (geometry_appearance_host_initialized) {
+        geometry_appearance_host.Shutdown();
+    }
+    if (geometry_image_host_initialized) {
+        geometry_image_host.Shutdown(runtime.Context());
+    }
+    if (geometry_upload_host_initialized) {
+        geometry_upload_host.Shutdown(runtime.Context());
+    }
+    if (geometry_resource_host_initialized) {
+        geometry_resource_host.Shutdown(runtime.Context());
+    }
+    if (runtime_initialized) {
+        runtime.Shutdown();
+    }
+}
+
 VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_bloom_post_stack_smoke,
              "integration;gpu;sdl;runtime;geometry;render_target;postprocess") {
     Runtime runtime{};
@@ -1261,19 +1535,24 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_bloom_post_stack_smoke,
         VR_CHECK(geometry_upload_host.Stats().upload_count > 0U);
         VR_CHECK(geometry_image_host.Stats().image_count >= 2U);
         VR_CHECK(geometry_appearance_host.Stats().appearance_count >= 2U);
+        const bool graph_only_record_active = vr::test::IsGraphOnlyScene3DRecordActive(runtime);
         VR_CHECK(recorder.Stats().pre_scene_renderer_count == 1U);
         VR_CHECK(recorder.Stats().frame_packet_prepare_count > 0U);
-        VR_CHECK(recorder.Stats().frame_packet_record_count > 0U);
+        VR_CHECK(graph_only_record_active
+                     ? (recorder.Stats().frame_packet_record_count == 0U)
+                     : (recorder.Stats().frame_packet_record_count > 0U));
         VR_CHECK(recorder.ActiveView() == &main_view);
         VR_CHECK(recorder.ActiveView() != nullptr);
         VR_CHECK(recorder.ActiveView()->camera == &camera);
         VR_CHECK(runtime.TargetPool().Stats().acquire_count > 0U);
         VR_CHECK(runtime.TargetPool().Stats().reuse_hit_count > 0U);
         VR_CHECK(runtime.Ibl().Stats().prepared_frame_count > 0U);
-        VR_CHECK(runtime.RenderTarget().ResolveView(recorder.PostStack().Targets().ColorTarget()).state ==
-                 vr::render::RenderTargetStateKind::shader_read);
-        VR_CHECK(runtime.RenderTarget().ResolveView(recorder.PostStack().Targets().DepthTarget()).state ==
-                 vr::render::RenderTargetStateKind::depth_attachment);
+        if (!graph_only_record_active) {
+            VR_CHECK(runtime.RenderTarget().ResolveView(recorder.PostStack().Targets().ColorTarget()).state ==
+                     vr::render::RenderTargetStateKind::shader_read);
+            VR_CHECK(runtime.RenderTarget().ResolveView(recorder.PostStack().Targets().DepthTarget()).state ==
+                     vr::render::RenderTargetStateKind::depth_attachment);
+        }
 
         recorder.Shutdown(runtime.Context());
         shadow_renderer.Shutdown(runtime.Context());

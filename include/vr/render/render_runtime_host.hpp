@@ -1677,16 +1677,32 @@ private:
                           }) {
                 if (const auto* frame_packet = recorder_.FramePacket();
                     frame_packet != nullptr) {
-                    services_ref.template Get<runtime::services::RenderGraphRuntimeService>()
-                        .template SetFrameSnapshot<ecs::Dim3>(
-                            render_graph::MakeFrameSnapshot(
-                                *frame_packet,
-                                frame.frame_index,
-                                render_graph::Extent3D{
-                                    .width = frame.swapchain_extent.width,
-                                    .height = frame.swapchain_extent.height,
-                                    .depth = 1U,
-                                }));
+                    auto& render_graph_service =
+                        services_ref.template Get<runtime::services::RenderGraphRuntimeService>();
+                    render_graph_service.template SetFrameSnapshot<ecs::Dim3>(
+                        render_graph::MakeFrameSnapshot(
+                            *frame_packet,
+                            frame.frame_index,
+                            render_graph::Extent3D{
+                                .width = frame.swapchain_extent.width,
+                                .height = frame.swapchain_extent.height,
+                                .depth = 1U,
+                            }));
+                    if constexpr (requires(RecorderT& recorder_ref_,
+                                           render_graph::RenderGraphBuilder& builder_ref_,
+                                           const render_graph::FrameSnapshot3D& snapshot_ref_,
+                                           const render_graph::MinimalFrameGraphBuildResult<ecs::Dim3>& build_result_ref_,
+                                           render_graph::ResourceVersionHandle& color_chain_ref_) {
+                                      recorder_ref_.BuildRenderGraph(builder_ref_, snapshot_ref_, build_result_ref_, color_chain_ref_);
+                                  }) {
+                        render_graph_service.template SetGraphBuildCallback<ecs::Dim3>(
+                            [&recorder_](render_graph::RenderGraphBuilder& builder_ref_,
+                                         const render_graph::FrameSnapshot3D& snapshot_ref_,
+                                         const render_graph::MinimalFrameGraphBuildResult<ecs::Dim3>& build_result_ref_,
+                                         render_graph::ResourceVersionHandle& color_chain_ref_) {
+                                recorder_.BuildRenderGraph(builder_ref_, snapshot_ref_, build_result_ref_, color_chain_ref_);
+                            });
+                    }
                 }
             }
         } else if constexpr (requires(RecorderT& recorder_ref_,
@@ -2005,7 +2021,8 @@ private:
             augmented.swapchain_targets = runtime.render_target_initialized ? &runtime.swapchain_targets : nullptr;
 
             const auto& graph_service = runtime.services_ref.template Get<runtime::services::RenderGraphRuntimeService>();
-            if (graph_service.CanExecuteGraphRecord(runtime.platform_host.Context())) {
+            if (graph_service.GraphOnlyRecordPathEnabled() &&
+                graph_service.CanExecuteGraphRecord(runtime.platform_host.Context())) {
                 return;
             }
 

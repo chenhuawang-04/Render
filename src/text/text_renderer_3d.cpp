@@ -1,6 +1,7 @@
 ﻿#include "vr/text/text_renderer_3d.hpp"
 
 #include "vr/render/color_blend_state.hpp"
+#include "vr/render_graph/graph_command_context.hpp"
 #include "vr/render/render_loop_host.hpp"
 #include "vr/render/runtime_prepare_views.hpp"
 #include "vr/render/upload_host.hpp"
@@ -590,6 +591,17 @@ void TextRenderer3D::RecordSceneStage(const render::FrameRecordContext& record_c
     RecordInternal(record_context_, render::SceneRenderStagePassHintValue(stage_), true);
 }
 
+void TextRenderer3D::RecordGraphSceneStage(render_graph::GraphCommandContext& context_,
+                                           render::SceneRenderStage stage_,
+                                           render_graph::ResourceHandle color_target_,
+                                           render_graph::ResourceHandle depth_target_) {
+    RecordGraphInternal(context_,
+                        render::SceneRenderStagePassHintValue(stage_),
+                        true,
+                        color_target_,
+                        depth_target_);
+}
+
 void TextRenderer3D::RecordInternal(const render::FrameRecordContext& record_context_,
                                     std::uint32_t pass_bucket_,
                                     bool filter_by_pass_bucket_) {
@@ -885,6 +897,179 @@ void TextRenderer3D::RecordInternal(const render::FrameRecordContext& record_con
         !using_external_depth_target &&
         record_context_.image_index < depth_image_initialized.size()) {
         depth_image_initialized[record_context_.image_index] = 1U;
+    }
+}
+
+void TextRenderer3D::RecordGraphInternal(render_graph::GraphCommandContext& context_,
+                                         std::uint32_t pass_bucket_,
+                                         bool filter_by_pass_bucket_,
+                                         render_graph::ResourceHandle color_target_,
+                                         render_graph::ResourceHandle depth_target_) {
+    if (!initialized) {
+        throw std::runtime_error("TextRenderer3D::RecordGraphSceneStage called before Initialize");
+    }
+    if (context == nullptr || descriptor_host == nullptr || pipeline_host == nullptr ||
+        glyph_upload_host == nullptr || bindless_resources == nullptr) {
+        throw std::runtime_error("TextRenderer3D::RecordGraphSceneStage called before PrepareFrame");
+    }
+    if (context_.CommandBuffer() == VK_NULL_HANDLE) {
+        throw std::runtime_error("TextRenderer3D::RecordGraphSceneStage requires valid command buffer");
+    }
+
+    const auto resolved_color = context_.ResolveTextureView(color_target_);
+    const VkExtent2D render_extent{resolved_color.extent.width, resolved_color.extent.height};
+    if (render_extent.width == 0U || render_extent.height == 0U) {
+        throw std::runtime_error("TextRenderer3D::RecordGraphSceneStage resolved zero-sized render extent");
+    }
+
+    const bool use_depth_attachment = render_graph::IsValidResourceHandle(depth_target_);
+    const VkFormat active_depth_format = use_depth_attachment
+        ? context_.ResolveTextureView(depth_target_).format
+        : VK_FORMAT_UNDEFINED;
+
+    EnsurePipelineObjects(*context,
+                          *descriptor_host,
+                          *pipeline_host,
+                          resolved_color.format,
+                          use_depth_attachment ? active_depth_format : VK_FORMAT_UNDEFINED);
+
+    VkViewport viewport{};
+    viewport.x = 0.0F;
+    viewport.y = 0.0F;
+    viewport.width = static_cast<float>(render_extent.width);
+    viewport.height = static_cast<float>(render_extent.height);
+    viewport.minDepth = 0.0F;
+    viewport.maxDepth = 1.0F;
+    vkCmdSetViewport(context_.CommandBuffer(), 0U, 1U, &viewport);
+
+    VkRect2D scissor{};
+    scissor.offset = {0, 0};
+    scissor.extent = render_extent;
+    vkCmdSetScissor(context_.CommandBuffer(), 0U, 1U, &scissor);
+
+    const VkPipelineLayout pipeline_layout = pipeline_host->GetPipelineLayout(pipeline_layout_id);
+
+    PushConstants push_constants{};
+    push_constants.view_projection = frame_data_cache.view_projection;
+    push_constants.shading_params = ecs::Float4{
+        .x = create_info_cache.sdf_smooth,
+        .y = create_info_cache.bitmap_gamma,
+        .z = create_info_cache.bitmap_edge_sharpness,
+        .w = 0.0F,
+    };
+    push_constants.texture_slot = 0U;
+    push_constants.sampler_slot = 0U;
+    push_constants.reserved0 = 0U;
+    push_constants.reserved1 = 0U;
+    vkCmdPushConstants(context_.CommandBuffer(),
+                       pipeline_layout,
+                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                       0U,
+                       sizeof(PushConstants),
+                       &push_constants);
+
+    if (active_frame_index < frame_states.size()) {
+        const PerFrameState& frame_state = frame_states[active_frame_index];
+        if (frame_state.instance_count > 0U && frame_state.vertex_buffer.buffer != VK_NULL_HANDLE) {
+            std::uint32_t stage_draw_call_count = 0U;
+            std::uint32_t stage_filtered_batch_count = 0U;
+            const VkDescriptorSet bindless_sets[] = {
+                bindless_resources->SampledImageSet(),
+                bindless_resources->SamplerSet()
+            };
+            vkCmdBindDescriptorSets(context_.CommandBuffer(),
+                                    VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                    pipeline_layout,
+                                    0U,
+                                    2U,
+                                    bindless_sets,
+                                    0U,
+                                    nullptr);
+            stats.descriptor_set_bind_count += 2U;
+
+            const VkBuffer vertex_buffer = frame_state.vertex_buffer.buffer;
+            const VkDeviceSize vertex_offset = 0U;
+            vkCmdBindVertexBuffers(context_.CommandBuffer(), 0U, 1U, &vertex_buffer, &vertex_offset);
+
+            render::GraphicsPipelineId bound_pipeline_id{};
+            for (const auto& batch : render_scratch.draw_batches) {
+                if (filter_by_pass_bucket_ &&
+                    ecs::TextSystem<ecs::Dim3>::ExtractPassBucket(batch.sort_key) != pass_bucket_) {
+                    ++stage_filtered_batch_count;
+                    continue;
+                }
+                if (batch.glyph_count == 0U) {
+                    continue;
+                }
+                if (batch.atlas_page_id >= glyph_upload_host->PageCount()) {
+                    ++stats.skipped_draw_batch_count;
+                    continue;
+                }
+
+                const render::BindlessSlot texture_slot =
+                    glyph_upload_host->ResolveBindlessImageSlot(batch.atlas_page_id);
+                const render::BindlessSlot sampler_slot =
+                    glyph_upload_host->BindlessConfig().sampler_slot;
+                if (!texture_slot.IsValid() || !sampler_slot.IsValid()) {
+                    ++stats.skipped_draw_batch_count;
+                    continue;
+                }
+
+                const DepthPipelineMode mode = ResolveDepthPipelineMode(batch,
+                                                                       use_depth_attachment,
+                                                                       active_camera_reverse_z);
+                const render::GraphicsPipelineId pipeline_id =
+                    EnsureGraphicsPipelineForMode(*context,
+                                                 *pipeline_host,
+                                                 resolved_color.format,
+                                                 use_depth_attachment ? active_depth_format : VK_FORMAT_UNDEFINED,
+                                                 mode);
+                if (!pipeline_id.IsValid()) {
+                    ++stats.skipped_draw_batch_count;
+                    continue;
+                }
+                if (!bound_pipeline_id.IsValid() || bound_pipeline_id.value != pipeline_id.value) {
+                    vkCmdBindPipeline(context_.CommandBuffer(),
+                                      VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                      pipeline_host->GetGraphicsPipeline(pipeline_id));
+                    bound_pipeline_id = pipeline_id;
+                    ++stats.depth_pipeline_bind_count;
+                }
+
+                push_constants.texture_slot = texture_slot.index;
+                push_constants.sampler_slot = sampler_slot.index;
+                vkCmdPushConstants(context_.CommandBuffer(),
+                                   pipeline_layout,
+                                   VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                                   0U,
+                                   sizeof(PushConstants),
+                                   &push_constants);
+
+                vkCmdDraw(context_.CommandBuffer(),
+                          4U,
+                          batch.glyph_count,
+                          0U,
+                          batch.glyph_begin);
+                ++stats.draw_call_count;
+                ++stage_draw_call_count;
+                if (mode == DepthPipelineMode::depth_test_reverse_z ||
+                    mode == DepthPipelineMode::depth_test_write_reverse_z) {
+                    ++stats.reverse_z_draw_call_count;
+                }
+            }
+
+            if (filter_by_pass_bucket_) {
+                stats.stage_filtered_batch_count += stage_filtered_batch_count;
+                if (stage_draw_call_count == 0U) {
+                    ++stats.empty_stage_pass_count;
+                }
+                if (pass_bucket_ == static_cast<std::uint32_t>(ecs::TextRenderPassHint::opaque)) {
+                    stats.opaque_draw_call_count += stage_draw_call_count;
+                } else if (pass_bucket_ == static_cast<std::uint32_t>(ecs::TextRenderPassHint::transparent)) {
+                    stats.transparent_draw_call_count += stage_draw_call_count;
+                }
+            }
+        }
     }
 }
 

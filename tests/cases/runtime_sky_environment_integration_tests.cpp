@@ -1,4 +1,5 @@
-﻿#include "support/test_framework.hpp"
+#include "support/test_framework.hpp"
+#include "support/render_graph_test_utils.hpp"
 #include "vr/ecs/system/camera_system.hpp"
 #include "vr/ecs/system/transform_system.hpp"
 #include "vr/render/render_runtime_host.hpp"
@@ -37,11 +38,13 @@ struct SkySmokeResult final {
     std::uint32_t submitted_frames = 0U;
     vr::render::SkyEnvironmentPassStats pass_stats{};
     vr::render::SceneRecorder3DStats recorder_stats{};
+    vr::render_graph::RenderGraphRecordStats graph_record_stats{};
     vr::render::IblHostStats ibl_stats{};
     vr::render::IblBakeHostStats ibl_bake_stats{};
     vr::render::SkyEnvironmentGpuHostStats sky_host_stats{};
     vr::asset::TextureId active_ibl_specular_texture{};
     vr::asset::TextureId active_ibl_skybox_texture{};
+    bool graph_only_record_active = false;
 };
 
 [[nodiscard]] std::string ToLower(std::string_view value_) {
@@ -85,6 +88,7 @@ struct SkySmokeResult final {
     }
     return false;
 }
+
 
 [[nodiscard]] VkFormat SelectSkyTextureFormat(vr::VulkanContext& context_) {
     if (vr::asset::TextureHost::SupportsSampledFormat(context_, VK_FORMAT_R16G16B16A16_SFLOAT)) {
@@ -459,6 +463,12 @@ private:
 
         result.pass_stats = recorder.Recorder().EnvironmentPass().Stats();
         result.recorder_stats = recorder.Recorder().Stats();
+        if (const auto* service =
+                runtime.Services().TryGet<vr::runtime::services::RenderGraphRuntimeService>();
+            service != nullptr) {
+            result.graph_record_stats = service->LastRecordStats();
+        }
+        result.graph_only_record_active = vr::test::IsGraphOnlyScene3DRecordActive(runtime);
         result.ibl_stats = runtime.Ibl().Stats();
         if (runtime.HasIblBakeHost()) {
             result.ibl_bake_stats = runtime.IblBake().Stats();
@@ -498,7 +508,9 @@ VR_TEST_CASE(RuntimeIntegration_sky_environment_3d_solid_color_smoke,
         VR_CHECK(result.pass_stats.descriptor_set_bind_count == 0U);
         VR_CHECK(result.pass_stats.skipped_draw_count == 0U);
         VR_CHECK(result.recorder_stats.environment_prepare_count > 0U);
-        VR_CHECK(result.recorder_stats.environment_record_count > 0U);
+        VR_CHECK(result.graph_only_record_active
+                     ? (result.recorder_stats.environment_record_count == 0U)
+                     : (result.recorder_stats.environment_record_count > 0U));
         VR_CHECK(result.ibl_stats.prepared_frame_count == 0U);
         VR_CHECK(result.ibl_stats.environment_count > 0U);
         VR_CHECK(result.sky_host_stats.environment_count == 1U);
@@ -524,7 +536,9 @@ VR_TEST_CASE(RuntimeIntegration_sky_environment_3d_cubemap_smoke,
         VR_CHECK(result.pass_stats.descriptor_set_bind_count > 0U);
         VR_CHECK(result.pass_stats.skipped_draw_count == 0U);
         VR_CHECK(result.recorder_stats.environment_prepare_count > 0U);
-        VR_CHECK(result.recorder_stats.environment_record_count > 0U);
+        VR_CHECK(result.graph_only_record_active
+                     ? (result.recorder_stats.environment_record_count == 0U)
+                     : (result.recorder_stats.environment_record_count > 0U));
         VR_CHECK(result.ibl_stats.prepared_frame_count > 0U);
         VR_CHECK(result.ibl_stats.environment_count > 0U);
         VR_CHECK(result.ibl_stats.descriptor_update_count <= result.submitted_frames);
@@ -551,7 +565,9 @@ VR_TEST_CASE(RuntimeIntegration_sky_environment_3d_hdri_smoke,
         VR_CHECK(result.pass_stats.descriptor_set_bind_count > 0U);
         VR_CHECK(result.pass_stats.skipped_draw_count == 0U);
         VR_CHECK(result.recorder_stats.environment_prepare_count > 0U);
-        VR_CHECK(result.recorder_stats.environment_record_count > 0U);
+        VR_CHECK(result.graph_only_record_active
+                     ? (result.recorder_stats.environment_record_count == 0U)
+                     : (result.recorder_stats.environment_record_count > 0U));
         VR_CHECK(result.ibl_stats.prepared_frame_count == 0U);
         VR_CHECK(result.sky_host_stats.environment_count == 1U);
         VR_CHECK(result.sky_host_stats.ibl_register_count == 0U);
@@ -576,7 +592,9 @@ VR_TEST_CASE(RuntimeIntegration_sky_environment_3d_procedural_atmosphere_smoke,
         VR_CHECK(result.pass_stats.descriptor_set_bind_count == 0U);
         VR_CHECK(result.pass_stats.skipped_draw_count == 0U);
         VR_CHECK(result.recorder_stats.environment_prepare_count > 0U);
-        VR_CHECK(result.recorder_stats.environment_record_count > 0U);
+        VR_CHECK(result.graph_only_record_active
+                     ? (result.recorder_stats.environment_record_count == 0U)
+                     : (result.recorder_stats.environment_record_count > 0U));
         VR_CHECK(result.ibl_stats.environment_count > 0U);
         VR_CHECK(result.sky_host_stats.environment_count == 1U);
         VR_CHECK(result.sky_host_stats.ibl_register_count > 0U);

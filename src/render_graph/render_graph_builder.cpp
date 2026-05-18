@@ -573,6 +573,13 @@ ResourceVersionHandle RenderGraphBuilder::Write(const PassHandle pass_,
     return output_version;
 }
 
+void RenderGraphBuilder::AddDependency(const PassHandle pass_,
+                                       const PassHandle dependency_) {
+    PassNode& target_pass = RequirePass(pass_);
+    (void)RequirePass(dependency_);
+    AppendUnique(target_pass.explicit_dependencies, dependency_);
+}
+
 void RenderGraphBuilder::SetRasterPassDesc(const PassHandle pass_,
                                           RasterPassDesc raster_pass_) {
     PassNode& target_pass = RequirePass(pass_);
@@ -608,6 +615,12 @@ CompiledRenderGraph RenderGraphBuilder::Compile() const {
                 if (consumer_.index != pass_.handle.index) {
                     AppendUnique(pass_dependencies, consumer_);
                 }
+            }
+        }
+
+        for (const auto dependency_ : pass_.explicit_dependencies) {
+            if (dependency_.index != pass_.handle.index) {
+                AppendUnique(pass_dependencies, dependency_);
             }
         }
 

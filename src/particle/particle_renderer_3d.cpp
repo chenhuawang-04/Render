@@ -1,6 +1,7 @@
 ﻿#include "vr/particle/particle_renderer_3d.hpp"
 
 #include "vr/ecs/system/particle_system.hpp"
+#include "vr/render_graph/graph_command_context.hpp"
 #include "vr/ecs/system/spatial_math.hpp"
 #include "vr/ecs/system/transparency_render_policy.hpp"
 #include "vr/particle/generated/particle_3d_frag_spv.hpp"
@@ -841,6 +842,17 @@ void ParticleRenderer3D::RecordSceneStage(const render::FrameRecordContext& reco
     RecordInternal(record_context_, render::SceneRenderStagePassHintValue(stage_), true);
 }
 
+void ParticleRenderer3D::RecordGraphSceneStage(render_graph::GraphCommandContext& context_,
+                                               render::SceneRenderStage stage_,
+                                               render_graph::ResourceHandle color_target_,
+                                               render_graph::ResourceHandle depth_target_) {
+    RecordGraphInternal(context_,
+                        render::SceneRenderStagePassHintValue(stage_),
+                        true,
+                        color_target_,
+                        depth_target_);
+}
+
 void ParticleRenderer3D::RecordInternal(const render::FrameRecordContext& record_context_,
                                         std::uint32_t pass_bucket_,
                                         bool filter_by_pass_bucket_) {
@@ -1209,6 +1221,230 @@ void ParticleRenderer3D::RecordInternal(const render::FrameRecordContext& record
         create_info_cache.enable_depth &&
         record_context_.image_index < depth_image_initialized.size()) {
         depth_image_initialized[record_context_.image_index] = 1U;
+    }
+}
+
+void ParticleRenderer3D::RecordGraphInternal(render_graph::GraphCommandContext& context_,
+                                             std::uint32_t pass_bucket_,
+                                             bool filter_by_pass_bucket_,
+                                             render_graph::ResourceHandle color_target_,
+                                             render_graph::ResourceHandle depth_target_) {
+    if (!initialized) {
+        throw std::runtime_error("ParticleRenderer3D::RecordGraphSceneStage called before Initialize");
+    }
+    if (context == nullptr || pipeline_host == nullptr) {
+        throw std::runtime_error("ParticleRenderer3D::RecordGraphSceneStage called before PrepareFrame");
+    }
+    if (bindless_resources == nullptr || !bindless_resources->IsInitialized()) {
+        throw std::runtime_error("ParticleRenderer3D::RecordGraphSceneStage missing initialized BindlessResourceSystem");
+    }
+    if (context_.CommandBuffer() == VK_NULL_HANDLE) {
+        throw std::runtime_error("ParticleRenderer3D::RecordGraphSceneStage requires valid command buffer");
+    }
+
+    const auto resolved_color = context_.ResolveTextureView(color_target_);
+    const VkExtent2D render_extent{resolved_color.extent.width, resolved_color.extent.height};
+    if (render_extent.width == 0U || render_extent.height == 0U) {
+        throw std::runtime_error("ParticleRenderer3D::RecordGraphSceneStage resolved zero-sized render extent");
+    }
+
+    const bool use_depth_attachment = render_graph::IsValidResourceHandle(depth_target_);
+    const VkFormat active_depth_format = use_depth_attachment
+        ? context_.ResolveTextureView(depth_target_).format
+        : VK_FORMAT_UNDEFINED;
+
+    EnsurePipelineObjects(*context,
+                          *bindless_resources,
+                          *pipeline_host,
+                          resolved_color.format,
+                          active_depth_format);
+
+    if (gpu_build_active && particle_simulation_host != nullptr) {
+        particle_simulation_host->RecordBuild3D(*context,
+                                                *pipeline_host,
+                                                active_frame_index,
+                                                ResolveCameraPosition(),
+                                                ResolveCameraForward(),
+                                                context_.CommandBuffer());
+    }
+
+    VkViewport viewport{};
+    viewport.x = 0.0F;
+    viewport.y = 0.0F;
+    viewport.width = static_cast<float>(render_extent.width);
+    viewport.height = static_cast<float>(render_extent.height);
+    viewport.minDepth = 0.0F;
+    viewport.maxDepth = 1.0F;
+    vkCmdSetViewport(context_.CommandBuffer(), 0U, 1U, &viewport);
+
+    VkRect2D scissor{};
+    scissor.offset = VkOffset2D{0, 0};
+    scissor.extent = render_extent;
+    vkCmdSetScissor(context_.CommandBuffer(), 0U, 1U, &scissor);
+
+    if (((gpu_build_active &&
+          last_gpu_build_result.resources.draw_instances.buffer != VK_NULL_HANDLE) ||
+         (last_upload_result.upload.buffer != VK_NULL_HANDLE)) &&
+        !runtime_scratch.draw_batches.empty()) {
+        const VkBuffer vertex_buffer = gpu_build_active
+            ? last_gpu_build_result.resources.draw_instances.buffer
+            : last_upload_result.upload.buffer;
+        const VkDeviceSize vertex_offset = gpu_build_active
+            ? 0U
+            : last_upload_result.upload.offset;
+        vkCmdBindVertexBuffers(context_.CommandBuffer(),
+                               0U,
+                               1U,
+                               &vertex_buffer,
+                               &vertex_offset);
+        const VkPipelineLayout pipeline_layout = pipeline_host->GetPipelineLayout(pipeline_layout_id);
+
+        PushConstants push_constants{};
+        if (camera_component != nullptr) {
+            push_constants.view_projection = camera_component->runtime.view_projection_matrix;
+        } else {
+            push_constants.view_projection = ecs::spatial_math::IdentityMatrix4x4();
+        }
+        const ecs::Float3 camera_right = ResolveCameraRight();
+        const ecs::Float3 camera_up = ResolveCameraUp();
+        const ecs::Float3 camera_forward = ResolveCameraForward();
+        push_constants.camera_right = ecs::Float4{.x = camera_right.x, .y = camera_right.y, .z = camera_right.z, .w = 0.0F};
+        push_constants.camera_up = ecs::Float4{.x = camera_up.x, .y = camera_up.y, .z = camera_up.z, .w = 0.0F};
+        push_constants.camera_forward = ecs::Float4{.x = camera_forward.x, .y = camera_forward.y, .z = camera_forward.z, .w = 0.0F};
+        push_constants.params = 0U;
+        push_constants.reserved0 = 0U;
+        push_constants.reserved1 = 0U;
+        push_constants.reserved2 = 0U;
+
+        const std::array<VkDescriptorSet, 2U> bindless_sets{
+            bindless_resources->SampledImageSet(),
+            bindless_resources->SamplerSet()
+        };
+        if (bindless_sets[0U] == VK_NULL_HANDLE || bindless_sets[1U] == VK_NULL_HANDLE) {
+            throw std::runtime_error(
+                "ParticleRenderer3D::RecordGraphSceneStage requires valid bindless descriptor sets");
+        }
+        vkCmdBindDescriptorSets(context_.CommandBuffer(),
+                                VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                pipeline_layout,
+                                0U,
+                                static_cast<std::uint32_t>(bindless_sets.size()),
+                                bindless_sets.data(),
+                                0U,
+                                nullptr);
+        ++stats.descriptor_set_bind_count;
+
+        render::GraphicsPipelineId bound_pipeline{};
+        std::uint32_t bound_push_params = (std::numeric_limits<std::uint32_t>::max)();
+        std::uint32_t stage_draw_call_count = 0U;
+        std::uint32_t stage_filtered_batch_count = 0U;
+
+        std::uint32_t batch_index = 0U;
+        for (const ecs::ParticleDrawBatch& batch : runtime_scratch.draw_batches) {
+            if (filter_by_pass_bucket_ &&
+                ecs::ParticleSystem<ecs::Dim3>::ExtractPassBucket(batch.sort_key) != pass_bucket_) {
+                ++stage_filtered_batch_count;
+                ++batch_index;
+                continue;
+            }
+            if (batch.instance_count == 0U) {
+                ++stats.skipped_batch_count;
+                ++batch_index;
+                continue;
+            }
+
+            const ecs::ParticleRenderMode render_mode = DecodeRenderMode(batch.pipeline_state);
+            if (render_mode == ecs::ParticleRenderMode::mesh ||
+                render_mode == ecs::ParticleRenderMode::trail) {
+                ++stats.skipped_batch_count;
+                ++batch_index;
+                continue;
+            }
+
+            const BlendModeKind blend_mode = DecodeBlendModeKind(batch.pipeline_state);
+            const DepthPipelineMode depth_mode = ResolveDepthPipelineMode(batch.pipeline_state,
+                                                                          active_depth_format != VK_FORMAT_UNDEFINED,
+                                                                          active_camera_reverse_z);
+            const render::GraphicsPipelineId pipeline_id = EnsurePipelineForMode(*context,
+                                                                                 *pipeline_host,
+                                                                                 resolved_color.format,
+                                                                                 active_depth_format,
+                                                                                 blend_mode,
+                                                                                 depth_mode);
+            if (!pipeline_id.IsValid()) {
+                ++stats.skipped_batch_count;
+                ++batch_index;
+                continue;
+            }
+
+            const std::uint32_t push_params =
+                (static_cast<std::uint32_t>(render_mode) & 0xFFU) |
+                ((static_cast<std::uint32_t>(DecodeFacingMode(batch.pipeline_state)) & 0xFFU) << 8U);
+
+            if (bound_pipeline.value != pipeline_id.value) {
+                vkCmdBindPipeline(context_.CommandBuffer(),
+                                  VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                  pipeline_host->GetGraphicsPipeline(pipeline_id));
+                bound_pipeline = pipeline_id;
+                bound_push_params = (std::numeric_limits<std::uint32_t>::max)();
+            }
+
+            if (bound_push_params != push_params) {
+                push_constants.params = push_params;
+                vkCmdPushConstants(context_.CommandBuffer(),
+                                   pipeline_layout,
+                                   VK_SHADER_STAGE_VERTEX_BIT,
+                                   0U,
+                                   sizeof(PushConstants),
+                                   &push_constants);
+                bound_push_params = push_params;
+            }
+
+            if (gpu_build_active) {
+                const VkDeviceSize indirect_offset =
+                    static_cast<VkDeviceSize>(batch_index) * sizeof(ParticleGpuIndirectCommand);
+                vkCmdDrawIndirect(context_.CommandBuffer(),
+                                  last_gpu_build_result.resources.indirect_commands.buffer,
+                                  indirect_offset,
+                                  1U,
+                                  sizeof(ParticleGpuIndirectCommand));
+                ++stats.indirect_draw_count;
+            } else {
+                vkCmdDraw(context_.CommandBuffer(),
+                          6U,
+                          batch.instance_count,
+                          0U,
+                          batch.instance_begin);
+            }
+            ++stats.draw_call_count;
+            ++stage_draw_call_count;
+            ++batch_index;
+        }
+
+        if (filter_by_pass_bucket_) {
+            stats.stage_filtered_batch_count += stage_filtered_batch_count;
+            if (stage_draw_call_count == 0U) {
+                ++stats.empty_stage_pass_count;
+            }
+            if (pass_bucket_ == static_cast<std::uint32_t>(ecs::ParticleRenderPassHint::opaque)) {
+                stats.opaque_draw_call_count += stage_draw_call_count;
+            } else if (pass_bucket_ == static_cast<std::uint32_t>(ecs::ParticleRenderPassHint::transparent)) {
+                stats.transparent_draw_call_count += stage_draw_call_count;
+            }
+        } else {
+            for (const ecs::ParticleDrawBatch& batch : runtime_scratch.draw_batches) {
+                if (batch.instance_count == 0U) {
+                    continue;
+                }
+                const std::uint32_t bucket =
+                    ecs::ParticleSystem<ecs::Dim3>::ExtractPassBucket(batch.sort_key);
+                if (bucket == static_cast<std::uint32_t>(ecs::ParticleRenderPassHint::opaque)) {
+                    ++stats.opaque_draw_call_count;
+                } else if (bucket == static_cast<std::uint32_t>(ecs::ParticleRenderPassHint::transparent)) {
+                    ++stats.transparent_draw_call_count;
+                }
+            }
+        }
     }
 }
 

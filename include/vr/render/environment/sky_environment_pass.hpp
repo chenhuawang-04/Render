@@ -41,6 +41,12 @@ public:
                 const RenderView3D& view_,
                 const scene::SkyEnvironmentRenderState& state_,
                 scene::SkyEnvironmentGpuHandle gpu_handle_);
+    void RecordGraphPass(VkCommandBuffer command_buffer_,
+                         const RenderView3D& view_,
+                         const scene::SkyEnvironmentRenderState& state_,
+                         VkFormat color_format_,
+                         bool depth_tested_ = false,
+                         VkFormat depth_format_ = VK_FORMAT_UNDEFINED);
 
     void OnSwapchainRecreated(std::uint32_t image_count_,
                               VkExtent2D extent_,

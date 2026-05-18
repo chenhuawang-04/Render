@@ -2,6 +2,7 @@
 
 #include "Center/Memory/Container/Vector/McVector.hpp"
 #include "vr/asset/texture_host.hpp"
+#include "vr/render_graph/render_graph_types.hpp"
 #include "vr/ecs/component/bounds_component.hpp"
 #include "vr/ecs/component/camera_component.hpp"
 #include "vr/ecs/component/particle_component.hpp"
@@ -30,6 +31,10 @@ namespace vr::render {
 struct ParticleRenderer3DPrepareView;
 struct FrameRecordContext;
 class UploadHost;
+}
+
+namespace vr::render_graph {
+class GraphCommandContext;
 }
 
 namespace vr::resource {
@@ -123,6 +128,10 @@ public:
     void Record(const render::FrameRecordContext& record_context_);
     void RecordSceneStage(const render::FrameRecordContext& record_context_,
                           render::SceneRenderStage stage_);
+    void RecordGraphSceneStage(render_graph::GraphCommandContext& context_,
+                               render::SceneRenderStage stage_,
+                               render_graph::ResourceHandle color_target_,
+                               render_graph::ResourceHandle depth_target_ = render_graph::invalid_resource_handle);
     void OnSwapchainRecreated(std::uint32_t image_count_,
                               VkExtent2D extent_,
                               VkFormat format_);
@@ -232,6 +241,11 @@ private:
     void DestroyDepthResources(VulkanContext& context_);
     void DestroyRetiredDepthResources(VulkanContext& context_);
 
+    void RecordGraphInternal(render_graph::GraphCommandContext& context_,
+                             std::uint32_t pass_bucket_,
+                             bool filter_by_pass_bucket_,
+                             render_graph::ResourceHandle color_target_,
+                             render_graph::ResourceHandle depth_target_);
     void RecordInternal(const render::FrameRecordContext& record_context_,
                         std::uint32_t pass_bucket_,
                         bool filter_by_pass_bucket_);

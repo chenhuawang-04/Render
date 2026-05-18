@@ -2,6 +2,7 @@
 
 #include "Center/Memory/Container/Vector/McVector.hpp"
 #include "vr/ecs/component/bounds_component.hpp"
+#include "vr/render_graph/render_graph_types.hpp"
 #include "vr/ecs/system/culling_system.hpp"
 #include "vr/ecs/system/text_render_3d_system.hpp"
 #include "vr/render/bindless_resource_system.hpp"
@@ -24,6 +25,10 @@ namespace vr::render {
 struct TextRenderer3DPrepareView;
 struct FrameRecordContext;
 class UploadHost;
+}
+
+namespace vr::render_graph {
+class GraphCommandContext;
 }
 
 namespace vr::text {
@@ -108,6 +113,10 @@ public:
     void Record(const render::FrameRecordContext& record_context_);
     void RecordSceneStage(const render::FrameRecordContext& record_context_,
                           render::SceneRenderStage stage_);
+    void RecordGraphSceneStage(render_graph::GraphCommandContext& context_,
+                               render::SceneRenderStage stage_,
+                               render_graph::ResourceHandle color_target_,
+                               render_graph::ResourceHandle depth_target_ = render_graph::invalid_resource_handle);
     void OnSwapchainRecreated(std::uint32_t image_count_,
                               VkExtent2D extent_,
                               VkFormat format_);
@@ -205,6 +214,11 @@ private:
     void RecordDepthTransitionToAttachment(VkCommandBuffer command_buffer_,
                                            const resource::ImageResource& depth_resource_,
                                            bool initialized_) const;
+    void RecordGraphInternal(render_graph::GraphCommandContext& context_,
+                             std::uint32_t pass_bucket_,
+                             bool filter_by_pass_bucket_,
+                             render_graph::ResourceHandle color_target_,
+                             render_graph::ResourceHandle depth_target_);
     void RecordInternal(const render::FrameRecordContext& record_context_,
                         std::uint32_t pass_bucket_,
                         bool filter_by_pass_bucket_);

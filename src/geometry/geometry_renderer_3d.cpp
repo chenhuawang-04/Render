@@ -1,6 +1,7 @@
 #include "vr/geometry/geometry_renderer_3d.hpp"
 
 #include "vr/asset/texture_host.hpp"
+#include "vr/render_graph/graph_command_context.hpp"
 #include "vr/ecs/system/transparency_render_policy.hpp"
 #include "vr/geometry/geometry_appearance_resolver.hpp"
 #include "vr/geometry/generated/geometry_3d_frag_spv.hpp"
@@ -919,6 +920,17 @@ void GeometryRenderer3D::RecordSceneStage(const render::FrameRecordContext& reco
     RecordInternal(record_context_, render::SceneRenderStagePassHintValue(stage_), true);
 }
 
+void GeometryRenderer3D::RecordGraphSceneStage(render_graph::GraphCommandContext& context_,
+                                               render::SceneRenderStage stage_,
+                                               render_graph::ResourceHandle color_target_,
+                                               render_graph::ResourceHandle depth_target_) {
+    RecordGraphInternal(context_,
+                        render::SceneRenderStagePassHintValue(stage_),
+                        true,
+                        color_target_,
+                        depth_target_);
+}
+
 void GeometryRenderer3D::RecordInternal(const render::FrameRecordContext& record_context_,
                                         std::uint32_t pass_bucket_,
                                         bool filter_by_pass_bucket_) {
@@ -1287,6 +1299,258 @@ void GeometryRenderer3D::RecordInternal(const render::FrameRecordContext& record
         record_context_.image_index < depth_image_initialized.size()) {
         depth_image_initialized[record_context_.image_index] = 1U;
     }
+}
+
+void GeometryRenderer3D::RecordGraphInternal(render_graph::GraphCommandContext& context_,
+                                             std::uint32_t pass_bucket_,
+                                             bool filter_by_pass_bucket_,
+                                             render_graph::ResourceHandle color_target_,
+                                             render_graph::ResourceHandle depth_target_) {
+    if (!initialized) {
+        throw std::runtime_error("GeometryRenderer3D::RecordGraphSceneStage called before Initialize");
+    }
+    if (context == nullptr || descriptor_host == nullptr || pipeline_host == nullptr || geometry_resource_host == nullptr) {
+        throw std::runtime_error("GeometryRenderer3D::RecordGraphSceneStage called before PrepareFrame");
+    }
+    if (context_.CommandBuffer() == VK_NULL_HANDLE) {
+        throw std::runtime_error("GeometryRenderer3D::RecordGraphSceneStage requires valid command buffer");
+    }
+
+    const auto resolved_color = context_.ResolveTextureView(color_target_);
+    const VkExtent2D render_extent{resolved_color.extent.width, resolved_color.extent.height};
+    if (render_extent.width == 0U || render_extent.height == 0U) {
+        throw std::runtime_error("GeometryRenderer3D::RecordGraphSceneStage resolved zero-sized render extent");
+    }
+
+    const bool use_depth_attachment = render_graph::IsValidResourceHandle(depth_target_);
+    const VkFormat active_depth_format = use_depth_attachment
+        ? context_.ResolveTextureView(depth_target_).format
+        : VK_FORMAT_UNDEFINED;
+
+    EnsurePipelineObjects(*context,
+                          *pipeline_host,
+                          resolved_color.format,
+                          use_depth_attachment ? active_depth_format : VK_FORMAT_UNDEFINED);
+
+    VkViewport viewport{};
+    viewport.x = 0.0F;
+    viewport.y = 0.0F;
+    viewport.width = static_cast<float>(render_extent.width);
+    viewport.height = static_cast<float>(render_extent.height);
+    viewport.minDepth = 0.0F;
+    viewport.maxDepth = 1.0F;
+    vkCmdSetViewport(context_.CommandBuffer(), 0U, 1U, &viewport);
+
+    VkRect2D scissor{};
+    scissor.offset = VkOffset2D{0, 0};
+    scissor.extent = render_extent;
+    vkCmdSetScissor(context_.CommandBuffer(), 0U, 1U, &scissor);
+
+    FramePushConstants frame_push_constants{};
+    if (camera_component != nullptr) {
+        frame_push_constants.view_projection = camera_component->runtime.view_projection_matrix;
+    } else {
+        frame_push_constants.view_projection = ecs::spatial_math::IdentityMatrix4x4();
+    }
+    frame_push_constants.directional_light_x = create_info_cache.directional_light_x;
+    frame_push_constants.directional_light_y = create_info_cache.directional_light_y;
+    frame_push_constants.directional_light_z = create_info_cache.directional_light_z;
+    frame_push_constants.directional_light_intensity = std::max(0.0F, create_info_cache.directional_light_intensity);
+
+    const VkPipelineLayout pipeline_layout = pipeline_layout_id.IsValid()
+        ? pipeline_host->GetPipelineLayout(pipeline_layout_id)
+        : VK_NULL_HANDLE;
+    if (pipeline_layout != VK_NULL_HANDLE) {
+        vkCmdPushConstants(context_.CommandBuffer(),
+                           pipeline_layout,
+                           VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                           0U,
+                           sizeof(FramePushConstants),
+                           &frame_push_constants);
+    }
+
+    render::GraphicsPipelineId active_pipeline_id{};
+    VkBuffer active_vertex_buffer = VK_NULL_HANDLE;
+    VkBuffer active_index_buffer = VK_NULL_HANDLE;
+    std::uint32_t active_effective_visual_resource_id =
+        std::numeric_limits<std::uint32_t>::max();
+    std::uint32_t cached_effective_visual_resource_id =
+        std::numeric_limits<std::uint32_t>::max();
+    AppearancePushConstants cached_sampling_push_constants{};
+    std::uint32_t cached_geometry_id = 0U;
+    const GeometryResourceHost::MeshRecord* cached_mesh = nullptr;
+    const VkDescriptorSet frame_lighting_descriptor_set =
+        (active_frame_index < frame_lighting_resources.size())
+            ? frame_lighting_resources[active_frame_index].descriptor_set
+            : VK_NULL_HANDLE;
+    const VkDescriptorSet frame_ibl_descriptor_set =
+        (ibl_host != nullptr) ? ibl_host->ActiveParamsDescriptorSet(active_frame_index) : VK_NULL_HANDLE;
+    const std::array<VkDescriptorSet, 4U> global_descriptor_sets{
+        bindless_resources != nullptr ? bindless_resources->SampledImageSet() : VK_NULL_HANDLE,
+        bindless_resources != nullptr ? bindless_resources->SamplerSet() : VK_NULL_HANDLE,
+        frame_lighting_descriptor_set,
+        frame_ibl_descriptor_set,
+    };
+    bool shared_state_bound = false;
+
+    if (instance_range.buffer != VK_NULL_HANDLE && !runtime_scratch.draw_batches.empty()) {
+        std::uint32_t stage_draw_call_count = 0U;
+        std::uint32_t stage_filtered_batch_count = 0U;
+        const VkBuffer instance_vertex_buffer = instance_range.buffer;
+        const VkDeviceSize instance_vertex_offset = instance_range.offset;
+        vkCmdBindVertexBuffers(context_.CommandBuffer(),
+                               1U,
+                               1U,
+                               &instance_vertex_buffer,
+                               &instance_vertex_offset);
+
+        for (const ecs::Geometry3DDrawBatch& batch : runtime_scratch.draw_batches) {
+            if (filter_by_pass_bucket_ &&
+                ecs::GeometrySystem<ecs::Dim3>::ExtractPassBucket(batch.sort_key) != pass_bucket_) {
+                ++stage_filtered_batch_count;
+                continue;
+            }
+            if (batch.instance_count == 0U) {
+                continue;
+            }
+
+            const GeometryResourceHost::MeshRecord* mesh = nullptr;
+            if (cached_mesh != nullptr && cached_geometry_id == batch.geometry_id) {
+                mesh = cached_mesh;
+            } else {
+                mesh = geometry_resource_host->FindMesh(batch.geometry_id);
+                cached_mesh = mesh;
+                cached_geometry_id = batch.geometry_id;
+            }
+
+            if (mesh == nullptr || mesh->index_buffer.buffer == VK_NULL_HANDLE ||
+                mesh->vertex_buffer.buffer == VK_NULL_HANDLE || mesh->submeshes.empty()) {
+                ++stats.skipped_batch_count;
+                continue;
+            }
+
+            const std::uint32_t submesh_index = std::min(batch.submesh_index,
+                                                         static_cast<std::uint32_t>(mesh->submeshes.size() - 1U));
+            const GeometrySubmeshRange& submesh = mesh->submeshes[submesh_index];
+            if (submesh.index_count == 0U) {
+                ++stats.skipped_batch_count;
+                continue;
+            }
+
+            const BlendMode blend_mode = ResolveBlendMode(batch);
+            const PipelineMode mode = ResolvePipelineMode(batch, use_depth_attachment);
+            const TopologyMode topology_mode = ResolveTopologyMode(mesh->topology, batch);
+            const CullMode cull_mode = ResolveCullMode(batch);
+            const render::GraphicsPipelineId pipeline_id = EnsurePipelineForMode(*context,
+                                                                                 *pipeline_host,
+                                                                                 resolved_color.format,
+                                                                                 use_depth_attachment ? active_depth_format : VK_FORMAT_UNDEFINED,
+                                                                                 blend_mode,
+                                                                                 mode,
+                                                                                 topology_mode,
+                                                                                 cull_mode);
+            if (!pipeline_id.IsValid()) {
+                ++stats.skipped_batch_count;
+                continue;
+            }
+
+            AppearancePushConstants sampling_push_constants{};
+            if (batch.effective_visual_resource_id == cached_effective_visual_resource_id) {
+                sampling_push_constants = cached_sampling_push_constants;
+            } else if (!ResolveAppearancePushConstants(batch.effective_visual_resource_id,
+                                                       sampling_push_constants)) {
+                ++stats.skipped_batch_count;
+                continue;
+            } else {
+                cached_effective_visual_resource_id = batch.effective_visual_resource_id;
+                cached_sampling_push_constants = sampling_push_constants;
+            }
+
+            if (active_pipeline_id.value != pipeline_id.value) {
+                vkCmdBindPipeline(context_.CommandBuffer(),
+                                  VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                  pipeline_host->GetGraphicsPipeline(pipeline_id));
+                active_pipeline_id = pipeline_id;
+            }
+
+            if (!shared_state_bound) {
+                if (pipeline_layout == VK_NULL_HANDLE) {
+                    throw std::runtime_error("GeometryRenderer3D::RecordGraphSceneStage requires valid pipeline layout");
+                }
+                for (const VkDescriptorSet descriptor_set : global_descriptor_sets) {
+                    if (descriptor_set == VK_NULL_HANDLE) {
+                        throw std::runtime_error("GeometryRenderer3D::RecordGraphSceneStage requires valid bindless, lighting, and IBL descriptor sets");
+                    }
+                }
+                vkCmdBindDescriptorSets(context_.CommandBuffer(),
+                                        VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                        pipeline_layout,
+                                        0U,
+                                        static_cast<std::uint32_t>(global_descriptor_sets.size()),
+                                        global_descriptor_sets.data(),
+                                        0U,
+                                        nullptr);
+                shared_state_bound = true;
+                ++stats.descriptor_set_bind_count;
+                ++stats.light_descriptor_set_bind_count;
+                ++stats.ibl_descriptor_set_bind_count;
+            }
+
+            if (pipeline_layout != VK_NULL_HANDLE &&
+                active_effective_visual_resource_id != batch.effective_visual_resource_id) {
+                vkCmdPushConstants(context_.CommandBuffer(),
+                                   pipeline_layout,
+                                   VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                                   static_cast<std::uint32_t>(offsetof(PushConstants, appearance)),
+                                   sizeof(AppearancePushConstants),
+                                   &sampling_push_constants);
+                active_effective_visual_resource_id = batch.effective_visual_resource_id;
+                ++stats.appearance_push_constant_update_count;
+            }
+
+            if (active_vertex_buffer != mesh->vertex_buffer.buffer) {
+                const VkBuffer vertex_buffer = mesh->vertex_buffer.buffer;
+                const VkDeviceSize vertex_offset = 0U;
+                vkCmdBindVertexBuffers(context_.CommandBuffer(),
+                                       0U,
+                                       1U,
+                                       &vertex_buffer,
+                                       &vertex_offset);
+                active_vertex_buffer = mesh->vertex_buffer.buffer;
+            }
+
+            if (active_index_buffer != mesh->index_buffer.buffer) {
+                vkCmdBindIndexBuffer(context_.CommandBuffer(),
+                                     mesh->index_buffer.buffer,
+                                     0U,
+                                     VK_INDEX_TYPE_UINT32);
+                active_index_buffer = mesh->index_buffer.buffer;
+            }
+
+            vkCmdDrawIndexed(context_.CommandBuffer(),
+                             submesh.index_count,
+                             batch.instance_count,
+                             submesh.first_index,
+                             submesh.vertex_offset,
+                             batch.instance_begin);
+            ++stats.draw_call_count;
+            ++stage_draw_call_count;
+        }
+
+        if (filter_by_pass_bucket_) {
+            stats.stage_filtered_batch_count += stage_filtered_batch_count;
+            if (stage_draw_call_count == 0U) {
+                ++stats.empty_stage_pass_count;
+            }
+            if (pass_bucket_ == static_cast<std::uint32_t>(ecs::GeometryRenderPassHint::opaque)) {
+                stats.opaque_draw_call_count += stage_draw_call_count;
+            } else if (pass_bucket_ == static_cast<std::uint32_t>(ecs::GeometryRenderPassHint::transparent)) {
+                stats.transparent_draw_call_count += stage_draw_call_count;
+            }
+        }
+    }
+
+    stats.appearance_resolve_cache_entry_count = static_cast<std::uint32_t>(resolved_appearances.size());
 }
 
 void GeometryRenderer3D::OnSwapchainRecreated(std::uint32_t image_count_,

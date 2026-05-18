@@ -1,4 +1,5 @@
-﻿#include "support/test_framework.hpp"
+#include "support/test_framework.hpp"
+#include "support/render_graph_test_utils.hpp"
 #include "vr/ecs/system/bounds_system.hpp"
 #include "vr/ecs/system/camera_system.hpp"
 #include "vr/ecs/system/text_system.hpp"
@@ -106,6 +107,7 @@ using CameraSystem3D = vr::ecs::CameraSystem<vr::ecs::Dim3>;
     }
     return false;
 }
+
 
 void InitializeTextComponent(Text3D& component_,
                              std::uint32_t font_id_,
@@ -613,18 +615,23 @@ VR_TEST_CASE(RuntimeIntegration_text_renderer_3d_bloom_post_stack_smoke,
         VR_CHECK(observed_bounds_culling);
         VR_CHECK(max_culling_input_count == static_cast<std::uint32_t>(text_components.size()));
         VR_CHECK(max_culling_visible_count > 0U);
+        const bool graph_only_record_active = vr::test::IsGraphOnlyScene3DRecordActive(runtime);
         VR_CHECK(runtime.GlyphUpload().Stats().uploaded_rect_count > 0U);
         VR_CHECK(recorder.Stats().frame_packet_prepare_count > 0U);
-        VR_CHECK(recorder.Stats().frame_packet_record_count > 0U);
+        VR_CHECK(graph_only_record_active
+                     ? (recorder.Stats().frame_packet_record_count == 0U)
+                     : (recorder.Stats().frame_packet_record_count > 0U));
         VR_CHECK(recorder.ActiveView() == &main_view);
         VR_CHECK(recorder.ActiveView() != nullptr);
         VR_CHECK(recorder.ActiveView()->camera == &camera);
         VR_CHECK(runtime.TargetPool().Stats().acquire_count > 0U);
         VR_CHECK(runtime.TargetPool().Stats().reuse_hit_count > 0U);
-        VR_CHECK(runtime.RenderTarget().ResolveView(recorder.PostStack().Targets().ColorTarget()).state ==
-                 vr::render::RenderTargetStateKind::shader_read);
-        VR_CHECK(runtime.RenderTarget().ResolveView(recorder.PostStack().Targets().DepthTarget()).state ==
-                 vr::render::RenderTargetStateKind::depth_attachment);
+        if (!graph_only_record_active) {
+            VR_CHECK(runtime.RenderTarget().ResolveView(recorder.PostStack().Targets().ColorTarget()).state ==
+                     vr::render::RenderTargetStateKind::shader_read);
+            VR_CHECK(runtime.RenderTarget().ResolveView(recorder.PostStack().Targets().DepthTarget()).state ==
+                     vr::render::RenderTargetStateKind::depth_attachment);
+        }
 
         recorder.Shutdown(runtime.Context());
         text_renderer.Shutdown(runtime.Context());

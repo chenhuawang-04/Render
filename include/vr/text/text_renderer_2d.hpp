@@ -2,6 +2,7 @@
 
 #include "Center/Memory/Container/Vector/McVector.hpp"
 #include "vr/ecs/system/text_runtime_system.hpp"
+#include "vr/render_graph/render_graph_types.hpp"
 #include "vr/render/bindless_resource_system.hpp"
 #include "vr/render/descriptor_host.hpp"
 #include "vr/render/pipeline_host.hpp"
@@ -19,6 +20,10 @@ namespace vr::render {
 struct TextRenderer2DPrepareView;
 struct FrameRecordContext;
 class UploadHost;
+}
+
+namespace vr::render_graph {
+class GraphCommandContext;
 }
 
 namespace vr::text {
@@ -75,6 +80,8 @@ public:
 
     void PrepareFrame(const render::TextRenderer2DPrepareView& prepare_view_);
     void Record(const render::FrameRecordContext& record_context_);
+    void RecordGraphOverlay(render_graph::GraphCommandContext& context_,
+                            render_graph::ResourceHandle color_target_);
     void OnSwapchainRecreated(std::uint32_t image_count_,
                               VkExtent2D extent_,
                               VkFormat format_);
@@ -139,6 +146,8 @@ private:
                                render::DescriptorHost& descriptor_host_,
                                render::PipelineHost& pipeline_host_,
                                VkFormat color_format_);
+    void RecordGraphInternal(render_graph::GraphCommandContext& context_,
+                             render_graph::ResourceHandle color_target_);
 
 private:
     TextRenderer2DCreateInfo create_info_cache{};

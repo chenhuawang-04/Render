@@ -46,6 +46,7 @@ public:
 
     [[nodiscard]] CompiledRenderGraph Compile() const;
 
+    void AddDependency(PassHandle pass_, PassHandle dependency_);
     void SetRasterPassDesc(PassHandle pass_, RasterPassDesc raster_pass_);
     void SetExecuteCallback(PassHandle pass_, PassExecutionThunk execute_);
 
@@ -88,6 +89,7 @@ private:
         QueueClass queue = QueueClass::graphics;
         std::optional<RasterPassDesc> raster_pass{};
         PassExecutionThunk execute{};
+        std::vector<PassHandle> explicit_dependencies{};
         std::vector<AccessDesc> reads{};
         std::vector<WriteRecord> writes{};
     };

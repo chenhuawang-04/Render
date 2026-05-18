@@ -1,6 +1,7 @@
 ﻿#include "vr/text/text_renderer_2d.hpp"
 
 #include "vr/render/color_blend_state.hpp"
+#include "vr/render_graph/graph_command_context.hpp"
 #include "vr/render/render_loop_host.hpp"
 #include "vr/render/render_target_pass.hpp"
 #include "vr/render/runtime_prepare_views.hpp"
@@ -308,6 +309,11 @@ void TextRenderer2D::PrepareFrame(const render::TextRenderer2DPrepareView& prepa
     stats.uploaded_bytes = required_bytes;
 }
 
+void TextRenderer2D::RecordGraphOverlay(render_graph::GraphCommandContext& context_,
+                                       render_graph::ResourceHandle color_target_) {
+    RecordGraphInternal(context_, color_target_);
+}
+
 void TextRenderer2D::Record(const render::FrameRecordContext& record_context_) {
     if (!initialized) {
         throw std::runtime_error("TextRenderer2D::Record called before Initialize");
@@ -443,6 +449,124 @@ void TextRenderer2D::Record(const render::FrameRecordContext& record_context_) {
     vkCmdEndRendering(record_context_.command_buffer);
     render::RecordEndColorPass(record_context_, output_target_config);
     image_initialized[record_context_.image_index] = 1U;
+}
+
+void TextRenderer2D::RecordGraphInternal(render_graph::GraphCommandContext& context_,
+                                       render_graph::ResourceHandle color_target_) {
+    if (!initialized) {
+        throw std::runtime_error("TextRenderer2D::RecordGraphOverlay called before Initialize");
+    }
+    if (context == nullptr || descriptor_host == nullptr || pipeline_host == nullptr ||
+        glyph_upload_host == nullptr || bindless_resources == nullptr) {
+        throw std::runtime_error("TextRenderer2D::RecordGraphOverlay called before PrepareFrame");
+    }
+    if (context_.CommandBuffer() == VK_NULL_HANDLE) {
+        throw std::runtime_error("TextRenderer2D::RecordGraphOverlay requires valid command buffer");
+    }
+
+    const auto resolved_color = context_.ResolveTextureView(color_target_);
+    const VkExtent2D render_extent{resolved_color.extent.width, resolved_color.extent.height};
+    if (render_extent.width == 0U || render_extent.height == 0U) {
+        throw std::runtime_error("TextRenderer2D::RecordGraphOverlay resolved zero-sized render extent");
+    }
+
+    EnsurePipelineObjects(*context,
+                          *descriptor_host,
+                          *pipeline_host,
+                          resolved_color.format);
+
+    VkViewport viewport{};
+    viewport.x = 0.0F;
+    viewport.y = 0.0F;
+    viewport.width = static_cast<float>(render_extent.width);
+    viewport.height = static_cast<float>(render_extent.height);
+    viewport.minDepth = 0.0F;
+    viewport.maxDepth = 1.0F;
+    vkCmdSetViewport(context_.CommandBuffer(), 0U, 1U, &viewport);
+
+    VkRect2D scissor{};
+    scissor.offset = {0, 0};
+    scissor.extent = render_extent;
+    vkCmdSetScissor(context_.CommandBuffer(), 0U, 1U, &scissor);
+
+    const VkPipeline pipeline_handle = pipeline_host->GetGraphicsPipeline(graphics_pipeline_id);
+    const VkPipelineLayout pipeline_layout = pipeline_host->GetPipelineLayout(pipeline_layout_id);
+    vkCmdBindPipeline(context_.CommandBuffer(),
+                      VK_PIPELINE_BIND_POINT_GRAPHICS,
+                      pipeline_handle);
+
+    PushConstants push_constants{};
+    push_constants.inv_viewport_x = 1.0F / static_cast<float>(render_extent.width);
+    push_constants.inv_viewport_y = 1.0F / static_cast<float>(render_extent.height);
+    push_constants.depth = create_info_cache.depth;
+    push_constants.sdf_smooth = create_info_cache.sdf_smooth;
+    push_constants.bitmap_gamma = create_info_cache.bitmap_gamma;
+    push_constants.bitmap_edge_sharpness = create_info_cache.bitmap_edge_sharpness;
+    vkCmdPushConstants(context_.CommandBuffer(),
+                       pipeline_layout,
+                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                       0U,
+                       sizeof(PushConstants),
+                       &push_constants);
+
+    const std::uint32_t frame_index = active_frame_index;
+    if (frame_index < frame_states.size()) {
+        const PerFrameState& frame_state = frame_states[frame_index];
+        if (frame_state.instance_count > 0U && frame_state.vertex_buffer.buffer != VK_NULL_HANDLE) {
+            const VkDescriptorSet bindless_sets[] = {
+                bindless_resources->SampledImageSet(),
+                bindless_resources->SamplerSet()
+            };
+            vkCmdBindDescriptorSets(context_.CommandBuffer(),
+                                    VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                    pipeline_layout,
+                                    0U,
+                                    2U,
+                                    bindless_sets,
+                                    0U,
+                                    nullptr);
+            stats.descriptor_set_bind_count += 2U;
+
+            const VkBuffer vertex_buffer = frame_state.vertex_buffer.buffer;
+            const VkDeviceSize vertex_offset = 0U;
+            vkCmdBindVertexBuffers(context_.CommandBuffer(), 0U, 1U, &vertex_buffer, &vertex_offset);
+
+            for (const auto& batch : runtime_scratch.draw_batches) {
+                if (batch.glyph_count == 0U) {
+                    continue;
+                }
+                if (batch.atlas_page_id >= glyph_upload_host->PageCount()) {
+                    ++stats.skipped_draw_batch_count;
+                    continue;
+                }
+
+                const render::BindlessSlot texture_slot =
+                    glyph_upload_host->ResolveBindlessImageSlot(batch.atlas_page_id);
+                const render::BindlessSlot sampler_slot =
+                    glyph_upload_host->BindlessConfig().sampler_slot;
+                if (!texture_slot.IsValid() || !sampler_slot.IsValid()) {
+                    ++stats.skipped_draw_batch_count;
+                    continue;
+                }
+
+                push_constants.texture_slot = texture_slot.index;
+                push_constants.sampler_slot = sampler_slot.index;
+                vkCmdPushConstants(context_.CommandBuffer(),
+                                   pipeline_layout,
+                                   VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                                   0U,
+                                   sizeof(PushConstants),
+                                   &push_constants);
+
+                vkCmdDraw(context_.CommandBuffer(),
+                          4U,
+                          batch.glyph_count,
+                          0U,
+                          batch.glyph_begin);
+                ++stats.draw_call_count;
+            }
+        }
+    }
 }
 
 void TextRenderer2D::OnSwapchainRecreated(std::uint32_t image_count_,
