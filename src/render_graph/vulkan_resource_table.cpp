@@ -1,10 +1,20 @@
+#ifdef FindResource
+#undef FindResource
+#endif
+
 #include "vr/render_graph/vulkan_resource_table.hpp"
 
 #include "vr/render_graph/alias_allocator.hpp"
 
 #include <algorithm>
 #include <limits>
+#include <optional>
 #include <stdexcept>
+#include <vector>
+
+#ifdef FindResource
+#undef FindResource
+#endif
 
 namespace vr::render_graph {
 namespace {
@@ -175,7 +185,25 @@ namespace {
                         });
 }
 
+[[nodiscard]] auto FindTextureRecord(const std::vector<PhysicalTextureRecord>& records_,
+                                     const ResourceHandle logical_) {
+    return std::find_if(records_.begin(),
+                        records_.end(),
+                        [&](const PhysicalTextureRecord& record_) {
+                            return record_.logical.index == logical_.index;
+                        });
+}
+
 [[nodiscard]] auto FindBufferRecord(std::vector<PhysicalBufferRecord>& records_,
+                                    const ResourceHandle logical_) {
+    return std::find_if(records_.begin(),
+                        records_.end(),
+                        [&](const PhysicalBufferRecord& record_) {
+                            return record_.logical.index == logical_.index;
+                        });
+}
+
+[[nodiscard]] auto FindBufferRecord(const std::vector<PhysicalBufferRecord>& records_,
                                     const ResourceHandle logical_) {
     return std::find_if(records_.begin(),
                         records_.end(),
@@ -202,7 +230,56 @@ struct PreparedTransientBuffer final {
     resource::BufferCreateInfo create_info{};
     resource::BufferResource buffer_object{};
     VkMemoryRequirements memory_requirements{};
+    bool dedicated_required = false;
+    bool dedicated_preferred = false;
 };
+
+struct PreparedTransientImage final {
+    const CompiledResource* resource = nullptr;
+    const TransientAllocationRecord* allocation_record = nullptr;
+    resource::ImageCreateInfo create_info{};
+    resource::ImageResource image_object{};
+    VkMemoryRequirements memory_requirements{};
+    bool dedicated_required = false;
+    bool dedicated_preferred = false;
+};
+
+struct ExactVulkanRequirements final {
+    VkMemoryRequirements memory_requirements{};
+    bool dedicated_required = false;
+    bool dedicated_preferred = false;
+};
+
+struct ExactFootprintSlot final {
+    bool valid = false;
+    ResourceFootprint footprint{};
+};
+
+struct ExactFootprintProviderData final {
+    const std::vector<ExactFootprintSlot>* footprints = nullptr;
+};
+
+struct StagedTextureRecord final {
+    PhysicalTextureRecord record{};
+    std::optional<std::size_t> reuse_previous_index{};
+};
+
+struct StagedBufferRecord final {
+    PhysicalBufferRecord record{};
+    std::optional<std::size_t> reuse_previous_index{};
+};
+
+struct CommittedTextureRecords final {
+    std::vector<PhysicalTextureRecord> records{};
+    std::vector<std::optional<std::size_t>> reuse_previous_indices{};
+};
+
+struct CommittedBufferRecords final {
+    std::vector<PhysicalBufferRecord> records{};
+    std::vector<std::optional<std::size_t>> reuse_previous_indices{};
+};
+
+bool g_fail_resolve_before_publish_for_testing = false;
 
 [[nodiscard]] const TransientAllocationRecord* FindTransientAllocationRecord(
     const TransientAllocationPlan& plan_,
@@ -225,6 +302,16 @@ struct PreparedTransientBuffer final {
                         });
 }
 
+[[nodiscard]] auto FindPreparedTransientImage(std::vector<PreparedTransientImage>& prepared_,
+                                              const ResourceHandle logical_) {
+    return std::find_if(prepared_.begin(),
+                        prepared_.end(),
+                        [&](const PreparedTransientImage& entry_) {
+                            return entry_.resource != nullptr &&
+                                   entry_.resource->handle.index == logical_.index;
+                        });
+}
+
 [[nodiscard]] auto FindTransientBufferPageRecord(
     std::vector<TransientBufferPageRecord>& pages_,
     const std::uint32_t page_index_) {
@@ -233,6 +320,130 @@ struct PreparedTransientBuffer final {
                         [&](const TransientBufferPageRecord& page_) {
                             return page_.page_index == page_index_;
                         });
+}
+
+[[nodiscard]] auto FindTransientImagePageRecord(
+    std::vector<TransientImagePageRecord>& pages_,
+    const std::uint32_t page_index_) {
+    return std::find_if(pages_.begin(),
+                        pages_.end(),
+                        [&](const TransientImagePageRecord& page_) {
+                            return page_.page_index == page_index_;
+                        });
+}
+
+[[nodiscard]] ExactVulkanRequirements QueryBufferRequirements(VulkanContext& device_,
+                                                              const VkBuffer buffer_) {
+    ExactVulkanRequirements result{};
+    VkBufferMemoryRequirementsInfo2 requirements_info{};
+    requirements_info.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_REQUIREMENTS_INFO_2;
+    requirements_info.buffer = buffer_;
+
+    VkMemoryDedicatedRequirements dedicated_requirements{};
+    dedicated_requirements.sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_REQUIREMENTS;
+
+    VkMemoryRequirements2 requirements{};
+    requirements.sType = VK_STRUCTURE_TYPE_MEMORY_REQUIREMENTS_2;
+    requirements.pNext = &dedicated_requirements;
+
+    vkGetBufferMemoryRequirements2(device_.Device(), &requirements_info, &requirements);
+    result.memory_requirements = requirements.memoryRequirements;
+    result.dedicated_required = dedicated_requirements.requiresDedicatedAllocation == VK_TRUE;
+    result.dedicated_preferred = dedicated_requirements.prefersDedicatedAllocation == VK_TRUE;
+    return result;
+}
+
+[[nodiscard]] ExactVulkanRequirements QueryImageRequirements(VulkanContext& device_,
+                                                             const VkImage image_) {
+    ExactVulkanRequirements result{};
+    VkImageMemoryRequirementsInfo2 requirements_info{};
+    requirements_info.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_REQUIREMENTS_INFO_2;
+    requirements_info.image = image_;
+
+    VkMemoryDedicatedRequirements dedicated_requirements{};
+    dedicated_requirements.sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_REQUIREMENTS;
+
+    VkMemoryRequirements2 requirements{};
+    requirements.sType = VK_STRUCTURE_TYPE_MEMORY_REQUIREMENTS_2;
+    requirements.pNext = &dedicated_requirements;
+
+    vkGetImageMemoryRequirements2(device_.Device(), &requirements_info, &requirements);
+    result.memory_requirements = requirements.memoryRequirements;
+    result.dedicated_required = dedicated_requirements.requiresDedicatedAllocation == VK_TRUE;
+    result.dedicated_preferred = dedicated_requirements.prefersDedicatedAllocation == VK_TRUE;
+    return result;
+}
+
+[[nodiscard]] ResourceFootprint BuildExactBufferFootprint(const CompiledResource& resource_,
+                                                          const PreparedTransientBuffer& prepared_) {
+    ResourceFootprint footprint{};
+    footprint.size_bytes = prepared_.memory_requirements.size;
+    footprint.alignment_bytes = prepared_.memory_requirements.alignment;
+    footprint.memory_type_bits = prepared_.memory_requirements.memoryTypeBits;
+    footprint.usage_flags = resource_.buffer.usage;
+    footprint.dedicated_required = prepared_.dedicated_required;
+    footprint.dedicated_preferred = prepared_.dedicated_preferred;
+    footprint.host_visible = resource_.buffer.host_visible;
+    footprint.persistently_mapped = resource_.buffer.persistently_mapped;
+    return footprint;
+}
+
+[[nodiscard]] ResourceFootprint BuildExactImageFootprint(const CompiledResource& resource_,
+                                                         const PreparedTransientImage& prepared_) {
+    ResourceFootprint footprint{};
+    footprint.size_bytes = prepared_.memory_requirements.size;
+    footprint.alignment_bytes = prepared_.memory_requirements.alignment;
+    footprint.memory_type_bits = prepared_.memory_requirements.memoryTypeBits;
+    footprint.usage_flags = resource_.texture.usage;
+    footprint.dedicated_required = prepared_.dedicated_required;
+    footprint.dedicated_preferred = prepared_.dedicated_preferred;
+    footprint.lazy_memory_requested = resource_.texture.prefer_lazy_memory;
+    return footprint;
+}
+
+[[nodiscard]] bool ResolveExactFootprint(const CompiledResource& resource_,
+                                         ResourceFootprint& footprint_,
+                                         const void* user_data_,
+                                         std::string& error_message_) {
+    const auto* provider = static_cast<const ExactFootprintProviderData*>(user_data_);
+    if (provider == nullptr || provider->footprints == nullptr) {
+        error_message_ = "exact footprint provider is not initialized";
+        return false;
+    }
+    if (resource_.handle.index >= provider->footprints->size()) {
+        error_message_ = "exact footprint provider is missing a resource slot";
+        return false;
+    }
+
+    const auto& slot = (*provider->footprints)[resource_.handle.index];
+    if (!slot.valid) {
+        error_message_ = "exact footprint provider is missing resource footprint";
+        return false;
+    }
+
+    footprint_ = slot.footprint;
+    error_message_.clear();
+    return true;
+}
+
+void DestroyPreparedTransientBuffers(VulkanContext& device_,
+                                     std::vector<PreparedTransientBuffer>& prepared_) noexcept {
+    for (auto& prepared : prepared_) {
+        if (prepared.buffer_object.buffer != VK_NULL_HANDLE) {
+            resource::BufferHost::DestroyBuffer(device_, prepared.buffer_object);
+        }
+    }
+    prepared_.clear();
+}
+
+void DestroyPreparedTransientImages(VulkanContext& device_,
+                                    std::vector<PreparedTransientImage>& prepared_) noexcept {
+    for (auto& prepared : prepared_) {
+        if (prepared.image_object.image != VK_NULL_HANDLE) {
+            resource::ImageHost::DestroyImage(device_, prepared.image_object);
+        }
+    }
+    prepared_.clear();
 }
 
 void DestroyTransientBufferPages(std::vector<TransientBufferPageRecord>& pages_) noexcept {
@@ -246,12 +457,323 @@ void DestroyTransientBufferPages(std::vector<TransientBufferPageRecord>& pages_)
     pages_.clear();
 }
 
+void DestroyTransientImagePages(std::vector<TransientImagePageRecord>& pages_) noexcept {
+    for (auto& page_ : pages_) {
+        if (page_.memory_host != nullptr && page_.allocation_slice.valid()) {
+            page_.memory_host->Deallocate(page_.allocation_slice);
+            page_.allocation_slice = {};
+        }
+        page_.memory_host = nullptr;
+    }
+    pages_.clear();
+}
+
+void DestroyTextureRecords(VulkanContext& device_,
+                           render::RenderTargetHost& render_target_host_,
+                           std::vector<PhysicalTextureRecord>& records_,
+                           const std::uint64_t last_submitted_value_,
+                           const std::uint64_t completed_submit_value_) noexcept {
+    for (auto& record_ : records_) {
+        if (!record_.imported && render::IsValidRenderTargetHandle(record_.render_target)) {
+            (void)render_target_host_.DestroyTarget(device_,
+                                                    record_.render_target,
+                                                    last_submitted_value_,
+                                                    completed_submit_value_);
+            record_.render_target = render::invalid_render_target_handle;
+        }
+        if (record_.owned_resource.image != VK_NULL_HANDLE) {
+            resource::ImageHost::DestroyImage(device_, record_.owned_resource);
+        }
+    }
+    records_.clear();
+}
+
+void DestroyBufferRecords(VulkanContext& device_,
+                          std::vector<PhysicalBufferRecord>& records_) noexcept {
+    for (auto& record_ : records_) {
+        if (!record_.imported && record_.owned_resource.buffer != VK_NULL_HANDLE) {
+            resource::BufferHost::DestroyBuffer(device_, record_.owned_resource);
+        }
+    }
+    records_.clear();
+}
+
+void DestroyStagedTextureRecords(VulkanContext& device_,
+                                 render::RenderTargetHost& render_target_host_,
+                                 std::vector<StagedTextureRecord>& staged_records_,
+                                 const std::uint64_t last_submitted_value_,
+                                 const std::uint64_t completed_submit_value_) noexcept {
+    for (auto& staged_ : staged_records_) {
+        if (staged_.reuse_previous_index.has_value()) {
+            continue;
+        }
+        if (!staged_.record.imported && render::IsValidRenderTargetHandle(staged_.record.render_target)) {
+            (void)render_target_host_.DestroyTarget(device_,
+                                                    staged_.record.render_target,
+                                                    last_submitted_value_,
+                                                    completed_submit_value_);
+            staged_.record.render_target = render::invalid_render_target_handle;
+        }
+        if (staged_.record.owned_resource.image != VK_NULL_HANDLE) {
+            resource::ImageHost::DestroyImage(device_, staged_.record.owned_resource);
+        }
+    }
+    staged_records_.clear();
+}
+
+void DestroyStagedBufferRecords(VulkanContext& device_,
+                                std::vector<StagedBufferRecord>& staged_records_) noexcept {
+    for (auto& staged_ : staged_records_) {
+        if (staged_.reuse_previous_index.has_value()) {
+            continue;
+        }
+        if (!staged_.record.imported && staged_.record.owned_resource.buffer != VK_NULL_HANDLE) {
+            resource::BufferHost::DestroyBuffer(device_, staged_.record.owned_resource);
+        }
+    }
+    staged_records_.clear();
+}
+
+[[nodiscard]] const char* QueueClassToStringLocal(const QueueClass queue_) noexcept {
+    switch (queue_) {
+    case QueueClass::graphics:
+        return "graphics";
+    case QueueClass::compute:
+        return "compute";
+    case QueueClass::transfer:
+        return "transfer";
+    default:
+        break;
+    }
+    return "unknown";
+}
+
+[[nodiscard]] const CompiledResource* FindCompiledResourceByHandle(
+    const CompiledRenderGraph& compiled_graph_,
+    const ResourceHandle handle_) noexcept {
+    const auto resource_it = std::find_if(
+        compiled_graph_.Resources().begin(),
+        compiled_graph_.Resources().end(),
+        [&](const CompiledResource& resource_) {
+            return resource_.handle.index == handle_.index;
+        });
+    return resource_it != compiled_graph_.Resources().end() ? &(*resource_it) : nullptr;
+}
+
+[[nodiscard]] std::string BuildUnsupportedCrossQueueAliasMessage(
+    const CompiledRenderGraph& compiled_graph_,
+    const ResourceHandle previous_handle_,
+    const ResourceHandle next_handle_,
+    const LogicalBarrier& barrier_) {
+    const auto* previous_resource = FindCompiledResourceByHandle(compiled_graph_, previous_handle_);
+    const auto* next_resource = FindCompiledResourceByHandle(compiled_graph_, next_handle_);
+    const std::string previous_name =
+        previous_resource != nullptr ? previous_resource->debug_name : std::string("unknown_previous_resource");
+    const std::string next_name =
+        next_resource != nullptr ? next_resource->debug_name : std::string("unknown_next_resource");
+
+    std::string message = "VulkanResourceTable::Resolve does not support cross-queue alias realization";
+    message += " from ";
+    message += previous_name;
+    message += " to ";
+    message += next_name;
+    message += " (";
+    message += QueueClassToStringLocal(barrier_.src_queue);
+    message += " -> ";
+    message += QueueClassToStringLocal(barrier_.dst_queue);
+    message += ")";
+    return message;
+}
+
+void ValidateAliasRealizationSupport(const CompiledRenderGraph& compiled_graph_,
+                                     const BarrierPlan& barrier_plan_,
+                                     const RenderGraphExecutorCapabilities& executor_capabilities_) {
+    if (executor_capabilities_.supports_queue_transfer_batches) {
+        return;
+    }
+
+    for (const auto& batch_ : barrier_plan_.barrier_batches) {
+        for (const auto& barrier_ : batch_.barriers) {
+            if (!barrier_.aliasing || !barrier_.queue_transfer) {
+                continue;
+            }
+
+            ResourceHandle previous_handle{
+                .index = barrier_.resource.resource_index,
+                .generation = 1U,
+            };
+            ResourceHandle next_handle{
+                .index = barrier_.resource.resource_index,
+                .generation = 1U,
+            };
+            const auto alias_decision = std::find_if(
+                barrier_plan_.alias_barriers.begin(),
+                barrier_plan_.alias_barriers.end(),
+                [&](const AliasBarrierDecision& decision_) {
+                    return decision_.required &&
+                           decision_.realized &&
+                           decision_.next.index == barrier_.resource.resource_index &&
+                           decision_.previous_last_pass_order == barrier_.src_pass_order &&
+                           decision_.next_first_pass_order == barrier_.dst_pass_order;
+                });
+            if (alias_decision != barrier_plan_.alias_barriers.end()) {
+                previous_handle = alias_decision->previous;
+                next_handle = alias_decision->next;
+            }
+            throw VulkanResourceResolveError(
+                VulkanResourceResolveErrorCode::unsupported_cross_queue_alias,
+                previous_handle,
+                next_handle,
+                barrier_.src_queue,
+                barrier_.dst_queue,
+                BuildUnsupportedCrossQueueAliasMessage(compiled_graph_,
+                                                      previous_handle,
+                                                      next_handle,
+                                                      barrier_));
+        }
+    }
+}
+
+void CommitTextureRecords(PhysicalTextureRecord& destination_,
+                          PhysicalTextureRecord& source_) noexcept {
+    destination_.logical = source_.logical;
+    destination_.debug_name.swap(source_.debug_name);
+    destination_.lifetime = source_.lifetime;
+    destination_.desc = source_.desc;
+    destination_.render_target = source_.render_target;
+    destination_.owned_resource = source_.owned_resource;
+    destination_.alias_page_index = source_.alias_page_index;
+    destination_.aliased = source_.aliased;
+    destination_.imported = source_.imported;
+
+    source_.render_target = render::invalid_render_target_handle;
+    source_.owned_resource = {};
+    source_.alias_page_index = invalid_render_graph_index;
+    source_.aliased = false;
+    source_.imported = false;
+}
+
+void CommitBufferRecords(PhysicalBufferRecord& destination_,
+                         PhysicalBufferRecord& source_) noexcept {
+    destination_.logical = source_.logical;
+    destination_.debug_name.swap(source_.debug_name);
+    destination_.lifetime = source_.lifetime;
+    destination_.desc = source_.desc;
+    destination_.owned_resource = source_.owned_resource;
+    destination_.imported_buffer = source_.imported_buffer;
+    destination_.alias_page_index = source_.alias_page_index;
+    destination_.aliased = source_.aliased;
+    destination_.imported = source_.imported;
+
+    source_.owned_resource = {};
+    source_.imported_buffer = {};
+    source_.alias_page_index = invalid_render_graph_index;
+    source_.aliased = false;
+    source_.imported = false;
+}
+
+[[nodiscard]] CommittedTextureRecords BuildCommittedTextureRecords(
+    std::vector<StagedTextureRecord>& staged_records_) {
+    CommittedTextureRecords committed{};
+    committed.records.resize(staged_records_.size());
+    committed.reuse_previous_indices.resize(staged_records_.size());
+    for (std::size_t index = 0U; index < staged_records_.size(); ++index) {
+        committed.reuse_previous_indices[index] = staged_records_[index].reuse_previous_index;
+        CommitTextureRecords(committed.records[index], staged_records_[index].record);
+    }
+    staged_records_.clear();
+    return committed;
+}
+
+[[nodiscard]] CommittedBufferRecords BuildCommittedBufferRecords(
+    std::vector<StagedBufferRecord>& staged_records_) {
+    CommittedBufferRecords committed{};
+    committed.records.resize(staged_records_.size());
+    committed.reuse_previous_indices.resize(staged_records_.size());
+    for (std::size_t index = 0U; index < staged_records_.size(); ++index) {
+        committed.reuse_previous_indices[index] = staged_records_[index].reuse_previous_index;
+        CommitBufferRecords(committed.records[index], staged_records_[index].record);
+    }
+    staged_records_.clear();
+    return committed;
+}
+
+void AttachReusedTextureRecords(CommittedTextureRecords& committed_,
+                                std::vector<PhysicalTextureRecord>& previous_records_) noexcept {
+    for (std::size_t index = 0U; index < committed_.records.size(); ++index) {
+        const auto previous_index = committed_.reuse_previous_indices[index];
+        if (!previous_index.has_value()) {
+            continue;
+        }
+
+        auto& record = committed_.records[index];
+        auto& previous = previous_records_[*previous_index];
+        record.render_target = previous.render_target;
+        previous.render_target = render::invalid_render_target_handle;
+        if (record.owned_resource.image == VK_NULL_HANDLE &&
+            previous.owned_resource.image != VK_NULL_HANDLE) {
+            record.owned_resource = previous.owned_resource;
+            previous.owned_resource = {};
+        }
+    }
+}
+
+void AttachReusedBufferRecords(CommittedBufferRecords& committed_,
+                               std::vector<PhysicalBufferRecord>& previous_records_) noexcept {
+    for (std::size_t index = 0U; index < committed_.records.size(); ++index) {
+        const auto previous_index = committed_.reuse_previous_indices[index];
+        if (!previous_index.has_value()) {
+            continue;
+        }
+
+        auto& record = committed_.records[index];
+        auto& previous = previous_records_[*previous_index];
+        record.owned_resource = previous.owned_resource;
+        previous.owned_resource = {};
+    }
+}
+
 } // namespace
+
+void SetVulkanResourceTableResolveFailureBeforePublishForTesting(const bool enabled_) noexcept {
+    g_fail_resolve_before_publish_for_testing = enabled_;
+}
+
+VulkanResourceResolveError::VulkanResourceResolveError(
+    const VulkanResourceResolveErrorCode code_,
+    const ResourceHandle previous_resource_,
+    const ResourceHandle next_resource_,
+    const QueueClass source_queue_,
+    const QueueClass target_queue_,
+    std::string message_)
+    : std::runtime_error(std::move(message_))
+    , code(code_)
+    , previous_resource(previous_resource_)
+    , next_resource(next_resource_)
+    , source_queue(source_queue_)
+    , target_queue(target_queue_) {}
 
 void VulkanResourceTable::BeginFrame(VulkanContext& device_,
                                      render::RenderTargetHost& render_target_host_,
                                      const std::uint64_t last_submitted_value_,
                                      const std::uint64_t completed_submit_value_) {
+    (void)retired_transient_images.Collect(
+        completed_submit_value_,
+        [&](RetiredTransientImagePayload& payload_) {
+            if (payload_.owned_resource.image != VK_NULL_HANDLE) {
+                resource::ImageHost::DestroyImage(device_, payload_.owned_resource);
+            }
+        });
+    (void)retired_transient_image_pages.Collect(
+        completed_submit_value_,
+        [&](TransientImagePageRecord& page_) {
+            if (page_.memory_host != nullptr && page_.allocation_slice.valid()) {
+                page_.memory_host->Deallocate(page_.allocation_slice);
+                page_.allocation_slice = {};
+            }
+            page_.memory_host = nullptr;
+        });
+
     DestroyTransientRecords(device_,
                             render_target_host_,
                             last_submitted_value_,
@@ -280,42 +802,149 @@ void VulkanResourceTable::RegisterImportedBuffer(const ResourceHandle logical_,
 void VulkanResourceTable::Resolve(VulkanContext& device_,
                                   resource::GpuMemoryHost& gpu_memory_host_,
                                   render::RenderTargetHost& render_target_host_,
-                                  const CompiledRenderGraph& compiled_graph_,
+                                  CompiledRenderGraph& compiled_graph_,
                                   const std::uint64_t last_submitted_value_,
-                                  const std::uint64_t completed_submit_value_) {
-    std::vector<PhysicalTextureRecord> previous_textures = std::move(textures);
-    std::vector<PhysicalBufferRecord> previous_buffers = std::move(buffers);
-    std::vector<TransientBufferPageRecord> previous_transient_buffer_pages = std::move(transient_buffer_pages);
-    textures.clear();
-    buffers.clear();
-    transient_buffer_pages.clear();
-    textures.reserve(compiled_graph_.Resources().size());
-    buffers.reserve(compiled_graph_.Resources().size());
+                                  const std::uint64_t completed_submit_value_,
+                                  const RenderGraphExecutorCapabilities& executor_capabilities_) {
+    std::vector<PreparedTransientBuffer> prepared_transient_buffers{};
+    std::vector<PreparedTransientImage> prepared_transient_images{};
+    std::vector<StagedTextureRecord> staged_textures{};
+    std::vector<StagedBufferRecord> staged_buffers{};
+    std::vector<TransientBufferPageRecord> staged_transient_buffer_pages{};
+    std::vector<TransientImagePageRecord> staged_transient_image_pages{};
+    CommittedTextureRecords committed_textures{};
+    CommittedBufferRecords committed_buffers{};
+    TransientAllocationPlan realized_transient_plan{};
+    BarrierPlan realized_barrier_plan{};
 
     try {
-        std::vector<PreparedTransientBuffer> prepared_transient_buffers{};
         prepared_transient_buffers.reserve(compiled_graph_.Resources().size());
+        prepared_transient_images.reserve(compiled_graph_.Resources().size());
+        staged_textures.reserve(compiled_graph_.Resources().size());
+        staged_buffers.reserve(compiled_graph_.Resources().size());
+
+        std::uint32_t max_resource_index = 0U;
         for (const auto& resource_ : compiled_graph_.Resources()) {
-            if (resource_.kind != ResourceKind::buffer ||
-                resource_.lifetime != ResourceLifetime::transient) {
+            max_resource_index = (std::max)(max_resource_index, resource_.handle.index);
+        }
+        std::vector<ExactFootprintSlot> exact_footprints(static_cast<std::size_t>(max_resource_index) + 1U);
+
+        for (const auto& resource_ : compiled_graph_.Resources()) {
+            if (resource_.lifetime != ResourceLifetime::transient) {
                 continue;
             }
 
-            PreparedTransientBuffer prepared{};
+            if (resource_.kind == ResourceKind::buffer) {
+                PreparedTransientBuffer prepared{};
+                prepared.resource = &resource_;
+                prepared.create_info = BuildBufferCreateInfo(resource_.buffer);
+                prepared.buffer_object = resource::BufferHost::CreateBufferObject(device_,
+                                                                                  prepared.create_info);
+                const auto exact_requirements = QueryBufferRequirements(device_,
+                                                                        prepared.buffer_object.buffer);
+                prepared.memory_requirements = exact_requirements.memory_requirements;
+                prepared.dedicated_required = exact_requirements.dedicated_required;
+                prepared.dedicated_preferred = exact_requirements.dedicated_preferred;
+                prepared_transient_buffers.push_back(std::move(prepared));
+
+                auto& footprint_slot = exact_footprints[resource_.handle.index];
+                footprint_slot.valid = true;
+                footprint_slot.footprint = BuildExactBufferFootprint(
+                    resource_,
+                    prepared_transient_buffers.back());
+                continue;
+            }
+
+            PreparedTransientImage prepared{};
             prepared.resource = &resource_;
-            prepared.allocation_record = FindTransientAllocationRecord(compiled_graph_.TransientAllocations(),
-                                                                       resource_.handle);
-            prepared.create_info = BuildBufferCreateInfo(resource_.buffer);
-            prepared.buffer_object = resource::BufferHost::CreateBufferObject(device_,
-                                                                              prepared.create_info);
-            vkGetBufferMemoryRequirements(device_.Device(),
-                                          prepared.buffer_object.buffer,
-                                          &prepared.memory_requirements);
-            prepared_transient_buffers.push_back(std::move(prepared));
+            prepared.create_info = BuildImageCreateInfo(resource_.texture);
+            prepared.create_info.create_default_view = false;
+            prepared.image_object = resource::ImageHost::CreateImageObject(device_,
+                                                                           prepared.create_info);
+            const auto exact_requirements = QueryImageRequirements(device_,
+                                                                   prepared.image_object.image);
+            prepared.memory_requirements = exact_requirements.memory_requirements;
+            prepared.dedicated_required = exact_requirements.dedicated_required;
+            prepared.dedicated_preferred = exact_requirements.dedicated_preferred;
+            prepared_transient_images.push_back(std::move(prepared));
+
+            auto& footprint_slot = exact_footprints[resource_.handle.index];
+            footprint_slot.valid = true;
+            footprint_slot.footprint = BuildExactImageFootprint(
+                resource_,
+                prepared_transient_images.back());
         }
 
-        for (const auto& page_ : compiled_graph_.TransientAllocations().pages) {
+        ExactFootprintProviderData exact_provider_data{
+            .footprints = &exact_footprints,
+        };
+        realized_transient_plan = BuildTransientAllocationPlan(
+            compiled_graph_,
+            TransientFootprintProvider{
+                .user_data = &exact_provider_data,
+                .resolve_fn = &ResolveExactFootprint,
+            });
+        realized_barrier_plan = BuildBarrierPlan(compiled_graph_,
+                                                 &realized_transient_plan);
+        ValidateAliasRealizationSupport(compiled_graph_,
+                                        realized_barrier_plan,
+                                        executor_capabilities_);
+
+        for (const auto& page_ : realized_transient_plan.pages) {
             if (page_.kind != ResourceKind::buffer || page_.resources.empty()) {
+                if (page_.kind != ResourceKind::texture || page_.resources.empty()) {
+                    continue;
+                }
+
+                VkDeviceSize page_size = 0U;
+                VkDeviceSize page_alignment = 1U;
+                std::uint32_t memory_type_bits = 0xFFFFFFFFU;
+                bool have_resource = false;
+                VkImageTiling tiling = VK_IMAGE_TILING_OPTIMAL;
+                for (const auto handle_ : page_.resources) {
+                    const auto prepared = FindPreparedTransientImage(prepared_transient_images, handle_);
+                    if (prepared == prepared_transient_images.end()) {
+                        continue;
+                    }
+                    page_size = (std::max)(page_size, prepared->memory_requirements.size);
+                    page_alignment = (std::max)(page_alignment, prepared->memory_requirements.alignment);
+                    memory_type_bits &= prepared->memory_requirements.memoryTypeBits;
+                    tiling = prepared->create_info.tiling;
+                    have_resource = true;
+                }
+
+                if (!have_resource) {
+                    continue;
+                }
+                if (memory_type_bits == 0U) {
+                    throw std::runtime_error(
+                        "VulkanResourceTable transient image alias page has no shared memory type bits");
+                }
+
+                VkMemoryRequirements aggregate_requirements{};
+                aggregate_requirements.size = page_size;
+                aggregate_requirements.alignment = page_alignment;
+                aggregate_requirements.memoryTypeBits = memory_type_bits;
+
+                TransientImagePageRecord page_record{};
+                page_record.page_index = page_.page_index;
+                page_record.size_bytes = page_size;
+                page_record.alignment_bytes = page_alignment;
+                page_record.memory_type_bits = memory_type_bits;
+                page_record.tiling = tiling;
+                page_record.resources = page_.resources;
+                page_record.allocation_slice = gpu_memory_host_.AllocateImageMemory(
+                    aggregate_requirements,
+                    tiling,
+                    VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                    VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                    false,
+                    Center::Memory::Vulkan::LifetimeHint::transient,
+                    Center::Memory::Vulkan::HostAccess::none,
+                    false,
+                    false);
+                page_record.memory_host = &gpu_memory_host_;
+                staged_transient_image_pages.push_back(std::move(page_record));
                 continue;
             }
 
@@ -363,76 +992,132 @@ void VulkanResourceTable::Resolve(VulkanContext& device_,
                 false,
                 false);
             page_record.memory_host = &gpu_memory_host_;
-            transient_buffer_pages.push_back(std::move(page_record));
+            staged_transient_buffer_pages.push_back(std::move(page_record));
         }
 
         for (const auto& resource_ : compiled_graph_.Resources()) {
             if (resource_.kind == ResourceKind::texture) {
-                auto previous = FindTextureRecord(previous_textures, resource_.handle);
-                PhysicalTextureRecord record{};
-                record.logical = resource_.handle;
-                record.debug_name = resource_.debug_name;
-                record.lifetime = resource_.lifetime;
-                record.desc = resource_.texture;
+                const auto previous = FindTextureRecord(textures, resource_.handle);
+                StagedTextureRecord staged{};
+                staged.record.logical = resource_.handle;
+                staged.record.debug_name = resource_.debug_name;
+                staged.record.lifetime = resource_.lifetime;
+                staged.record.desc = resource_.texture;
 
                 if (resource_.lifetime == ResourceLifetime::imported) {
                     if (!HasImportedTextureBinding(imported_textures, resource_.handle)) {
                         throw std::invalid_argument(
                             "VulkanResourceTable missing imported texture binding for logical resource");
                     }
-                    record.render_target = imported_textures[resource_.handle.index];
-                    record.imported = true;
+                    staged.record.render_target = imported_textures[resource_.handle.index];
+                    staged.record.imported = true;
                 } else if (resource_.lifetime == ResourceLifetime::persistent &&
-                           previous != previous_textures.end() &&
+                           previous != textures.end() &&
                            !previous->imported &&
                            TextureDescsEqual(previous->desc, resource_.texture) &&
                            render::IsValidRenderTargetHandle(previous->render_target)) {
-                    record.render_target = previous->render_target;
-                    previous->render_target = render::invalid_render_target_handle;
+                    staged.reuse_previous_index = static_cast<std::size_t>(
+                        std::distance(textures.begin(), previous));
                 } else {
-                    if (previous != previous_textures.end() &&
-                        !previous->imported &&
-                        render::IsValidRenderTargetHandle(previous->render_target)) {
-                        (void)render_target_host_.DestroyTarget(device_,
-                                                                previous->render_target,
-                                                                last_submitted_value_,
-                                                                completed_submit_value_);
-                        previous->render_target = render::invalid_render_target_handle;
-                    }
+                    if (resource_.lifetime == ResourceLifetime::persistent) {
+                        auto desc = BuildRenderTargetDesc(resource_.texture);
+                        desc.debug_name = staged.record.debug_name.c_str();
+                        desc.lifetime = ResolveRenderTargetLifetime(resource_.lifetime);
+                        staged.record.render_target = render_target_host_.CreatePersistentTarget(device_, desc);
+                    } else {
+                        const auto prepared = FindPreparedTransientImage(prepared_transient_images, resource_.handle);
+                        if (prepared == prepared_transient_images.end()) {
+                            throw std::runtime_error(
+                                "VulkanResourceTable missing prepared transient image");
+                        }
 
-                    render::RenderTargetDesc desc = BuildRenderTargetDesc(resource_.texture);
-                    desc.debug_name = record.debug_name.c_str();
-                    desc.lifetime = ResolveRenderTargetLifetime(resource_.lifetime);
-                    record.render_target = (resource_.lifetime == ResourceLifetime::persistent)
-                        ? render_target_host_.CreatePersistentTarget(device_, desc)
-                        : render_target_host_.CreateTransientTarget(device_, desc);
+                        staged.record.owned_resource = prepared->image_object;
+                        prepared->image_object = {};
+
+                        const auto* allocation_record = FindTransientAllocationRecord(
+                            realized_transient_plan,
+                            resource_.handle);
+                        const bool page_backed = allocation_record != nullptr &&
+                                                 allocation_record->eligible &&
+                                                 allocation_record->page_index != invalid_render_graph_index;
+                        if (page_backed) {
+                            const auto page_it = FindTransientImagePageRecord(
+                                staged_transient_image_pages,
+                                allocation_record->page_index);
+                            if (page_it == staged_transient_image_pages.end()) {
+                                throw std::runtime_error(
+                                    "VulkanResourceTable transient image page assignment missing page record");
+                            }
+                            resource::ImageHost::BindAllocation(staged.record.owned_resource,
+                                                                gpu_memory_host_,
+                                                                page_it->allocation_slice,
+                                                                false,
+                                                                allocation_record->page_offset_bytes);
+                            staged.record.alias_page_index = page_it->page_index;
+                            staged.record.aliased = allocation_record->aliased;
+                        } else {
+                            const auto allocation_slice = gpu_memory_host_.AllocateImageMemory(
+                                prepared->memory_requirements,
+                                prepared->create_info.tiling,
+                                prepared->create_info.memory_properties,
+                                prepared->create_info.memory_properties,
+                                false,
+                                Center::Memory::Vulkan::LifetimeHint::transient,
+                                Center::Memory::Vulkan::HostAccess::none,
+                                prepared->dedicated_required,
+                                prepared->dedicated_preferred,
+                                staged.record.owned_resource.image);
+                            resource::ImageHost::BindAllocation(staged.record.owned_resource,
+                                                                gpu_memory_host_,
+                                                                allocation_slice,
+                                                                true,
+                                                                0U);
+                        }
+
+                        render::ImportedRenderTargetDesc imported_desc{};
+                        imported_desc.debug_name = staged.record.debug_name.c_str();
+                        imported_desc.ownership = render::RenderTargetOwnership::imported_image_owned_view;
+                        imported_desc.dimension = static_cast<render::RenderTargetDimension>(resource_.texture.dimension);
+                        imported_desc.image = staged.record.owned_resource.image;
+                        imported_desc.image_view = VK_NULL_HANDLE;
+                        imported_desc.format = staged.record.owned_resource.format;
+                        imported_desc.extent = staged.record.owned_resource.extent;
+                        imported_desc.samples = staged.record.owned_resource.samples;
+                        imported_desc.usage = staged.record.owned_resource.usage;
+                        imported_desc.aspect = ResolveImageAspect(resource_.texture);
+                        imported_desc.mip_levels = staged.record.owned_resource.mip_levels;
+                        imported_desc.array_layers = staged.record.owned_resource.array_layers;
+                        imported_desc.color_encoding = render::RenderTargetColorEncoding::linear;
+                        imported_desc.initial_state = render::RenderTargetStateKind::undefined;
+                        staged.record.render_target = render_target_host_.ImportTarget(device_, imported_desc);
+                    }
                 }
 
-                textures.push_back(std::move(record));
+                staged_textures.push_back(std::move(staged));
                 continue;
             }
 
-            auto previous = FindBufferRecord(previous_buffers, resource_.handle);
-            PhysicalBufferRecord record{};
-            record.logical = resource_.handle;
-            record.debug_name = resource_.debug_name;
-            record.lifetime = resource_.lifetime;
-            record.desc = resource_.buffer;
+            const auto previous = FindBufferRecord(buffers, resource_.handle);
+            StagedBufferRecord staged{};
+            staged.record.logical = resource_.handle;
+            staged.record.debug_name = resource_.debug_name;
+            staged.record.lifetime = resource_.lifetime;
+            staged.record.desc = resource_.buffer;
 
             if (resource_.lifetime == ResourceLifetime::imported) {
                 if (!HasImportedBufferBinding(imported_buffers, resource_.handle)) {
                     throw std::invalid_argument(
                         "VulkanResourceTable missing imported buffer binding for logical resource");
                 }
-                record.imported = true;
-                record.imported_buffer = imported_buffers[resource_.handle.index];
+                staged.record.imported = true;
+                staged.record.imported_buffer = imported_buffers[resource_.handle.index];
             } else if (resource_.lifetime == ResourceLifetime::persistent &&
-                       previous != previous_buffers.end() &&
+                       previous != buffers.end() &&
                        !previous->imported &&
                        BufferDescsEqual(previous->desc, resource_.buffer) &&
                        previous->owned_resource.buffer != VK_NULL_HANDLE) {
-                record.owned_resource = previous->owned_resource;
-                previous->owned_resource = {};
+                staged.reuse_previous_index = static_cast<std::size_t>(
+                    std::distance(buffers.begin(), previous));
             } else if (resource_.lifetime == ResourceLifetime::transient) {
                 const auto prepared = FindPreparedTransientBuffer(prepared_transient_buffers, resource_.handle);
                 if (prepared == prepared_transient_buffers.end()) {
@@ -440,26 +1125,29 @@ void VulkanResourceTable::Resolve(VulkanContext& device_,
                         "VulkanResourceTable missing prepared transient buffer");
                 }
 
-                record.owned_resource = prepared->buffer_object;
+                staged.record.owned_resource = prepared->buffer_object;
                 prepared->buffer_object = {};
 
-                const bool page_backed = prepared->allocation_record != nullptr &&
-                                         prepared->allocation_record->eligible &&
-                                         prepared->allocation_record->page_index != invalid_render_graph_index;
+                const auto* allocation_record = FindTransientAllocationRecord(
+                    realized_transient_plan,
+                    resource_.handle);
+                const bool page_backed = allocation_record != nullptr &&
+                                         allocation_record->eligible &&
+                                         allocation_record->page_index != invalid_render_graph_index;
                 if (page_backed) {
-                    const auto page_it = FindTransientBufferPageRecord(transient_buffer_pages,
-                                                                       prepared->allocation_record->page_index);
-                    if (page_it == transient_buffer_pages.end()) {
+                    const auto page_it = FindTransientBufferPageRecord(staged_transient_buffer_pages,
+                                                                       allocation_record->page_index);
+                    if (page_it == staged_transient_buffer_pages.end()) {
                         throw std::runtime_error(
                             "VulkanResourceTable transient buffer page assignment missing page record");
                     }
-                    resource::BufferHost::BindAllocation(record.owned_resource,
+                    resource::BufferHost::BindAllocation(staged.record.owned_resource,
                                                          gpu_memory_host_,
                                                          page_it->allocation_slice,
                                                          false,
-                                                         prepared->allocation_record->page_offset_bytes);
-                    record.alias_page_index = page_it->page_index;
-                    record.aliased = prepared->allocation_record->aliased;
+                                                         allocation_record->page_offset_bytes);
+                    staged.record.alias_page_index = page_it->page_index;
+                    staged.record.aliased = allocation_record->aliased;
                 } else {
                     const bool host_visible_requested =
                         (prepared->create_info.memory_properties & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0U;
@@ -474,81 +1162,78 @@ void VulkanResourceTable::Resolve(VulkanContext& device_,
                         host_visible_requested
                             ? Center::Memory::Vulkan::HostAccess::sequential_write
                             : Center::Memory::Vulkan::HostAccess::none,
-                        false,
-                        false,
-                        record.owned_resource.buffer);
-                    resource::BufferHost::BindAllocation(record.owned_resource,
+                        prepared->dedicated_required,
+                        prepared->dedicated_preferred,
+                        staged.record.owned_resource.buffer);
+                    resource::BufferHost::BindAllocation(staged.record.owned_resource,
                                                          gpu_memory_host_,
                                                          allocation_slice,
                                                          true,
                                                          0U);
                 }
             } else {
-                if (previous != previous_buffers.end() &&
-                    !previous->imported &&
-                    previous->owned_resource.buffer != VK_NULL_HANDLE) {
-                    resource::BufferHost::DestroyBuffer(device_, previous->owned_resource);
-                    previous->owned_resource = {};
-                }
-                record.owned_resource = resource::BufferHost::CreateBuffer(
+                staged.record.owned_resource = resource::BufferHost::CreateBuffer(
                     device_,
                     BuildBufferCreateInfo(resource_.buffer),
                     gpu_memory_host_);
             }
 
-            buffers.push_back(std::move(record));
+            staged_buffers.push_back(std::move(staged));
         }
-    } catch (...) {
-        for (auto& texture_ : textures) {
-            if (!texture_.imported && render::IsValidRenderTargetHandle(texture_.render_target)) {
-                (void)render_target_host_.DestroyTarget(device_,
-                                                        texture_.render_target,
-                                                        last_submitted_value_,
-                                                        completed_submit_value_);
-            }
-        }
-        textures.clear();
 
-        for (auto& buffer_ : buffers) {
-            if (!buffer_.imported && buffer_.owned_resource.buffer != VK_NULL_HANDLE) {
-                resource::BufferHost::DestroyBuffer(device_, buffer_.owned_resource);
-            }
-        }
-        buffers.clear();
-        DestroyTransientBufferPages(transient_buffer_pages);
+        DestroyPreparedTransientBuffers(device_, prepared_transient_buffers);
+        DestroyPreparedTransientImages(device_, prepared_transient_images);
 
-        for (auto& texture_ : previous_textures) {
-            if (!texture_.imported && render::IsValidRenderTargetHandle(texture_.render_target)) {
-                (void)render_target_host_.DestroyTarget(device_,
-                                                        texture_.render_target,
-                                                        last_submitted_value_,
-                                                        completed_submit_value_);
-            }
+        committed_textures = BuildCommittedTextureRecords(staged_textures);
+        committed_buffers = BuildCommittedBufferRecords(staged_buffers);
+
+        if (g_fail_resolve_before_publish_for_testing) {
+            throw std::runtime_error(
+                "VulkanResourceTable::Resolve injected failure before publish");
         }
-        for (auto& buffer_ : previous_buffers) {
-            if (!buffer_.imported && buffer_.owned_resource.buffer != VK_NULL_HANDLE) {
-                resource::BufferHost::DestroyBuffer(device_, buffer_.owned_resource);
-            }
-        }
+
+        auto previous_textures = std::move(textures);
+        auto previous_buffers = std::move(buffers);
+        auto previous_transient_buffer_pages = std::move(transient_buffer_pages);
+        auto previous_transient_image_pages = std::move(transient_image_pages);
+
+        AttachReusedTextureRecords(committed_textures, previous_textures);
+        AttachReusedBufferRecords(committed_buffers, previous_buffers);
+
+        textures.swap(committed_textures.records);
+        buffers.swap(committed_buffers.records);
+        transient_buffer_pages.swap(staged_transient_buffer_pages);
+        transient_image_pages.swap(staged_transient_image_pages);
+        compiled_graph_.OverrideTransientPlanning(std::move(realized_transient_plan),
+                                                  std::move(realized_barrier_plan));
+
+        DestroyTextureRecords(device_,
+                              render_target_host_,
+                              previous_textures,
+                              last_submitted_value_,
+                              completed_submit_value_);
+        DestroyBufferRecords(device_, previous_buffers);
         DestroyTransientBufferPages(previous_transient_buffer_pages);
+        DestroyTransientImagePages(previous_transient_image_pages);
+    } catch (...) {
+        DestroyStagedTextureRecords(device_,
+                                    render_target_host_,
+                                    staged_textures,
+                                    last_submitted_value_,
+                                    completed_submit_value_);
+        DestroyStagedBufferRecords(device_, staged_buffers);
+        DestroyTransientBufferPages(staged_transient_buffer_pages);
+        DestroyTransientImagePages(staged_transient_image_pages);
+        DestroyTextureRecords(device_,
+                              render_target_host_,
+                              committed_textures.records,
+                              last_submitted_value_,
+                              completed_submit_value_);
+        DestroyBufferRecords(device_, committed_buffers.records);
+        DestroyPreparedTransientBuffers(device_, prepared_transient_buffers);
+        DestroyPreparedTransientImages(device_, prepared_transient_images);
         throw;
     }
-
-    for (auto& record_ : previous_textures) {
-        if (!record_.imported && render::IsValidRenderTargetHandle(record_.render_target)) {
-            (void)render_target_host_.DestroyTarget(device_,
-                                                    record_.render_target,
-                                                    last_submitted_value_,
-                                                    completed_submit_value_);
-        }
-    }
-
-    for (auto& record_ : previous_buffers) {
-        if (!record_.imported && record_.owned_resource.buffer != VK_NULL_HANDLE) {
-            resource::BufferHost::DestroyBuffer(device_, record_.owned_resource);
-        }
-    }
-    DestroyTransientBufferPages(previous_transient_buffer_pages);
 
     RefreshStats();
 }
@@ -663,6 +1348,14 @@ void VulkanResourceTable::DestroyTransientRecords(VulkanContext& device_,
                                                     texture_it->render_target,
                                                     last_submitted_value_,
                                                     completed_submit_value_);
+            texture_it->render_target = render::invalid_render_target_handle;
+            if (texture_it->owned_resource.image != VK_NULL_HANDLE) {
+                retired_transient_images.Retire(
+                    RetiredTransientImagePayload{
+                        .owned_resource = std::move(texture_it->owned_resource),
+                    },
+                    last_submitted_value_);
+            }
             texture_it = textures.erase(texture_it);
             continue;
         }
@@ -682,6 +1375,12 @@ void VulkanResourceTable::DestroyTransientRecords(VulkanContext& device_,
     }
 
     DestroyTransientBufferPages(transient_buffer_pages);
+    for (auto& page_ : transient_image_pages) {
+        if (page_.allocation_slice.valid()) {
+            retired_transient_image_pages.Retire(std::move(page_), last_submitted_value_);
+        }
+    }
+    transient_image_pages.clear();
 }
 
 void VulkanResourceTable::DestroyAllRecords(VulkanContext& device_,
@@ -696,6 +1395,9 @@ void VulkanResourceTable::DestroyAllRecords(VulkanContext& device_,
                                                     completed_submit_value_);
             texture_.render_target = render::invalid_render_target_handle;
         }
+        if (texture_.owned_resource.image != VK_NULL_HANDLE) {
+            resource::ImageHost::DestroyImage(device_, texture_.owned_resource);
+        }
     }
     textures.clear();
 
@@ -707,6 +1409,19 @@ void VulkanResourceTable::DestroyAllRecords(VulkanContext& device_,
     }
     buffers.clear();
     DestroyTransientBufferPages(transient_buffer_pages);
+    DestroyTransientImagePages(transient_image_pages);
+    (void)retired_transient_images.Flush([&](RetiredTransientImagePayload& payload_) {
+        if (payload_.owned_resource.image != VK_NULL_HANDLE) {
+            resource::ImageHost::DestroyImage(device_, payload_.owned_resource);
+        }
+    });
+    (void)retired_transient_image_pages.Flush([&](TransientImagePageRecord& page_) {
+        if (page_.memory_host != nullptr && page_.allocation_slice.valid()) {
+            page_.memory_host->Deallocate(page_.allocation_slice);
+            page_.allocation_slice = {};
+        }
+        page_.memory_host = nullptr;
+    });
 }
 
 void VulkanResourceTable::RefreshStats() noexcept {
@@ -718,6 +1433,7 @@ void VulkanResourceTable::RefreshStats() noexcept {
             stats.persistent_texture_count += 1U;
         } else if (texture_.lifetime == ResourceLifetime::transient) {
             stats.transient_texture_count += 1U;
+            stats.transient_aliased_texture_count += texture_.aliased ? 1U : 0U;
         }
     }
     for (const auto& buffer_ : buffers) {
@@ -731,6 +1447,7 @@ void VulkanResourceTable::RefreshStats() noexcept {
         }
     }
     stats.transient_buffer_page_count = static_cast<std::uint32_t>(transient_buffer_pages.size());
+    stats.transient_image_page_count = static_cast<std::uint32_t>(transient_image_pages.size());
 }
 
 } // namespace vr::render_graph

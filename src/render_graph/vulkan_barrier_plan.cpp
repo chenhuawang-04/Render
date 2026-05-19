@@ -151,6 +151,44 @@ namespace {
     return record_.imported ? record_.imported_buffer.buffer : record_.owned_resource.buffer;
 }
 
+[[nodiscard]] bool TryBuildImageBarrier(const VulkanResourceTable& resource_table_,
+                                        const render::RenderTargetHost& render_target_host_,
+                                        const ResourceHandle logical_,
+                                        const LoweredVulkanBarrier& barrier_,
+                                        const VkPipelineStageFlags2 src_stage_mask_,
+                                        const VkAccessFlags2 src_access_mask_,
+                                        const VkPipelineStageFlags2 dst_stage_mask_,
+                                        const VkAccessFlags2 dst_access_mask_,
+                                        const std::uint32_t src_queue_family_index_,
+                                        const std::uint32_t dst_queue_family_index_,
+                                        VkImageMemoryBarrier2& image_barrier_) {
+    const auto* texture_ = resource_table_.FindTexture(logical_);
+    if (texture_ == nullptr) {
+        return false;
+    }
+
+    const auto resolved_view = render_target_host_.ResolveView(texture_->render_target);
+    if (resolved_view.image == VK_NULL_HANDLE) {
+        return false;
+    }
+
+    image_barrier_ = {};
+    image_barrier_.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+    image_barrier_.srcStageMask = src_stage_mask_;
+    image_barrier_.srcAccessMask = src_access_mask_;
+    image_barrier_.dstStageMask = dst_stage_mask_;
+    image_barrier_.dstAccessMask = dst_access_mask_;
+    image_barrier_.oldLayout = barrier_.old_layout;
+    image_barrier_.newLayout = barrier_.new_layout;
+    image_barrier_.srcQueueFamilyIndex = src_queue_family_index_;
+    image_barrier_.dstQueueFamilyIndex = dst_queue_family_index_;
+    image_barrier_.image = resolved_view.image;
+    image_barrier_.subresourceRange = BuildImageSubresourceRange(render_target_host_,
+                                                                 texture_->render_target,
+                                                                 barrier_.subresource_range);
+    return true;
+}
+
 [[nodiscard]] VulkanCommandBarrierBatch* FindCommandBatch(
     std::vector<VulkanCommandBarrierBatch>& command_batches_,
     const PassHandle pass_,
@@ -360,6 +398,9 @@ std::string VulkanBarrierPlan::BuildDebugString() const {
             if (barrier_.host_boundary) {
                 oss << " host_boundary";
             }
+            if (barrier_.aliasing) {
+                oss << " alias";
+            }
             oss << '\n';
         }
     }
@@ -533,7 +574,9 @@ VulkanBarrierPlan LowerToVulkanBarrierPlan(const CompiledRenderGraph& compiled_g
                 .src_access_mask = before_.access_mask,
                 .dst_stage_mask = after_.stage_mask,
                 .dst_access_mask = after_.access_mask,
-                .old_layout = (resource_->kind == ResourceKind::texture) ? before_.image_layout : VK_IMAGE_LAYOUT_UNDEFINED,
+                .old_layout = (resource_->kind == ResourceKind::texture)
+                    ? (barrier_.aliasing ? VK_IMAGE_LAYOUT_UNDEFINED : before_.image_layout)
+                    : VK_IMAGE_LAYOUT_UNDEFINED,
                 .new_layout = (resource_->kind == ResourceKind::texture) ? after_.image_layout : VK_IMAGE_LAYOUT_UNDEFINED,
                 .src_queue_family_index = barrier_.queue_transfer
                     ? ResolveQueueFamilyIndex(queue_families_, barrier_.src_queue)
@@ -582,32 +625,55 @@ VulkanCommandReadyPlan BuildCommandReadyVulkanBarrierPlan(
                 .generation = 1U,
             };
 
-            const bool needs_ownership_transfer = barrier_.queue_transfer &&
-                                                 barrier_.src_queue_family_index != barrier_.dst_queue_family_index;
-            if (!needs_ownership_transfer) {
+            const bool needs_queue_dependency = barrier_.queue_transfer &&
+                                               (barrier_.aliasing ||
+                                                barrier_.src_queue_family_index != barrier_.dst_queue_family_index);
+            if (!needs_queue_dependency) {
+                if (barrier_.aliasing) {
+                    if (barrier_.kind == ResourceKind::texture) {
+                        VkImageMemoryBarrier2 image_barrier{};
+                        if (!TryBuildImageBarrier(resource_table_,
+                                                  render_target_host_,
+                                                  logical,
+                                                  barrier_,
+                                                  barrier_.src_stage_mask,
+                                                  barrier_.src_access_mask,
+                                                  barrier_.dst_stage_mask,
+                                                  barrier_.dst_access_mask,
+                                                  VK_QUEUE_FAMILY_IGNORED,
+                                                  VK_QUEUE_FAMILY_IGNORED,
+                                                  image_barrier)) {
+                            continue;
+                        }
+                        command_batch->dependency.image_barriers.push_back(image_barrier);
+                    } else {
+                        VkMemoryBarrier2 memory_barrier{};
+                        memory_barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+                        memory_barrier.srcStageMask = barrier_.src_stage_mask;
+                        memory_barrier.srcAccessMask = barrier_.src_access_mask;
+                        memory_barrier.dstStageMask = barrier_.dst_stage_mask;
+                        memory_barrier.dstAccessMask = barrier_.dst_access_mask;
+                        command_batch->dependency.memory_barriers.push_back(memory_barrier);
+                    }
+                    command_batch->barriers.push_back(barrier_);
+                    continue;
+                }
+
                 if (barrier_.kind == ResourceKind::texture) {
-                    const auto* texture_ = resource_table_.FindTexture(logical);
-                    if (texture_ == nullptr) {
-                        continue;
-                    }
-                    const auto resolved_view = render_target_host_.ResolveView(texture_->render_target);
-                    if (resolved_view.image == VK_NULL_HANDLE) {
-                        continue;
-                    }
                     VkImageMemoryBarrier2 image_barrier{};
-                    image_barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-                    image_barrier.srcStageMask = barrier_.src_stage_mask;
-                    image_barrier.srcAccessMask = barrier_.src_access_mask;
-                    image_barrier.dstStageMask = barrier_.dst_stage_mask;
-                    image_barrier.dstAccessMask = barrier_.dst_access_mask;
-                    image_barrier.oldLayout = barrier_.old_layout;
-                    image_barrier.newLayout = barrier_.new_layout;
-                    image_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                    image_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                    image_barrier.image = resolved_view.image;
-                    image_barrier.subresourceRange = BuildImageSubresourceRange(render_target_host_,
-                                                                               texture_->render_target,
-                                                                               barrier_.subresource_range);
+                    if (!TryBuildImageBarrier(resource_table_,
+                                              render_target_host_,
+                                              logical,
+                                              barrier_,
+                                              barrier_.src_stage_mask,
+                                              barrier_.src_access_mask,
+                                              barrier_.dst_stage_mask,
+                                              barrier_.dst_access_mask,
+                                              VK_QUEUE_FAMILY_IGNORED,
+                                              VK_QUEUE_FAMILY_IGNORED,
+                                              image_barrier)) {
+                        continue;
+                    }
                     command_batch->dependency.image_barriers.push_back(image_barrier);
                 } else {
                     const auto* buffer_ = resource_table_.FindBuffer(logical);
@@ -650,30 +716,66 @@ VulkanCommandReadyPlan BuildCommandReadyVulkanBarrierPlan(
                 transfer_batch = &plan.queue_transfer_batches.back();
             }
 
-            if (barrier_.kind == ResourceKind::texture) {
-                const auto* texture_ = resource_table_.FindTexture(logical);
-                if (texture_ == nullptr) {
-                    continue;
-                }
-                const auto resolved_view = render_target_host_.ResolveView(texture_->render_target);
-                if (resolved_view.image == VK_NULL_HANDLE) {
-                    continue;
-                }
+            if (barrier_.aliasing) {
+                if (barrier_.kind == ResourceKind::texture) {
+                    VkImageMemoryBarrier2 release_barrier{};
+                    if (!TryBuildImageBarrier(resource_table_,
+                                              render_target_host_,
+                                              logical,
+                                              barrier_,
+                                              barrier_.src_stage_mask,
+                                              barrier_.src_access_mask,
+                                              VK_PIPELINE_STAGE_2_NONE,
+                                              VK_ACCESS_2_NONE,
+                                              barrier_.src_queue_family_index,
+                                              barrier_.dst_queue_family_index,
+                                              release_barrier)) {
+                        continue;
+                    }
+                    transfer_batch->release_dependency.image_barriers.push_back(release_barrier);
 
+                    VkImageMemoryBarrier2 acquire_barrier = release_barrier;
+                    acquire_barrier.srcStageMask = VK_PIPELINE_STAGE_2_NONE;
+                    acquire_barrier.srcAccessMask = VK_ACCESS_2_NONE;
+                    acquire_barrier.dstStageMask = barrier_.dst_stage_mask;
+                    acquire_barrier.dstAccessMask = barrier_.dst_access_mask;
+                    transfer_batch->acquire_dependency.image_barriers.push_back(acquire_barrier);
+                } else {
+                    VkMemoryBarrier2 release_barrier{};
+                    release_barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+                    release_barrier.srcStageMask = barrier_.src_stage_mask;
+                    release_barrier.srcAccessMask = barrier_.src_access_mask;
+                    release_barrier.dstStageMask = VK_PIPELINE_STAGE_2_NONE;
+                    release_barrier.dstAccessMask = VK_ACCESS_2_NONE;
+                    transfer_batch->release_dependency.memory_barriers.push_back(release_barrier);
+
+                    VkMemoryBarrier2 acquire_barrier{};
+                    acquire_barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+                    acquire_barrier.srcStageMask = VK_PIPELINE_STAGE_2_NONE;
+                    acquire_barrier.srcAccessMask = VK_ACCESS_2_NONE;
+                    acquire_barrier.dstStageMask = barrier_.dst_stage_mask;
+                    acquire_barrier.dstAccessMask = barrier_.dst_access_mask;
+                    transfer_batch->acquire_dependency.memory_barriers.push_back(acquire_barrier);
+                }
+                transfer_batch->barriers.push_back(barrier_);
+                continue;
+            }
+
+            if (barrier_.kind == ResourceKind::texture) {
                 VkImageMemoryBarrier2 release_barrier{};
-                release_barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-                release_barrier.srcStageMask = barrier_.src_stage_mask;
-                release_barrier.srcAccessMask = barrier_.src_access_mask;
-                release_barrier.dstStageMask = VK_PIPELINE_STAGE_2_NONE;
-                release_barrier.dstAccessMask = VK_ACCESS_2_NONE;
-                release_barrier.oldLayout = barrier_.old_layout;
-                release_barrier.newLayout = barrier_.new_layout;
-                release_barrier.srcQueueFamilyIndex = barrier_.src_queue_family_index;
-                release_barrier.dstQueueFamilyIndex = barrier_.dst_queue_family_index;
-                release_barrier.image = resolved_view.image;
-                release_barrier.subresourceRange = BuildImageSubresourceRange(render_target_host_,
-                                                                             texture_->render_target,
-                                                                             barrier_.subresource_range);
+                if (!TryBuildImageBarrier(resource_table_,
+                                          render_target_host_,
+                                          logical,
+                                          barrier_,
+                                          barrier_.src_stage_mask,
+                                          barrier_.src_access_mask,
+                                          VK_PIPELINE_STAGE_2_NONE,
+                                          VK_ACCESS_2_NONE,
+                                          barrier_.src_queue_family_index,
+                                          barrier_.dst_queue_family_index,
+                                          release_barrier)) {
+                    continue;
+                }
                 transfer_batch->release_dependency.image_barriers.push_back(release_barrier);
 
                 VkImageMemoryBarrier2 acquire_barrier = release_barrier;

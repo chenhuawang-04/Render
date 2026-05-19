@@ -84,6 +84,13 @@ void CheckSharedBindlessBindings(vr::test::TestContext& test_context_,
     CheckSharedBindlessBindingPrefix(test_context_, pass_);
 }
 
+void CheckNoDescriptorBindings(vr::test::TestContext& test_context_,
+                               const vr::render_graph::CompiledPass& pass_) {
+    test_context_.Check(pass_.descriptor_bindings.empty(),
+                        "pass_.descriptor_bindings.empty()",
+                        {__FILE__, static_cast<std::uint32_t>(__LINE__)});
+}
+
 void CheckSurface2DGraphBindings(vr::test::TestContext& test_context_,
                                  const vr::render_graph::CompiledPass& pass_) {
     test_context_.Require(pass_.descriptor_bindings.size() == 7U,
@@ -809,7 +816,7 @@ VR_TEST_CASE(SceneRecorder2D_build_render_graph_routes_geometry_scene_to_scene_p
     VR_CHECK(compiled.Passes()[0].executable);
     VR_REQUIRE(compiled.Passes()[0].raster_pass.has_value());
     VR_CHECK(static_cast<bool>(compiled.Passes()[0].execute));
-    CheckSharedBindlessBindings(test_context_, compiled.Passes()[0]);
+    CheckNoDescriptorBindings(test_context_, compiled.Passes()[0]);
 
     recorder.ClearFramePacket();
 }
@@ -848,7 +855,7 @@ VR_TEST_CASE(SceneRecorder2D_build_render_graph_routes_background_to_scene_pass,
     VR_CHECK(compiled.Passes()[0].executable);
     VR_REQUIRE(compiled.Passes()[0].raster_pass.has_value());
     VR_CHECK(static_cast<bool>(compiled.Passes()[0].execute));
-    CheckSharedBindlessBindings(test_context_, compiled.Passes()[0]);
+    CheckNoDescriptorBindings(test_context_, compiled.Passes()[0]);
 
     recorder.ClearFramePacket();
 }

@@ -89,6 +89,7 @@ public:
     [[nodiscard]] bool BindImageMemory(
         VkImage image_,
         const Center::Memory::Vulkan::Slice& slice_,
+        VkImageTiling tiling_ = VK_IMAGE_TILING_OPTIMAL,
         VkDeviceSize resource_offset_ = 0U) noexcept;
 
     void Deallocate(const Center::Memory::Vulkan::Slice& slice_) noexcept;

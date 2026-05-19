@@ -167,7 +167,7 @@ VR_TEST_CASE(PbrShaderContract_surface_3d_fragment_uses_shared_surface_appearanc
 
     VR_CHECK(Contains(source, "#include \"vr/render/pbr.glsl\""));
     VR_CHECK(Contains(source, "#include \"vr/render/appearance_decode_3d.glsl\""));
-    VR_CHECK(Contains(source, "layout(set = 2, binding = 0, std430) readonly buffer AppearanceRecordBuffer"));
+    VR_CHECK(Contains(source, "layout(set = 2, binding = 8, std430) readonly buffer AppearanceRecordBuffer"));
     VR_CHECK(Contains(source, "DecodedAppearance3D decode_surface_appearance(vec3 normal_world_)"));
     VR_CHECK(Contains(source, "AppearanceGpuRecord appearance_record = appearance_records[in_appearance_record_index];"));
     VR_CHECK(Contains(source, "return decode_appearance_record_3d(appearance_record,"));

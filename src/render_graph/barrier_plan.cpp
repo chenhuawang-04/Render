@@ -16,6 +16,8 @@ struct LastAccessState final {
     bool valid = false;
 };
 
+using BoundaryAccessState = LastAccessState;
+
 [[nodiscard]] const char* QueueClassToString(const QueueClass queue_) noexcept {
     switch (queue_) {
     case QueueClass::graphics:
@@ -497,17 +499,85 @@ std::string BarrierPlan::BuildJson() const {
 }
 
 BarrierPlan BuildBarrierPlan(const CompiledRenderGraph& compiled_graph_) {
+    return BuildBarrierPlan(compiled_graph_, nullptr);
+}
+
+BarrierPlan BuildBarrierPlan(const CompiledRenderGraph& compiled_graph_,
+                             const TransientAllocationPlan* transient_plan_override_) {
     BarrierPlan plan{};
     if (compiled_graph_.Passes().empty() || compiled_graph_.Resources().empty()) {
         return plan;
     }
+
+    const TransientAllocationPlan& transient_plan =
+        transient_plan_override_ != nullptr ? *transient_plan_override_ : compiled_graph_.TransientAllocations();
+    plan.alias_candidates = transient_plan.alias_candidates;
+    plan.alias_barriers = transient_plan.alias_barriers;
 
     std::uint32_t max_resource_index = 0U;
     for (const auto& resource_ : compiled_graph_.Resources()) {
         max_resource_index = (std::max)(max_resource_index, resource_.handle.index);
     }
     std::vector<LastAccessState> last_accesses(static_cast<std::size_t>(max_resource_index) + 1U);
+    std::vector<BoundaryAccessState> first_accesses(static_cast<std::size_t>(max_resource_index) + 1U);
+    std::vector<BoundaryAccessState> terminal_accesses(static_cast<std::size_t>(max_resource_index) + 1U);
     std::vector<std::uint32_t> batch_index_by_pass(compiled_graph_.Passes().size(), invalid_render_graph_index);
+
+    for (std::uint32_t pass_order = 0U;
+         pass_order < static_cast<std::uint32_t>(compiled_graph_.Passes().size());
+         ++pass_order) {
+        const auto& pass_ = compiled_graph_.Passes()[pass_order];
+        const auto capture_boundary = [&](const AccessDesc& access_) {
+            if (!IsValidResourceVersionHandle(access_.resource) ||
+                access_.access == AccessKind::none ||
+                access_.resource.resource_index >= first_accesses.size()) {
+                return;
+            }
+
+            auto& first_ = first_accesses[access_.resource.resource_index];
+            if (!first_.valid) {
+                first_ = BoundaryAccessState{
+                    .access = access_,
+                    .queue = pass_.queue,
+                    .pass = pass_.handle,
+                    .pass_order = pass_order,
+                    .valid = true,
+                };
+            }
+
+            terminal_accesses[access_.resource.resource_index] = BoundaryAccessState{
+                .access = access_,
+                .queue = pass_.queue,
+                .pass = pass_.handle,
+                .pass_order = pass_order,
+                .valid = true,
+            };
+        };
+
+        for (const auto& read_ : pass_.reads) {
+            capture_boundary(read_);
+        }
+        for (const auto& write_ : pass_.writes) {
+            capture_boundary(write_);
+        }
+    }
+
+    std::vector<std::vector<std::size_t>> alias_barriers_by_target_pass(compiled_graph_.Passes().size());
+    for (std::size_t barrier_index = 0U; barrier_index < plan.alias_barriers.size(); ++barrier_index) {
+        const auto& alias_barrier = plan.alias_barriers[barrier_index];
+        if (!IsValidResourceHandle(alias_barrier.previous) ||
+            !IsValidResourceHandle(alias_barrier.next) ||
+            alias_barrier.previous.index >= terminal_accesses.size() ||
+            alias_barrier.next.index >= first_accesses.size()) {
+            continue;
+        }
+
+        const auto& next_access = first_accesses[alias_barrier.next.index];
+        if (!next_access.valid || next_access.pass_order >= alias_barriers_by_target_pass.size()) {
+            continue;
+        }
+        alias_barriers_by_target_pass[next_access.pass_order].push_back(barrier_index);
+    }
 
     bool previous_pass_has_host_boundary = false;
     for (std::uint32_t pass_order = 0U;
@@ -599,6 +669,42 @@ BarrierPlan BuildBarrierPlan(const CompiledRenderGraph& compiled_graph_) {
             process_access(write_);
         }
 
+        for (const auto barrier_index : alias_barriers_by_target_pass[pass_order]) {
+            auto& alias_barrier = plan.alias_barriers[barrier_index];
+            if (!alias_barrier.required ||
+                alias_barrier.previous.index >= terminal_accesses.size() ||
+                alias_barrier.next.index >= first_accesses.size()) {
+                continue;
+            }
+
+            const auto& previous_access = terminal_accesses[alias_barrier.previous.index];
+            const auto& next_access = first_accesses[alias_barrier.next.index];
+            if (!previous_access.valid || !next_access.valid) {
+                continue;
+            }
+
+            const ResourceKind kind = ResolveResourceKind(compiled_graph_, next_access.access.resource.resource_index);
+            batch.barriers.push_back(LogicalBarrier{
+                .resource = next_access.access.resource,
+                .kind = kind,
+                .before = previous_access.access.access,
+                .after = next_access.access.access,
+                .src_queue = previous_access.queue,
+                .dst_queue = next_access.queue,
+                .subresource_range = next_access.access.subresource_range,
+                .buffer_range = next_access.access.buffer_range,
+                .src_pass = previous_access.pass,
+                .dst_pass = next_access.pass,
+                .src_pass_order = previous_access.pass_order,
+                .dst_pass_order = next_access.pass_order,
+                .queue_transfer = previous_access.queue != next_access.queue,
+                .host_boundary = IsHostAccess(previous_access.access.access) || IsHostAccess(next_access.access.access),
+                .aliasing = true,
+                .uav_ordering = false,
+            });
+            alias_barrier.realized = true;
+        }
+
         if (!batch.barriers.empty()) {
             queue_batch.barrier_batch_indices.push_back(static_cast<std::uint32_t>(plan.barrier_batches.size()));
             plan.barrier_batches.push_back(std::move(batch));
@@ -667,9 +773,6 @@ BarrierPlan BuildBarrierPlan(const CompiledRenderGraph& compiled_graph_) {
                               dependency_index);
         }
     }
-
-    plan.alias_candidates = compiled_graph_.TransientAllocations().alias_candidates;
-    plan.alias_barriers = compiled_graph_.TransientAllocations().alias_barriers;
 
     return plan;
 }

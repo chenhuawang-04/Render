@@ -68,5 +68,8 @@ struct BarrierPlan final {
 };
 
 [[nodiscard]] BarrierPlan BuildBarrierPlan(const CompiledRenderGraph& compiled_graph_);
+[[nodiscard]] BarrierPlan BuildBarrierPlan(
+    const CompiledRenderGraph& compiled_graph_,
+    const TransientAllocationPlan* transient_plan_override_);
 
 } // namespace vr::render_graph

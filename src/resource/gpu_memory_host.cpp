@@ -310,7 +310,7 @@ Center::Memory::Vulkan::Slice GpuMemoryHost::AllocateAndBindImage(
                                                               dedicated_required_,
                                                               dedicated_preferred_,
                                                               image_);
-    if (!BindImageMemory(image_, slice, 0U)) {
+    if (!BindImageMemory(image_, slice, tiling_, 0U)) {
         allocator->deallocate(slice);
         throw std::runtime_error("GpuMemoryHost::AllocateAndBindImage(bind_resource) failed");
     }
@@ -361,6 +361,7 @@ Center::Memory::Vulkan::Slice GpuMemoryHost::AllocateImageMemory(
 bool GpuMemoryHost::BindImageMemory(
     VkImage image_,
     const Center::Memory::Vulkan::Slice& slice_,
+    const VkImageTiling tiling_,
     VkDeviceSize resource_offset_) noexcept {
     if (!initialized || !allocator.has_value() || image_ == VK_NULL_HANDLE || !slice_.valid()) {
         return false;
@@ -369,7 +370,7 @@ bool GpuMemoryHost::BindImageMemory(
         return false;
     }
     return allocator->provider().bind_resource(
-        ToAllocationKind(VK_IMAGE_TILING_OPTIMAL),
+        ToAllocationKind(tiling_),
         Center::Memory::VulkanNativeBackend::to_resource_handle(image_),
         slice_,
         static_cast<std::size_t>(resource_offset_));

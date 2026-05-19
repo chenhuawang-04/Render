@@ -48,28 +48,24 @@ void CheckVk(const char* stage_, VkResult result_) {
 
 } // namespace
 
-ImageResource ImageHost::CreateImage(VulkanContext& context_,
-                                     const ImageCreateInfo& create_info_,
-                                     GpuMemoryHost& gpu_memory_host_) {
+ImageResource ImageHost::CreateImageObject(VulkanContext& context_,
+                                           const ImageCreateInfo& create_info_) {
     if (!context_.IsDeviceInitialized()) {
-        throw std::runtime_error("ImageHost::CreateImage requires initialized Vulkan device");
-    }
-    if (!gpu_memory_host_.IsInitialized()) {
-        throw std::runtime_error("ImageHost::CreateImage requires initialized GpuMemoryHost");
+        throw std::runtime_error("ImageHost::CreateImageObject requires initialized Vulkan device");
     }
     if (create_info_.format == VK_FORMAT_UNDEFINED) {
-        throw std::runtime_error("ImageHost::CreateImage requires valid format");
+        throw std::runtime_error("ImageHost::CreateImageObject requires valid format");
     }
     if (create_info_.extent.width == 0U ||
         create_info_.extent.height == 0U ||
         create_info_.extent.depth == 0U) {
-        throw std::runtime_error("ImageHost::CreateImage extent dimensions must be > 0");
+        throw std::runtime_error("ImageHost::CreateImageObject extent dimensions must be > 0");
     }
     if (create_info_.usage == 0U) {
-        throw std::runtime_error("ImageHost::CreateImage requires non-zero usage flags");
+        throw std::runtime_error("ImageHost::CreateImageObject requires non-zero usage flags");
     }
     if (create_info_.mip_levels == 0U || create_info_.array_layers == 0U) {
-        throw std::runtime_error("ImageHost::CreateImage mip_levels/array_layers must be > 0");
+        throw std::runtime_error("ImageHost::CreateImageObject mip_levels/array_layers must be > 0");
     }
 
     ImageResource resource{};
@@ -89,7 +85,7 @@ ImageResource ImageHost::CreateImage(VulkanContext& context_,
     if (create_info_.sharing_mode == VK_SHARING_MODE_CONCURRENT) {
         if (create_info_.queue_family_indices.empty()) {
             throw std::runtime_error(
-                "ImageHost::CreateImage concurrent sharing requires queue_family_indices");
+                "ImageHost::CreateImageObject concurrent sharing requires queue_family_indices");
         }
         vk_create_info.queueFamilyIndexCount = static_cast<uint32_t>(create_info_.queue_family_indices.size());
         vk_create_info.pQueueFamilyIndices = create_info_.queue_family_indices.data();
@@ -101,6 +97,23 @@ ImageResource ImageHost::CreateImage(VulkanContext& context_,
 
     CheckVk("vkCreateImage",
             vkCreateImage(context_.Device(), &vk_create_info, nullptr, &resource.image));
+    resource.format = create_info_.format;
+    resource.extent = create_info_.extent;
+    resource.mip_levels = create_info_.mip_levels;
+    resource.array_layers = create_info_.array_layers;
+    resource.samples = create_info_.samples;
+    resource.usage = create_info_.usage;
+    resource.tiling = create_info_.tiling;
+    return resource;
+}
+
+ImageResource ImageHost::CreateImage(VulkanContext& context_,
+                                     const ImageCreateInfo& create_info_,
+                                     GpuMemoryHost& gpu_memory_host_) {
+    if (!gpu_memory_host_.IsInitialized()) {
+        throw std::runtime_error("ImageHost::CreateImage requires initialized GpuMemoryHost");
+    }
+    ImageResource resource = CreateImageObject(context_, create_info_);
 
     try {
         VkMemoryRequirements memory_requirements{};
@@ -112,8 +125,7 @@ ImageResource ImageHost::CreateImage(VulkanContext& context_,
             ? Center::Memory::Vulkan::HostAccess::random_read_write
             : Center::Memory::Vulkan::HostAccess::none;
 
-        resource.allocation_slice = gpu_memory_host_.AllocateAndBindImage(
-            resource.image,
+        const auto allocation_slice = gpu_memory_host_.AllocateImageMemory(
             memory_requirements,
             create_info_.tiling,
             create_info_.memory_properties,
@@ -122,18 +134,9 @@ ImageResource ImageHost::CreateImage(VulkanContext& context_,
             Center::Memory::Vulkan::LifetimeHint::long_lived,
             host_access,
             false,
-            false);
-
-        resource.memory_host = &gpu_memory_host_;
-        resource.memory_type_index = resource.allocation_slice.memory_type_index;
-        resource.memory_properties = gpu_memory_host_.QueryMemoryProperties(resource.memory_type_index);
-
-        resource.format = create_info_.format;
-        resource.extent = create_info_.extent;
-        resource.mip_levels = create_info_.mip_levels;
-        resource.array_layers = create_info_.array_layers;
-        resource.samples = create_info_.samples;
-        resource.usage = create_info_.usage;
+            false,
+            resource.image);
+        BindAllocation(resource, gpu_memory_host_, allocation_slice, true, 0U);
 
         if (create_info_.create_default_view) {
             VkImageViewCreateInfo default_view_info{};
@@ -162,6 +165,34 @@ ImageResource ImageHost::CreateImage(VulkanContext& context_,
     return resource;
 }
 
+void ImageHost::BindAllocation(ImageResource& resource_,
+                               GpuMemoryHost& gpu_memory_host_,
+                               const Center::Memory::Vulkan::Slice& allocation_slice_,
+                               const bool owns_allocation_,
+                               const VkDeviceSize resource_offset_) {
+    if (resource_.image == VK_NULL_HANDLE) {
+        throw std::runtime_error("ImageHost::BindAllocation requires a created VkImage");
+    }
+    if (!gpu_memory_host_.IsInitialized()) {
+        throw std::runtime_error("ImageHost::BindAllocation requires initialized GpuMemoryHost");
+    }
+    if (!allocation_slice_.valid()) {
+        throw std::runtime_error("ImageHost::BindAllocation requires a valid allocation slice");
+    }
+    if (!gpu_memory_host_.BindImageMemory(resource_.image,
+                                          allocation_slice_,
+                                          resource_.tiling,
+                                          resource_offset_)) {
+        throw std::runtime_error("ImageHost::BindAllocation bind failed");
+    }
+
+    resource_.allocation_slice = allocation_slice_;
+    resource_.memory_host = &gpu_memory_host_;
+    resource_.memory_type_index = allocation_slice_.memory_type_index;
+    resource_.memory_properties = gpu_memory_host_.QueryMemoryProperties(resource_.memory_type_index);
+    resource_.owns_allocation = owns_allocation_;
+}
+
 void ImageHost::DestroyImage(VulkanContext& context_,
                              ImageResource& resource_) {
     const VkDevice device = context_.Device();
@@ -176,7 +207,9 @@ void ImageHost::DestroyImage(VulkanContext& context_,
         }
     }
 
-    if (resource_.memory_host != nullptr && resource_.allocation_slice.valid()) {
+    if (resource_.owns_allocation &&
+        resource_.memory_host != nullptr &&
+        resource_.allocation_slice.valid()) {
         resource_.memory_host->Deallocate(resource_.allocation_slice);
     }
 
@@ -188,8 +221,10 @@ void ImageHost::DestroyImage(VulkanContext& context_,
     resource_.array_layers = 1U;
     resource_.samples = VK_SAMPLE_COUNT_1_BIT;
     resource_.usage = 0U;
+    resource_.tiling = VK_IMAGE_TILING_OPTIMAL;
     resource_.memory_properties = 0U;
     resource_.memory_type_index = 0U;
+    resource_.owns_allocation = false;
 }
 
 VkImageView ImageHost::CreateView(VulkanContext& context_,

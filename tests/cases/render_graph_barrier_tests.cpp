@@ -1,6 +1,8 @@
 #include "support/test_framework.hpp"
 #include "vr/render_graph/render_graph_builder.hpp"
 
+#include <algorithm>
+
 namespace {
 
 VR_TEST_CASE(RenderGraphBarrierPlanner_emits_image_barriers_for_scene_overlay_present_chain,
@@ -238,7 +240,67 @@ VR_TEST_CASE(RenderGraphBarrierPlanner_reports_alias_candidates_for_non_overlapp
     VR_CHECK(alias_candidates[0].aliasable);
     VR_REQUIRE(alias_barriers.size() == 1U);
     VR_CHECK(alias_barriers[0].required);
-    VR_CHECK(!alias_barriers[0].realized);
+    VR_CHECK(alias_barriers[0].realized);
+}
+
+VR_TEST_CASE(RenderGraphAliasBarrier_realizes_alias_barriers_before_next_first_use,
+             "unit;core;render_graph;barrier") {
+    vr::render_graph::RenderGraphBuilder builder{};
+    const auto temp_a = builder.CreateBuffer(
+        "temp_a",
+        vr::render_graph::BufferDesc{
+            .size_bytes = 2048U,
+            .usage = vr::render_graph::buffer_usage_storage_flag,
+        });
+    const auto temp_b = builder.CreateBuffer(
+        "temp_b",
+        vr::render_graph::BufferDesc{
+            .size_bytes = 2048U,
+            .usage = vr::render_graph::buffer_usage_storage_flag,
+        });
+
+    const auto pass_a = builder.AddPass("pass_a", true);
+    const auto pass_b = builder.AddPass("pass_b", true);
+    const auto pass_c = builder.AddPass("pass_c", true);
+    const auto pass_d = builder.AddPass("pass_d", true);
+
+    const auto temp_a_written = builder.Write(
+        pass_a,
+        temp_a,
+        vr::render_graph::AccessDesc{.access = vr::render_graph::AccessKind::shader_storage_write});
+    (void)builder.Read(
+        pass_b,
+        temp_a_written,
+        vr::render_graph::AccessDesc{.access = vr::render_graph::AccessKind::shader_storage_read});
+    const auto temp_b_written = builder.Write(
+        pass_c,
+        temp_b,
+        vr::render_graph::AccessDesc{.access = vr::render_graph::AccessKind::shader_storage_write});
+    (void)builder.Read(
+        pass_d,
+        temp_b_written,
+        vr::render_graph::AccessDesc{.access = vr::render_graph::AccessKind::shader_storage_read});
+
+    const auto compiled = builder.Compile();
+    const auto& plan = compiled.PlannedBarriers();
+
+    VR_REQUIRE(plan.alias_barriers.size() == 1U);
+    VR_CHECK(plan.alias_barriers[0].required);
+    VR_CHECK(plan.alias_barriers[0].realized);
+
+    const auto alias_batch = std::find_if(
+        plan.barrier_batches.begin(),
+        plan.barrier_batches.end(),
+        [&](const vr::render_graph::CompiledBarrierBatch& batch_) {
+            return batch_.pass.index == pass_c.index;
+        });
+    VR_REQUIRE(alias_batch != plan.barrier_batches.end());
+    VR_REQUIRE(!alias_batch->barriers.empty());
+    VR_CHECK(alias_batch->barriers[0].aliasing);
+    VR_CHECK(alias_batch->barriers[0].src_pass.index == pass_b.index);
+    VR_CHECK(alias_batch->barriers[0].dst_pass.index == pass_c.index);
+    VR_CHECK(alias_batch->barriers[0].before == vr::render_graph::AccessKind::shader_storage_read);
+    VR_CHECK(alias_batch->barriers[0].after == vr::render_graph::AccessKind::shader_storage_write);
 }
 
 } // namespace

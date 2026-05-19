@@ -7,6 +7,7 @@
 #include <functional>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace vr::render_graph {
@@ -106,6 +107,13 @@ public:
     [[nodiscard]] std::string BuildDebugString() const;
     [[nodiscard]] std::string BuildDotGraph() const;
     [[nodiscard]] std::string BuildJson() const;
+
+    void OverrideTransientPlanning(TransientAllocationPlan transient_allocation_plan_,
+                                   BarrierPlan barrier_plan_) noexcept {
+        using std::swap;
+        swap(transient_allocation_plan, transient_allocation_plan_);
+        swap(barrier_plan, barrier_plan_);
+    }
 
 private:
     friend class RenderGraphBuilder;

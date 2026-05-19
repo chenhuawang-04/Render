@@ -50,17 +50,28 @@ struct ImageResource {
     uint32_t array_layers = 1U;
     VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
     VkImageUsageFlags usage = 0U;
+    VkImageTiling tiling = VK_IMAGE_TILING_OPTIMAL;
     VkMemoryPropertyFlags memory_properties = 0U;
     uint32_t memory_type_index = 0U;
+    bool owns_allocation = false;
 };
 
 class ImageHost final {
 public:
     ImageHost() = delete;
 
+    [[nodiscard]] static ImageResource CreateImageObject(VulkanContext& context_,
+                                                         const ImageCreateInfo& create_info_);
+
     [[nodiscard]] static ImageResource CreateImage(VulkanContext& context_,
                                                    const ImageCreateInfo& create_info_,
                                                    GpuMemoryHost& gpu_memory_host_);
+
+    static void BindAllocation(ImageResource& resource_,
+                               GpuMemoryHost& gpu_memory_host_,
+                               const Center::Memory::Vulkan::Slice& allocation_slice_,
+                               bool owns_allocation_ = true,
+                               VkDeviceSize resource_offset_ = 0U);
 
     static void DestroyImage(VulkanContext& context_,
                              ImageResource& resource_);
