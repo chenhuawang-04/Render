@@ -139,6 +139,7 @@ void ConfigureUnifiedScene3DRuntimeCreateInfo(Runtime::CreateInfo& create_info_)
     create_info_.render_loop.swapchain.preferred_image_count = 2U;
     create_info_.render_loop.commands.initial_primary_per_frame = 2U;
     create_info_.render_loop.commands.primary_growth_chunk = 2U;
+    create_info_.diagnostics.level = vr::runtime::DiagnosticsLevel::Detailed;
     create_info_.poll_events_each_tick = true;
 }
 
@@ -973,6 +974,14 @@ VR_TEST_CASE(RuntimeIntegration_unified_scene_3d_bloom_post_stack_smoke,
         std::uint32_t max_geometry_vertex_deform_instances = 0U;
         std::uint32_t max_geometry_morph_instances = 0U;
         std::uint32_t max_shadow_morph_draw_calls = 0U;
+        bool graph_only_record_active = false;
+        bool graph_diagnostics_available = false;
+        std::uint32_t max_recorded_pass_count = 0U;
+        std::uint64_t max_transient_logical_total_bytes = 0U;
+        std::uint32_t max_transient_page_count = 0U;
+        std::uint64_t max_transient_saved_bytes = 0U;
+        std::uint32_t max_lazy_memory_requested_count = 0U;
+        bool observed_unrealized_lazy_memory_without_reason = false;
 
         constexpr std::uint32_t max_ticks = 16U;
         for (std::uint32_t tick_index = 0U;
@@ -1084,6 +1093,30 @@ VR_TEST_CASE(RuntimeIntegration_unified_scene_3d_bloom_post_stack_smoke,
                 tick_result.render.code == vr::render::TickCode::RecreateRequested) {
                 ++submitted_frames;
             }
+            graph_only_record_active =
+                graph_only_record_active || vr::test::IsGraphOnlyScene3DRecordActive(runtime);
+            graph_diagnostics_available =
+                graph_diagnostics_available || tick_result.diagnostics.render_graph.available;
+            max_recorded_pass_count = std::max(max_recorded_pass_count,
+                                               tick_result.diagnostics.render_graph.recorded_pass_count);
+            max_transient_logical_total_bytes =
+                std::max(max_transient_logical_total_bytes,
+                         tick_result.diagnostics.render_graph.transient_logical_total_bytes);
+            max_transient_page_count = std::max(max_transient_page_count,
+                                                tick_result.diagnostics.render_graph.transient_page_count);
+            max_transient_saved_bytes =
+                std::max(max_transient_saved_bytes,
+                         tick_result.diagnostics.render_graph.transient_saved_bytes);
+            max_lazy_memory_requested_count =
+                std::max(max_lazy_memory_requested_count,
+                         tick_result.diagnostics.render_graph.lazy_memory_requested_count);
+            for (const auto& lazy_resource : tick_result.diagnostics.render_graph.lazy_memory_resources) {
+                observed_unrealized_lazy_memory_without_reason =
+                    observed_unrealized_lazy_memory_without_reason ||
+                    (lazy_resource.requested &&
+                     !lazy_resource.realized &&
+                     lazy_resource.unavailable_reason.empty());
+            }
 
             const auto environment_stats = recorder.EnvironmentPass().Stats();
             const auto geometry_stats = geometry_renderer.Stats();
@@ -1147,7 +1180,14 @@ VR_TEST_CASE(RuntimeIntegration_unified_scene_3d_bloom_post_stack_smoke,
         VR_CHECK(max_text_instances > 0U);
         VR_CHECK(max_geometry_skeletal_instances > 0U);
         VR_CHECK(max_geometry_vertex_deform_instances > 0U);
-        const bool graph_only_record_active = vr::test::IsGraphOnlyScene3DRecordActive(runtime);
+        VR_CHECK(graph_only_record_active);
+        VR_CHECK(graph_diagnostics_available);
+        VR_CHECK(max_recorded_pass_count > 0U);
+        VR_CHECK(max_transient_logical_total_bytes > 0U);
+        VR_CHECK(max_transient_page_count > 0U);
+        VR_CHECK(max_transient_saved_bytes > 0U);
+        VR_CHECK(max_lazy_memory_requested_count > 0U);
+        VR_CHECK(!observed_unrealized_lazy_memory_without_reason);
         VR_CHECK(max_geometry_morph_instances > 0U);
         VR_CHECK(max_shadow_morph_draw_calls > 0U);
         VR_CHECK(recorder.Stats().pre_scene_renderer_count == 1U);
@@ -1165,8 +1205,8 @@ VR_TEST_CASE(RuntimeIntegration_unified_scene_3d_bloom_post_stack_smoke,
         VR_CHECK(recorder.ActiveView() == &main_view);
         VR_CHECK(recorder.ActiveView() != nullptr);
         VR_CHECK(recorder.ActiveView()->camera == &camera);
-        VR_CHECK(runtime.TargetPool().Stats().acquire_count > 0U);
-        VR_CHECK(runtime.TargetPool().Stats().reuse_hit_count > 0U);
+        VR_CHECK(runtime.TargetPool().Stats().acquire_count == 0U);
+        VR_CHECK(runtime.TargetPool().Stats().reuse_hit_count == 0U);
         VR_CHECK(runtime.Ibl().Stats().prepared_frame_count > 0U);
         VR_CHECK(runtime.Ibl().Stats().environment_count >= 1U);
         VR_CHECK(runtime.Ibl().Stats().descriptor_update_count <= submitted_frames + 2U);
@@ -1187,12 +1227,6 @@ VR_TEST_CASE(RuntimeIntegration_unified_scene_3d_bloom_post_stack_smoke,
         VR_CHECK(main_scene_packet.extra.ibl_environment_id == 0U);
         VR_CHECK(main_scene_packet.extra.environment.prefiltered_texture_id == 0U);
         VR_CHECK(main_scene_packet.extra.environment.brdf_lut_texture_id == 0U);
-        if (!graph_only_record_active) {
-            VR_CHECK(runtime.RenderTarget().ResolveView(recorder.PostStack().Targets().ColorTarget()).state ==
-                     vr::render::RenderTargetStateKind::shader_read);
-            VR_CHECK(runtime.RenderTarget().ResolveView(recorder.PostStack().Targets().DepthTarget()).state ==
-                     vr::render::RenderTargetStateKind::depth_attachment);
-        }
         VR_CHECK(runtime.GlyphUpload().Stats().uploaded_rect_count > 0U);
         VR_CHECK(animation_frame_coordinator.Stats().apply_scene_call_count > 0U);
         VR_CHECK(animation_frame_coordinator.Stats().apply_shadow_call_count > 0U);

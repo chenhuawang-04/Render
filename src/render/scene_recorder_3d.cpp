@@ -2,11 +2,13 @@
 #include "vr/geometry/geometry_renderer_3d.hpp"
 #include "vr/render/environment/sky_environment_gpu_host.hpp"
 #include "vr/render/ibl_bake_host.hpp"
+#include "vr/runtime/services/render_graph_runtime_service.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace vr::render {
@@ -36,6 +38,11 @@ constexpr float k_max_bloom_downsample_scale = 1.0F;
     return render_graph::TextureFormat::r16g16b16a16_sfloat;
 }
 
+[[nodiscard]] std::string BuildIndexedBloomResourceName(std::string_view prefix_,
+                                                        const std::uint32_t index_) {
+    return std::string(prefix_) + "_" + std::to_string(index_);
+}
+
 [[nodiscard]] render_graph::TextureDesc BuildBloomIntermediateDesc(
     const render_graph::FrameSnapshot3D& snapshot_,
     const render::RenderTargetBloomRendererCreateInfo& bloom_create_info_) noexcept {
@@ -55,6 +62,7 @@ constexpr float k_max_bloom_downsample_scale = 1.0F;
         .mip_level_count = 1U,
         .array_layer_count = 1U,
         .sample_count = render_graph::SampleCount::x1,
+        .allow_alias = true,
     };
 }
 
@@ -70,6 +78,7 @@ constexpr float k_max_bloom_downsample_scale = 1.0F;
         .mip_level_count = 1U,
         .array_layer_count = 1U,
         .sample_count = render_graph::SampleCount::x1,
+        .allow_alias = true,
     };
 }
 
@@ -117,6 +126,7 @@ void SceneRecorder3D::Initialize(const SceneRecorder3DCreateInfo& create_info_) 
     context = nullptr;
     render_target_host = nullptr;
     render_target_pool = nullptr;
+    graph_runtime_service = nullptr;
     light_frame_coordinator = nullptr;
     animation_frame_coordinator = nullptr;
     shadow_frame_coordinator = nullptr;
@@ -147,6 +157,7 @@ void SceneRecorder3D::Shutdown(VulkanContext& context_) noexcept {
     context = nullptr;
     render_target_host = nullptr;
     render_target_pool = nullptr;
+    graph_runtime_service = nullptr;
     light_frame_coordinator = nullptr;
     animation_frame_coordinator = nullptr;
     shadow_frame_coordinator = nullptr;
@@ -169,12 +180,14 @@ void SceneRecorder3D::BindRuntimeResources(VulkanContext& context_,
     context = &context_;
     render_target_host = &render_target_host_;
     render_target_pool = render_target_pool_;
+    graph_runtime_service = nullptr;
 }
 
 void SceneRecorder3D::ClearRuntimeBinding() noexcept {
     context = nullptr;
     render_target_host = nullptr;
     render_target_pool = nullptr;
+    graph_runtime_service = nullptr;
 }
 
 void SceneRecorder3D::BindLightFrameCoordinator(
@@ -256,6 +269,10 @@ void SceneRecorder3D::PrepareFrame(const SceneRecorder3DPrepareView& prepare_vie
     const bool shadow_enabled = IsShadowEnabledForSubmission();
     const bool use_explicit_scene_target = HasExplicitSceneTargetForSubmission();
     const bool use_post_stack = ShouldUsePostStackForSubmission();
+    const bool prefer_graph_only_runtime_path =
+        (context != nullptr) ? PreferGraphOnlyRuntimePath(*context) : false;
+    const bool graph_only_post_stack_path =
+        prefer_graph_only_runtime_path && use_post_stack && !use_explicit_scene_target;
     const bool has_sky_environment_pass = HasSkyEnvironmentPassForSubmission();
     const bool record_sky_before_opaque = ShouldRecordSkyEnvironmentBeforeOpaque();
     const bool record_sky_after_opaque = ShouldRecordSkyEnvironmentAfterOpaque();
@@ -269,13 +286,21 @@ void SceneRecorder3D::PrepareFrame(const SceneRecorder3DPrepareView& prepare_vie
     SceneRenderTargetSet* targets = nullptr;
     if (use_post_stack) {
         targets = &post_stack.Targets();
-        (void)targets->PrepareFrame(SceneRenderTargetSetPrepareView{
-            .device = prepare_view_.device,
-            .render_target = prepare_view_.render_target,
-            .render_target_pool = prepare_view_.render_target_pool,
-            .frame = prepare_view_.frame,
-            .progress = prepare_view_.progress,
-        });
+        if (!graph_only_post_stack_path) {
+            (void)targets->PrepareFrame(SceneRenderTargetSetPrepareView{
+                .device = prepare_view_.device,
+                .render_target = prepare_view_.render_target,
+                .render_target_pool = prepare_view_.render_target_pool,
+                .frame = prepare_view_.frame,
+                .progress = prepare_view_.progress,
+            });
+        } else {
+            targets->InvalidateFrameTargets();
+            post_stack.Bloom().ClearSceneSourceTarget();
+            post_stack.Bloom().ResetOutputTargetConfig();
+            sky_environment_pass.ResetOutputTargetConfig();
+            sky_environment_pass.ResetDepthTargetConfig();
+        }
     }
 
     if (prepare_view_.sky_environment != nullptr &&
@@ -324,7 +349,12 @@ void SceneRecorder3D::PrepareFrame(const SceneRecorder3DPrepareView& prepare_vie
     resolved_prepare_view.ibl_environment_id = ibl_environment_id;
     resolved_prepare_view.ibl_brdf_lut_texture_id = ibl_brdf_lut_texture_id;
 
-    ConfigureSkyEnvironmentPassForTargets();
+    if (!graph_only_post_stack_path) {
+        ConfigureSkyEnvironmentPassForTargets();
+    } else {
+        sky_environment_pass.ResetOutputTargetConfig();
+        sky_environment_pass.ResetDepthTargetConfig();
+    }
     if (HasSkyEnvironmentPassForSubmission() &&
         frame_packet != nullptr &&
         CanPrepareSkyEnvironmentPass(resolved_prepare_view, frame_packet->extra.environment)) {
@@ -357,7 +387,10 @@ void SceneRecorder3D::PrepareFrame(const SceneRecorder3DPrepareView& prepare_vie
         if (entry_.renderer == nullptr) {
             return;
         }
-        if (use_explicit_scene_target) {
+        if (graph_only_post_stack_path) {
+            // Graph-only runtime path binds scene targets through RenderGraph.
+            // Keep only lighting/animation configuration below.
+        } else if (use_explicit_scene_target) {
             if (entry_.configure_direct_scene_fn != nullptr) {
                 const RenderTargetColorOutputConfig color_output =
                     BuildExplicitSceneOutputConfig(entry_.pass_role);
@@ -443,10 +476,14 @@ void SceneRecorder3D::PrepareFrame(const SceneRecorder3DPrepareView& prepare_vie
     };
     ForEachSceneRendererInStageOrder(configure_scene_renderer);
     if (targets != nullptr) {
-        (void)targets->ConfigureSceneConsumer(post_stack.Bloom());
-        post_stack.Bloom().PrepareFrame(
-            MakeRenderTargetBloomRendererPrepareView(
-                MakeSceneBloomPostStackPrepareView(resolved_prepare_view)));
+        if (!graph_only_post_stack_path) {
+            (void)targets->ConfigureSceneConsumer(post_stack.Bloom());
+            post_stack.Bloom().PrepareFrame(
+                MakeRenderTargetBloomRendererPrepareView(
+                    MakeSceneBloomPostStackPrepareView(resolved_prepare_view)));
+        } else {
+            post_stack.Bloom().PrepareGraphFrame(resolved_prepare_view);
+        }
     }
 
     auto prepare_scene_renderer = [&](const SceneRendererEntry& entry_) {
@@ -465,7 +502,9 @@ void SceneRecorder3D::PrepareFrame(const SceneRecorder3DPrepareView& prepare_vie
         if (!overlay_enabled || !IsOverlayLayerVisibleForSubmission(entry.submission_layer_mask)) {
             continue;
         }
-        if (entry.renderer != nullptr && entry.set_output_target_fn != nullptr) {
+        if (!graph_only_post_stack_path &&
+            entry.renderer != nullptr &&
+            entry.set_output_target_fn != nullptr) {
             entry.set_output_target_fn(entry.renderer, BuildOverlayOutputConfig(entry.output_target_config));
         }
         if (entry.prepare_fn != nullptr && entry.renderer != nullptr) {
@@ -487,8 +526,6 @@ void SceneRecorder3D::BuildRenderGraph(
     const render_graph::FrameSnapshot3D& snapshot_,
     const render_graph::MinimalFrameGraphBuildResult<ecs::Dim3>& build_result_,
     render_graph::ResourceVersionHandle& color_chain_) {
-    (void)snapshot_;
-    (void)color_chain_;
     if (!initialized) {
         return;
     }
@@ -725,8 +762,8 @@ void SceneRecorder3D::BuildRenderGraph(
         auto& bloom_renderer = post_stack.Bloom();
         const auto& bloom_create_info = bloom_renderer.CreateInfo();
         const auto bloom_desc = BuildBloomIntermediateDesc(snapshot_, bloom_create_info);
-        const auto bloom_target_a = builder_.CreateTexture("bloom_target_a", bloom_desc);
-        const auto bloom_target_b = builder_.CreateTexture("bloom_target_b", bloom_desc);
+        const auto prefilter_target =
+            builder_.CreateTexture("bloom_prefilter_target", bloom_desc);
         const auto postprocess_output_target = graph_overlay_present
             ? builder_.CreateTexture("postprocess_color",
                                      BuildPostprocessOverlayIntermediateDesc(snapshot_),
@@ -737,14 +774,14 @@ void SceneRecorder3D::BuildRenderGraph(
         (void)builder_.Read(prefilter_pass,
                             color_chain_,
                             render_graph::AccessDesc{.access = render_graph::AccessKind::shader_sample_read});
-        const auto bloom_a_v1 = builder_.Write(prefilter_pass,
-                                               bloom_target_a,
-                                               render_graph::AccessDesc{.access = render_graph::AccessKind::color_attachment_write});
+        auto bloom_chain = builder_.Write(prefilter_pass,
+                                          prefilter_target,
+                                          render_graph::AccessDesc{.access = render_graph::AccessKind::color_attachment_write});
         builder_.SetRasterPassDesc(prefilter_pass,
                                    render_graph::RasterPassDesc{
                                        .color_attachments = {
                                            render_graph::RasterColorAttachmentDesc{
-                                               .target = bloom_target_a,
+                                               .target = prefilter_target,
                                                .load_op = render_graph::AttachmentLoadOp::dont_care,
                                                .store_op = render_graph::AttachmentStoreOp::store,
                                            },
@@ -753,25 +790,28 @@ void SceneRecorder3D::BuildRenderGraph(
         bloom_renderer.DescribeGraphSingleSourceBindings(builder_, prefilter_pass);
         const auto scene_color = build_result_.scene_color;
         builder_.SetExecuteCallback(prefilter_pass,
-                                    [this, scene_color, bloom_target_a](render_graph::GraphCommandContext& context_) {
-                                        post_stack.Bloom().RecordGraphPrefilterPass(context_, scene_color, bloom_target_a);
+                                    [this, scene_color, prefilter_target](render_graph::GraphCommandContext& context_) {
+                                        post_stack.Bloom().RecordGraphPrefilterPass(context_, scene_color, prefilter_target);
                                     });
 
-        auto bloom_chain = bloom_a_v1;
+        auto bloom_chain_target = prefilter_target;
         const std::uint32_t blur_pair_count = std::max<std::uint32_t>(1U, bloom_create_info.blur_pass_pair_count);
         for (std::uint32_t blur_index = 0U; blur_index < blur_pair_count; ++blur_index) {
+            const auto blur_h_target = builder_.CreateTexture(
+                BuildIndexedBloomResourceName("bloom_blur_h_target", blur_index),
+                bloom_desc);
             const auto blur_h_pass = builder_.AddPass("bloom_blur_h");
             (void)builder_.Read(blur_h_pass,
                                 bloom_chain,
                                 render_graph::AccessDesc{.access = render_graph::AccessKind::shader_sample_read});
-            const auto bloom_b_v = builder_.Write(blur_h_pass,
-                                                  bloom_target_b,
-                                                  render_graph::AccessDesc{.access = render_graph::AccessKind::color_attachment_write});
+            const auto blur_h_version = builder_.Write(blur_h_pass,
+                                                       blur_h_target,
+                                                       render_graph::AccessDesc{.access = render_graph::AccessKind::color_attachment_write});
             builder_.SetRasterPassDesc(blur_h_pass,
                                        render_graph::RasterPassDesc{
                                            .color_attachments = {
                                                render_graph::RasterColorAttachmentDesc{
-                                                   .target = bloom_target_b,
+                                                   .target = blur_h_target,
                                                    .load_op = render_graph::AttachmentLoadOp::dont_care,
                                                    .store_op = render_graph::AttachmentStoreOp::store,
                                                },
@@ -779,22 +819,25 @@ void SceneRecorder3D::BuildRenderGraph(
                                        });
             bloom_renderer.DescribeGraphSingleSourceBindings(builder_, blur_h_pass);
             builder_.SetExecuteCallback(blur_h_pass,
-                                        [this, bloom_target_a, bloom_target_b](render_graph::GraphCommandContext& context_) {
-                                            post_stack.Bloom().RecordGraphBlurPass(context_, bloom_target_a, bloom_target_b);
+                                        [this, bloom_chain_target, blur_h_target](render_graph::GraphCommandContext& context_) {
+                                            post_stack.Bloom().RecordGraphBlurPass(context_, bloom_chain_target, blur_h_target);
                                         });
 
+            const auto blur_v_target = builder_.CreateTexture(
+                BuildIndexedBloomResourceName("bloom_blur_v_target", blur_index),
+                bloom_desc);
             const auto blur_v_pass = builder_.AddPass("bloom_blur_v");
             (void)builder_.Read(blur_v_pass,
-                                bloom_b_v,
+                                blur_h_version,
                                 render_graph::AccessDesc{.access = render_graph::AccessKind::shader_sample_read});
             bloom_chain = builder_.Write(blur_v_pass,
-                                         bloom_target_a,
+                                         blur_v_target,
                                          render_graph::AccessDesc{.access = render_graph::AccessKind::color_attachment_write});
             builder_.SetRasterPassDesc(blur_v_pass,
                                        render_graph::RasterPassDesc{
                                            .color_attachments = {
                                                render_graph::RasterColorAttachmentDesc{
-                                                   .target = bloom_target_a,
+                                                   .target = blur_v_target,
                                                    .load_op = render_graph::AttachmentLoadOp::dont_care,
                                                    .store_op = render_graph::AttachmentStoreOp::store,
                                                },
@@ -802,9 +845,10 @@ void SceneRecorder3D::BuildRenderGraph(
                                        });
             bloom_renderer.DescribeGraphSingleSourceBindings(builder_, blur_v_pass);
             builder_.SetExecuteCallback(blur_v_pass,
-                                        [this, bloom_target_b, bloom_target_a](render_graph::GraphCommandContext& context_) {
-                                            post_stack.Bloom().RecordGraphBlurPass(context_, bloom_target_b, bloom_target_a);
+                                        [this, blur_h_target, blur_v_target](render_graph::GraphCommandContext& context_) {
+                                            post_stack.Bloom().RecordGraphBlurPass(context_, blur_h_target, blur_v_target);
                                         });
+            bloom_chain_target = blur_v_target;
         }
 
         const auto combine_pass = builder_.AddPass("bloom_combine");
@@ -840,10 +884,10 @@ void SceneRecorder3D::BuildRenderGraph(
                                    });
         bloom_renderer.DescribeGraphDualSourceBindings(builder_, combine_pass);
         builder_.SetExecuteCallback(combine_pass,
-                                    [this, scene_color, bloom_target_a, postprocess_output_target](render_graph::GraphCommandContext& context_) {
+                                    [this, scene_color, bloom_chain_target, postprocess_output_target](render_graph::GraphCommandContext& context_) {
                                         post_stack.Bloom().RecordGraphCombinePass(context_,
                                                                                   scene_color,
-                                                                                  bloom_target_a,
+                                                                                  bloom_chain_target,
                                                                                   postprocess_output_target);
                                     });
     }
@@ -1070,6 +1114,10 @@ void SceneRecorder3D::OnSwapchainRecreated(std::uint32_t image_count_,
     const bool shadow_enabled = IsShadowEnabledForSubmission();
     const bool use_explicit_scene_target = HasExplicitSceneTargetForSubmission();
     const bool use_post_stack = ShouldUsePostStackForSubmission();
+    const bool prefer_graph_only_runtime_path =
+        (context != nullptr) ? PreferGraphOnlyRuntimePath(*context) : false;
+    const bool graph_only_post_stack_path =
+        prefer_graph_only_runtime_path && use_post_stack && !use_explicit_scene_target;
 
     sky_environment_pass.OnSwapchainRecreated(image_count_,
                                               extent_,
@@ -1125,7 +1173,7 @@ void SceneRecorder3D::OnSwapchainRecreated(std::uint32_t image_count_,
         }
     }
 
-    if (use_post_stack) {
+    if (use_post_stack && !graph_only_post_stack_path) {
         post_stack.Bloom().OnSwapchainRecreated(image_count_, extent_, format_);
         (void)post_stack.Targets().OnSwapchainRecreated(*context,
                                                         *render_target_host,
@@ -1133,6 +1181,13 @@ void SceneRecorder3D::OnSwapchainRecreated(std::uint32_t image_count_,
                                                         extent_,
                                                         last_submitted_value_,
                                                         completed_submit_value_);
+    } else if (graph_only_post_stack_path) {
+        post_stack.Bloom().OnSwapchainRecreated(image_count_, extent_, format_);
+        post_stack.Targets().InvalidateFrameTargets();
+        post_stack.Bloom().ClearSceneSourceTarget();
+        post_stack.Bloom().ResetOutputTargetConfig();
+        sky_environment_pass.ResetOutputTargetConfig();
+        sky_environment_pass.ResetDepthTargetConfig();
     }
 
     auto reconfigure_scene_renderer = [&](const SceneRendererEntry& entry_) {
@@ -1142,7 +1197,9 @@ void SceneRecorder3D::OnSwapchainRecreated(std::uint32_t image_count_,
         if (entry_.renderer == nullptr) {
             return;
         }
-        if (use_explicit_scene_target) {
+        if (graph_only_post_stack_path) {
+            // Graph-only runtime path keeps scene targets in RenderGraph state only.
+        } else if (use_explicit_scene_target) {
             if (entry_.configure_direct_scene_fn != nullptr) {
                 const RenderTargetColorOutputConfig color_output =
                     BuildExplicitSceneOutputConfig(entry_.pass_role);
@@ -1188,14 +1245,16 @@ void SceneRecorder3D::OnSwapchainRecreated(std::uint32_t image_count_,
         }
     };
     ForEachSceneRendererInStageOrder(reconfigure_scene_renderer);
-    if (use_post_stack) {
+    if (use_post_stack && !graph_only_post_stack_path) {
         (void)post_stack.Targets().ConfigureSceneConsumer(post_stack.Bloom());
     }
     for (const OverlayRendererEntry& entry : overlay_renderer_entries) {
         if (!overlay_enabled || !IsOverlayLayerVisibleForSubmission(entry.submission_layer_mask)) {
             continue;
         }
-        if (entry.renderer != nullptr && entry.set_output_target_fn != nullptr) {
+        if (!graph_only_post_stack_path &&
+            entry.renderer != nullptr &&
+            entry.set_output_target_fn != nullptr) {
             entry.set_output_target_fn(entry.renderer, BuildOverlayOutputConfig(entry.output_target_config));
         }
     }
@@ -1543,6 +1602,11 @@ bool SceneRecorder3D::IsPostProcessEnabledForSubmission() const noexcept {
         return true;
     }
     return ResolveScenePostProcessEnabledForView(*frame_packet, scene_view);
+}
+
+bool SceneRecorder3D::PreferGraphOnlyRuntimePath(const VulkanContext& device_) const noexcept {
+    return graph_runtime_service != nullptr &&
+           graph_runtime_service->SupportsGraphOnlyRecord(device_);
 }
 
 bool SceneRecorder3D::HasSkyEnvironmentPassForSubmission() const noexcept {

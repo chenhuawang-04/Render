@@ -1549,6 +1549,7 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_bloom_post_stack_smoke,
         VR_CHECK(geometry_image_host.Stats().image_count >= 2U);
         VR_CHECK(geometry_appearance_host.Stats().appearance_count >= 2U);
         const bool graph_only_record_active = vr::test::IsGraphOnlyScene3DRecordActive(runtime);
+        VR_CHECK(graph_only_record_active);
         if (graph_only_record_active) {
             VR_CHECK(max_descriptor_updates == 0U);
             VR_CHECK(max_transient_descriptor_updates > 0U);
@@ -1563,8 +1564,13 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_bloom_post_stack_smoke,
         VR_CHECK(recorder.ActiveView() == &main_view);
         VR_CHECK(recorder.ActiveView() != nullptr);
         VR_CHECK(recorder.ActiveView()->camera == &camera);
-        VR_CHECK(runtime.TargetPool().Stats().acquire_count > 0U);
-        VR_CHECK(runtime.TargetPool().Stats().reuse_hit_count > 0U);
+        if (graph_only_record_active) {
+            VR_CHECK(runtime.TargetPool().Stats().acquire_count == 0U);
+            VR_CHECK(runtime.TargetPool().Stats().reuse_hit_count == 0U);
+        } else {
+            VR_CHECK(runtime.TargetPool().Stats().acquire_count > 0U);
+            VR_CHECK(runtime.TargetPool().Stats().reuse_hit_count > 0U);
+        }
         VR_CHECK(runtime.Ibl().Stats().prepared_frame_count > 0U);
         if (!graph_only_record_active) {
             VR_CHECK(runtime.RenderTarget().ResolveView(recorder.PostStack().Targets().ColorTarget()).state ==

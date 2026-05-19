@@ -469,6 +469,7 @@ VR_TEST_CASE(RuntimeIntegration_surface_renderer_3d_bloom_post_stack_smoke,
         VR_CHECK(max_blur_draw_calls > 0U);
         VR_CHECK(max_combine_draw_calls > 0U);
         const bool graph_only_record_active = vr::test::IsGraphOnlyScene3DRecordActive(runtime);
+        VR_CHECK(graph_only_record_active);
         VR_CHECK(max_bloom_descriptor_updates == 0U);
         VR_CHECK(recorder.Stats().frame_packet_prepare_count > 0U);
         VR_CHECK(graph_only_record_active
@@ -484,8 +485,13 @@ VR_TEST_CASE(RuntimeIntegration_surface_renderer_3d_bloom_post_stack_smoke,
                      vr::render::RenderTargetStateKind::depth_attachment);
         }
         VR_CHECK(surface_image_host.Stats().image_count >= 2U);
-        VR_CHECK(runtime.TargetPool().Stats().acquire_count > 0U);
-        VR_CHECK(runtime.TargetPool().Stats().reuse_hit_count > 0U);
+        if (graph_only_record_active) {
+            VR_CHECK(runtime.TargetPool().Stats().acquire_count == 0U);
+            VR_CHECK(runtime.TargetPool().Stats().reuse_hit_count == 0U);
+        } else {
+            VR_CHECK(runtime.TargetPool().Stats().acquire_count > 0U);
+            VR_CHECK(runtime.TargetPool().Stats().reuse_hit_count > 0U);
+        }
         VR_CHECK(runtime.Ibl().Stats().prepared_frame_count > 0U);
         VR_CHECK(surface_image_host.ResolveBindlessImageSlot(6101U).IsValid());
         VR_CHECK(surface_image_host.ResolveBindlessImageSlot(6102U).IsValid());

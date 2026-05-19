@@ -616,6 +616,7 @@ VR_TEST_CASE(RuntimeIntegration_text_renderer_3d_bloom_post_stack_smoke,
         VR_CHECK(max_culling_input_count == static_cast<std::uint32_t>(text_components.size()));
         VR_CHECK(max_culling_visible_count > 0U);
         const bool graph_only_record_active = vr::test::IsGraphOnlyScene3DRecordActive(runtime);
+        VR_CHECK(graph_only_record_active);
         VR_CHECK(runtime.GlyphUpload().Stats().uploaded_rect_count > 0U);
         VR_CHECK(recorder.Stats().frame_packet_prepare_count > 0U);
         VR_CHECK(graph_only_record_active
@@ -624,8 +625,13 @@ VR_TEST_CASE(RuntimeIntegration_text_renderer_3d_bloom_post_stack_smoke,
         VR_CHECK(recorder.ActiveView() == &main_view);
         VR_CHECK(recorder.ActiveView() != nullptr);
         VR_CHECK(recorder.ActiveView()->camera == &camera);
-        VR_CHECK(runtime.TargetPool().Stats().acquire_count > 0U);
-        VR_CHECK(runtime.TargetPool().Stats().reuse_hit_count > 0U);
+        if (graph_only_record_active) {
+            VR_CHECK(runtime.TargetPool().Stats().acquire_count == 0U);
+            VR_CHECK(runtime.TargetPool().Stats().reuse_hit_count == 0U);
+        } else {
+            VR_CHECK(runtime.TargetPool().Stats().acquire_count > 0U);
+            VR_CHECK(runtime.TargetPool().Stats().reuse_hit_count > 0U);
+        }
         if (!graph_only_record_active) {
             VR_CHECK(runtime.RenderTarget().ResolveView(recorder.PostStack().Targets().ColorTarget()).state ==
                      vr::render::RenderTargetStateKind::shader_read);

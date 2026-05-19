@@ -6,6 +6,7 @@
 #include "vr/render_graph/render_graph_executor.hpp"
 #include "vr/render_graph/vulkan_barrier_plan.hpp"
 #include "vr/render_graph/vulkan_resource_table.hpp"
+#include "vr/runtime/runtime_diagnostics.hpp"
 #include "vr/runtime/runtime_service.hpp"
 #include "vr/runtime/service_dependency.hpp"
 #include "vr/runtime/services/descriptor_service.hpp"
@@ -66,6 +67,7 @@ public:
         frame_snapshot = std::monostate{};
         direct_imported_textures.clear();
         strict_graph_only_record_required = false;
+        last_diagnostics = {};
     }
 
     template<typename ContextT>
@@ -189,6 +191,7 @@ public:
                 physical_resources,
                 services.template Get<RenderTargetService>().Host());
         }
+        RefreshDiagnostics(vr::runtime::detail::ResolveDevice(context_));
     }
 
     template<typename ContextT>
@@ -215,6 +218,7 @@ public:
             command_ready_vulkan_barriers,
         };
         record_stats = render_graph::RenderGraphExecutor::Record(graph_context);
+        RefreshDiagnostics(device);
     }
 
     template<typename ContextT>
@@ -341,7 +345,65 @@ public:
         return record_stats;
     }
 
+    [[nodiscard]] const vr::runtime::RenderGraphRuntimeDiagnostics& LastDiagnostics() const noexcept {
+        return last_diagnostics;
+    }
+
 private:
+    void RefreshDiagnostics(const VulkanContext& device_) {
+        vr::runtime::RenderGraphRuntimeDiagnostics diagnostics{};
+        diagnostics.available = has_compiled_graph;
+        diagnostics.frame_compiled = has_compiled_graph && !compiled_graph.Empty();
+        diagnostics.graph_only_path_enabled = graph_only_record_path_enabled;
+        diagnostics.graph_only_supported = SupportsGraphOnlyRecord(device_);
+        diagnostics.graph_only_active =
+            diagnostics.graph_only_supported &&
+            CanExecuteGraphRecord(device_) &&
+            record_stats.pass_count > 0U;
+        diagnostics.strict_graph_only_required = strict_graph_only_record_required;
+        if (has_compiled_graph) {
+            diagnostics.compiled_pass_count =
+                static_cast<std::uint32_t>(compiled_graph.Passes().size());
+            diagnostics.executable_pass_count = static_cast<std::uint32_t>(
+                std::count_if(compiled_graph.Passes().begin(),
+                              compiled_graph.Passes().end(),
+                              [](const render_graph::CompiledPass& pass_) {
+                                  return pass_.executable;
+                              }));
+            const auto& timeline = compiled_graph.TransientAllocations().timeline;
+            diagnostics.transient_logical_total_bytes = timeline.logical_total_bytes;
+            diagnostics.transient_physical_total_bytes = timeline.physical_total_bytes;
+            diagnostics.transient_peak_live_bytes = timeline.peak_live_bytes;
+            diagnostics.transient_saved_bytes = timeline.saved_bytes;
+            diagnostics.transient_page_count = timeline.page_count;
+            diagnostics.alias_barrier_count = timeline.alias_barrier_count;
+        }
+        diagnostics.recorded_pass_count = record_stats.pass_count;
+        diagnostics.recorded_command_batch_count = record_stats.command_batch_count;
+        diagnostics.recorded_image_barrier_count = record_stats.image_barrier_count;
+        diagnostics.recorded_buffer_barrier_count = record_stats.buffer_barrier_count;
+        diagnostics.recorded_queue_transfer_batch_count = record_stats.queue_transfer_batch_count;
+        diagnostics.lazy_memory_requested_count =
+            physical_resources.Stats().lazy_memory_requested_count;
+        diagnostics.lazy_memory_realized_count =
+            physical_resources.Stats().lazy_memory_realized_count;
+        diagnostics.lazy_memory_unavailable_count =
+            physical_resources.Stats().lazy_memory_unavailable_count;
+        diagnostics.lazy_memory_resources.reserve(
+            physical_resources.LazyMemoryResolutions().size());
+        for (const auto& resolution_ : physical_resources.LazyMemoryResolutions()) {
+            diagnostics.lazy_memory_resources.push_back(
+                vr::runtime::RenderGraphLazyMemoryResourceDiagnostics{
+                    .logical_resource_index = resolution_.logical.index,
+                    .debug_name = resolution_.debug_name,
+                    .requested = resolution_.requested,
+                    .realized = resolution_.realized,
+                    .unavailable_reason = resolution_.unavailable_reason,
+                });
+        }
+        last_diagnostics = std::move(diagnostics);
+    }
+
     template<typename ContextT>
     void ResolvePhysicalResources(ContextT& context_) {
         auto& services = vr::runtime::detail::ResolveServices(context_);
@@ -444,6 +506,7 @@ private:
     bool record_execution_enabled = false;
     bool graph_only_record_path_enabled = false;
     bool strict_graph_only_record_required = false;
+    vr::runtime::RenderGraphRuntimeDiagnostics last_diagnostics{};
     FrameSnapshotVariant frame_snapshot{};
     std::vector<ImportedTextureBinding> direct_imported_textures{};
 };

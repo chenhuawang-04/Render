@@ -21,6 +21,7 @@ namespace {
         .mip_level_count = 1U,
         .array_layer_count = 1U,
         .sample_count = render_graph::SampleCount::x1,
+        .allow_alias = true,
     };
 }
 

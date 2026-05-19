@@ -65,6 +65,7 @@ public:
     void ResetOutputTargetConfig() noexcept;
 
     void PrepareFrame(const RenderTargetBloomRendererPrepareView& prepare_view_);
+    void PrepareGraphFrame(const SceneRecorder3DPrepareView& prepare_view_);
     void Record(const FrameRecordContext& record_context_);
     void DescribeGraphSingleSourceBindings(render_graph::RenderGraphBuilder& builder_,
                                            render_graph::PassHandle pass_) const;
@@ -89,6 +90,13 @@ public:
     [[nodiscard]] const RenderTargetBloomRendererCreateInfo& CreateInfo() const noexcept;
 
 private:
+    void ResetPreparedFrameState() noexcept;
+    void BindPreparedFrameServices(VulkanContext& context_,
+                                   DescriptorHost& descriptor_host_,
+                                   PipelineHost& pipeline_host_,
+                                   RenderTargetHost& render_target_host_,
+                                   resource::SamplerHost& sampler_host_,
+                                   BindlessResourceSystem* bindless_) noexcept;
     struct PrefilterPushConstants final {
         float threshold = 1.0F;
         float knee = 0.5F;

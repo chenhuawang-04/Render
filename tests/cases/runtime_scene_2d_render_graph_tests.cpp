@@ -119,6 +119,7 @@ void ConfigureScene2DGraphRuntimeCreateInfo(Runtime::CreateInfo& create_info_,
     create_info_.render_loop.swapchain.preferred_image_count = 2U;
     create_info_.render_loop.commands.initial_primary_per_frame = 2U;
     create_info_.render_loop.commands.primary_growth_chunk = 2U;
+    create_info_.diagnostics.level = vr::runtime::DiagnosticsLevel::Detailed;
     create_info_.poll_events_each_tick = true;
 }
 
@@ -252,6 +253,10 @@ VR_TEST_CASE(RuntimeIntegration_scene_recorder_2d_text_overlay_graph_smoke,
         std::uint32_t max_draw_batches = 0U;
         std::uint32_t max_draw_calls = 0U;
         bool graph_only_active = false;
+        bool graph_diagnostics_available = false;
+        std::uint32_t max_recorded_pass_count = 0U;
+        std::uint64_t max_transient_logical_total_bytes = 0U;
+        std::uint32_t max_transient_page_count = 0U;
 
         constexpr std::uint32_t max_ticks = 8U;
         for (std::uint32_t tick_index = 0U;
@@ -269,6 +274,15 @@ VR_TEST_CASE(RuntimeIntegration_scene_recorder_2d_text_overlay_graph_smoke,
 
             graph_only_active =
                 graph_only_active || vr::test::IsGraphOnlyScene2DRecordActive(runtime);
+            graph_diagnostics_available =
+                graph_diagnostics_available || tick_result.diagnostics.render_graph.available;
+            max_recorded_pass_count = std::max(max_recorded_pass_count,
+                                               tick_result.diagnostics.render_graph.recorded_pass_count);
+            max_transient_logical_total_bytes =
+                std::max(max_transient_logical_total_bytes,
+                         tick_result.diagnostics.render_graph.transient_logical_total_bytes);
+            max_transient_page_count = std::max(max_transient_page_count,
+                                                tick_result.diagnostics.render_graph.transient_page_count);
             const vr::text::TextRenderer2DStats& stats = text_renderer.Stats();
             max_glyph_quads = std::max(max_glyph_quads, stats.glyph_quad_count);
             max_draw_batches = std::max(max_draw_batches, stats.draw_batch_count);
@@ -280,6 +294,9 @@ VR_TEST_CASE(RuntimeIntegration_scene_recorder_2d_text_overlay_graph_smoke,
 
         VR_REQUIRE(submitted_frames > 0U);
         VR_CHECK(graph_only_active);
+        VR_CHECK(graph_diagnostics_available);
+        VR_CHECK(max_recorded_pass_count > 0U);
+        VR_CHECK(max_transient_logical_total_bytes >= max_transient_page_count);
         VR_CHECK(max_glyph_quads > 0U);
         VR_CHECK(max_draw_batches > 0U);
         VR_CHECK(max_draw_calls > 0U);
@@ -395,6 +412,10 @@ VR_TEST_CASE(RuntimeIntegration_scene_recorder_2d_particle_overlay_graph_smoke,
         std::uint32_t max_descriptor_binds = 0U;
         std::uint32_t max_descriptor_updates = 0U;
         bool graph_only_active = false;
+        bool graph_diagnostics_available = false;
+        std::uint32_t max_recorded_pass_count = 0U;
+        std::uint64_t max_transient_logical_total_bytes = 0U;
+        std::uint32_t max_transient_page_count = 0U;
 
         constexpr std::uint32_t max_ticks = 10U;
         for (std::uint32_t tick_index = 0U;
@@ -408,6 +429,15 @@ VR_TEST_CASE(RuntimeIntegration_scene_recorder_2d_particle_overlay_graph_smoke,
 
             graph_only_active =
                 graph_only_active || vr::test::IsGraphOnlyScene2DRecordActive(runtime);
+            graph_diagnostics_available =
+                graph_diagnostics_available || tick_result.diagnostics.render_graph.available;
+            max_recorded_pass_count = std::max(max_recorded_pass_count,
+                                               tick_result.diagnostics.render_graph.recorded_pass_count);
+            max_transient_logical_total_bytes =
+                std::max(max_transient_logical_total_bytes,
+                         tick_result.diagnostics.render_graph.transient_logical_total_bytes);
+            max_transient_page_count = std::max(max_transient_page_count,
+                                                tick_result.diagnostics.render_graph.transient_page_count);
             const auto& renderer_stats = particle_renderer.Stats();
             max_uploaded_instances = std::max(max_uploaded_instances,
                                               renderer_stats.uploaded_instance_count);
@@ -423,6 +453,9 @@ VR_TEST_CASE(RuntimeIntegration_scene_recorder_2d_particle_overlay_graph_smoke,
 
         VR_REQUIRE(submitted_frames > 0U);
         VR_CHECK(graph_only_active);
+        VR_CHECK(graph_diagnostics_available);
+        VR_CHECK(max_recorded_pass_count > 0U);
+        VR_CHECK(max_transient_logical_total_bytes >= max_transient_page_count);
         VR_CHECK(max_uploaded_instances > 0U);
         VR_CHECK(max_draw_calls > 0U);
         VR_CHECK(max_descriptor_binds > 0U);

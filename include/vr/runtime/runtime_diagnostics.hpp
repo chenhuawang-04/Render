@@ -16,6 +16,8 @@
 #include "vr/text/glyph_upload_host.hpp"
 
 #include <cstdint>
+#include <string>
+#include <vector>
 #include <vulkan/vulkan.h>
 
 namespace vr::runtime {
@@ -89,6 +91,40 @@ struct AllocationStats final {
     std::uint32_t render_target_transient_acquired_count = 0U;
 };
 
+struct RenderGraphLazyMemoryResourceDiagnostics final {
+    std::uint32_t logical_resource_index = 0U;
+    std::string debug_name{};
+    bool requested = false;
+    bool realized = false;
+    std::string unavailable_reason{};
+};
+
+struct RenderGraphRuntimeDiagnostics final {
+    bool available = false;
+    bool frame_compiled = false;
+    bool graph_only_path_enabled = false;
+    bool graph_only_supported = false;
+    bool graph_only_active = false;
+    bool strict_graph_only_required = false;
+    std::uint32_t compiled_pass_count = 0U;
+    std::uint32_t executable_pass_count = 0U;
+    std::uint32_t recorded_pass_count = 0U;
+    std::uint32_t recorded_command_batch_count = 0U;
+    std::uint32_t recorded_image_barrier_count = 0U;
+    std::uint32_t recorded_buffer_barrier_count = 0U;
+    std::uint32_t recorded_queue_transfer_batch_count = 0U;
+    std::uint64_t transient_logical_total_bytes = 0U;
+    std::uint64_t transient_physical_total_bytes = 0U;
+    std::uint64_t transient_peak_live_bytes = 0U;
+    std::uint64_t transient_saved_bytes = 0U;
+    std::uint32_t transient_page_count = 0U;
+    std::uint32_t alias_barrier_count = 0U;
+    std::uint32_t lazy_memory_requested_count = 0U;
+    std::uint32_t lazy_memory_realized_count = 0U;
+    std::uint32_t lazy_memory_unavailable_count = 0U;
+    std::vector<RenderGraphLazyMemoryResourceDiagnostics> lazy_memory_resources{};
+};
+
 struct RuntimeFrameDiagnosticsV2 final {
     bool collected = false;
     DiagnosticsLevel level = DiagnosticsLevel::Off;
@@ -117,6 +153,7 @@ struct RuntimeFrameDiagnosticsV2 final {
     ParticleRenderStats particle_render{};
 
     AllocationStats allocations{};
+    RenderGraphRuntimeDiagnostics render_graph{};
 };
 
 [[nodiscard]] constexpr bool DiagnosticsCollectsFrameData(DiagnosticsLevel level_) noexcept {

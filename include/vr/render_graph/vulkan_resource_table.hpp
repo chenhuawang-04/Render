@@ -71,6 +71,14 @@ struct RetiredTransientImagePayload final {
     resource::ImageResource owned_resource{};
 };
 
+struct VulkanLazyMemoryResolution final {
+    ResourceHandle logical{};
+    std::string debug_name{};
+    bool requested = false;
+    bool realized = false;
+    std::string unavailable_reason{};
+};
+
 struct VulkanResourceTableStats final {
     std::uint32_t imported_texture_count = 0U;
     std::uint32_t imported_buffer_count = 0U;
@@ -82,6 +90,9 @@ struct VulkanResourceTableStats final {
     std::uint32_t transient_image_page_count = 0U;
     std::uint32_t transient_aliased_buffer_count = 0U;
     std::uint32_t transient_aliased_texture_count = 0U;
+    std::uint32_t lazy_memory_requested_count = 0U;
+    std::uint32_t lazy_memory_realized_count = 0U;
+    std::uint32_t lazy_memory_unavailable_count = 0U;
 };
 
 struct RenderGraphExecutorCapabilities final {
@@ -159,6 +170,7 @@ public:
     [[nodiscard]] const PhysicalBufferRecord* FindBuffer(ResourceHandle logical_) const noexcept;
     [[nodiscard]] const std::vector<PhysicalTextureRecord>& Textures() const noexcept;
     [[nodiscard]] const std::vector<PhysicalBufferRecord>& Buffers() const noexcept;
+    [[nodiscard]] const std::vector<VulkanLazyMemoryResolution>& LazyMemoryResolutions() const noexcept;
     [[nodiscard]] const VulkanResourceTableStats& Stats() const noexcept;
 
     [[nodiscard]] static render::RenderTargetDesc BuildRenderTargetDesc(
@@ -188,6 +200,7 @@ private:
     render::RetireBus<TransientImagePageRecord> retired_transient_image_pages{};
     std::vector<render::RenderTargetHandle> imported_textures{};
     std::vector<ImportedBufferBinding> imported_buffers{};
+    std::vector<VulkanLazyMemoryResolution> lazy_memory_resolutions{};
     VulkanResourceTableStats stats{};
 };
 

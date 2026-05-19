@@ -1412,6 +1412,28 @@ VR_TEST_CASE(RenderGraphRuntimeService_builds_bloom_chain_from_scene_recorder_3d
     VR_REQUIRE(compiled != nullptr);
     VR_CHECK(!compiled->Passes().empty());
     VR_CHECK(compiled->HasExecutablePasses());
+    VR_CHECK(compiled->TransientAllocations().timeline.saved_bytes > 0U);
+    VR_CHECK(compiled->TransientAllocations().timeline.page_count > 0U);
+
+    const auto& diagnostics = service.LastDiagnostics();
+    VR_CHECK(diagnostics.available);
+    VR_CHECK(diagnostics.frame_compiled);
+    VR_CHECK(diagnostics.compiled_pass_count >= 1U);
+    VR_CHECK(diagnostics.transient_saved_bytes == compiled->TransientAllocations().timeline.saved_bytes);
+    VR_CHECK(diagnostics.transient_page_count == compiled->TransientAllocations().timeline.page_count);
+    VR_CHECK(diagnostics.lazy_memory_requested_count > 0U);
+    VR_CHECK(std::any_of(diagnostics.lazy_memory_resources.begin(),
+                         diagnostics.lazy_memory_resources.end(),
+                         [](const vr::runtime::RenderGraphLazyMemoryResourceDiagnostics& resource_) {
+                             return resource_.requested;
+                         }));
+    VR_CHECK(std::all_of(diagnostics.lazy_memory_resources.begin(),
+                         diagnostics.lazy_memory_resources.end(),
+                         [](const vr::runtime::RenderGraphLazyMemoryResourceDiagnostics& resource_) {
+                             return !resource_.requested ||
+                                    resource_.realized ||
+                                    !resource_.unavailable_reason.empty();
+                         }));
 
     recorder.ClearFramePacket();
     host.Shutdown();

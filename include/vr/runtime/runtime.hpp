@@ -718,6 +718,11 @@ private:
             diagnostics.allocations.render_target_transient_acquired_count =
                 static_cast<std::uint32_t>(diagnostics.render_target_pool.acquire_count);
         }
+        if (const auto* render_graph_service =
+                host.Services().template TryGet<services::RenderGraphRuntimeService>();
+            render_graph_service != nullptr) {
+            diagnostics.render_graph = render_graph_service->LastDiagnostics();
+        }
         if (host.HasGlyphAtlasHost()) {
             diagnostics.glyph_atlas = host.GlyphAtlas().Stats();
         }

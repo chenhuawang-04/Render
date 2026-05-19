@@ -146,6 +146,7 @@ template<ecs::DimensionTag DimensionT>
         .mip_level_count = 1U,
         .array_layer_count = 1U,
         .sample_count = SampleCount::x1,
+        .prefer_lazy_memory = true,
     };
 }
 

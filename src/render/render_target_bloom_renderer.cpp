@@ -179,18 +179,7 @@ void RenderTargetBloomRenderer::ResetOutputTargetConfig() noexcept {
     output_target_config = {};
 }
 
-void RenderTargetBloomRenderer::PrepareFrame(const RenderTargetBloomRendererPrepareView& prepare_view_) {
-    if (!initialized) {
-        throw std::runtime_error("RenderTargetBloomRenderer::PrepareFrame called before Initialize");
-    }
-
-    context = &prepare_view_.device;
-    descriptor_host = &prepare_view_.descriptor;
-    pipeline_host = &prepare_view_.pipeline;
-    render_target_host = &prepare_view_.render_target;
-    render_target_pool = &prepare_view_.render_target_pool;
-    sampler_host = &prepare_view_.sampler;
-    bindless_resources = prepare_view_.bindless;
+void RenderTargetBloomRenderer::ResetPreparedFrameState() noexcept {
     stats = {};
     bloom_target_a = {};
     bloom_target_b = {};
@@ -200,6 +189,36 @@ void RenderTargetBloomRenderer::PrepareFrame(const RenderTargetBloomRendererPrep
     sampler_slot = {};
     active_intermediate_format = VK_FORMAT_UNDEFINED;
     frame_ready = false;
+}
+
+void RenderTargetBloomRenderer::BindPreparedFrameServices(
+    VulkanContext& context_,
+    DescriptorHost& descriptor_host_,
+    PipelineHost& pipeline_host_,
+    RenderTargetHost& render_target_host_,
+    resource::SamplerHost& sampler_host_,
+    BindlessResourceSystem* bindless_) noexcept {
+    context = &context_;
+    descriptor_host = &descriptor_host_;
+    pipeline_host = &pipeline_host_;
+    render_target_host = &render_target_host_;
+    sampler_host = &sampler_host_;
+    bindless_resources = bindless_;
+}
+
+void RenderTargetBloomRenderer::PrepareFrame(const RenderTargetBloomRendererPrepareView& prepare_view_) {
+    if (!initialized) {
+        throw std::runtime_error("RenderTargetBloomRenderer::PrepareFrame called before Initialize");
+    }
+
+    BindPreparedFrameServices(prepare_view_.device,
+                              prepare_view_.descriptor,
+                              prepare_view_.pipeline,
+                              prepare_view_.render_target,
+                              prepare_view_.sampler,
+                              prepare_view_.bindless);
+    render_target_pool = &prepare_view_.render_target_pool;
+    ResetPreparedFrameState();
 
     if (!IsValidRenderTargetHandle(scene_source_target) ||
         !render_target_host->IsValid(scene_source_target)) {
@@ -249,6 +268,27 @@ void RenderTargetBloomRenderer::PrepareFrame(const RenderTargetBloomRendererPrep
                   bloom_texture_slot_a.IsValid() &&
                   bloom_texture_slot_b.IsValid() &&
                   sampler_slot.IsValid();
+}
+
+void RenderTargetBloomRenderer::PrepareGraphFrame(const SceneRecorder3DPrepareView& prepare_view_) {
+    if (!initialized) {
+        throw std::runtime_error("RenderTargetBloomRenderer::PrepareGraphFrame called before Initialize");
+    }
+    if (prepare_view_.descriptor == nullptr ||
+        prepare_view_.pipeline == nullptr ||
+        prepare_view_.sampler == nullptr) {
+        throw std::runtime_error(
+            "RenderTargetBloomRenderer::PrepareGraphFrame requires descriptor, pipeline, and sampler services");
+    }
+
+    BindPreparedFrameServices(prepare_view_.device,
+                              *prepare_view_.descriptor,
+                              *prepare_view_.pipeline,
+                              prepare_view_.render_target,
+                              *prepare_view_.sampler,
+                              prepare_view_.bindless);
+    render_target_pool = nullptr;
+    ResetPreparedFrameState();
 }
 
 void RenderTargetBloomRenderer::Record(const FrameRecordContext& record_context_) {

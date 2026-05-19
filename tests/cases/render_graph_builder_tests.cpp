@@ -1581,6 +1581,8 @@ VR_TEST_CASE(SceneRecorder3D_build_render_graph_inserts_bloom_chain_before_prese
     VR_CHECK(compiled.Passes()[3].debug_name == "bloom_blur_v");
     VR_CHECK(compiled.Passes()[4].debug_name == "bloom_combine");
     VR_CHECK(compiled.Passes().back().debug_name == "present_transition");
+    VR_CHECK(compiled.TransientAllocations().timeline.saved_bytes > 0U);
+    VR_CHECK(compiled.TransientAllocations().timeline.page_count > 0U);
     for (std::size_t pass_index = 1U; pass_index <= 4U; ++pass_index) {
         VR_REQUIRE(compiled.Passes()[pass_index].descriptor_bindings.size() == 2U);
         VR_CHECK(compiled.Passes()[pass_index].descriptor_bindings[0U].set == 0U);

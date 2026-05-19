@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <limits>
 #include <optional>
+#include <sstream>
 #include <stdexcept>
 #include <vector>
 
@@ -95,6 +96,69 @@ namespace {
         usage |= VK_IMAGE_USAGE_TRANSFER_DST_BIT;
     }
     return usage;
+}
+
+[[nodiscard]] bool IsLazyMemoryUsageEligible(const TextureDesc& desc_) noexcept {
+    if (!desc_.prefer_lazy_memory) {
+        return false;
+    }
+    const bool has_attachment_usage =
+        HasTextureUsageFlag(desc_.usage, texture_usage_color_attachment_flag) ||
+        HasTextureUsageFlag(desc_.usage, texture_usage_depth_stencil_attachment_flag);
+    if (!has_attachment_usage) {
+        return false;
+    }
+    return !HasTextureUsageFlag(desc_.usage, texture_usage_sampled_flag) &&
+           !HasTextureUsageFlag(desc_.usage, texture_usage_storage_flag) &&
+           !HasTextureUsageFlag(desc_.usage, texture_usage_transfer_src_flag) &&
+           !HasTextureUsageFlag(desc_.usage, texture_usage_transfer_dst_flag) &&
+           !HasTextureUsageFlag(desc_.usage, texture_usage_present_flag);
+}
+
+[[nodiscard]] std::string BuildLazyMemoryIneligibleReason(const TextureDesc& desc_) {
+    if (!desc_.prefer_lazy_memory) {
+        return {};
+    }
+    const bool has_attachment_usage =
+        HasTextureUsageFlag(desc_.usage, texture_usage_color_attachment_flag) ||
+        HasTextureUsageFlag(desc_.usage, texture_usage_depth_stencil_attachment_flag);
+    if (!has_attachment_usage) {
+        return "resource usage has no attachment access for lazy memory";
+    }
+    if (HasTextureUsageFlag(desc_.usage, texture_usage_sampled_flag)) {
+        return "resource usage includes sampled reads";
+    }
+    if (HasTextureUsageFlag(desc_.usage, texture_usage_storage_flag)) {
+        return "resource usage includes storage access";
+    }
+    if (HasTextureUsageFlag(desc_.usage, texture_usage_transfer_src_flag) ||
+        HasTextureUsageFlag(desc_.usage, texture_usage_transfer_dst_flag)) {
+        return "resource usage includes transfer access";
+    }
+    if (HasTextureUsageFlag(desc_.usage, texture_usage_present_flag)) {
+        return "resource usage includes present access";
+    }
+    return "resource usage is not eligible for lazy memory";
+}
+
+[[nodiscard]] bool SupportsLazilyAllocatedMemory(const VulkanContext& device_,
+                                                 const std::uint32_t memory_type_bits_) noexcept {
+    VkPhysicalDeviceMemoryProperties memory_properties{};
+    vkGetPhysicalDeviceMemoryProperties(device_.PhysicalDevice(), &memory_properties);
+    for (std::uint32_t memory_type_index = 0U;
+         memory_type_index < memory_properties.memoryTypeCount;
+         ++memory_type_index) {
+        const std::uint32_t mask = (1U << memory_type_index);
+        if ((memory_type_bits_ & mask) == 0U) {
+            continue;
+        }
+        const VkMemoryPropertyFlags flags =
+            memory_properties.memoryTypes[memory_type_index].propertyFlags;
+        if ((flags & VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT) != 0U) {
+            return true;
+        }
+    }
+    return false;
 }
 
 [[nodiscard]] VkBufferUsageFlags ResolveBufferUsage(const BufferDesc& desc_) noexcept {
@@ -279,6 +343,18 @@ struct CommittedBufferRecords final {
     std::vector<std::optional<std::size_t>> reuse_previous_indices{};
 };
 
+struct LazyMemoryAllocationAttempt final {
+    bool requested = false;
+    bool should_attempt = false;
+    bool realized = false;
+    std::string unavailable_reason{};
+};
+
+struct LazyMemoryResolutionSlot final {
+    bool valid = false;
+    VulkanLazyMemoryResolution resolution{};
+};
+
 bool g_fail_resolve_before_publish_for_testing = false;
 
 [[nodiscard]] const TransientAllocationRecord* FindTransientAllocationRecord(
@@ -372,6 +448,48 @@ bool g_fail_resolve_before_publish_for_testing = false;
     result.dedicated_required = dedicated_requirements.requiresDedicatedAllocation == VK_TRUE;
     result.dedicated_preferred = dedicated_requirements.prefersDedicatedAllocation == VK_TRUE;
     return result;
+}
+
+[[nodiscard]] LazyMemoryAllocationAttempt EvaluateLazyMemoryAttempt(
+    const CompiledResource& resource_,
+    VulkanContext& device_,
+    const VkMemoryRequirements& requirements_) {
+    LazyMemoryAllocationAttempt attempt{};
+    attempt.requested = resource_.kind == ResourceKind::texture &&
+                        resource_.texture.prefer_lazy_memory;
+    if (!attempt.requested) {
+        return attempt;
+    }
+    if (!IsLazyMemoryUsageEligible(resource_.texture)) {
+        attempt.unavailable_reason = BuildLazyMemoryIneligibleReason(resource_.texture);
+        return attempt;
+    }
+    if (!SupportsLazilyAllocatedMemory(device_, requirements_.memoryTypeBits)) {
+        attempt.unavailable_reason = "no compatible lazily allocated memory type";
+        return attempt;
+    }
+    attempt.should_attempt = true;
+    return attempt;
+}
+
+void SetLazyMemoryResolution(std::vector<LazyMemoryResolutionSlot>& resolution_slots_,
+                             const CompiledResource& resource_,
+                             const LazyMemoryAllocationAttempt& attempt_) {
+    if (resource_.kind != ResourceKind::texture || !attempt_.requested) {
+        return;
+    }
+    if (resource_.handle.index >= resolution_slots_.size()) {
+        resolution_slots_.resize(resource_.handle.index + 1U);
+    }
+    auto& slot = resolution_slots_[resource_.handle.index];
+    slot.valid = true;
+    slot.resolution.logical = resource_.handle;
+    slot.resolution.debug_name = resource_.debug_name;
+    slot.resolution.requested = true;
+    slot.resolution.realized = attempt_.realized;
+    slot.resolution.unavailable_reason = attempt_.realized
+        ? std::string{}
+        : attempt_.unavailable_reason;
 }
 
 [[nodiscard]] ResourceFootprint BuildExactBufferFootprint(const CompiledResource& resource_,
@@ -780,6 +898,7 @@ void VulkanResourceTable::BeginFrame(VulkanContext& device_,
                             completed_submit_value_);
     imported_textures.clear();
     imported_buffers.clear();
+    lazy_memory_resolutions.clear();
     RefreshStats();
 }
 
@@ -816,6 +935,7 @@ void VulkanResourceTable::Resolve(VulkanContext& device_,
     CommittedBufferRecords committed_buffers{};
     TransientAllocationPlan realized_transient_plan{};
     BarrierPlan realized_barrier_plan{};
+    std::vector<VulkanLazyMemoryResolution> staged_lazy_memory_resolutions{};
 
     try {
         prepared_transient_buffers.reserve(compiled_graph_.Resources().size());
@@ -828,6 +948,8 @@ void VulkanResourceTable::Resolve(VulkanContext& device_,
             max_resource_index = (std::max)(max_resource_index, resource_.handle.index);
         }
         std::vector<ExactFootprintSlot> exact_footprints(static_cast<std::size_t>(max_resource_index) + 1U);
+        std::vector<LazyMemoryResolutionSlot> lazy_memory_resolution_slots(
+            static_cast<std::size_t>(max_resource_index) + 1U);
 
         for (const auto& resource_ : compiled_graph_.Resources()) {
             if (resource_.lifetime != ResourceLifetime::transient) {
@@ -890,6 +1012,51 @@ void VulkanResourceTable::Resolve(VulkanContext& device_,
                                         realized_barrier_plan,
                                         executor_capabilities_);
 
+        const auto allocate_image_memory_with_lazy_fallback =
+            [&](const VkMemoryRequirements& requirements_,
+                const VkImageTiling tiling_,
+                const bool dedicated_required_,
+                const bool dedicated_preferred_,
+                const VkImage dedicated_image_,
+                LazyMemoryAllocationAttempt& lazy_attempt_) {
+                if (lazy_attempt_.should_attempt) {
+                    try {
+                        const auto slice = gpu_memory_host_.AllocateImageMemory(
+                            requirements_,
+                            tiling_,
+                            VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT,
+                            VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT |
+                                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                            false,
+                            Center::Memory::Vulkan::LifetimeHint::transient,
+                            Center::Memory::Vulkan::HostAccess::none,
+                            dedicated_required_,
+                            dedicated_preferred_,
+                            dedicated_image_);
+                        lazy_attempt_.realized = true;
+                        lazy_attempt_.unavailable_reason.clear();
+                        return slice;
+                    } catch (const std::exception& exception_) {
+                        std::ostringstream reason_stream{};
+                        reason_stream << "lazy allocation failed: " << exception_.what();
+                        lazy_attempt_.realized = false;
+                        lazy_attempt_.unavailable_reason = reason_stream.str();
+                    }
+                }
+
+                return gpu_memory_host_.AllocateImageMemory(
+                    requirements_,
+                    tiling_,
+                    VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                    VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                    false,
+                    Center::Memory::Vulkan::LifetimeHint::transient,
+                    Center::Memory::Vulkan::HostAccess::none,
+                    dedicated_required_,
+                    dedicated_preferred_,
+                    dedicated_image_);
+            };
+
         for (const auto& page_ : realized_transient_plan.pages) {
             if (page_.kind != ResourceKind::buffer || page_.resources.empty()) {
                 if (page_.kind != ResourceKind::texture || page_.resources.empty()) {
@@ -926,6 +1093,15 @@ void VulkanResourceTable::Resolve(VulkanContext& device_,
                 aggregate_requirements.alignment = page_alignment;
                 aggregate_requirements.memoryTypeBits = memory_type_bits;
 
+                const auto* representative_resource =
+                    FindCompiledResourceByHandle(compiled_graph_, page_.resources.front());
+                LazyMemoryAllocationAttempt lazy_attempt{};
+                if (representative_resource != nullptr) {
+                    lazy_attempt = EvaluateLazyMemoryAttempt(*representative_resource,
+                                                             device_,
+                                                             aggregate_requirements);
+                }
+
                 TransientImagePageRecord page_record{};
                 page_record.page_index = page_.page_index;
                 page_record.size_bytes = page_size;
@@ -933,17 +1109,35 @@ void VulkanResourceTable::Resolve(VulkanContext& device_,
                 page_record.memory_type_bits = memory_type_bits;
                 page_record.tiling = tiling;
                 page_record.resources = page_.resources;
-                page_record.allocation_slice = gpu_memory_host_.AllocateImageMemory(
-                    aggregate_requirements,
-                    tiling,
-                    VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-                    VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-                    false,
-                    Center::Memory::Vulkan::LifetimeHint::transient,
-                    Center::Memory::Vulkan::HostAccess::none,
-                    false,
-                    false);
+                page_record.allocation_slice = representative_resource != nullptr
+                    ? allocate_image_memory_with_lazy_fallback(aggregate_requirements,
+                                                               tiling,
+                                                               false,
+                                                               false,
+                                                               VK_NULL_HANDLE,
+                                                               lazy_attempt)
+                    : gpu_memory_host_.AllocateImageMemory(
+                          aggregate_requirements,
+                          tiling,
+                          VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                          VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                          false,
+                          Center::Memory::Vulkan::LifetimeHint::transient,
+                          Center::Memory::Vulkan::HostAccess::none,
+                          false,
+                          false);
                 page_record.memory_host = &gpu_memory_host_;
+                if (representative_resource != nullptr && lazy_attempt.requested) {
+                    for (const auto handle_ : page_.resources) {
+                        const auto* page_resource = FindCompiledResourceByHandle(compiled_graph_, handle_);
+                        if (page_resource == nullptr) {
+                            continue;
+                        }
+                        SetLazyMemoryResolution(lazy_memory_resolution_slots,
+                                                *page_resource,
+                                                lazy_attempt);
+                    }
+                }
                 staged_transient_image_pages.push_back(std::move(page_record));
                 continue;
             }
@@ -1056,17 +1250,19 @@ void VulkanResourceTable::Resolve(VulkanContext& device_,
                             staged.record.alias_page_index = page_it->page_index;
                             staged.record.aliased = allocation_record->aliased;
                         } else {
-                            const auto allocation_slice = gpu_memory_host_.AllocateImageMemory(
+                            auto lazy_attempt = EvaluateLazyMemoryAttempt(resource_,
+                                                                          device_,
+                                                                          prepared->memory_requirements);
+                            const auto allocation_slice = allocate_image_memory_with_lazy_fallback(
                                 prepared->memory_requirements,
                                 prepared->create_info.tiling,
-                                prepared->create_info.memory_properties,
-                                prepared->create_info.memory_properties,
-                                false,
-                                Center::Memory::Vulkan::LifetimeHint::transient,
-                                Center::Memory::Vulkan::HostAccess::none,
                                 prepared->dedicated_required,
                                 prepared->dedicated_preferred,
-                                staged.record.owned_resource.image);
+                                staged.record.owned_resource.image,
+                                lazy_attempt);
+                            SetLazyMemoryResolution(lazy_memory_resolution_slots,
+                                                    resource_,
+                                                    lazy_attempt);
                             resource::ImageHost::BindAllocation(staged.record.owned_resource,
                                                                 gpu_memory_host_,
                                                                 allocation_slice,
@@ -1186,6 +1382,13 @@ void VulkanResourceTable::Resolve(VulkanContext& device_,
 
         committed_textures = BuildCommittedTextureRecords(staged_textures);
         committed_buffers = BuildCommittedBufferRecords(staged_buffers);
+        staged_lazy_memory_resolutions.clear();
+        for (auto& slot_ : lazy_memory_resolution_slots) {
+            if (!slot_.valid || !slot_.resolution.requested) {
+                continue;
+            }
+            staged_lazy_memory_resolutions.push_back(std::move(slot_.resolution));
+        }
 
         if (g_fail_resolve_before_publish_for_testing) {
             throw std::runtime_error(
@@ -1204,6 +1407,7 @@ void VulkanResourceTable::Resolve(VulkanContext& device_,
         buffers.swap(committed_buffers.records);
         transient_buffer_pages.swap(staged_transient_buffer_pages);
         transient_image_pages.swap(staged_transient_image_pages);
+        lazy_memory_resolutions.swap(staged_lazy_memory_resolutions);
         compiled_graph_.OverrideTransientPlanning(std::move(realized_transient_plan),
                                                   std::move(realized_barrier_plan));
 
@@ -1248,6 +1452,7 @@ void VulkanResourceTable::Shutdown(VulkanContext& device_,
                       completed_submit_value_);
     imported_textures.clear();
     imported_buffers.clear();
+    lazy_memory_resolutions.clear();
     RefreshStats();
 }
 
@@ -1275,6 +1480,10 @@ const std::vector<PhysicalTextureRecord>& VulkanResourceTable::Textures() const 
 
 const std::vector<PhysicalBufferRecord>& VulkanResourceTable::Buffers() const noexcept {
     return buffers;
+}
+
+const std::vector<VulkanLazyMemoryResolution>& VulkanResourceTable::LazyMemoryResolutions() const noexcept {
+    return lazy_memory_resolutions;
 }
 
 const VulkanResourceTableStats& VulkanResourceTable::Stats() const noexcept {
@@ -1328,6 +1537,9 @@ resource::ImageCreateInfo VulkanResourceTable::BuildImageCreateInfo(
     create_info.array_layers = desc_.array_layer_count;
     create_info.samples = ResolveSampleCount(desc_.sample_count);
     create_info.usage = ResolveImageUsage(desc_);
+    if (IsLazyMemoryUsageEligible(desc_)) {
+        create_info.usage |= VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT;
+    }
     create_info.memory_properties = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
     create_info.create_default_view = true;
     create_info.default_view_type = ResolveImageViewType(desc_);
@@ -1448,6 +1660,17 @@ void VulkanResourceTable::RefreshStats() noexcept {
     }
     stats.transient_buffer_page_count = static_cast<std::uint32_t>(transient_buffer_pages.size());
     stats.transient_image_page_count = static_cast<std::uint32_t>(transient_image_pages.size());
+    for (const auto& resolution_ : lazy_memory_resolutions) {
+        if (!resolution_.requested) {
+            continue;
+        }
+        stats.lazy_memory_requested_count += 1U;
+        if (resolution_.realized) {
+            stats.lazy_memory_realized_count += 1U;
+        } else {
+            stats.lazy_memory_unavailable_count += 1U;
+        }
+    }
 }
 
 } // namespace vr::render_graph

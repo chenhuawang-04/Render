@@ -1649,6 +1649,39 @@ private:
                                const SceneRecorder3DPrepareView& prepare_view_) {
                           recorder_ref_.PrepareFrame(prepare_view_);
                       }) {
+            if constexpr (requires(RecorderT& recorder_ref_) {
+                              recorder_ref_.FramePacket();
+                          }) {
+                if (const auto* frame_packet = recorder_.FramePacket();
+                    frame_packet != nullptr) {
+                    auto& render_graph_service =
+                        services_ref.template Get<runtime::services::RenderGraphRuntimeService>();
+                    render_graph_service.template SetFrameSnapshot<ecs::Dim3>(
+                        render_graph::MakeFrameSnapshot(
+                            *frame_packet,
+                            frame.frame_index,
+                            render_graph::Extent3D{
+                                .width = frame.swapchain_extent.width,
+                                .height = frame.swapchain_extent.height,
+                                .depth = 1U,
+                            }));
+                    if constexpr (requires(RecorderT& recorder_ref_,
+                                           render_graph::RenderGraphBuilder& builder_ref_,
+                                           const render_graph::FrameSnapshot3D& snapshot_ref_,
+                                           const render_graph::MinimalFrameGraphBuildResult<ecs::Dim3>& build_result_ref_,
+                                           render_graph::ResourceVersionHandle& color_chain_ref_) {
+                                      recorder_ref_.BuildRenderGraph(builder_ref_, snapshot_ref_, build_result_ref_, color_chain_ref_);
+                                  }) {
+                        render_graph_service.template SetGraphBuildCallback<ecs::Dim3>(
+                            [&recorder_](render_graph::RenderGraphBuilder& builder_ref_,
+                                         const render_graph::FrameSnapshot3D& snapshot_ref_,
+                                         const render_graph::MinimalFrameGraphBuildResult<ecs::Dim3>& build_result_ref_,
+                                         render_graph::ResourceVersionHandle& color_chain_ref_) {
+                                recorder_.BuildRenderGraph(builder_ref_, snapshot_ref_, build_result_ref_, color_chain_ref_);
+                            });
+                    }
+                }
+            }
             recorder_.PrepareFrame(SceneRecorder3DPrepareView{
                 .device = device,
                 .gpu_memory = &gpu_memory_host,
@@ -1709,6 +1742,40 @@ private:
                                       const SceneRecorder2DPrepareView& prepare_view_) {
                                  recorder_ref_.PrepareFrame(prepare_view_);
                              }) {
+            if constexpr (requires(RecorderT& recorder_ref_) {
+                              recorder_ref_.FramePacket();
+                          }) {
+                if (const auto* frame_packet = recorder_.FramePacket();
+                    frame_packet != nullptr) {
+                    auto& render_graph_service =
+                        services_ref.template Get<runtime::services::RenderGraphRuntimeService>();
+                    render_graph_service.template SetFrameSnapshot<ecs::Dim2>(
+                        render_graph::MakeFrameSnapshot(
+                            *frame_packet,
+                            frame.frame_index,
+                            render_graph::Extent3D{
+                                .width = frame.swapchain_extent.width,
+                                .height = frame.swapchain_extent.height,
+                                .depth = 1U,
+                            }));
+                    if constexpr (requires(RecorderT& recorder_ref_,
+                                           render_graph::RenderGraphBuilder& builder_ref_,
+                                           const render_graph::FrameSnapshot2D& snapshot_ref_,
+                                           const render_graph::MinimalFrameGraphBuildResult<ecs::Dim2>& build_result_ref_,
+                                           render_graph::ResourceVersionHandle& color_chain_ref_) {
+                                      recorder_ref_.BuildRenderGraph(builder_ref_, snapshot_ref_, build_result_ref_, color_chain_ref_);
+                                  }) {
+                        render_graph_service.template SetGraphBuildCallback<ecs::Dim2>(
+                            [&recorder_](render_graph::RenderGraphBuilder& builder_ref_,
+                                         const render_graph::FrameSnapshot2D& snapshot_ref_,
+                                         const render_graph::MinimalFrameGraphBuildResult<ecs::Dim2>& build_result_ref_,
+                                         render_graph::ResourceVersionHandle& color_chain_ref_) {
+                                recorder_.BuildRenderGraph(builder_ref_, snapshot_ref_, build_result_ref_, color_chain_ref_);
+                            });
+                        render_graph_service.RequireStrictGraphOnlyRecord(true);
+                    }
+                }
+            }
             recorder_.PrepareFrame(SceneRecorder2DPrepareView{
                 .device = device,
                 .gpu_memory = &gpu_memory_host,
@@ -2351,6 +2418,7 @@ private:
             diagnostics.allocations.render_target_transient_acquired_count =
                 static_cast<std::uint32_t>(diagnostics.render_target_pool.acquire_count);
         }
+        diagnostics.render_graph = render_graph_runtime_service_ref.LastDiagnostics();
         if (glyph_atlas_initialized) {
             diagnostics.glyph_atlas = glyph_atlas_host.Stats();
         }

@@ -41,6 +41,10 @@ class TextRenderer2D;
 class TextRenderer3D;
 }
 
+namespace vr::runtime::services {
+class RenderGraphRuntimeService;
+}
+
 namespace vr::render {
 
 template<typename T>
@@ -154,6 +158,14 @@ public:
         BindRuntimeResources(runtime_.Context(),
                              runtime_.RenderTarget(),
                              runtime_.HasRenderTargetPool() ? &runtime_.TargetPool() : nullptr);
+        if constexpr (requires(RuntimeT& runtime_ref_) {
+                          runtime_ref_.Services();
+                      }) {
+            graph_runtime_service =
+                runtime_.Services().template TryGet<runtime::services::RenderGraphRuntimeService>();
+        } else {
+            graph_runtime_service = nullptr;
+        }
     }
 
     void ClearRuntimeBinding() noexcept;
@@ -740,6 +752,7 @@ private:
     [[nodiscard]] bool IsShadowEnabledForSubmission() const noexcept;
     [[nodiscard]] bool IsOverlayEnabledForSubmission() const noexcept;
     [[nodiscard]] bool IsPostProcessEnabledForSubmission() const noexcept;
+    [[nodiscard]] bool PreferGraphOnlyRuntimePath(const VulkanContext& device_) const noexcept;
     [[nodiscard]] bool HasSkyEnvironmentPassForSubmission() const noexcept;
     [[nodiscard]] bool HasVisibleSceneRendererForSubmission() const noexcept;
     [[nodiscard]] bool HasVisibleOpaqueSceneRendererForSubmission() const noexcept;
@@ -768,6 +781,7 @@ private:
     VulkanContext* context = nullptr;
     RenderTargetHost* render_target_host = nullptr;
     RenderTargetPool* render_target_pool = nullptr;
+    runtime::services::RenderGraphRuntimeService* graph_runtime_service = nullptr;
     render::LightFrameCoordinator<ecs::Dim3>* light_frame_coordinator = nullptr;
     render::AnimationFrameCoordinator<ecs::Dim3>* animation_frame_coordinator = nullptr;
     render::ShadowFrameCoordinator<ecs::Dim3>* shadow_frame_coordinator = nullptr;
