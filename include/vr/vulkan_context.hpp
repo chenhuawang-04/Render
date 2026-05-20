@@ -36,6 +36,9 @@ struct VulkanDeviceCreateInfo {
     VkPhysicalDeviceVulkan13Features required_vulkan13_features{};
     VkPhysicalDeviceVulkan12Features optional_vulkan12_features{};
     VkPhysicalDeviceVulkan13Features optional_vulkan13_features{};
+    // 显式 opt-in 的高级动态渲染能力。当前仅在设备支持时尝试启用；
+    // 不支持时保持 disabled，而不是让设备创建失败。
+    bool request_dynamic_rendering_local_read = false;
     // `minimal_required`：仅当对应 struct 中存在至少一个 VK_TRUE feature bit 时，
     // 才把 Vulkan 1.2 / 1.3 feature struct 接入 vkCreateDevice 的 pNext 链。
     // 这是默认策略，可保持 pNext 链最小化。
@@ -91,6 +94,16 @@ struct DescriptorSetLayoutSupportInfo {
     std::uint32_t max_variable_descriptor_count = 0U;
 };
 
+struct DynamicRenderingLocalReadCaps {
+    bool extension_supported = false;
+    bool feature_supported = false;
+    bool supported = false;
+    bool requested = false;
+    bool extension_enabled = false;
+    bool feature_enabled = false;
+    bool enabled = false;
+};
+
 class VulkanContext final {
 public:
     VulkanContext() = default;
@@ -133,6 +146,7 @@ public:
     [[nodiscard]] const VkPhysicalDeviceVulkan12Features& EnabledVulkan12Features() const noexcept;
     [[nodiscard]] const VkPhysicalDeviceVulkan13Features& EnabledVulkan13Features() const noexcept;
     [[nodiscard]] const DescriptorIndexingCaps& DescriptorIndexingCapsInfo() const noexcept;
+    [[nodiscard]] const DynamicRenderingLocalReadCaps& DynamicRenderingLocalReadCapsInfo() const noexcept;
 
     [[nodiscard]] DescriptorSetLayoutSupportInfo QueryDescriptorSetLayoutSupport(
         const VkDescriptorSetLayoutCreateInfo& create_info_) const;
@@ -167,6 +181,7 @@ private:
     VkPhysicalDeviceVulkan12Features enabled_vulkan12_features{};
     VkPhysicalDeviceVulkan13Features enabled_vulkan13_features{};
     DescriptorIndexingCaps descriptor_indexing_caps{};
+    DynamicRenderingLocalReadCaps dynamic_rendering_local_read_caps{};
 
     bool validation_enabled = false;
     McVector<const char*> enabled_validation_layers{};

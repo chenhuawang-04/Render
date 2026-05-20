@@ -10,6 +10,7 @@ struct RenderGraphRecordStats final {
     std::uint32_t pass_count = 0U;
     std::uint32_t command_batch_count = 0U;
     std::uint32_t queue_transfer_batch_count = 0U;
+    std::uint32_t rendering_scope_count = 0U;
     std::uint32_t memory_barrier_count = 0U;
     std::uint32_t buffer_barrier_count = 0U;
     std::uint32_t image_barrier_count = 0U;

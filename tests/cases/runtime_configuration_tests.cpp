@@ -297,11 +297,14 @@ VR_TEST_CASE(RuntimeConfig_vulkan_device_feature_chain_policy_defaults_to_minima
     vr::VulkanDeviceCreateInfo device_create_info{};
     VR_CHECK(device_create_info.feature_chain_policy ==
              vr::VulkanFeatureChainPolicy::minimal_required);
+    VR_CHECK(!device_create_info.request_dynamic_rendering_local_read);
 
     device_create_info.feature_chain_policy =
         vr::VulkanFeatureChainPolicy::explicit_vulkan12_vulkan13;
     VR_CHECK(device_create_info.feature_chain_policy ==
              vr::VulkanFeatureChainPolicy::explicit_vulkan12_vulkan13);
+    device_create_info.request_dynamic_rendering_local_read = true;
+    VR_CHECK(device_create_info.request_dynamic_rendering_local_read);
 }
 
 VR_TEST_CASE(RuntimeConfig_unavailable_modules_throw_before_initialize, "unit;core;runtime") {

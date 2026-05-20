@@ -50,8 +50,11 @@ add_executable(${VR_TEST_TARGET}
     cases/render_graph_builder_tests.cpp
     cases/render_graph_descriptor_tests.cpp
     cases/render_graph_alias_allocator_tests.cpp
+    cases/render_graph_load_store_optimizer_tests.cpp
     cases/background_2d_graph_tests.cpp
     cases/render_graph_barrier_tests.cpp
+    cases/render_graph_native_pass_fusion_tests.cpp
+    cases/render_graph_tbr_policy_tests.cpp
     cases/render_graph_queue_scheduler_tests.cpp
     cases/render_graph_vulkan_backend_tests.cpp
     cases/ecs_bounds_system_tests.cpp

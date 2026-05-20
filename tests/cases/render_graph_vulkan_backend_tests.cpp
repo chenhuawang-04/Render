@@ -1785,6 +1785,238 @@ VR_TEST_CASE(RenderGraphExecutor_invokes_pass_execute_thunks,
     table.Shutdown(host.Context(), host.RenderTarget(), 0U, 0U);
 }
 
+VR_TEST_CASE(RenderGraphExecutor_fuses_native_pass_groups_into_single_dynamic_rendering_scope,
+             "integration;render_graph;executor;native_pass;vulkan") {
+    Host host{};
+    try {
+        auto create_info = MakeMinimalRenderTargetRuntimeCreateInfo();
+        EnableRenderGraphRuntimeExecutionFeatures(create_info);
+        host.Initialize(create_info);
+    } catch (const std::exception& exception_) {
+        if (IsEnvironmentSkipError(exception_.what())) {
+            VR_SKIP(exception_.what());
+        }
+        throw;
+    }
+    if (host.Context().EnabledVulkan13Features().dynamicRendering != VK_TRUE) {
+        VR_SKIP("dynamicRendering feature unavailable");
+    }
+    if (host.Context().EnabledVulkan13Features().synchronization2 != VK_TRUE) {
+        VR_SKIP("synchronization2 feature unavailable");
+    }
+
+    host.EnsureSwapchainTargetsForFrame(0U, 0U);
+    const auto imported_present = host.SwapchainTargets().Get(0U);
+    VR_REQUIRE(vr::render::IsValidRenderTargetHandle(imported_present));
+
+    vr::render_graph::RenderGraphBuilder builder{};
+    const auto scene_color = builder.CreateTexture(
+        "scene_color",
+        vr::render_graph::TextureDesc{
+            .format = vr::render_graph::TextureFormat::r16g16b16a16_sfloat,
+            .extent = {.width = 160U, .height = 90U, .depth = 1U},
+            .usage = vr::render_graph::texture_usage_color_attachment_flag |
+                     vr::render_graph::texture_usage_sampled_flag,
+        });
+    const auto scene_depth = builder.CreateTexture(
+        "scene_depth",
+        vr::render_graph::TextureDesc{
+            .format = vr::render_graph::TextureFormat::d32_sfloat,
+            .extent = {.width = 160U, .height = 90U, .depth = 1U},
+            .usage = vr::render_graph::texture_usage_depth_stencil_attachment_flag,
+        });
+    const auto present_target = builder.CreateTexture(
+        "present_target",
+        vr::render_graph::TextureDesc{
+            .format = vr::render_graph::TextureFormat::unknown,
+            .extent = {.width = 160U, .height = 90U, .depth = 1U},
+            .usage = vr::render_graph::texture_usage_color_attachment_flag |
+                     vr::render_graph::texture_usage_present_flag,
+        },
+        vr::render_graph::ResourceLifetime::imported);
+
+    const auto opaque = builder.AddPass("opaque_scene");
+    const auto transparent = builder.AddPass("transparent_scene");
+    const auto present = builder.AddPass("present_to_swapchain", true);
+
+    const auto color_v1 = builder.Write(
+        opaque,
+        scene_color,
+        vr::render_graph::AccessDesc{
+            .access = vr::render_graph::AccessKind::color_attachment_write,
+        });
+    const auto depth_v1 = builder.Write(
+        opaque,
+        scene_depth,
+        vr::render_graph::AccessDesc{
+            .access = vr::render_graph::AccessKind::depth_stencil_write,
+        });
+    (void)builder.Read(
+        transparent,
+        color_v1,
+        vr::render_graph::AccessDesc{
+            .access = vr::render_graph::AccessKind::color_attachment_read,
+        });
+    const auto color_v2 = builder.Write(
+        transparent,
+        color_v1,
+        vr::render_graph::AccessDesc{
+            .access = vr::render_graph::AccessKind::color_attachment_write,
+        });
+    (void)builder.Read(
+        transparent,
+        depth_v1,
+        vr::render_graph::AccessDesc{
+            .access = vr::render_graph::AccessKind::depth_stencil_read,
+        });
+    (void)builder.Write(
+        transparent,
+        depth_v1,
+        vr::render_graph::AccessDesc{
+            .access = vr::render_graph::AccessKind::depth_stencil_write,
+        });
+    (void)builder.Read(
+        present,
+        color_v2,
+        vr::render_graph::AccessDesc{
+            .access = vr::render_graph::AccessKind::shader_sample_read,
+        });
+    (void)builder.Write(
+        present,
+        present_target,
+        vr::render_graph::AccessDesc{
+            .access = vr::render_graph::AccessKind::present,
+        });
+
+    const auto make_raster_pass_desc =
+        [](const vr::render_graph::ResourceHandle color_,
+           const vr::render_graph::ResourceHandle depth_,
+           const vr::render_graph::AttachmentLoadOp color_load_,
+           const vr::render_graph::AttachmentLoadOp depth_load_) {
+            return vr::render_graph::RasterPassDesc{
+                .color_attachments = {
+                    vr::render_graph::RasterColorAttachmentDesc{
+                        .target = color_,
+                        .load_op = color_load_,
+                        .store_op = vr::render_graph::AttachmentStoreOp::store,
+                    },
+                },
+                .has_depth_attachment = true,
+                .depth_attachment = vr::render_graph::RasterDepthAttachmentDesc{
+                    .target = depth_,
+                    .load_op = depth_load_,
+                    .store_op = vr::render_graph::AttachmentStoreOp::store,
+                    .stencil_load_op = vr::render_graph::AttachmentLoadOp::dont_care,
+                    .stencil_store_op = vr::render_graph::AttachmentStoreOp::dont_care,
+                    .read_only = false,
+                },
+            };
+        };
+    builder.SetRasterPassDesc(
+        opaque,
+        make_raster_pass_desc(scene_color,
+                              scene_depth,
+                              vr::render_graph::AttachmentLoadOp::load,
+                              vr::render_graph::AttachmentLoadOp::load));
+    builder.SetRasterPassDesc(
+        transparent,
+        make_raster_pass_desc(scene_color,
+                              scene_depth,
+                              vr::render_graph::AttachmentLoadOp::load,
+                              vr::render_graph::AttachmentLoadOp::load));
+
+    std::vector<std::uint32_t> executed_passes{};
+    builder.SetExecuteCallback(opaque, [&](vr::render_graph::GraphCommandContext& context_) {
+        executed_passes.push_back(context_.CurrentPass().index);
+        VR_CHECK(context_.CurrentPass().index == opaque.index);
+    });
+    builder.SetExecuteCallback(transparent, [&](vr::render_graph::GraphCommandContext& context_) {
+        executed_passes.push_back(context_.CurrentPass().index);
+        VR_CHECK(context_.CurrentPass().index == transparent.index);
+    });
+
+    auto compiled = builder.Compile();
+    VR_REQUIRE(compiled.NativePasses().groups.size() == 1U);
+    VR_CHECK(compiled.NativePasses().groups[0].first_pass_order == 0U);
+    VR_CHECK(compiled.NativePasses().groups[0].last_pass_order == 1U);
+    VR_CHECK(compiled.NativePasses().summary.fused_raster_pass_count == 1U);
+    VR_CHECK(compiled.NativePasses().summary.load_inference_count == 2U);
+    VR_CHECK(compiled.NativePasses().summary.store_elision_count == 1U);
+    VR_REQUIRE(compiled.NativePasses().groups[0].attachments.color_attachments.size() == 1U);
+    VR_CHECK(compiled.NativePasses().groups[0].attachments.color_attachments[0].effective_load_op ==
+             vr::render_graph::AttachmentLoadOp::dont_care);
+    VR_REQUIRE(compiled.NativePasses().groups[0].attachments.has_depth_attachment);
+    VR_CHECK(compiled.NativePasses().groups[0].attachments.depth_attachment.effective_load_op ==
+             vr::render_graph::AttachmentLoadOp::dont_care);
+    VR_CHECK(compiled.NativePasses().groups[0].attachments.depth_attachment.effective_store_op ==
+             vr::render_graph::AttachmentStoreOp::dont_care);
+
+    vr::QueueFamilyIndices queue_families{};
+    queue_families.graphics = 2U;
+    const auto lowered = vr::render_graph::LowerToVulkanBarrierPlan(compiled, queue_families);
+
+    vr::render_graph::VulkanResourceTable table{};
+    table.BeginFrame(host.Context(), host.RenderTarget(), 0U, 0U);
+    table.RegisterImportedTexture(present_target, imported_present);
+    table.Resolve(host.Context(), host.GpuMemory(), host.RenderTarget(), compiled, 0U, 0U);
+    const auto command_ready = vr::render_graph::BuildCommandReadyVulkanBarrierPlan(
+        lowered,
+        table,
+        host.RenderTarget());
+
+    const auto lowered_transparent_batch = std::find_if(
+        lowered.barrier_batches.begin(),
+        lowered.barrier_batches.end(),
+        [&](const vr::render_graph::VulkanBarrierBatch& batch_) {
+            return batch_.pass.index == transparent.index;
+        });
+    VR_CHECK(lowered_transparent_batch == lowered.barrier_batches.end());
+
+    const auto command_transparent_batch = std::find_if(
+        command_ready.command_batches.begin(),
+        command_ready.command_batches.end(),
+        [&](const vr::render_graph::VulkanCommandBarrierBatch& batch_) {
+            return batch_.pass.index == transparent.index;
+        });
+    VR_CHECK(command_transparent_batch == command_ready.command_batches.end());
+
+    const VkCommandBuffer command_buffer = host.Context().BeginSingleTimeCommands();
+    auto graph_context = vr::render_graph::GraphCommandContext{
+        host.Context(),
+        0U,
+        command_buffer,
+        compiled,
+        table,
+        host.RenderTarget(),
+        nullptr,
+        lowered,
+        command_ready,
+    };
+    const auto rendering_info =
+        graph_context.BuildRenderingInfo(compiled.NativePasses().groups[0]);
+    VR_CHECK(rendering_info.color_attachments[0].loadOp ==
+             VK_ATTACHMENT_LOAD_OP_DONT_CARE);
+    VR_CHECK(rendering_info.color_attachments[0].storeOp ==
+             VK_ATTACHMENT_STORE_OP_STORE);
+    VR_CHECK(rendering_info.depth_attachment.loadOp ==
+             VK_ATTACHMENT_LOAD_OP_DONT_CARE);
+    VR_CHECK(rendering_info.depth_attachment.storeOp ==
+             VK_ATTACHMENT_STORE_OP_DONT_CARE);
+    const auto stats = vr::render_graph::RenderGraphExecutor::Record(graph_context);
+    host.Context().EndSingleTimeCommands(command_buffer);
+
+    VR_REQUIRE(executed_passes.size() == 2U);
+    VR_CHECK(executed_passes[0] == opaque.index);
+    VR_CHECK(executed_passes[1] == transparent.index);
+    VR_CHECK(graph_context.RenderingScopeCount() == 1U);
+    VR_CHECK(stats.pass_count == 2U);
+    VR_CHECK(stats.rendering_scope_count == 1U);
+    VR_CHECK(stats.command_batch_count == 2U);
+    VR_CHECK(stats.queue_transfer_batch_count == 0U);
+
+    table.Shutdown(host.Context(), host.RenderTarget(), 0U, 0U);
+}
+
 VR_TEST_CASE(RenderGraphExecutor_records_minimal_graph_barrier_batches,
              "integration;render_graph;executor;vulkan") {
     Host host{};
@@ -1864,8 +2096,10 @@ VR_TEST_CASE(RenderGraphExecutor_records_minimal_graph_barrier_batches,
 VR_TEST_CASE(RenderGraphRuntimeService_builds_bloom_chain_from_scene_recorder_3d_in_pre_record,
              "integration;render_graph;runtime;postprocess;vulkan") {
     Host host{};
+    auto create_info = MakeMinimalRenderTargetRuntimeCreateInfo();
+    create_info.platform.device.request_dynamic_rendering_local_read = true;
     try {
-        host.Initialize(MakeMinimalRenderTargetRuntimeCreateInfo());
+        host.Initialize(create_info);
     } catch (const std::exception& exception_) {
         if (IsEnvironmentSkipError(exception_.what())) {
             VR_SKIP(exception_.what());
@@ -1956,14 +2190,66 @@ VR_TEST_CASE(RenderGraphRuntimeService_builds_bloom_chain_from_scene_recorder_3d
     VR_CHECK(compiled->HasExecutablePasses());
     VR_CHECK(compiled->TransientAllocations().timeline.saved_bytes > 0U);
     VR_CHECK(compiled->TransientAllocations().timeline.page_count > 0U);
+    const std::string compiled_debug = compiled->BuildDebugString();
+    const std::string compiled_json = compiled->BuildJson();
+    const auto& local_read_caps =
+        host.Context().DynamicRenderingLocalReadCapsInfo();
+    VR_CHECK(local_read_caps.requested);
 
     const auto& diagnostics = service.LastDiagnostics();
     VR_CHECK(diagnostics.available);
     VR_CHECK(diagnostics.frame_compiled);
     VR_CHECK(diagnostics.compiled_pass_count >= 1U);
+    VR_CHECK(diagnostics.logical_raster_pass_count ==
+             compiled->NativePasses().summary.logical_raster_pass_count);
+    VR_CHECK(diagnostics.native_pass_group_count ==
+             compiled->NativePasses().summary.native_pass_group_count);
+    VR_CHECK(diagnostics.fused_raster_pass_count ==
+             compiled->NativePasses().summary.fused_raster_pass_count);
+    VR_CHECK(diagnostics.store_elision_count ==
+             compiled->NativePasses().summary.store_elision_count);
+    VR_CHECK(diagnostics.load_inference_count ==
+             compiled->NativePasses().summary.load_inference_count);
+    VR_CHECK(diagnostics.effective_clear_attachment_count ==
+             compiled->NativePasses().summary.clear_attachment_count);
+    VR_CHECK(diagnostics.local_read_candidate_count ==
+             compiled->NativePasses().summary.local_read_candidate_count);
+    VR_CHECK(diagnostics.dynamic_rendering_local_read_supported ==
+             compiled->NativePasses().local_read.supported);
+    VR_CHECK(diagnostics.dynamic_rendering_local_read_requested ==
+             compiled->NativePasses().local_read.requested);
+    VR_CHECK(diagnostics.dynamic_rendering_local_read_enabled ==
+             compiled->NativePasses().local_read.device_enabled);
+    VR_CHECK(diagnostics.dynamic_rendering_local_read_supported ==
+             local_read_caps.supported);
+    VR_CHECK(compiled->NativePasses().local_read.requested ==
+             local_read_caps.requested);
+    VR_CHECK(diagnostics.dynamic_rendering_local_read_requested ==
+             local_read_caps.requested);
+    VR_CHECK(diagnostics.dynamic_rendering_local_read_status ==
+             std::string(vr::render_graph::NativePassLocalReadStatusName(
+                 compiled->NativePasses().local_read.status)));
+    VR_CHECK(diagnostics.dynamic_rendering_local_read_reason ==
+             std::string(vr::render_graph::NativePassLocalReadReasonName(
+                 compiled->NativePasses().local_read.reason)));
     VR_CHECK(diagnostics.transient_saved_bytes == compiled->TransientAllocations().timeline.saved_bytes);
     VR_CHECK(diagnostics.transient_page_count == compiled->TransientAllocations().timeline.page_count);
     VR_CHECK(diagnostics.lazy_memory_requested_count > 0U);
+    VR_CHECK(diagnostics.logical_raster_pass_count >=
+             diagnostics.native_pass_group_count);
+    VR_CHECK(compiled_debug.find("native_pass_store_elisions=") !=
+             std::string::npos);
+    VR_CHECK(compiled_debug.find("native_pass_effective_clears=") !=
+             std::string::npos);
+    VR_CHECK(compiled_debug.find("native_pass_local_read requested=1") !=
+             std::string::npos);
+    VR_CHECK(compiled_json.find("\"nativePassPlan\"") != std::string::npos);
+    VR_CHECK(compiled_json.find("\"localRead\"") != std::string::npos);
+    VR_CHECK(compiled_json.find("\"requested\": true") != std::string::npos);
+    VR_CHECK(compiled_json.find("\"effectiveLoadOp\":") != std::string::npos);
+    VR_CHECK(compiled_json.find("\"effectiveStoreOp\":") != std::string::npos);
+    VR_CHECK(compiled_json.find("\"loadReason\":") != std::string::npos);
+    VR_CHECK(compiled_json.find("\"storeReason\":") != std::string::npos);
     VR_CHECK(std::any_of(diagnostics.lazy_memory_resources.begin(),
                          diagnostics.lazy_memory_resources.end(),
                          [](const vr::runtime::RenderGraphLazyMemoryResourceDiagnostics& resource_) {

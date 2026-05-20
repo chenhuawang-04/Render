@@ -47,6 +47,9 @@ public:
     [[nodiscard]] CompiledRenderGraph Compile() const;
 
     void AddDependency(PassHandle pass_, PassHandle dependency_);
+    void SetPassCompileHints(PassHandle pass_, PassCompileHints compile_hints_);
+    void SetNativePassPlannerConfig(NativePassPlannerConfig planner_config_) noexcept;
+    [[nodiscard]] const NativePassPlannerConfig& NativePassPlannerConfigInfo() const noexcept;
     [[nodiscard]] std::uint32_t RegisterExternalBufferBindingResolver(
         ExternalBufferBindingResolver resolver_);
     void AddPassDescriptorBinding(PassHandle pass_,
@@ -107,6 +110,7 @@ private:
         std::string debug_name{};
         bool side_effect = false;
         QueueClass queue = QueueClass::graphics;
+        PassCompileHints compile_hints{};
         std::optional<RasterPassDesc> raster_pass{};
         PassExecutionThunk execute{};
         std::vector<PassHandle> explicit_dependencies{};
@@ -129,6 +133,7 @@ private:
     std::vector<ResourceNode> resources{};
     std::vector<PassNode> passes{};
     std::vector<ExternalBufferBindingResolver> external_buffer_binding_resolvers{};
+    NativePassPlannerConfig native_pass_planner_config{};
 };
 
 } // namespace vr::render_graph

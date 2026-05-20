@@ -2,6 +2,7 @@
 
 #include "vr/render_graph/alias_allocator.hpp"
 #include "vr/render_graph/barrier_plan.hpp"
+#include "vr/render_graph/native_pass_plan.hpp"
 #include "vr/render_graph/render_graph_types.hpp"
 
 #include <functional>
@@ -21,6 +22,7 @@ struct CompiledPass final {
     bool side_effect = false;
     bool executable = false;
     QueueClass queue = QueueClass::graphics;
+    PassCompileHints compile_hints{};
     std::optional<RasterPassDesc> raster_pass{};
     PassExecutionThunk execute{};
     std::vector<PassHandle> dependencies{};
@@ -81,6 +83,10 @@ public:
         return descriptor_plan;
     }
 
+    [[nodiscard]] const NativePassPlan& NativePasses() const noexcept {
+        return native_pass_plan;
+    }
+
     [[nodiscard]] const ExternalBufferBindingResolver* FindExternalBufferBindingResolver(
         const std::uint32_t resolver_id_) const noexcept {
         if (resolver_id_ == 0U) {
@@ -125,6 +131,7 @@ private:
     TransientAllocationPlan transient_allocation_plan{};
     BarrierPlan barrier_plan{};
     DescriptorBindingPlan descriptor_plan{};
+    NativePassPlan native_pass_plan{};
     std::vector<ExternalBufferBindingResolver> external_buffer_binding_resolvers{};
 };
 

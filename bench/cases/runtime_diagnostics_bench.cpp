@@ -278,6 +278,30 @@ using Runtime = vr::render::RenderRuntimeHost<vr::platform::ActiveBackendTag, 2U
     return diagnostics;
 }
 
+[[nodiscard]] vr::runtime::RenderGraphRuntimeDiagnostics MakeFusedNativePassDiagnostics() {
+    vr::runtime::RenderGraphRuntimeDiagnostics diagnostics{};
+    diagnostics.available = true;
+    diagnostics.frame_compiled = true;
+    diagnostics.dynamic_rendering_local_read_supported = true;
+    diagnostics.dynamic_rendering_local_read_requested = true;
+    diagnostics.dynamic_rendering_local_read_enabled = false;
+    diagnostics.compiled_pass_count = 6U;
+    diagnostics.executable_pass_count = 6U;
+    diagnostics.logical_raster_pass_count = 5U;
+    diagnostics.native_pass_group_count = 4U;
+    diagnostics.fused_raster_pass_count = 1U;
+    diagnostics.recorded_pass_count = 6U;
+    diagnostics.recorded_rendering_scope_count = 4U;
+    diagnostics.store_elision_count = 1U;
+    diagnostics.load_inference_count = 2U;
+    diagnostics.effective_clear_attachment_count = 2U;
+    diagnostics.local_read_candidate_count = 1U;
+    diagnostics.dynamic_rendering_local_read_status = "disabled";
+    diagnostics.dynamic_rendering_local_read_reason =
+        "device_feature_not_enabled";
+    return diagnostics;
+}
+
 void RunQueueTimelineConsumerBenchmark(
     vr::bench::BenchmarkContext& bench_context_,
     const vr::runtime::RenderGraphRuntimeDiagnostics& diagnostics_,
@@ -315,6 +339,50 @@ void RunQueueTimelineConsumerBenchmark(
 
     bench_context_.AddItems(iterations);
     bench_context_.AddBytes(bytes_processed);
+    vr::bench::BenchmarkContext::DoNotOptimize(checksum);
+    vr::bench::BenchmarkContext::ClobberMemory();
+}
+
+void RunNativePassDiagnosticsConsumerBenchmark(
+    vr::bench::BenchmarkContext& bench_context_,
+    const vr::runtime::RenderGraphRuntimeDiagnostics& diagnostics_) {
+    std::uint64_t checksum = 0U;
+    const std::uint64_t iterations = bench_context_.Iterations();
+    for (std::uint64_t i = 0U; i < iterations; ++i) {
+        if (!diagnostics_.available ||
+            !diagnostics_.frame_compiled ||
+            diagnostics_.native_pass_group_count >= diagnostics_.logical_raster_pass_count ||
+            diagnostics_.recorded_rendering_scope_count >=
+                diagnostics_.logical_raster_pass_count ||
+            diagnostics_.fused_raster_pass_count == 0U ||
+            diagnostics_.store_elision_count == 0U ||
+            diagnostics_.local_read_candidate_count == 0U ||
+            diagnostics_.dynamic_rendering_local_read_status.empty() ||
+            diagnostics_.dynamic_rendering_local_read_reason.empty()) {
+            throw std::runtime_error(
+                "RenderGraph native-pass diagnostics benchmark validation failed");
+        }
+
+        checksum += diagnostics_.compiled_pass_count;
+        checksum += diagnostics_.logical_raster_pass_count;
+        checksum += diagnostics_.native_pass_group_count;
+        checksum += diagnostics_.fused_raster_pass_count;
+        checksum += diagnostics_.recorded_rendering_scope_count;
+        checksum += diagnostics_.store_elision_count;
+        checksum += diagnostics_.load_inference_count;
+        checksum += diagnostics_.effective_clear_attachment_count;
+        checksum += diagnostics_.local_read_candidate_count;
+        checksum += diagnostics_.dynamic_rendering_local_read_supported ? 1U : 0U;
+        checksum += diagnostics_.dynamic_rendering_local_read_requested ? 1U : 0U;
+        checksum += diagnostics_.dynamic_rendering_local_read_enabled ? 1U : 0U;
+        checksum += static_cast<std::uint64_t>(
+            diagnostics_.dynamic_rendering_local_read_status.size() +
+            diagnostics_.dynamic_rendering_local_read_reason.size());
+        vr::bench::BenchmarkContext::DoNotOptimize(checksum);
+    }
+
+    bench_context_.AddItems(iterations);
+    bench_context_.AddBytes(iterations * sizeof(vr::runtime::RenderGraphRuntimeDiagnostics));
     vr::bench::BenchmarkContext::DoNotOptimize(checksum);
     vr::bench::BenchmarkContext::ClobberMemory();
 }
@@ -423,6 +491,13 @@ VR_BENCHMARK_CASE(RenderGraphQueueTimelineConsumer_multi_graphics_compute_enable
         0U,
         1U,
         2U);
+}
+
+VR_BENCHMARK_CASE(RenderGraphNativePassDiagnosticsConsumer_fused_scene,
+                  "core;runtime;cpu;render_graph;native_pass;diagnostics;phase11") {
+    RunNativePassDiagnosticsConsumerBenchmark(
+        bench_context_,
+        MakeFusedNativePassDiagnostics());
 }
 
 } // namespace

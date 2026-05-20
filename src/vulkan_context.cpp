@@ -148,6 +148,16 @@ void PushUniqueCString(McVector<const char*>& values_, const char* candidate_) {
     return true;
 }
 
+[[nodiscard]] bool HasDeviceExtension(const PropertiesVector& available_extensions_,
+                                      const char* extension_name_) {
+    for (const auto& available_ext : available_extensions_) {
+        if (std::strcmp(extension_name_, available_ext.extensionName) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 [[nodiscard]] bool IsEnabledEnvFlag(const char* env_name_) noexcept {
     if (env_name_ == nullptr || env_name_[0] == '\0') {
         return false;
@@ -493,6 +503,40 @@ void MergeSupportedOptionalVulkan13Features(
             enabled[i] = VK_TRUE;
         }
     }
+}
+
+[[nodiscard]] DynamicRenderingLocalReadCaps QueryDynamicRenderingLocalReadCaps(
+    VkInstance instance_,
+    VkPhysicalDevice physical_device_) {
+    DynamicRenderingLocalReadCaps caps{};
+    if (instance_ == VK_NULL_HANDLE || physical_device_ == VK_NULL_HANDLE) {
+        return caps;
+    }
+
+    const auto available_extensions = EnumerateDeviceExtensions(physical_device_);
+    caps.extension_supported = HasDeviceExtension(
+        available_extensions,
+        VK_KHR_DYNAMIC_RENDERING_LOCAL_READ_EXTENSION_NAME);
+
+    const auto get_features2_fn =
+        reinterpret_cast<PFN_vkGetPhysicalDeviceFeatures2>(
+            vkGetInstanceProcAddr(instance_, "vkGetPhysicalDeviceFeatures2"));
+    if (get_features2_fn != nullptr && caps.extension_supported) {
+        VkPhysicalDeviceFeatures2 supported_features2{};
+        supported_features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+
+        VkPhysicalDeviceDynamicRenderingLocalReadFeaturesKHR local_read_features{};
+        local_read_features.sType =
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_LOCAL_READ_FEATURES_KHR;
+
+        supported_features2.pNext = &local_read_features;
+        get_features2_fn(physical_device_, &supported_features2);
+        caps.feature_supported =
+            local_read_features.dynamicRenderingLocalRead == VK_TRUE;
+    }
+
+    caps.supported = caps.extension_supported && caps.feature_supported;
+    return caps;
 }
 
 [[nodiscard]] uint32_t MinNonZero(uint32_t lhs_, uint32_t rhs_) noexcept {
@@ -851,6 +895,8 @@ VulkanContext& VulkanContext::operator=(VulkanContext&& other_) noexcept {
     enabled_vulkan12_features = std::exchange(other_.enabled_vulkan12_features, {});
     enabled_vulkan13_features = std::exchange(other_.enabled_vulkan13_features, {});
     descriptor_indexing_caps = std::exchange(other_.descriptor_indexing_caps, {});
+    dynamic_rendering_local_read_caps =
+        std::exchange(other_.dynamic_rendering_local_read_caps, {});
 
     validation_enabled = std::exchange(other_.validation_enabled, false);
     enabled_validation_layers = std::move(other_.enabled_validation_layers);
@@ -917,6 +963,7 @@ void VulkanContext::ShutdownDevice() {
     enabled_vulkan13_features = {};
     enabled_vulkan13_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
     descriptor_indexing_caps = {};
+    dynamic_rendering_local_read_caps = {};
 }
 
 void VulkanContext::Shutdown() {
@@ -1006,6 +1053,10 @@ const VkPhysicalDeviceVulkan13Features& VulkanContext::EnabledVulkan13Features()
 
 const DescriptorIndexingCaps& VulkanContext::DescriptorIndexingCapsInfo() const noexcept {
     return descriptor_indexing_caps;
+}
+
+const DynamicRenderingLocalReadCaps& VulkanContext::DynamicRenderingLocalReadCapsInfo() const noexcept {
+    return dynamic_rendering_local_read_caps;
 }
 
 DescriptorSetLayoutSupportInfo VulkanContext::QueryDescriptorSetLayoutSupport(
@@ -1202,6 +1253,8 @@ void VulkanContext::PickPhysicalDevice(const VulkanDeviceCreateInfo& create_info
     diagnostics_stream << "  surface_required=" << (surface != VK_NULL_HANDLE ? "true" : "false") << '\n';
     diagnostics_stream << "  require_dedicated_transfer_queue="
                        << (create_info_.require_dedicated_transfer_queue ? "true" : "false") << '\n';
+    diagnostics_stream << "  request_dynamic_rendering_local_read="
+                       << (create_info_.request_dynamic_rendering_local_read ? "true" : "false") << '\n';
     diagnostics_stream << "  required_device_extensions=";
     if (enabled_device_extensions.empty()) {
         diagnostics_stream << "<none>";
@@ -1424,6 +1477,10 @@ void VulkanContext::PickPhysicalDevice(const VulkanDeviceCreateInfo& create_info
     physical_device = best_device;
     queue_family_indices = best_indices;
     descriptor_indexing_caps = QueryDescriptorIndexingCaps(instance, physical_device);
+    dynamic_rendering_local_read_caps =
+        QueryDynamicRenderingLocalReadCaps(instance, physical_device);
+    dynamic_rendering_local_read_caps.requested =
+        create_info_.request_dynamic_rendering_local_read;
 
     if (DeviceSelectionVerboseLogEnabled()) {
         std::cerr << diagnostics_stream.str();
@@ -1433,6 +1490,8 @@ void VulkanContext::PickPhysicalDevice(const VulkanDeviceCreateInfo& create_info
                   << ", present_queue=" << queue_family_to_string(best_indices.present)
                   << ", compute_queue=" << queue_family_to_string(best_indices.compute)
                   << ", transfer_queue=" << queue_family_to_string(best_indices.transfer)
+                  << ", local_read_supported="
+                  << (dynamic_rendering_local_read_caps.supported ? "true" : "false")
                   << ")\n";
     }
 }
@@ -1500,6 +1559,11 @@ void VulkanContext::CreateLogicalDevice(const VulkanDeviceCreateInfo& create_inf
     optional_vulkan13_features_local.pNext = nullptr;
     NormalizeVulkan13FeatureBits(optional_vulkan13_features_local);
 
+    VkPhysicalDeviceDynamicRenderingLocalReadFeaturesKHR enabled_local_read_features_local{};
+    enabled_local_read_features_local.sType =
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_LOCAL_READ_FEATURES_KHR;
+    enabled_local_read_features_local.pNext = nullptr;
+
     const bool needs_required_vulkan12_features =
         HasRequiredVulkan12Features(enabled_vulkan12_features_local);
     const bool needs_required_vulkan13_features =
@@ -1548,6 +1612,15 @@ void VulkanContext::CreateLogicalDevice(const VulkanDeviceCreateInfo& create_inf
                                                supported_vulkan13_features);
     }
 
+    const bool wants_dynamic_rendering_local_read =
+        create_info_.request_dynamic_rendering_local_read &&
+        dynamic_rendering_local_read_caps.supported;
+    if (wants_dynamic_rendering_local_read) {
+        PushUniqueCString(enabled_device_extensions,
+                          VK_KHR_DYNAMIC_RENDERING_LOCAL_READ_EXTENSION_NAME);
+        enabled_local_read_features_local.dynamicRenderingLocalRead = VK_TRUE;
+    }
+
     VkBaseOutStructure* feature_chain_head = nullptr;
     VkBaseOutStructure** feature_chain_next = &feature_chain_head;
     auto append_feature_chain = [&](VkBaseOutStructure* node_) {
@@ -1566,6 +1639,10 @@ void VulkanContext::CreateLogicalDevice(const VulkanDeviceCreateInfo& create_inf
     if (ShouldAppendVulkan13Features(enabled_vulkan13_features_local,
                                      create_info_.feature_chain_policy)) {
         append_feature_chain(reinterpret_cast<VkBaseOutStructure*>(&enabled_vulkan13_features_local));
+    }
+    if (enabled_local_read_features_local.dynamicRenderingLocalRead == VK_TRUE) {
+        append_feature_chain(
+            reinterpret_cast<VkBaseOutStructure*>(&enabled_local_read_features_local));
     }
     if (create_info_.required_features_pnext != nullptr) {
         *feature_chain_next = reinterpret_cast<VkBaseOutStructure*>(
@@ -1625,6 +1702,16 @@ void VulkanContext::CreateLogicalDevice(const VulkanDeviceCreateInfo& create_inf
     descriptor_indexing_caps.sampler_update_after_bind =
         descriptor_indexing_caps.max_update_after_bind_samplers > 0U &&
         descriptor_indexing_caps.enabled;
+    dynamic_rendering_local_read_caps.requested =
+        create_info_.request_dynamic_rendering_local_read;
+    dynamic_rendering_local_read_caps.extension_enabled =
+        wants_dynamic_rendering_local_read;
+    dynamic_rendering_local_read_caps.feature_enabled =
+        wants_dynamic_rendering_local_read &&
+        enabled_local_read_features_local.dynamicRenderingLocalRead == VK_TRUE;
+    dynamic_rendering_local_read_caps.enabled =
+        dynamic_rendering_local_read_caps.extension_enabled &&
+        dynamic_rendering_local_read_caps.feature_enabled;
 }
 
 void VulkanContext::CreateDefaultCommandPools() {

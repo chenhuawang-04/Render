@@ -3,6 +3,7 @@
 #include "vr/render_graph/compiled_render_graph.hpp"
 
 #include <algorithm>
+#include <optional>
 #include <sstream>
 
 namespace vr::render_graph {
@@ -17,6 +18,15 @@ struct LastAccessState final {
 };
 
 using BoundaryAccessState = LastAccessState;
+
+struct AttachmentRole final {
+    enum class Kind : std::uint8_t {
+        color = 0U,
+        depth = 1U,
+    };
+
+    Kind kind = Kind::color;
+};
 
 [[nodiscard]] const char* QueueClassToString(const QueueClass queue_) noexcept {
     switch (queue_) {
@@ -128,6 +138,47 @@ using BoundaryAccessState = LastAccessState;
     return access_ == AccessKind::host_read || access_ == AccessKind::host_write;
 }
 
+[[nodiscard]] bool IsColorAttachmentAccess(const AccessKind access_) noexcept {
+    return access_ == AccessKind::color_attachment_read ||
+           access_ == AccessKind::color_attachment_write;
+}
+
+[[nodiscard]] bool IsDepthAttachmentAccess(const AccessKind access_) noexcept {
+    return access_ == AccessKind::depth_stencil_read ||
+           access_ == AccessKind::depth_stencil_write ||
+           access_ == AccessKind::depth_stencil_read_write;
+}
+
+[[nodiscard]] std::optional<AttachmentRole> FindNativePassAttachmentRole(
+    const NativePassAttachmentPlan& attachment_plan_,
+    const std::uint32_t resource_index_) {
+    for (const auto& color_attachment_ : attachment_plan_.color_attachments) {
+        if (color_attachment_.target.index == resource_index_) {
+            return AttachmentRole{
+                .kind = AttachmentRole::Kind::color,
+            };
+        }
+    }
+    if (attachment_plan_.has_depth_attachment &&
+        attachment_plan_.depth_attachment.target.index == resource_index_) {
+        return AttachmentRole{
+            .kind = AttachmentRole::Kind::depth,
+        };
+    }
+    return std::nullopt;
+}
+
+[[nodiscard]] bool IsAttachmentCompatibleAccess(const AttachmentRole& role_,
+                                                const AccessKind access_) noexcept {
+    switch (role_.kind) {
+    case AttachmentRole::Kind::color:
+        return IsColorAttachmentAccess(access_);
+    case AttachmentRole::Kind::depth:
+        return IsDepthAttachmentAccess(access_);
+    }
+    return false;
+}
+
 [[nodiscard]] bool IntervalsOverlap(const std::uint64_t lhs_begin_,
                                     const std::uint64_t lhs_end_,
                                     const std::uint64_t rhs_begin_,
@@ -194,6 +245,48 @@ using BoundaryAccessState = LastAccessState;
            IsWriteAccess(current_.access) ||
            IsHostAccess(previous_.access.access) ||
            IsHostAccess(current_.access);
+}
+
+[[nodiscard]] bool IsNativePassInternalizedBarrier(
+    const CompiledRenderGraph& compiled_graph_,
+    const ResourceVersionHandle resource_,
+    const ResourceKind kind_,
+    const AccessKind before_,
+    const AccessKind after_,
+    const QueueClass src_queue_,
+    const QueueClass dst_queue_,
+    const std::uint32_t src_pass_order_,
+    const std::uint32_t dst_pass_order_,
+    const bool queue_transfer_,
+    const bool host_boundary_,
+    const bool aliasing_) {
+    if (kind_ != ResourceKind::texture ||
+        !IsValidResourceVersionHandle(resource_) ||
+        queue_transfer_ ||
+        host_boundary_ ||
+        aliasing_ ||
+        src_queue_ != dst_queue_ ||
+        src_pass_order_ == invalid_render_graph_index ||
+        dst_pass_order_ == invalid_render_graph_index) {
+        return false;
+    }
+
+    const auto* src_group =
+        compiled_graph_.NativePasses().FindGroupByPassOrder(src_pass_order_);
+    const auto* dst_group =
+        compiled_graph_.NativePasses().FindGroupByPassOrder(dst_pass_order_);
+    if (src_group == nullptr || dst_group == nullptr || src_group != dst_group) {
+        return false;
+    }
+
+    const auto role_ = FindNativePassAttachmentRole(src_group->attachments,
+                                                    resource_.resource_index);
+    if (!role_.has_value()) {
+        return false;
+    }
+
+    return IsAttachmentCompatibleAccess(*role_, before_) &&
+           IsAttachmentCompatibleAccess(*role_, after_);
 }
 
 [[nodiscard]] ResourceKind ResolveResourceKind(const CompiledRenderGraph& compiled_graph_,
@@ -633,24 +726,42 @@ BarrierPlan BuildBarrierPlan(const CompiledRenderGraph& compiled_graph_,
                     .uav_ordering = false,
                 });
             } else if (RequiresBarrier(previous_, access_, pass_.queue, kind)) {
-                batch.barriers.push_back(LogicalBarrier{
-                    .resource = access_.resource,
-                    .kind = kind,
-                    .before = previous_.access.access,
-                    .after = access_.access,
-                    .src_queue = previous_.queue,
-                    .dst_queue = pass_.queue,
-                    .subresource_range = access_.subresource_range,
-                    .buffer_range = access_.buffer_range,
-                    .src_pass = previous_.pass,
-                    .dst_pass = pass_.handle,
-                    .src_pass_order = previous_.pass_order,
-                    .dst_pass_order = pass_order,
-                    .queue_transfer = previous_.queue != pass_.queue,
-                    .host_boundary = IsHostAccess(previous_.access.access) || IsHostAccess(access_.access),
-                    .aliasing = false,
-                    .uav_ordering = HasStorageWrite(previous_.access.access) && IsStorageAccess(access_.access),
-                });
+                const bool queue_transfer = previous_.queue != pass_.queue;
+                const bool host_boundary =
+                    IsHostAccess(previous_.access.access) || IsHostAccess(access_.access);
+                const bool uav_ordering =
+                    HasStorageWrite(previous_.access.access) && IsStorageAccess(access_.access);
+                if (!IsNativePassInternalizedBarrier(compiled_graph_,
+                                                     access_.resource,
+                                                     kind,
+                                                     previous_.access.access,
+                                                     access_.access,
+                                                     previous_.queue,
+                                                     pass_.queue,
+                                                     previous_.pass_order,
+                                                     pass_order,
+                                                     queue_transfer,
+                                                     host_boundary,
+                                                     false)) {
+                    batch.barriers.push_back(LogicalBarrier{
+                        .resource = access_.resource,
+                        .kind = kind,
+                        .before = previous_.access.access,
+                        .after = access_.access,
+                        .src_queue = previous_.queue,
+                        .dst_queue = pass_.queue,
+                        .subresource_range = access_.subresource_range,
+                        .buffer_range = access_.buffer_range,
+                        .src_pass = previous_.pass,
+                        .dst_pass = pass_.handle,
+                        .src_pass_order = previous_.pass_order,
+                        .dst_pass_order = pass_order,
+                        .queue_transfer = queue_transfer,
+                        .host_boundary = host_boundary,
+                        .aliasing = false,
+                        .uav_ordering = uav_ordering,
+                    });
+                }
             }
 
             previous_ = LastAccessState{

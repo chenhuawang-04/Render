@@ -209,6 +209,18 @@ public:
         }
 
         if (builder.PassCount() != 0U) {
+            const auto& local_read_caps =
+                vr::runtime::detail::ResolveDevice(context_)
+                    .DynamicRenderingLocalReadCapsInfo();
+            builder.SetNativePassPlannerConfig(
+                render_graph::NativePassPlannerConfig{
+                    .request_dynamic_rendering_local_read =
+                        local_read_caps.requested,
+                    .dynamic_rendering_local_read_supported =
+                        local_read_caps.supported,
+                    .dynamic_rendering_local_read_enabled =
+                        local_read_caps.enabled,
+                });
             SetCompiledGraph(builder.Compile());
             ResolvePhysicalResources(context_);
             const auto capabilities = render_graph::InspectQueueExecutionCapabilities(
@@ -1330,6 +1342,7 @@ private:
             [](render_graph::RenderGraphRecordStats& destination_,
                const render_graph::RenderGraphRecordStats& source_) {
                 destination_.pass_count += source_.pass_count;
+                destination_.rendering_scope_count += source_.rendering_scope_count;
                 destination_.command_batch_count += source_.command_batch_count;
                 destination_.memory_barrier_count += source_.memory_barrier_count;
                 destination_.buffer_barrier_count += source_.buffer_barrier_count;
@@ -1495,6 +1508,13 @@ private:
         diagnostics.multi_queue_enabled = queue_execution_policy.multi_queue_enabled;
         diagnostics.graphics_fallback_active = queue_execution_policy.graphics_fallback_active;
         diagnostics.queue_fallback_reason = queue_execution_policy.fallback_reason;
+        const auto& local_read_caps = device_.DynamicRenderingLocalReadCapsInfo();
+        diagnostics.dynamic_rendering_local_read_supported =
+            local_read_caps.supported;
+        diagnostics.dynamic_rendering_local_read_requested =
+            local_read_caps.requested;
+        diagnostics.dynamic_rendering_local_read_enabled =
+            local_read_caps.enabled;
         if (has_compiled_graph) {
             diagnostics.compiled_pass_count =
                 static_cast<std::uint32_t>(compiled_graph.Passes().size());
@@ -1504,6 +1524,32 @@ private:
                               [](const render_graph::CompiledPass& pass_) {
                                   return pass_.executable;
                               }));
+            diagnostics.logical_raster_pass_count =
+                compiled_graph.NativePasses().summary.logical_raster_pass_count;
+            diagnostics.native_pass_group_count =
+                compiled_graph.NativePasses().summary.native_pass_group_count;
+            diagnostics.fused_raster_pass_count =
+                compiled_graph.NativePasses().summary.fused_raster_pass_count;
+            diagnostics.store_elision_count =
+                compiled_graph.NativePasses().summary.store_elision_count;
+            diagnostics.load_inference_count =
+                compiled_graph.NativePasses().summary.load_inference_count;
+            diagnostics.effective_clear_attachment_count =
+                compiled_graph.NativePasses().summary.clear_attachment_count;
+            diagnostics.local_read_candidate_count =
+                compiled_graph.NativePasses().summary.local_read_candidate_count;
+            diagnostics.dynamic_rendering_local_read_requested =
+                compiled_graph.NativePasses().local_read.requested;
+            diagnostics.dynamic_rendering_local_read_supported =
+                compiled_graph.NativePasses().local_read.supported;
+            diagnostics.dynamic_rendering_local_read_enabled =
+                compiled_graph.NativePasses().local_read.device_enabled;
+            diagnostics.dynamic_rendering_local_read_status = std::string(
+                render_graph::NativePassLocalReadStatusName(
+                    compiled_graph.NativePasses().local_read.status));
+            diagnostics.dynamic_rendering_local_read_reason = std::string(
+                render_graph::NativePassLocalReadReasonName(
+                    compiled_graph.NativePasses().local_read.reason));
             const auto& timeline = compiled_graph.TransientAllocations().timeline;
             diagnostics.transient_logical_total_bytes = timeline.logical_total_bytes;
             diagnostics.transient_physical_total_bytes = timeline.physical_total_bytes;
@@ -1511,8 +1557,17 @@ private:
             diagnostics.transient_saved_bytes = timeline.saved_bytes;
             diagnostics.transient_page_count = timeline.page_count;
             diagnostics.alias_barrier_count = timeline.alias_barrier_count;
+        } else {
+            diagnostics.dynamic_rendering_local_read_status = std::string(
+                render_graph::NativePassLocalReadStatusName(
+                    render_graph::NativePassLocalReadStatus::not_applicable));
+            diagnostics.dynamic_rendering_local_read_reason = std::string(
+                render_graph::NativePassLocalReadReasonName(
+                    render_graph::NativePassLocalReadReason::none));
         }
         diagnostics.recorded_pass_count = record_stats.pass_count;
+        diagnostics.recorded_rendering_scope_count =
+            record_stats.rendering_scope_count;
         diagnostics.recorded_command_batch_count = record_stats.command_batch_count;
         diagnostics.recorded_image_barrier_count = record_stats.image_barrier_count;
         diagnostics.recorded_buffer_barrier_count = record_stats.buffer_barrier_count;

@@ -506,6 +506,7 @@ add_library(vulkan_init STATIC
     src/asset/texture_host.cpp
     src/render_graph/alias_allocator.cpp
     src/render_graph/barrier_plan.cpp
+    src/render_graph/native_pass_plan.cpp
     src/render_graph/render_graph_builder.cpp
     src/render_graph/render_graph_executor.cpp
     src/render_graph/vulkan_barrier_plan.cpp

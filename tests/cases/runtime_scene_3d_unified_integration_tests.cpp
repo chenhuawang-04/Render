@@ -977,6 +977,11 @@ VR_TEST_CASE(RuntimeIntegration_unified_scene_3d_bloom_post_stack_smoke,
         bool graph_only_record_active = false;
         bool graph_diagnostics_available = false;
         std::uint32_t max_recorded_pass_count = 0U;
+        std::uint32_t max_logical_raster_pass_count = 0U;
+        std::uint32_t max_native_pass_group_count = 0U;
+        std::uint32_t max_fused_raster_pass_count = 0U;
+        std::uint32_t max_recorded_rendering_scope_count = 0U;
+        std::uint32_t max_store_elision_count = 0U;
         std::uint64_t max_transient_logical_total_bytes = 0U;
         std::uint32_t max_transient_page_count = 0U;
         std::uint64_t max_transient_saved_bytes = 0U;
@@ -1099,6 +1104,21 @@ VR_TEST_CASE(RuntimeIntegration_unified_scene_3d_bloom_post_stack_smoke,
                 graph_diagnostics_available || tick_result.diagnostics.render_graph.available;
             max_recorded_pass_count = std::max(max_recorded_pass_count,
                                                tick_result.diagnostics.render_graph.recorded_pass_count);
+            max_logical_raster_pass_count =
+                std::max(max_logical_raster_pass_count,
+                         tick_result.diagnostics.render_graph.logical_raster_pass_count);
+            max_native_pass_group_count =
+                std::max(max_native_pass_group_count,
+                         tick_result.diagnostics.render_graph.native_pass_group_count);
+            max_fused_raster_pass_count =
+                std::max(max_fused_raster_pass_count,
+                         tick_result.diagnostics.render_graph.fused_raster_pass_count);
+            max_recorded_rendering_scope_count =
+                std::max(max_recorded_rendering_scope_count,
+                         tick_result.diagnostics.render_graph.recorded_rendering_scope_count);
+            max_store_elision_count =
+                std::max(max_store_elision_count,
+                         tick_result.diagnostics.render_graph.store_elision_count);
             max_transient_logical_total_bytes =
                 std::max(max_transient_logical_total_bytes,
                          tick_result.diagnostics.render_graph.transient_logical_total_bytes);
@@ -1183,6 +1203,13 @@ VR_TEST_CASE(RuntimeIntegration_unified_scene_3d_bloom_post_stack_smoke,
         VR_CHECK(graph_only_record_active);
         VR_CHECK(graph_diagnostics_available);
         VR_CHECK(max_recorded_pass_count > 0U);
+        VR_CHECK(max_logical_raster_pass_count > 0U);
+        VR_CHECK(max_native_pass_group_count > 0U);
+        VR_CHECK(max_fused_raster_pass_count > 0U);
+        VR_CHECK(max_native_pass_group_count < max_logical_raster_pass_count);
+        VR_CHECK(max_recorded_rendering_scope_count > 0U);
+        VR_CHECK(max_recorded_rendering_scope_count < max_logical_raster_pass_count);
+        VR_CHECK(max_store_elision_count > 0U);
         VR_CHECK(max_transient_logical_total_bytes > 0U);
         VR_CHECK(max_transient_page_count > 0U);
         VR_CHECK(max_transient_saved_bytes > 0U);

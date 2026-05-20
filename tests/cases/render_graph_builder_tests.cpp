@@ -1544,6 +1544,78 @@ VR_TEST_CASE(SceneRecorder3D_build_render_graph_inserts_transparent_scene_pass_b
     recorder.ClearFramePacket();
 }
 
+VR_TEST_CASE(SceneRecorder3D_build_render_graph_fuses_main_and_transparent_scene_native_pass_group,
+             "unit;core;render_graph;runtime;native_pass") {
+    vr::render::SceneRecorder3D recorder{};
+    recorder.Initialize();
+    vr::surface::SurfaceRenderer3D surface_renderer{};
+    surface_renderer.Initialize();
+    recorder.RegisterTransparentSceneRenderer(surface_renderer,
+                                             vr::render::SceneRenderPassRole::single);
+
+    vr::ecs::Camera<vr::ecs::Dim3> world_camera{};
+    world_camera.style.viewport = {.origin_x = 0.0F, .origin_y = 0.0F, .width = 320.0F, .height = 180.0F};
+    world_camera.runtime.revision = 1U;
+    world_camera.runtime.culling_mask = 0x1U;
+    auto world_view = vr::render::MakeRenderViewFromCamera(
+        world_camera,
+        static_cast<const vr::ecs::Transform<vr::ecs::Dim3>*>(nullptr),
+        vr::render::RenderViewKind::world,
+        0U);
+    auto packet = vr::render::MakeSingleViewScenePacket(world_view, 896U);
+    packet.postprocess_policy = vr::render::RenderPostProcessPolicy::disabled;
+    recorder.SetFramePacket(&packet);
+
+    const auto snapshot = vr::render_graph::MakeFrameSnapshot(packet, 24U);
+    vr::render_graph::RenderGraphBuilder builder{};
+    auto color_chain = vr::render_graph::invalid_resource_version;
+    const auto build_result = vr::render_graph::BuildMinimalFrameGraph(
+        builder,
+        snapshot,
+        [&recorder](vr::render_graph::RenderGraphBuilder& builder_ref_,
+                    const vr::render_graph::FrameSnapshot3D& snapshot_ref_,
+                    vr::render_graph::MinimalFrameGraphBuildResult<vr::ecs::Dim3>& build_result_ref_,
+                    vr::render_graph::ResourceVersionHandle& color_chain_ref_) {
+            recorder.BuildRenderGraph(builder_ref_, snapshot_ref_, build_result_ref_, color_chain_ref_);
+        });
+    const auto compiled = builder.Compile();
+
+    auto find_pass_order = [&compiled](const std::string_view name_) -> std::uint32_t {
+        for (std::uint32_t pass_order = 0U;
+             pass_order < static_cast<std::uint32_t>(compiled.Passes().size());
+             ++pass_order) {
+            if (compiled.Passes()[pass_order].debug_name == name_) {
+                return pass_order;
+            }
+        }
+        return vr::render_graph::invalid_render_graph_index;
+    };
+
+    VR_CHECK(build_result.built);
+    const std::uint32_t main_scene_order = find_pass_order("main_scene_pass");
+    const std::uint32_t transparent_scene_order =
+        find_pass_order("transparent_scene_pass");
+    VR_REQUIRE(main_scene_order != vr::render_graph::invalid_render_graph_index);
+    VR_REQUIRE(transparent_scene_order !=
+               vr::render_graph::invalid_render_graph_index);
+
+    const auto* native_group =
+        compiled.NativePasses().FindGroupByPassOrder(main_scene_order);
+    VR_REQUIRE(native_group != nullptr);
+    VR_CHECK(native_group->first_pass_order == main_scene_order);
+    VR_CHECK(native_group->last_pass_order == transparent_scene_order);
+    VR_REQUIRE(native_group->attachments.has_depth_attachment);
+    VR_CHECK(!native_group->attachments.depth_attachment.read_only);
+    VR_CHECK(native_group->attachments.depth_attachment.effective_store_op ==
+             vr::render_graph::AttachmentStoreOp::dont_care);
+    VR_CHECK(native_group->attachments.depth_attachment.store_elided);
+    VR_CHECK(compiled.NativePasses().summary.fused_raster_pass_count > 0U);
+    VR_CHECK(compiled.NativePasses().summary.native_pass_group_count <
+             compiled.NativePasses().summary.logical_raster_pass_count);
+
+    recorder.ClearFramePacket();
+}
+
 VR_TEST_CASE(SceneRecorder3D_build_render_graph_inserts_bloom_chain_before_present_transition,
              "unit;core;render_graph;runtime") {
     vr::render::SceneRecorder3D recorder{};

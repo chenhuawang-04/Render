@@ -279,25 +279,71 @@ void EmitDependencyInfo(const VkCommandBuffer command_buffer_,
         static_cast<std::uint32_t>(dependency_->image_barriers.size());
 }
 
-[[nodiscard]] std::vector<const VulkanCommandBarrierBatch*> BuildCommandBatchesByPass(
-    const GraphCommandContext& context_) {
-    std::vector<const VulkanCommandBarrierBatch*> command_batches_by_pass(
+[[nodiscard]] std::vector<std::uint32_t> BuildPassOrderByHandleIndex(
+    const CompiledRenderGraph& compiled_graph_) {
+    std::uint32_t max_handle_index = 0U;
+    for (const auto& pass_ : compiled_graph_.Passes()) {
+        max_handle_index = (std::max)(max_handle_index, pass_.handle.index);
+    }
+
+    std::vector<std::uint32_t> pass_order_by_handle_index(
+        static_cast<std::size_t>(max_handle_index) + 1U,
+        invalid_render_graph_index);
+    for (std::uint32_t pass_order = 0U;
+         pass_order < static_cast<std::uint32_t>(compiled_graph_.Passes().size());
+         ++pass_order) {
+        pass_order_by_handle_index[compiled_graph_.Passes()[pass_order].handle.index] = pass_order;
+    }
+    return pass_order_by_handle_index;
+}
+
+[[nodiscard]] std::vector<const VulkanCommandBarrierBatch*> BuildCommandBatchesByPassOrder(
+    const GraphCommandContext& context_,
+    const std::vector<std::uint32_t>& pass_order_by_handle_index_) {
+    std::vector<const VulkanCommandBarrierBatch*> command_batches_by_pass_order(
         context_.Graph().Passes().size(),
         nullptr);
     for (const auto& batch_ : context_.CommandReadyBarriers().command_batches) {
-        if (batch_.pass.index < command_batches_by_pass.size()) {
-            command_batches_by_pass[batch_.pass.index] = &batch_;
+        if (batch_.pass.index >= pass_order_by_handle_index_.size()) {
+            continue;
         }
+        const std::uint32_t pass_order = pass_order_by_handle_index_[batch_.pass.index];
+        if (pass_order == invalid_render_graph_index ||
+            pass_order >= command_batches_by_pass_order.size()) {
+            continue;
+        }
+        command_batches_by_pass_order[pass_order] = &batch_;
     }
-    return command_batches_by_pass;
+    return command_batches_by_pass_order;
 }
 
-void RecordPass(GraphCommandContext& context_,
-                const CompiledPass& pass_,
-                const std::vector<const VulkanCommandBarrierBatch*>& command_batches_by_pass_,
-                RenderGraphRecordStats& stats_) {
-    const auto* command_batch = (pass_.handle.index < command_batches_by_pass_.size())
-        ? command_batches_by_pass_[pass_.handle.index]
+[[nodiscard]] bool CommandBatchTouchesNativePassAttachments(
+    const VulkanCommandBarrierBatch& command_batch_,
+    const NativePassGroup& native_pass_group_) noexcept {
+    const auto touches_resource = [&](const std::uint32_t resource_index_) {
+        for (const auto& color_attachment_ : native_pass_group_.attachments.color_attachments) {
+            if (color_attachment_.target.index == resource_index_) {
+                return true;
+            }
+        }
+        return native_pass_group_.attachments.has_depth_attachment &&
+               native_pass_group_.attachments.depth_attachment.target.index == resource_index_;
+    };
+
+    return std::any_of(command_batch_.barriers.begin(),
+                       command_batch_.barriers.end(),
+                       [&](const LoweredVulkanBarrier& barrier_) {
+                           return touches_resource(barrier_.resource.resource_index);
+                       });
+}
+
+void RecordSinglePass(GraphCommandContext& context_,
+                      const CompiledPass& pass_,
+                      const std::uint32_t pass_order_,
+                      const std::vector<const VulkanCommandBarrierBatch*>& command_batches_by_pass_order_,
+                      RenderGraphRecordStats& stats_) {
+    const auto* command_batch = (pass_order_ < command_batches_by_pass_order_.size())
+        ? command_batches_by_pass_order_[pass_order_]
         : nullptr;
 
     EmitDependencyInfo(context_.CommandBuffer(),
@@ -313,7 +359,14 @@ void RecordPass(GraphCommandContext& context_,
     PrepareDescriptorSetsForPass(context_, pass_);
 
     if (has_raster_pass) {
-        const auto rendering_info = context_.BuildRenderingInfo(*pass_.raster_pass);
+        const NativePassGroup* native_pass_group =
+            context_.Graph().NativePasses().FindGroupByPassOrder(pass_order_);
+        const auto rendering_info =
+            (native_pass_group != nullptr &&
+             native_pass_group->first_pass_order == pass_order_ &&
+             native_pass_group->last_pass_order == pass_order_)
+            ? context_.BuildRenderingInfo(*native_pass_group)
+            : context_.BuildRenderingInfo(*pass_.raster_pass);
         context_.BeginRendering(rendering_info);
     }
 
@@ -328,14 +381,140 @@ void RecordPass(GraphCommandContext& context_,
     stats_.pass_count += 1U;
 }
 
+void RecordNativePassGroup(
+    GraphCommandContext& context_,
+    const NativePassGroup& native_pass_group_,
+    const std::vector<const VulkanCommandBarrierBatch*>& command_batches_by_pass_order_,
+    RenderGraphRecordStats& stats_) {
+    const auto& passes = context_.Graph().Passes();
+    if (native_pass_group_.first_pass_order == invalid_render_graph_index ||
+        native_pass_group_.last_pass_order == invalid_render_graph_index ||
+        native_pass_group_.first_pass_order >= passes.size() ||
+        native_pass_group_.last_pass_order >= passes.size() ||
+        native_pass_group_.first_pass_order > native_pass_group_.last_pass_order) {
+        throw std::runtime_error(
+            "RenderGraphExecutor::Record encountered invalid native pass group range");
+    }
+
+    const auto& first_pass = passes[native_pass_group_.first_pass_order];
+    const auto& last_pass = passes[native_pass_group_.last_pass_order];
+    if (!first_pass.raster_pass.has_value() || !last_pass.raster_pass.has_value()) {
+        throw std::runtime_error(
+            "RenderGraphExecutor::Record encountered native pass group without raster pass metadata");
+    }
+
+    const auto* first_command_batch =
+        (native_pass_group_.first_pass_order < command_batches_by_pass_order_.size())
+            ? command_batches_by_pass_order_[native_pass_group_.first_pass_order]
+            : nullptr;
+    EmitDependencyInfo(context_.CommandBuffer(),
+                       first_command_batch != nullptr ? &first_command_batch->dependency : nullptr,
+                       stats_);
+
+    const auto rendering_info = context_.BuildRenderingInfo(native_pass_group_);
+    context_.BeginRendering(rendering_info);
+
+    for (std::uint32_t pass_order = native_pass_group_.first_pass_order;
+         pass_order <= native_pass_group_.last_pass_order;
+         ++pass_order) {
+        const auto& pass_ = passes[pass_order];
+
+        if (pass_order != native_pass_group_.first_pass_order) {
+            const auto* command_batch = (pass_order < command_batches_by_pass_order_.size())
+                ? command_batches_by_pass_order_[pass_order]
+                : nullptr;
+            if (command_batch != nullptr) {
+                if (CommandBatchTouchesNativePassAttachments(*command_batch,
+                                                             native_pass_group_)) {
+                    throw std::runtime_error(
+                        "RenderGraphExecutor::Record encountered native-pass-internal attachment barrier after fused rendering began");
+                }
+                EmitDependencyInfo(context_.CommandBuffer(),
+                                   &command_batch->dependency,
+                                   stats_);
+            }
+        }
+
+        context_.SetCurrentPass(pass_.handle);
+        PrepareDescriptorSetsForPass(context_, pass_);
+        if (pass_.execute) {
+            pass_.execute(context_);
+        }
+        context_.ClearCurrentPass();
+        stats_.pass_count += 1U;
+    }
+
+    context_.EndRendering();
+}
+
+RenderGraphRecordStats RecordPassSequence(
+    GraphCommandContext& context_,
+    const std::vector<PassHandle>& pass_handles_,
+    const VulkanDependencyInfoData* begin_dependency_,
+    const VulkanDependencyInfoData* end_dependency_) {
+    RenderGraphRecordStats stats{};
+    if (context_.CommandBuffer() == VK_NULL_HANDLE) {
+        return stats;
+    }
+    const std::uint32_t rendering_scope_count_before =
+        context_.RenderingScopeCount();
+
+    const auto pass_order_by_handle_index = BuildPassOrderByHandleIndex(context_.Graph());
+    const auto command_batches_by_pass_order =
+        BuildCommandBatchesByPassOrder(context_, pass_order_by_handle_index);
+
+    EmitDependencyInfo(context_.CommandBuffer(), begin_dependency_, stats);
+
+    std::uint32_t recorded_group_last_pass_order = invalid_render_graph_index;
+    for (const auto pass_handle_ : pass_handles_) {
+        if (pass_handle_.index >= pass_order_by_handle_index.size()) {
+            continue;
+        }
+        const std::uint32_t pass_order = pass_order_by_handle_index[pass_handle_.index];
+        if (pass_order == invalid_render_graph_index ||
+            pass_order >= context_.Graph().Passes().size()) {
+            continue;
+        }
+        if (recorded_group_last_pass_order != invalid_render_graph_index &&
+            pass_order <= recorded_group_last_pass_order) {
+            continue;
+        }
+
+        if (const auto* native_pass_group =
+                context_.Graph().NativePasses().FindGroupByPassOrder(pass_order);
+            native_pass_group != nullptr) {
+            if (native_pass_group->first_pass_order == pass_order) {
+                RecordNativePassGroup(context_,
+                                      *native_pass_group,
+                                      command_batches_by_pass_order,
+                                      stats);
+                recorded_group_last_pass_order = native_pass_group->last_pass_order;
+                continue;
+            }
+            if (pass_order <= native_pass_group->last_pass_order) {
+                continue;
+            }
+        }
+
+        RecordSinglePass(context_,
+                         context_.Graph().Passes()[pass_order],
+                         pass_order,
+                         command_batches_by_pass_order,
+                         stats);
+    }
+
+    EmitDependencyInfo(context_.CommandBuffer(), end_dependency_, stats);
+    stats.rendering_scope_count =
+        context_.RenderingScopeCount() - rendering_scope_count_before;
+    return stats;
+}
+
 } // namespace
 
 RenderGraphRecordStats RenderGraphExecutor::Record(GraphCommandContext& context_) {
-    RenderGraphRecordStats stats{};
-
     const VkCommandBuffer command_buffer = context_.CommandBuffer();
     if (command_buffer == VK_NULL_HANDLE) {
-        return stats;
+        return {};
     }
 
     const auto& command_ready = context_.CommandReadyBarriers();
@@ -344,16 +523,10 @@ RenderGraphRecordStats RenderGraphExecutor::Record(GraphCommandContext& context_
             "RenderGraphExecutor::Record currently supports only single-queue command batches");
     }
 
-    const auto command_batches_by_pass = BuildCommandBatchesByPass(context_);
-
-    for (const auto pass_handle_ : context_.Graph().ExecutionOrder()) {
-        const auto* pass_ = context_.Graph().FindPass(pass_handle_);
-        if (pass_ == nullptr) {
-            continue;
-        }
-        RecordPass(context_, *pass_, command_batches_by_pass, stats);
-    }
-
+    RenderGraphRecordStats stats = RecordPassSequence(context_,
+                                                      context_.Graph().ExecutionOrder(),
+                                                      nullptr,
+                                                      nullptr);
     stats.queue_transfer_batch_count = static_cast<std::uint32_t>(command_ready.queue_transfer_batches.size());
     return stats;
 }
@@ -363,24 +536,10 @@ RenderGraphRecordStats RenderGraphExecutor::RecordQueueBatch(
     const QueueSubmitBatch& queue_batch_,
     const VulkanDependencyInfoData* begin_dependency_,
     const VulkanDependencyInfoData* end_dependency_) {
-    RenderGraphRecordStats stats{};
-    if (context_.CommandBuffer() == VK_NULL_HANDLE) {
-        return stats;
-    }
-
-    const auto command_batches_by_pass = BuildCommandBatchesByPass(context_);
-    EmitDependencyInfo(context_.CommandBuffer(), begin_dependency_, stats);
-
-    for (const auto pass_handle_ : queue_batch_.passes) {
-        const auto* pass_ = context_.Graph().FindPass(pass_handle_);
-        if (pass_ == nullptr) {
-            continue;
-        }
-        RecordPass(context_, *pass_, command_batches_by_pass, stats);
-    }
-
-    EmitDependencyInfo(context_.CommandBuffer(), end_dependency_, stats);
-    return stats;
+    return RecordPassSequence(context_,
+                              queue_batch_.passes,
+                              begin_dependency_,
+                              end_dependency_);
 }
 
 } // namespace vr::render_graph

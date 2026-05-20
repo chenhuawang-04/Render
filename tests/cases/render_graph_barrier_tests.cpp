@@ -67,6 +67,132 @@ VR_TEST_CASE(RenderGraphBarrierPlanner_emits_image_barriers_for_scene_overlay_pr
     VR_CHECK(plan.barrier_batches[1].barriers[0].after == vr::render_graph::AccessKind::shader_sample_read);
 }
 
+VR_TEST_CASE(RenderGraphBarrierPlanner_internalizes_fused_native_pass_attachment_barriers,
+             "unit;core;render_graph;barrier;native_pass") {
+    vr::render_graph::RenderGraphBuilder builder{};
+    const auto scene_color = builder.CreateTexture(
+        "scene_color",
+        vr::render_graph::TextureDesc{
+            .format = vr::render_graph::TextureFormat::r16g16b16a16_sfloat,
+            .extent = {.width = 320U, .height = 180U, .depth = 1U},
+            .usage = vr::render_graph::texture_usage_color_attachment_flag |
+                     vr::render_graph::texture_usage_sampled_flag,
+        });
+    const auto scene_depth = builder.CreateTexture(
+        "scene_depth",
+        vr::render_graph::TextureDesc{
+            .format = vr::render_graph::TextureFormat::d32_sfloat,
+            .extent = {.width = 320U, .height = 180U, .depth = 1U},
+            .usage = vr::render_graph::texture_usage_depth_stencil_attachment_flag,
+        });
+    const auto present_target = builder.CreateTexture(
+        "present_target",
+        vr::render_graph::TextureDesc{
+            .format = vr::render_graph::TextureFormat::unknown,
+            .extent = {.width = 320U, .height = 180U, .depth = 1U},
+            .usage = vr::render_graph::texture_usage_color_attachment_flag |
+                     vr::render_graph::texture_usage_present_flag,
+        },
+        vr::render_graph::ResourceLifetime::imported);
+
+    const auto opaque = builder.AddPass("opaque_scene");
+    const auto transparent = builder.AddPass("transparent_scene");
+    const auto present = builder.AddPass("present_to_swapchain", true);
+
+    const auto color_v1 = builder.Write(
+        opaque,
+        scene_color,
+        vr::render_graph::AccessDesc{.access = vr::render_graph::AccessKind::color_attachment_write});
+    const auto depth_v1 = builder.Write(
+        opaque,
+        scene_depth,
+        vr::render_graph::AccessDesc{.access = vr::render_graph::AccessKind::depth_stencil_write});
+    (void)builder.Read(
+        transparent,
+        color_v1,
+        vr::render_graph::AccessDesc{.access = vr::render_graph::AccessKind::color_attachment_read});
+    const auto color_v2 = builder.Write(
+        transparent,
+        color_v1,
+        vr::render_graph::AccessDesc{.access = vr::render_graph::AccessKind::color_attachment_write});
+    (void)builder.Read(
+        transparent,
+        depth_v1,
+        vr::render_graph::AccessDesc{.access = vr::render_graph::AccessKind::depth_stencil_read});
+    (void)builder.Write(
+        transparent,
+        depth_v1,
+        vr::render_graph::AccessDesc{.access = vr::render_graph::AccessKind::depth_stencil_write});
+    (void)builder.Read(
+        present,
+        color_v2,
+        vr::render_graph::AccessDesc{.access = vr::render_graph::AccessKind::shader_sample_read});
+    (void)builder.Write(
+        present,
+        present_target,
+        vr::render_graph::AccessDesc{.access = vr::render_graph::AccessKind::present});
+
+    builder.SetRasterPassDesc(
+        opaque,
+        vr::render_graph::RasterPassDesc{
+            .color_attachments = {
+                vr::render_graph::RasterColorAttachmentDesc{
+                    .target = scene_color,
+                    .load_op = vr::render_graph::AttachmentLoadOp::clear,
+                    .store_op = vr::render_graph::AttachmentStoreOp::store,
+                },
+            },
+            .has_depth_attachment = true,
+            .depth_attachment = vr::render_graph::RasterDepthAttachmentDesc{
+                .target = scene_depth,
+                .load_op = vr::render_graph::AttachmentLoadOp::clear,
+                .store_op = vr::render_graph::AttachmentStoreOp::store,
+                .stencil_load_op = vr::render_graph::AttachmentLoadOp::dont_care,
+                .stencil_store_op = vr::render_graph::AttachmentStoreOp::dont_care,
+            },
+        });
+    builder.SetRasterPassDesc(
+        transparent,
+        vr::render_graph::RasterPassDesc{
+            .color_attachments = {
+                vr::render_graph::RasterColorAttachmentDesc{
+                    .target = scene_color,
+                    .load_op = vr::render_graph::AttachmentLoadOp::load,
+                    .store_op = vr::render_graph::AttachmentStoreOp::store,
+                },
+            },
+            .has_depth_attachment = true,
+            .depth_attachment = vr::render_graph::RasterDepthAttachmentDesc{
+                .target = scene_depth,
+                .load_op = vr::render_graph::AttachmentLoadOp::load,
+                .store_op = vr::render_graph::AttachmentStoreOp::store,
+                .stencil_load_op = vr::render_graph::AttachmentLoadOp::dont_care,
+                .stencil_store_op = vr::render_graph::AttachmentStoreOp::dont_care,
+            },
+        });
+
+    const auto compiled = builder.Compile();
+    const auto& native_passes = compiled.NativePasses();
+    const auto& plan = compiled.PlannedBarriers();
+
+    VR_REQUIRE(native_passes.groups.size() == 1U);
+    VR_CHECK(native_passes.groups[0].first_pass_order == 0U);
+    VR_CHECK(native_passes.groups[0].last_pass_order == 1U);
+    VR_REQUIRE(plan.barrier_batches.size() == 2U);
+    VR_CHECK(plan.barrier_batches[0].pass.index == opaque.index);
+    VR_CHECK(plan.barrier_batches[1].pass.index == present.index);
+    VR_REQUIRE(plan.barrier_batches[0].barriers.size() == 2U);
+    VR_REQUIRE(plan.barrier_batches[1].barriers.size() == 1U);
+
+    const auto transparent_batch = std::find_if(
+        plan.barrier_batches.begin(),
+        plan.barrier_batches.end(),
+        [&](const vr::render_graph::CompiledBarrierBatch& batch_) {
+            return batch_.pass.index == transparent.index;
+        });
+    VR_CHECK(transparent_batch == plan.barrier_batches.end());
+}
+
 VR_TEST_CASE(RenderGraphBarrierPlanner_emits_queue_transfer_for_transfer_to_graphics_buffer_read,
              "unit;core;render_graph;barrier") {
     vr::render_graph::RenderGraphBuilder builder{};

@@ -455,6 +455,9 @@ std::string CompiledRenderGraph::BuildDebugString() const {
             oss << " side_effect";
         }
         oss << " queue=" << QueueClassToString(pass_.queue);
+        if (pass_.compile_hints.force_native_pass_split) {
+            oss << " force_native_pass_split";
+        }
         oss << " deps=";
         for (std::size_t dep_index = 0; dep_index < pass_.dependencies.size(); ++dep_index) {
             if (dep_index != 0U) {
@@ -480,6 +483,7 @@ std::string CompiledRenderGraph::BuildDebugString() const {
     }
 
     oss << "liveness=" << liveness_ranges.size() << '\n';
+    oss << BuildNativePassPlanDebugString(*this);
     for (const auto& range_ : liveness_ranges) {
         oss << "resource=" << range_.debug_name
             << " first=" << range_.first_pass_order
@@ -609,6 +613,9 @@ std::string CompiledRenderGraph::BuildJson() const {
         oss << "      \"sideEffect\": " << (pass_.side_effect ? "true" : "false") << ",\n";
         oss << "      \"executable\": " << (pass_.executable ? "true" : "false") << ",\n";
         oss << "      \"queue\": \"" << QueueClassToString(pass_.queue) << "\",\n";
+        oss << "      \"compileHints\": {\"forceNativePassSplit\": "
+            << (pass_.compile_hints.force_native_pass_split ? "true" : "false")
+            << "},\n";
 
         oss << "      \"dependencies\": [";
         for (std::size_t dep_index = 0; dep_index < pass_.dependencies.size(); ++dep_index) {
@@ -664,6 +671,7 @@ std::string CompiledRenderGraph::BuildJson() const {
         oss << '\n';
     }
     oss << "  ],\n";
+    oss << "  \"nativePassPlan\": " << BuildNativePassPlanJson(*this) << ",\n";
 
     oss << "  \"livenessRanges\": [\n";
     for (std::size_t index = 0; index < liveness_ranges.size(); ++index) {
@@ -867,6 +875,21 @@ void RenderGraphBuilder::AddDependency(const PassHandle pass_,
     PassNode& target_pass = RequirePass(pass_);
     (void)RequirePass(dependency_);
     AppendUnique(target_pass.explicit_dependencies, dependency_);
+}
+
+void RenderGraphBuilder::SetPassCompileHints(const PassHandle pass_,
+                                             const PassCompileHints compile_hints_) {
+    PassNode& target_pass = RequirePass(pass_);
+    target_pass.compile_hints = compile_hints_;
+}
+
+void RenderGraphBuilder::SetNativePassPlannerConfig(
+    const NativePassPlannerConfig planner_config_) noexcept {
+    native_pass_planner_config = planner_config_;
+}
+
+const NativePassPlannerConfig& RenderGraphBuilder::NativePassPlannerConfigInfo() const noexcept {
+    return native_pass_planner_config;
 }
 
 std::uint32_t RenderGraphBuilder::RegisterExternalBufferBindingResolver(
@@ -1194,6 +1217,7 @@ CompiledRenderGraph RenderGraphBuilder::Compile() const {
         compiled_pass.side_effect = pass_.side_effect;
         compiled_pass.executable = static_cast<bool>(pass_.execute) || pass_.raster_pass.has_value();
         compiled_pass.queue = pass_.queue;
+        compiled_pass.compile_hints = pass_.compile_hints;
         compiled_pass.raster_pass = pass_.raster_pass;
         compiled_pass.execute = pass_.execute;
         compiled_pass.reads = pass_.reads;
@@ -1396,6 +1420,8 @@ CompiledRenderGraph RenderGraphBuilder::Compile() const {
         }
     }
 
+    compiled.native_pass_plan =
+        BuildNativePassPlan(compiled, native_pass_planner_config);
     compiled.external_buffer_binding_resolvers = external_buffer_binding_resolvers;
     compiled.transient_allocation_plan = BuildTransientAllocationPlan(compiled);
     compiled.barrier_plan = BuildBarrierPlan(compiled);

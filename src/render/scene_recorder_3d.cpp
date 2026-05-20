@@ -734,7 +734,7 @@ void SceneRecorder3D::BuildRenderGraph(
                                            .stencil_load_op = render_graph::AttachmentLoadOp::dont_care,
                                            .stencil_store_op = render_graph::AttachmentStoreOp::dont_care,
                                            .clear_value = {.depth = 1.0F, .stencil = 0U},
-                                           .read_only = true,
+                                           .read_only = false,
                                        },
                                    });
         for (const auto* entry_ : transparent_visible_entries) {

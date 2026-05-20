@@ -3,6 +3,7 @@
 #include "vr/render/render_pass_preset.hpp"
 #include "vr/render/descriptor_host.hpp"
 #include "vr/render/render_target_host.hpp"
+#include "vr/render_graph/native_pass_plan.hpp"
 #include "vr/render_graph/render_graph_types.hpp"
 #include "vr/render_graph/vulkan_barrier_plan.hpp"
 #include "vr/render_graph/vulkan_resource_table.hpp"
@@ -199,7 +200,86 @@ public:
                                   raster_pass_.layer_count);
     }
 
+    [[nodiscard]] render::RenderTargetRenderingInfo BuildRenderingInfo(
+        const NativePassGroup& native_pass_group_) const {
+        const auto& attachments_ = native_pass_group_.attachments;
+        std::vector<render::AttachmentRef> color_attachments{};
+        color_attachments.reserve(attachments_.color_attachments.size());
+
+        render::AttachmentRef depth_attachment{};
+        const render::AttachmentRef* depth_attachment_ptr = nullptr;
+        const render::AttachmentRef* stencil_attachment_ptr = nullptr;
+        VkRect2D render_area{};
+        bool render_area_initialized = false;
+
+        const auto set_render_area_from = [&](const ResourceHandle target_) {
+            if (render_area_initialized) {
+                return;
+            }
+            const auto resolved = ResolveTextureView(target_);
+            render_area.offset = VkOffset2D{0, 0};
+            render_area.extent = VkExtent2D{resolved.extent.width, resolved.extent.height};
+            render_area_initialized = true;
+        };
+
+        for (std::size_t color_index = 0U;
+             color_index < attachments_.color_attachments.size();
+             ++color_index) {
+            const auto& group_attachment_ =
+                attachments_.color_attachments[color_index];
+
+            render::AttachmentRef attachment{};
+            attachment.target = ResolveTextureTarget(group_attachment_.target);
+            attachment.load_op =
+                ToVkAttachmentLoadOp(group_attachment_.effective_load_op);
+            attachment.store_op =
+                ToVkAttachmentStoreOp(group_attachment_.effective_store_op);
+            attachment.clear_value.color = VkClearColorValue{{
+                group_attachment_.clear_value.red,
+                group_attachment_.clear_value.green,
+                group_attachment_.clear_value.blue,
+                group_attachment_.clear_value.alpha,
+            }};
+            attachment.expected_state = render::RenderTargetStateKind::color_attachment;
+            color_attachments.push_back(attachment);
+            set_render_area_from(group_attachment_.target);
+        }
+
+        if (attachments_.has_depth_attachment) {
+            depth_attachment.target = ResolveTextureTarget(attachments_.depth_attachment.target);
+            depth_attachment.load_op =
+                ToVkAttachmentLoadOp(
+                    attachments_.depth_attachment.effective_load_op);
+            depth_attachment.store_op =
+                ToVkAttachmentStoreOp(
+                    attachments_.depth_attachment.effective_store_op);
+            depth_attachment.stencil_load_op =
+                ToVkAttachmentLoadOp(
+                    attachments_.depth_attachment.effective_stencil_load_op);
+            depth_attachment.stencil_store_op =
+                ToVkAttachmentStoreOp(
+                    attachments_.depth_attachment.effective_stencil_store_op);
+            depth_attachment.clear_value.depthStencil = VkClearDepthStencilValue{
+                attachments_.depth_attachment.clear_value.depth,
+                attachments_.depth_attachment.clear_value.stencil,
+            };
+            depth_attachment.expected_state = attachments_.depth_attachment.read_only
+                ? render::RenderTargetStateKind::depth_read_only
+                : render::RenderTargetStateKind::depth_attachment;
+            depth_attachment_ptr = &depth_attachment;
+            set_render_area_from(attachments_.depth_attachment.target);
+        }
+
+        return BuildRenderingInfo(render_area,
+                                  color_attachments.data(),
+                                  static_cast<std::uint32_t>(color_attachments.size()),
+                                  depth_attachment_ptr,
+                                  stencil_attachment_ptr,
+                                  attachments_.layer_count);
+    }
+
     void BeginRendering(const render::RenderTargetRenderingInfo& rendering_info_) const noexcept {
+        ++rendering_scope_count;
         vkCmdBeginRendering(command_buffer, rendering_info_.VkInfoPtr());
     }
 
@@ -219,6 +299,10 @@ public:
 
     [[nodiscard]] PassHandle CurrentPass() const noexcept {
         return current_pass;
+    }
+
+    [[nodiscard]] std::uint32_t RenderingScopeCount() const noexcept {
+        return rendering_scope_count;
     }
 
     void SetCurrentPassDescriptorSets(std::vector<VkDescriptorSet> descriptor_sets_) {
@@ -280,6 +364,7 @@ private:
     const VulkanCommandReadyPlan* command_ready_vulkan_barriers = nullptr;
     PassHandle current_pass = invalid_pass_handle;
     std::vector<VkDescriptorSet> current_pass_descriptor_sets{};
+    mutable std::uint32_t rendering_scope_count = 0U;
 };
 
 } // namespace vr::render_graph
