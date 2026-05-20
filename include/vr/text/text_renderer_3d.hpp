@@ -156,8 +156,13 @@ private:
     struct PerFrameState final {
         resource::BufferResource vertex_buffer{};
         VkDeviceSize vertex_buffer_capacity_bytes = 0U;
+        resource::BufferResource graph_staging_buffer{};
+        VkDeviceSize graph_staging_buffer_capacity_bytes = 0U;
         std::uint32_t instance_count = 0U;
         std::uint64_t uploaded_revision = 0U;
+        render_graph::ResourceHandle graph_vertex_buffer = render_graph::invalid_resource_handle;
+        render_graph::ResourceVersionHandle graph_vertex_version = render_graph::invalid_resource_version;
+        VkDeviceSize graph_vertex_size_bytes = 0U;
     };
 
     struct RetiredDepthImage final {
@@ -191,6 +196,12 @@ private:
                                     const render::TextRenderer3DPrepareView& prepare_view_,
                                     std::uint32_t frame_index_,
                                     VkDeviceSize required_bytes_);
+    void EnsureGraphUploadStagingForFrame(VulkanContext& context_,
+                                          const render::TextRenderer3DPrepareView& prepare_view_,
+                                          std::uint32_t frame_index_,
+                                          VkDeviceSize required_bytes_);
+    void ScheduleGraphInstanceUpload(render_graph::RenderGraphBuilder& builder_,
+                                     render_graph::PassHandle pass_);
 
     void EnsurePipelineObjects(VulkanContext& context_,
                                render::DescriptorHost& descriptor_host_,

@@ -1,4 +1,5 @@
 ﻿#include "support/test_framework.hpp"
+#include "support/render_graph_test_utils.hpp"
 #include "vr/ecs/system/bounds_system.hpp"
 #include "vr/ecs/system/camera_system.hpp"
 #include "vr/ecs/system/particle_emitter_system.hpp"
@@ -8,6 +9,8 @@
 #include "vr/particle/particle_simulation_host.hpp"
 #include "vr/particle/particle_upload_host.hpp"
 #include "vr/render/render_runtime_host.hpp"
+#include "vr/render/render_view_submission_utils.hpp"
+#include "vr/render/scene_recorder_3d.hpp"
 #include "vr/render/scene_render_stage.hpp"
 
 #include <SDL3/SDL.h>
@@ -97,7 +100,52 @@ void ConfigureParticle3DRuntimeCreateInfo(Runtime::CreateInfo& create_info_,
     create_info_.render_loop.swapchain.preferred_image_count = 2U;
     create_info_.render_loop.commands.initial_primary_per_frame = 2U;
     create_info_.render_loop.commands.primary_growth_chunk = 2U;
+    create_info_.render_loop.submit_wait_stage_mask = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+    create_info_.diagnostics.level = vr::runtime::DiagnosticsLevel::Detailed;
     create_info_.poll_events_each_tick = true;
+}
+
+[[nodiscard]] bool HasEffectiveQueueBatchWithPass(
+    const vr::runtime::RenderGraphRuntimeDiagnostics& diagnostics_,
+    std::string_view queue_name_,
+    std::string_view pass_name_) {
+    return std::any_of(
+        diagnostics_.effective_queue_batches.begin(),
+        diagnostics_.effective_queue_batches.end(),
+        [&](const vr::runtime::RenderGraphQueueBatchDiagnostics& batch_) {
+            if (batch_.queue_name != queue_name_) {
+                return false;
+            }
+            return std::any_of(
+                batch_.pass_debug_names.begin(),
+                batch_.pass_debug_names.end(),
+                [&](const std::string& debug_name_) {
+                    return debug_name_ == pass_name_;
+                });
+        });
+}
+
+[[nodiscard]] bool HasEffectiveQueueBatchOnQueue(
+    const vr::runtime::RenderGraphRuntimeDiagnostics& diagnostics_,
+    std::string_view queue_name_) {
+    return std::any_of(
+        diagnostics_.effective_queue_batches.begin(),
+        diagnostics_.effective_queue_batches.end(),
+        [&](const vr::runtime::RenderGraphQueueBatchDiagnostics& batch_) {
+            return batch_.queue_name == queue_name_;
+        });
+}
+
+[[nodiscard]] bool AllEffectiveQueueBatchesUseQueue(
+    const vr::runtime::RenderGraphRuntimeDiagnostics& diagnostics_,
+    std::string_view queue_name_) {
+    return !diagnostics_.effective_queue_batches.empty() &&
+           std::all_of(
+               diagnostics_.effective_queue_batches.begin(),
+               diagnostics_.effective_queue_batches.end(),
+               [&](const vr::runtime::RenderGraphQueueBatchDiagnostics& batch_) {
+                   return batch_.queue_name == queue_name_;
+               });
 }
 
 struct ParticleStageRecorder3D final {
@@ -465,6 +513,260 @@ VR_TEST_CASE(RuntimeIntegration_particle_renderer_3d_gpu_persistent_seed_once,
         if (runtime_initialized) {
             runtime.Shutdown();
             runtime_initialized = false;
+        }
+        throw;
+    }
+}
+
+VR_TEST_CASE(RuntimeIntegration_scene_recorder_3d_particle_graph_async_compute_uses_compute_or_graphics_fallback,
+             "integration;gpu;sdl;runtime;particle;scene3d;render_graph;queue;compute") {
+    Runtime runtime{};
+    vr::render::SceneRecorder3D recorder{};
+    vr::particle::ParticleRenderer3D particle_renderer{};
+
+    bool runtime_initialized = false;
+    bool recorder_initialized = false;
+    bool renderer_initialized = false;
+
+    try {
+        Runtime::CreateInfo create_info{};
+        ConfigureParticle3DRuntimeCreateInfo(create_info,
+                                             "vr_tests_scene_recorder_3d_particle_graph_compute");
+        runtime.Initialize(create_info);
+        runtime_initialized = true;
+
+        const auto& particle_simulation_service =
+            runtime.Services().Get<vr::runtime::services::ParticleSimulationService>();
+        if (!particle_simulation_service.Capabilities().SupportsHybridSimulation()) {
+            runtime.Shutdown();
+            runtime_initialized = false;
+            VR_SKIP("ParticleSimulationService hybrid GPU simulation is unavailable in this environment.");
+        }
+
+        Particle3D particle{};
+        ParticleEmitter3D emitter{};
+        ParticleSystem3D::Initialize(particle);
+        ParticleEmitterSystem3D::Initialize(particle, emitter);
+        ParticleSystem3D::SetRenderPassHint(particle, vr::ecs::ParticleRenderPassHint::transparent);
+        ParticleSystem3D::SetSimulationMode(particle, vr::ecs::ParticleSimulationMode::hybrid_gpu);
+        ParticleSystem3D::SetRenderMode(particle, vr::ecs::ParticleRenderMode::billboard);
+        ParticleSystem3D::SetFacingMode(particle, vr::ecs::ParticleFacingMode::screen);
+        ParticleSystem3D::SetDepthState(particle, true, false);
+        ParticleSystem3D::SetStartEndColor(particle,
+                                           vr::ecs::Rgba8{255U, 232U, 180U, 255U},
+                                           vr::ecs::Rgba8{255U, 96U, 32U, 0U});
+        ParticleSystem3D::SetScalarStyle(particle, 0.12F, 0.0F, 1.0F, 0.0F, 0.0F);
+
+        ParticleEmitterSystem3D::SetBurst(particle, emitter, 16U, 0.0F);
+        ParticleEmitterSystem3D::SetSpawnRate(particle, emitter, 42.0F);
+        ParticleEmitterSystem3D::SetLifetimeRange(particle, emitter, 0.75F, 1.20F);
+        ParticleEmitterSystem3D::SetSpeedRange(particle, emitter, 0.1F, 0.8F);
+        ParticleEmitterSystem3D::SetSizeRange(particle, emitter, 0.20F, 0.32F, 0.04F, 0.12F);
+        ParticleEmitterSystem3D::SetEmissionShape(particle,
+                                                  emitter,
+                                                  vr::ecs::ParticleEmitterShape::sphere,
+                                                  vr::ecs::Float3{.x = 0.0F, .y = 0.0F, .z = 0.0F},
+                                                  0.18F,
+                                                  vr::ecs::Float3{.x = 0.0F, .y = 1.0F, .z = 0.0F},
+                                                  0.45F,
+                                                  0.20F);
+        ParticleEmitterSystem3D::SetPlayback(particle, emitter, true, true, true);
+
+        Transform3D particle_transform{};
+        Bounds3D particle_bounds{};
+        TransformSystem3D::Initialize(particle_transform);
+        BoundsSystem3D::Initialize(particle_bounds);
+        TransformSystem3D::SetLocalPosition(particle_transform,
+                                            vr::ecs::Float3{.x = 0.0F, .y = -0.15F, .z = 0.0F});
+        BoundsSystem3D::SetLocalCenterExtents(particle_bounds,
+                                              vr::ecs::Float3{.x = 0.0F, .y = 0.0F, .z = 0.0F},
+                                              vr::ecs::Float3{.x = 0.55F, .y = 0.55F, .z = 0.55F});
+        TransformSystem3D::UpdateHierarchy(&particle_transform, 1U);
+        (void)BoundsSystem3D::UpdateAligned(&particle_bounds, &particle_transform, 1U);
+
+        Camera3D camera{};
+        Transform3D camera_transform{};
+        CameraSystem3D::Initialize(camera);
+        TransformSystem3D::Initialize(camera_transform);
+        CameraSystem3D::SetProjectionMode(camera, vr::ecs::CameraProjectionMode::perspective);
+        CameraSystem3D::SetVerticalFovRadians(camera, 60.0F * 0.01745329251994329577F);
+        CameraSystem3D::SetNearFar(camera, 0.05F, 64.0F);
+        CameraSystem3D::SetAspectRatio(camera, 640.0F / 360.0F);
+        TransformSystem3D::SetLocalPosition(camera_transform,
+                                            vr::ecs::Float3{.x = 0.0F, .y = 0.0F, .z = 3.25F});
+        TransformSystem3D::UpdateHierarchy(&camera_transform, 1U);
+        CameraSystem3D::MarkViewDirty(camera);
+        CameraSystem3D::Update(camera, camera_transform);
+
+        vr::render::SceneRecorder3DCreateInfo recorder_create_info{};
+        recorder_create_info.scene_target.color_debug_name = "RuntimeParticle3DGraphSceneColor";
+        recorder_create_info.scene_target.depth_debug_name = "RuntimeParticle3DGraphSceneDepth";
+        recorder_create_info.scene_target.enable_depth = true;
+        recorder_create_info.scene_target.color_lifetime = vr::render::RenderTargetLifetime::transient;
+        recorder_create_info.scene_target.depth_lifetime = vr::render::RenderTargetLifetime::transient;
+        recorder_create_info.reserve_scene_renderer_count = 1U;
+        recorder_create_info.reserve_overlay_renderer_count = 0U;
+        recorder.Initialize(recorder_create_info);
+        recorder_initialized = true;
+        recorder.BindRuntime(runtime);
+
+        vr::particle::ParticleRenderer3DCreateInfo renderer_create_info{};
+        renderer_create_info.reserve_component_count = 1U;
+        renderer_create_info.reserve_particle_count = 256U;
+        renderer_create_info.enable_depth = true;
+        renderer_create_info.clear_depth = true;
+        renderer_create_info.clear_swapchain = false;
+        particle_renderer.Initialize(renderer_create_info);
+        renderer_initialized = true;
+        runtime.Services().Get<vr::runtime::services::ParticleRenderService>().ConfigureRenderer(
+            particle_renderer);
+        particle_renderer.SetSceneData(&particle,
+                                       &emitter,
+                                       &particle_transform,
+                                       1U,
+                                       &camera,
+                                       &camera_transform,
+                                       &particle_bounds);
+        recorder.RegisterTransparentSceneRenderer(particle_renderer,
+                                                  vr::render::SceneRenderPassRole::single);
+
+        vr::render::RenderView3D main_view{};
+        vr::render::RenderScenePacket3D main_scene_packet{};
+        vr::render::RefreshExtentBoundWorldSceneSubmission(main_view,
+                                                           main_scene_packet,
+                                                           camera,
+                                                           camera_transform,
+                                                           runtime.Swapchain().Extent(),
+                                                           9201U);
+        recorder.SetFramePacket(&main_scene_packet);
+
+        std::uint32_t submitted_frames = 0U;
+        std::uint32_t max_indirect_draw_calls = 0U;
+        bool graph_only_active = false;
+        bool compute_requested = false;
+        bool compute_enabled = false;
+        bool graphics_fallback_active = false;
+        bool graph_compute_pass_seen = false;
+        bool queue_timeline_json_available = false;
+        std::uint32_t max_effective_queue_batch_count = 0U;
+        std::uint32_t max_effective_queue_dependency_count = 0U;
+        bool compute_queue_batch_seen = false;
+        bool graphics_queue_batch_seen = false;
+        bool graphics_only_effective_batches_seen = false;
+        std::uint64_t max_compute_submitted = 0U;
+        std::uint64_t max_compute_completed = 0U;
+
+        constexpr std::uint32_t max_ticks = 8U;
+        for (std::uint32_t tick_index = 0U;
+             tick_index < max_ticks && runtime.IsRunning();
+             ++tick_index) {
+            vr::render::RefreshExtentBoundWorldSceneSubmission(main_view,
+                                                               main_scene_packet,
+                                                               camera,
+                                                               camera_transform,
+                                                               runtime.Swapchain().Extent(),
+                                                               9201U + tick_index);
+            recorder.SetFramePacket(&main_scene_packet);
+
+            const auto tick_result = runtime.Tick(recorder);
+            if (tick_result.render.code == vr::render::TickCode::Submitted ||
+                tick_result.render.code == vr::render::TickCode::RecreateRequested) {
+                ++submitted_frames;
+            }
+
+            const auto& graph_diag = tick_result.diagnostics.render_graph;
+            graph_only_active =
+                graph_only_active || vr::test::IsGraphOnlyScene3DRecordActive(runtime);
+            compute_requested = compute_requested || graph_diag.compute_queue_requested;
+            compute_enabled = compute_enabled || graph_diag.compute_queue_enabled;
+            graphics_fallback_active =
+                graphics_fallback_active || graph_diag.graphics_fallback_active;
+            queue_timeline_json_available =
+                queue_timeline_json_available || !graph_diag.effective_queue_timeline_json.empty();
+            max_effective_queue_batch_count =
+                std::max(max_effective_queue_batch_count,
+                         graph_diag.effective_queue_batch_count);
+            max_effective_queue_dependency_count =
+                std::max(max_effective_queue_dependency_count,
+                         graph_diag.effective_queue_dependency_count);
+            compute_queue_batch_seen =
+                compute_queue_batch_seen ||
+                HasEffectiveQueueBatchOnQueue(graph_diag, "compute");
+            graphics_queue_batch_seen =
+                graphics_queue_batch_seen ||
+                HasEffectiveQueueBatchOnQueue(graph_diag, "graphics");
+            graphics_only_effective_batches_seen =
+                graphics_only_effective_batches_seen ||
+                AllEffectiveQueueBatchesUseQueue(graph_diag, "graphics");
+            max_indirect_draw_calls = std::max(max_indirect_draw_calls,
+                                               particle_renderer.Stats().indirect_draw_count);
+            max_compute_submitted = std::max(max_compute_submitted,
+                                             tick_result.diagnostics.queues.compute_submitted);
+            max_compute_completed = std::max(max_compute_completed,
+                                             tick_result.diagnostics.queues.compute_completed);
+
+            const auto& graph_service =
+                runtime.Services().Get<vr::runtime::services::RenderGraphRuntimeService>();
+            if (const auto* compiled_graph = graph_service.TryGetCompiledGraph();
+                compiled_graph != nullptr) {
+                graph_compute_pass_seen = graph_compute_pass_seen ||
+                    std::any_of(compiled_graph->Passes().begin(),
+                                compiled_graph->Passes().end(),
+                                [](const auto& pass_) {
+                                    return pass_.debug_name == "particle_3d_gpu_build" &&
+                                           pass_.executable;
+                                });
+            }
+
+            SDL_Delay(1U);
+        }
+
+        VR_REQUIRE(submitted_frames > 0U);
+        VR_CHECK(graph_only_active);
+        VR_CHECK(queue_timeline_json_available);
+        VR_CHECK(max_effective_queue_batch_count > 0U);
+        VR_REQUIRE(particle_simulation_service.Stats().gpu_build_prepare_count > 0U);
+        VR_REQUIRE(particle_simulation_service.Stats().gpu_build_dispatch_count > 0U);
+        VR_REQUIRE(particle_simulation_service.Stats().update_dispatch_count > 0U);
+        VR_REQUIRE(max_indirect_draw_calls > 0U);
+        VR_CHECK(recorder.Stats().frame_packet_record_count == 0U);
+
+        if (compute_enabled) {
+            VR_CHECK(graph_compute_pass_seen);
+            VR_CHECK(compute_requested);
+            VR_CHECK(!graphics_fallback_active);
+            VR_CHECK(max_effective_queue_dependency_count > 0U);
+            VR_CHECK(compute_queue_batch_seen);
+            VR_CHECK(graphics_queue_batch_seen);
+            VR_CHECK(max_compute_submitted > 0U);
+            VR_CHECK(max_compute_completed <= max_compute_submitted);
+        } else {
+            VR_CHECK(graphics_fallback_active || !compute_requested);
+            VR_CHECK(graphics_only_effective_batches_seen);
+            VR_CHECK(max_compute_submitted == 0U);
+        }
+
+        recorder.Shutdown(runtime.Context());
+        recorder_initialized = false;
+        particle_renderer.Shutdown(runtime.Context());
+        renderer_initialized = false;
+        runtime.Shutdown();
+        runtime_initialized = false;
+    } catch (const std::exception& e) {
+        if (recorder_initialized && runtime_initialized && runtime.IsInitialized()) {
+            recorder.Shutdown(runtime.Context());
+            recorder_initialized = false;
+        }
+        if (renderer_initialized && runtime_initialized && runtime.IsInitialized()) {
+            particle_renderer.Shutdown(runtime.Context());
+            renderer_initialized = false;
+        }
+        if (runtime_initialized && runtime.IsInitialized()) {
+            runtime.Shutdown();
+            runtime_initialized = false;
+        }
+        if (IsEnvironmentSkipError(e.what())) {
+            VR_SKIP(e.what());
         }
         throw;
     }

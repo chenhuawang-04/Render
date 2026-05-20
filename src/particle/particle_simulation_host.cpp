@@ -1242,6 +1242,13 @@ ParticleSimulationGpuBuildResult ParticleSimulationHost::PrepareGpuBuild2D(
         descriptor_host_.AllocateSet(context_, frame_index_, gpu_build_descriptor_layout_id);
     build_path.build_descriptor_set =
         descriptor_host_.AllocateSet(context_, frame_index_, gpu_build_descriptor_layout_id);
+    const auto descriptor_range = [](const BufferSlot& slot_,
+                                     const VkDeviceSize logical_size_) noexcept {
+        if (logical_size_ != 0U) {
+            return logical_size_;
+        }
+        return slot_.capacity_bytes != 0U ? slot_.capacity_bytes : VkDeviceSize{1U};
+    };
     render::DescriptorMcVector<render::DescriptorBufferWrite> buffer_writes{};
     buffer_writes.reserve(6U);
     buffer_writes.push_back(render::DescriptorBufferWrite{
@@ -1250,7 +1257,7 @@ ParticleSimulationGpuBuildResult ParticleSimulationHost::PrepareGpuBuild2D(
         .descriptor_type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
         .buffer = state_read_slot.resource.buffer,
         .offset = 0U,
-        .range = state_bytes,
+        .range = descriptor_range(state_read_slot, state_bytes),
     });
     buffer_writes.push_back(render::DescriptorBufferWrite{
         .binding = 1U,
@@ -1258,7 +1265,7 @@ ParticleSimulationGpuBuildResult ParticleSimulationHost::PrepareGpuBuild2D(
         .descriptor_type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
         .buffer = state_write_slot.resource.buffer,
         .offset = 0U,
-        .range = state_bytes,
+        .range = descriptor_range(state_write_slot, state_bytes),
     });
     buffer_writes.push_back(render::DescriptorBufferWrite{
         .binding = 2U,
@@ -1266,7 +1273,7 @@ ParticleSimulationGpuBuildResult ParticleSimulationHost::PrepareGpuBuild2D(
         .descriptor_type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
         .buffer = build_path.alive_list.resource.buffer,
         .offset = 0U,
-        .range = list_bytes,
+        .range = descriptor_range(build_path.alive_list, list_bytes),
     });
     buffer_writes.push_back(render::DescriptorBufferWrite{
         .binding = 3U,
@@ -1274,7 +1281,7 @@ ParticleSimulationGpuBuildResult ParticleSimulationHost::PrepareGpuBuild2D(
         .descriptor_type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
         .buffer = build_path.dead_list.resource.buffer,
         .offset = 0U,
-        .range = list_bytes,
+        .range = descriptor_range(build_path.dead_list, list_bytes),
     });
     buffer_writes.push_back(render::DescriptorBufferWrite{
         .binding = 4U,
@@ -1282,7 +1289,7 @@ ParticleSimulationGpuBuildResult ParticleSimulationHost::PrepareGpuBuild2D(
         .descriptor_type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
         .buffer = build_path.spawn_packets.resource.buffer,
         .offset = 0U,
-        .range = spawn_bytes,
+        .range = descriptor_range(build_path.spawn_packets, spawn_bytes),
     });
     buffer_writes.push_back(render::DescriptorBufferWrite{
         .binding = 5U,
@@ -1290,7 +1297,7 @@ ParticleSimulationGpuBuildResult ParticleSimulationHost::PrepareGpuBuild2D(
         .descriptor_type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
         .buffer = build_path.indirect_commands.resource.buffer,
         .offset = 0U,
-        .range = indirect_bytes,
+        .range = descriptor_range(build_path.indirect_commands, indirect_bytes),
     });
     render::DescriptorMcVector<render::DescriptorImageWrite> image_writes{};
     render::DescriptorMcVector<render::DescriptorTexelBufferWrite> texel_writes{};
@@ -1308,7 +1315,7 @@ ParticleSimulationGpuBuildResult ParticleSimulationHost::PrepareGpuBuild2D(
         .descriptor_type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
         .buffer = state_write_slot.resource.buffer,
         .offset = 0U,
-        .range = state_bytes,
+        .range = descriptor_range(state_write_slot, state_bytes),
     });
     buffer_writes.push_back(render::DescriptorBufferWrite{
         .binding = 1U,
@@ -1316,7 +1323,9 @@ ParticleSimulationGpuBuildResult ParticleSimulationHost::PrepareGpuBuild2D(
         .descriptor_type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
         .buffer = build_path.draw_instances.resource.buffer,
         .offset = 0U,
-        .range = static_cast<VkDeviceSize>(result.state_record_count) * sizeof(ecs::Particle2DGpuInstance),
+        .range = descriptor_range(
+            build_path.draw_instances,
+            static_cast<VkDeviceSize>(result.state_record_count) * sizeof(ecs::Particle2DGpuInstance)),
     });
     buffer_writes.push_back(render::DescriptorBufferWrite{
         .binding = 2U,
@@ -1324,7 +1333,7 @@ ParticleSimulationGpuBuildResult ParticleSimulationHost::PrepareGpuBuild2D(
         .descriptor_type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
         .buffer = build_path.alive_list.resource.buffer,
         .offset = 0U,
-        .range = list_bytes,
+        .range = descriptor_range(build_path.alive_list, list_bytes),
     });
     buffer_writes.push_back(render::DescriptorBufferWrite{
         .binding = 3U,
@@ -1332,7 +1341,7 @@ ParticleSimulationGpuBuildResult ParticleSimulationHost::PrepareGpuBuild2D(
         .descriptor_type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
         .buffer = build_path.dead_list.resource.buffer,
         .offset = 0U,
-        .range = list_bytes,
+        .range = descriptor_range(build_path.dead_list, list_bytes),
     });
     buffer_writes.push_back(render::DescriptorBufferWrite{
         .binding = 4U,
@@ -1340,7 +1349,7 @@ ParticleSimulationGpuBuildResult ParticleSimulationHost::PrepareGpuBuild2D(
         .descriptor_type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
         .buffer = build_path.spawn_packets.resource.buffer,
         .offset = 0U,
-        .range = spawn_bytes,
+        .range = descriptor_range(build_path.spawn_packets, spawn_bytes),
     });
     buffer_writes.push_back(render::DescriptorBufferWrite{
         .binding = 5U,
@@ -1348,7 +1357,7 @@ ParticleSimulationGpuBuildResult ParticleSimulationHost::PrepareGpuBuild2D(
         .descriptor_type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
         .buffer = build_path.indirect_commands.resource.buffer,
         .offset = 0U,
-        .range = indirect_bytes,
+        .range = descriptor_range(build_path.indirect_commands, indirect_bytes),
     });
     descriptor_host_.UpdateSet(context_,
                                build_path.build_descriptor_set,
@@ -1552,6 +1561,13 @@ ParticleSimulationGpuBuildResult ParticleSimulationHost::PrepareGpuBuild3D(
         descriptor_host_.AllocateSet(context_, frame_index_, gpu_build_descriptor_layout_id);
     build_path.build_descriptor_set =
         descriptor_host_.AllocateSet(context_, frame_index_, gpu_build_descriptor_layout_id);
+    const auto descriptor_range = [](const BufferSlot& slot_,
+                                     const VkDeviceSize logical_size_) noexcept {
+        if (logical_size_ != 0U) {
+            return logical_size_;
+        }
+        return slot_.capacity_bytes != 0U ? slot_.capacity_bytes : VkDeviceSize{1U};
+    };
     render::DescriptorMcVector<render::DescriptorBufferWrite> buffer_writes{};
     buffer_writes.reserve(7U);
     buffer_writes.push_back(render::DescriptorBufferWrite{
@@ -1560,7 +1576,7 @@ ParticleSimulationGpuBuildResult ParticleSimulationHost::PrepareGpuBuild3D(
         .descriptor_type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
         .buffer = state_read_slot.resource.buffer,
         .offset = 0U,
-        .range = state_bytes,
+        .range = descriptor_range(state_read_slot, state_bytes),
     });
     buffer_writes.push_back(render::DescriptorBufferWrite{
         .binding = 1U,
@@ -1568,7 +1584,7 @@ ParticleSimulationGpuBuildResult ParticleSimulationHost::PrepareGpuBuild3D(
         .descriptor_type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
         .buffer = state_write_slot.resource.buffer,
         .offset = 0U,
-        .range = state_bytes,
+        .range = descriptor_range(state_write_slot, state_bytes),
     });
     buffer_writes.push_back(render::DescriptorBufferWrite{
         .binding = 2U,
@@ -1576,7 +1592,7 @@ ParticleSimulationGpuBuildResult ParticleSimulationHost::PrepareGpuBuild3D(
         .descriptor_type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
         .buffer = build_path.alive_list.resource.buffer,
         .offset = 0U,
-        .range = list_bytes,
+        .range = descriptor_range(build_path.alive_list, list_bytes),
     });
     buffer_writes.push_back(render::DescriptorBufferWrite{
         .binding = 3U,
@@ -1584,7 +1600,7 @@ ParticleSimulationGpuBuildResult ParticleSimulationHost::PrepareGpuBuild3D(
         .descriptor_type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
         .buffer = build_path.dead_list.resource.buffer,
         .offset = 0U,
-        .range = list_bytes,
+        .range = descriptor_range(build_path.dead_list, list_bytes),
     });
     buffer_writes.push_back(render::DescriptorBufferWrite{
         .binding = 4U,
@@ -1592,7 +1608,7 @@ ParticleSimulationGpuBuildResult ParticleSimulationHost::PrepareGpuBuild3D(
         .descriptor_type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
         .buffer = build_path.spawn_packets.resource.buffer,
         .offset = 0U,
-        .range = spawn_bytes,
+        .range = descriptor_range(build_path.spawn_packets, spawn_bytes),
     });
     buffer_writes.push_back(render::DescriptorBufferWrite{
         .binding = 5U,
@@ -1600,7 +1616,7 @@ ParticleSimulationGpuBuildResult ParticleSimulationHost::PrepareGpuBuild3D(
         .descriptor_type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
         .buffer = build_path.indirect_commands.resource.buffer,
         .offset = 0U,
-        .range = indirect_bytes,
+        .range = descriptor_range(build_path.indirect_commands, indirect_bytes),
     });
     if (build_path.sort_keys.resource.buffer != VK_NULL_HANDLE) {
         buffer_writes.push_back(render::DescriptorBufferWrite{
@@ -1628,7 +1644,7 @@ ParticleSimulationGpuBuildResult ParticleSimulationHost::PrepareGpuBuild3D(
         .descriptor_type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
         .buffer = state_write_slot.resource.buffer,
         .offset = 0U,
-        .range = state_bytes,
+        .range = descriptor_range(state_write_slot, state_bytes),
     });
     buffer_writes.push_back(render::DescriptorBufferWrite{
         .binding = 1U,
@@ -1636,7 +1652,9 @@ ParticleSimulationGpuBuildResult ParticleSimulationHost::PrepareGpuBuild3D(
         .descriptor_type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
         .buffer = build_path.draw_instances.resource.buffer,
         .offset = 0U,
-        .range = static_cast<VkDeviceSize>(result.state_record_count) * sizeof(ecs::Particle3DGpuInstance),
+        .range = descriptor_range(
+            build_path.draw_instances,
+            static_cast<VkDeviceSize>(result.state_record_count) * sizeof(ecs::Particle3DGpuInstance)),
     });
     buffer_writes.push_back(render::DescriptorBufferWrite{
         .binding = 2U,
@@ -1644,7 +1662,7 @@ ParticleSimulationGpuBuildResult ParticleSimulationHost::PrepareGpuBuild3D(
         .descriptor_type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
         .buffer = build_path.alive_list.resource.buffer,
         .offset = 0U,
-        .range = list_bytes,
+        .range = descriptor_range(build_path.alive_list, list_bytes),
     });
     buffer_writes.push_back(render::DescriptorBufferWrite{
         .binding = 3U,
@@ -1652,7 +1670,7 @@ ParticleSimulationGpuBuildResult ParticleSimulationHost::PrepareGpuBuild3D(
         .descriptor_type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
         .buffer = build_path.dead_list.resource.buffer,
         .offset = 0U,
-        .range = list_bytes,
+        .range = descriptor_range(build_path.dead_list, list_bytes),
     });
     buffer_writes.push_back(render::DescriptorBufferWrite{
         .binding = 4U,
@@ -1660,7 +1678,7 @@ ParticleSimulationGpuBuildResult ParticleSimulationHost::PrepareGpuBuild3D(
         .descriptor_type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
         .buffer = build_path.spawn_packets.resource.buffer,
         .offset = 0U,
-        .range = spawn_bytes,
+        .range = descriptor_range(build_path.spawn_packets, spawn_bytes),
     });
     buffer_writes.push_back(render::DescriptorBufferWrite{
         .binding = 5U,
@@ -1668,7 +1686,7 @@ ParticleSimulationGpuBuildResult ParticleSimulationHost::PrepareGpuBuild3D(
         .descriptor_type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
         .buffer = build_path.indirect_commands.resource.buffer,
         .offset = 0U,
-        .range = indirect_bytes,
+        .range = descriptor_range(build_path.indirect_commands, indirect_bytes),
     });
     if (build_path.sort_keys.resource.buffer != VK_NULL_HANDLE) {
         buffer_writes.push_back(render::DescriptorBufferWrite{
@@ -1783,25 +1801,37 @@ void ParticleSimulationHost::RecordBuild2D(VulkanContext& context_,
 
     if (context_.EnabledVulkan13Features().synchronization2 == VK_TRUE) {
         std::array<VkBufferMemoryBarrier2, 2U> barriers{};
-        barriers[0].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
-        barriers[0].srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-        barriers[0].srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
-        barriers[0].dstStageMask = VK_PIPELINE_STAGE_2_VERTEX_INPUT_BIT;
-        barriers[0].dstAccessMask = VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT;
-        barriers[0].buffer = build_path.draw_instances.resource.buffer;
-        barriers[0].offset = 0U;
-        barriers[0].size = static_cast<VkDeviceSize>(build_path.state_record_count) * sizeof(ecs::Particle2DGpuInstance);
-        barriers[1].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
-        barriers[1].srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-        barriers[1].srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
-        barriers[1].dstStageMask = VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT;
-        barriers[1].dstAccessMask = VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT;
-        barriers[1].buffer = build_path.indirect_commands.resource.buffer;
-        barriers[1].offset = 0U;
-        barriers[1].size = static_cast<VkDeviceSize>(build_path.indirect_command_count) * sizeof(ParticleGpuIndirectCommand);
+        std::uint32_t barrier_count = 0U;
+
+        auto& draw_barrier = barriers[barrier_count++];
+        draw_barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+        draw_barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        draw_barrier.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+        draw_barrier.dstStageMask = VK_PIPELINE_STAGE_2_VERTEX_INPUT_BIT;
+        draw_barrier.dstAccessMask = VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT;
+        draw_barrier.buffer = build_path.draw_instances.resource.buffer;
+        draw_barrier.offset = 0U;
+        draw_barrier.size =
+            static_cast<VkDeviceSize>(build_path.state_record_count) * sizeof(ecs::Particle2DGpuInstance);
+
+        if (build_path.indirect_command_count > 0U &&
+            build_path.indirect_commands.resource.buffer != VK_NULL_HANDLE) {
+            auto& indirect_barrier = barriers[barrier_count++];
+            indirect_barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+            indirect_barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            indirect_barrier.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+            indirect_barrier.dstStageMask = VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT;
+            indirect_barrier.dstAccessMask = VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT;
+            indirect_barrier.buffer = build_path.indirect_commands.resource.buffer;
+            indirect_barrier.offset = 0U;
+            indirect_barrier.size =
+                static_cast<VkDeviceSize>(build_path.indirect_command_count) *
+                sizeof(ParticleGpuIndirectCommand);
+        }
+
         VkDependencyInfo dependency_info{};
         dependency_info.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-        dependency_info.bufferMemoryBarrierCount = static_cast<std::uint32_t>(barriers.size());
+        dependency_info.bufferMemoryBarrierCount = barrier_count;
         dependency_info.pBufferMemoryBarriers = barriers.data();
         vkCmdPipelineBarrier2(command_buffer_, &dependency_info);
     }
@@ -1862,33 +1892,48 @@ void ParticleSimulationHost::RecordBuild3D(VulkanContext& context_,
 
     if (context_.EnabledVulkan13Features().synchronization2 == VK_TRUE) {
         std::array<VkBufferMemoryBarrier2, 3U> barriers{};
-        barriers[0].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
-        barriers[0].srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-        barriers[0].srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
-        barriers[0].dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-        barriers[0].dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
-        barriers[0].buffer = state_write_slot.resource.buffer;
-        barriers[0].offset = 0U;
-        barriers[0].size = static_cast<VkDeviceSize>(build_path.state_record_count) * sizeof(ParticleGpuStateRecord);
-        barriers[1].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
-        barriers[1].srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-        barriers[1].srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
-        barriers[1].dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-        barriers[1].dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
-        barriers[1].buffer = build_path.alive_list.resource.buffer;
-        barriers[1].offset = 0U;
-        barriers[1].size = static_cast<VkDeviceSize>(build_path.state_record_count) * sizeof(ParticleGpuAliveEntry);
-        barriers[2].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
-        barriers[2].srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-        barriers[2].srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
-        barriers[2].dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-        barriers[2].dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT;
-        barriers[2].buffer = build_path.sort_keys.resource.buffer;
-        barriers[2].offset = 0U;
-        barriers[2].size = static_cast<VkDeviceSize>(build_path.sort_keys.element_capacity) * sizeof(ParticleGpuSortKeyRecord);
+        std::uint32_t barrier_count = 0U;
+
+        auto& state_barrier = barriers[barrier_count++];
+        state_barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+        state_barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        state_barrier.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+        state_barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        state_barrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+        state_barrier.buffer = state_write_slot.resource.buffer;
+        state_barrier.offset = 0U;
+        state_barrier.size =
+            static_cast<VkDeviceSize>(build_path.state_record_count) * sizeof(ParticleGpuStateRecord);
+
+        auto& alive_barrier = barriers[barrier_count++];
+        alive_barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+        alive_barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        alive_barrier.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+        alive_barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        alive_barrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+        alive_barrier.buffer = build_path.alive_list.resource.buffer;
+        alive_barrier.offset = 0U;
+        alive_barrier.size =
+            static_cast<VkDeviceSize>(build_path.state_record_count) * sizeof(ParticleGpuAliveEntry);
+
+        if (build_path.gpu_sort_enabled &&
+            build_path.sort_keys.resource.buffer != VK_NULL_HANDLE) {
+            auto& sort_barrier = barriers[barrier_count++];
+            sort_barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+            sort_barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            sort_barrier.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+            sort_barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            sort_barrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT;
+            sort_barrier.buffer = build_path.sort_keys.resource.buffer;
+            sort_barrier.offset = 0U;
+            sort_barrier.size =
+                static_cast<VkDeviceSize>(build_path.sort_keys.element_capacity) *
+                sizeof(ParticleGpuSortKeyRecord);
+        }
+
         VkDependencyInfo dependency_info{};
         dependency_info.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-        dependency_info.bufferMemoryBarrierCount = static_cast<std::uint32_t>(barriers.size());
+        dependency_info.bufferMemoryBarrierCount = barrier_count;
         dependency_info.pBufferMemoryBarriers = barriers.data();
         vkCmdPipelineBarrier2(command_buffer_, &dependency_info);
     }
@@ -1989,25 +2034,37 @@ void ParticleSimulationHost::RecordBuild3D(VulkanContext& context_,
 
     if (context_.EnabledVulkan13Features().synchronization2 == VK_TRUE) {
         std::array<VkBufferMemoryBarrier2, 2U> barriers{};
-        barriers[0].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
-        barriers[0].srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-        barriers[0].srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
-        barriers[0].dstStageMask = VK_PIPELINE_STAGE_2_VERTEX_INPUT_BIT;
-        barriers[0].dstAccessMask = VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT;
-        barriers[0].buffer = build_path.draw_instances.resource.buffer;
-        barriers[0].offset = 0U;
-        barriers[0].size = static_cast<VkDeviceSize>(build_path.state_record_count) * sizeof(ecs::Particle3DGpuInstance);
-        barriers[1].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
-        barriers[1].srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-        barriers[1].srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
-        barriers[1].dstStageMask = VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT;
-        barriers[1].dstAccessMask = VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT;
-        barriers[1].buffer = build_path.indirect_commands.resource.buffer;
-        barriers[1].offset = 0U;
-        barriers[1].size = static_cast<VkDeviceSize>(build_path.indirect_command_count) * sizeof(ParticleGpuIndirectCommand);
+        std::uint32_t barrier_count = 0U;
+
+        auto& draw_barrier = barriers[barrier_count++];
+        draw_barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+        draw_barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        draw_barrier.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+        draw_barrier.dstStageMask = VK_PIPELINE_STAGE_2_VERTEX_INPUT_BIT;
+        draw_barrier.dstAccessMask = VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT;
+        draw_barrier.buffer = build_path.draw_instances.resource.buffer;
+        draw_barrier.offset = 0U;
+        draw_barrier.size =
+            static_cast<VkDeviceSize>(build_path.state_record_count) * sizeof(ecs::Particle3DGpuInstance);
+
+        if (build_path.indirect_command_count > 0U &&
+            build_path.indirect_commands.resource.buffer != VK_NULL_HANDLE) {
+            auto& indirect_barrier = barriers[barrier_count++];
+            indirect_barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+            indirect_barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            indirect_barrier.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+            indirect_barrier.dstStageMask = VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT;
+            indirect_barrier.dstAccessMask = VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT;
+            indirect_barrier.buffer = build_path.indirect_commands.resource.buffer;
+            indirect_barrier.offset = 0U;
+            indirect_barrier.size =
+                static_cast<VkDeviceSize>(build_path.indirect_command_count) *
+                sizeof(ParticleGpuIndirectCommand);
+        }
+
         VkDependencyInfo dependency_info{};
         dependency_info.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-        dependency_info.bufferMemoryBarrierCount = static_cast<std::uint32_t>(barriers.size());
+        dependency_info.bufferMemoryBarrierCount = barrier_count;
         dependency_info.pBufferMemoryBarriers = barriers.data();
         vkCmdPipelineBarrier2(command_buffer_, &dependency_info);
     }
@@ -2217,6 +2274,24 @@ void ParticleSimulationHost::EnsureBufferCapacity(VulkanContext& context_,
     create_info.size = target_bytes;
     create_info.usage = BuildBufferUsageFlags(usage_);
     create_info.memory_properties = create_info_cache.memory_properties;
+    auto append_queue_family = [&](const std::optional<std::uint32_t> family_) {
+        if (!family_.has_value()) {
+            return;
+        }
+        if (std::find(create_info.queue_family_indices.begin(),
+                      create_info.queue_family_indices.end(),
+                      family_.value()) == create_info.queue_family_indices.end()) {
+            create_info.queue_family_indices.push_back(family_.value());
+        }
+    };
+    append_queue_family(context_.QueueFamilies().graphics);
+    append_queue_family(context_.QueueFamilies().compute);
+    append_queue_family(context_.QueueFamilies().transfer);
+    if (create_info.queue_family_indices.size() > 1U) {
+        create_info.sharing_mode = VK_SHARING_MODE_CONCURRENT;
+    } else {
+        create_info.queue_family_indices.clear();
+    }
     slot_.resource = resource::BufferHost::CreateBuffer(context_, create_info, *gpu_memory_host);
     slot_.capacity_bytes = target_bytes;
     slot_.element_capacity = target_elements;

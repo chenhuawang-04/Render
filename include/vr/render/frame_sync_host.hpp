@@ -10,6 +10,7 @@
 #include <limits>
 #include <sstream>
 #include <stdexcept>
+#include <vector>
 
 namespace vr::render {
 
@@ -339,10 +340,6 @@ public:
         if (token_.graphics_signal_value == 0U) {
             throw std::runtime_error("FrameSyncHost::Submit token.graphics_signal_value must be non-zero");
         }
-        constexpr uint32_t kMaxWaitSemaphores = 8U;
-        if (extra_wait_count_ > kMaxWaitSemaphores - 1U) {
-            throw std::runtime_error("FrameSyncHost::Submit extra_wait_count exceeds internal capacity");
-        }
         if (extra_wait_count_ > 0U && extra_waits_ == nullptr) {
             throw std::runtime_error("FrameSyncHost::Submit extra_waits must be non-null when count > 0");
         }
@@ -350,45 +347,46 @@ public:
         const VkDevice device_ = context_.Device();
         CheckVk("vkResetFences(reuse fence)", vkResetFences(device_, 1U, &token_.reuse_fence));
 
-        std::array<VkSemaphore, kMaxWaitSemaphores> wait_semaphores{};
-        std::array<VkPipelineStageFlags, kMaxWaitSemaphores> wait_stage_masks{};
-        std::array<VkPipelineStageFlags2, kMaxWaitSemaphores> wait_stage_masks2{};
-        uint32_t wait_count = 0U;
+        std::vector<VkSemaphore> wait_semaphores{};
+        std::vector<VkPipelineStageFlags> wait_stage_masks{};
+        std::vector<VkPipelineStageFlags2> wait_stage_masks2{};
+        wait_semaphores.reserve(static_cast<std::size_t>(extra_wait_count_) + 1U);
+        wait_stage_masks.reserve(static_cast<std::size_t>(extra_wait_count_) + 1U);
+        wait_stage_masks2.reserve(static_cast<std::size_t>(extra_wait_count_) + 1U);
 
-        wait_semaphores[wait_count] = token_.acquire_binary;
-        wait_stage_masks[wait_count] = wait_stage_mask_ == 0U
+        const VkPipelineStageFlags acquire_stage_mask = wait_stage_mask_ == 0U
             ? VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT
             : wait_stage_mask_;
-        wait_stage_masks2[wait_count] = static_cast<VkPipelineStageFlags2>(wait_stage_masks[wait_count]);
-        if (wait_stage_masks2[wait_count] == 0U) {
-            wait_stage_masks2[wait_count] = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+        VkPipelineStageFlags2 acquire_stage_mask2 =
+            static_cast<VkPipelineStageFlags2>(acquire_stage_mask);
+        if (acquire_stage_mask2 == 0U) {
+            acquire_stage_mask2 = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
         }
-        ++wait_count;
+        wait_semaphores.push_back(token_.acquire_binary);
+        wait_stage_masks.push_back(acquire_stage_mask);
+        wait_stage_masks2.push_back(acquire_stage_mask2);
 
         for (uint32_t i = 0U; i < extra_wait_count_; ++i) {
             const FrameSubmitWait& wait_info = extra_waits_[i];
             if (wait_info.semaphore == VK_NULL_HANDLE) {
                 continue;
             }
-            if (wait_count >= kMaxWaitSemaphores) {
-                throw std::runtime_error("FrameSyncHost::Submit wait semaphore count overflow");
-            }
             const VkPipelineStageFlags stage_mask = wait_info.stage_mask == 0U
                 ? VK_PIPELINE_STAGE_ALL_COMMANDS_BIT
                 : wait_info.stage_mask;
-            wait_semaphores[wait_count] = wait_info.semaphore;
-            wait_stage_masks[wait_count] = stage_mask;
-            wait_stage_masks2[wait_count] = static_cast<VkPipelineStageFlags2>(stage_mask);
-            if (wait_stage_masks2[wait_count] == 0U) {
-                wait_stage_masks2[wait_count] = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+            VkPipelineStageFlags2 stage_mask2 = static_cast<VkPipelineStageFlags2>(stage_mask);
+            if (stage_mask2 == 0U) {
+                stage_mask2 = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
             }
-            ++wait_count;
+            wait_semaphores.push_back(wait_info.semaphore);
+            wait_stage_masks.push_back(stage_mask);
+            wait_stage_masks2.push_back(stage_mask2);
         }
 
         try {
             if (context_.EnabledVulkan13Features().synchronization2 == VK_TRUE) {
-                std::array<VkSemaphoreSubmitInfo, kMaxWaitSemaphores> wait_infos{};
-                for (uint32_t i = 0U; i < wait_count; ++i) {
+                std::vector<VkSemaphoreSubmitInfo> wait_infos(wait_semaphores.size());
+                for (std::size_t i = 0U; i < wait_semaphores.size(); ++i) {
                     wait_infos[i].sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
                     wait_infos[i].semaphore = wait_semaphores[i];
                     wait_infos[i].value = 0U;
@@ -411,8 +409,9 @@ public:
                 VkSubmitInfo2 submit_info2{};
                 submit_info2.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2;
                 submit_info2.flags = 0U;
-                submit_info2.waitSemaphoreInfoCount = wait_count;
-                submit_info2.pWaitSemaphoreInfos = wait_infos.data();
+                submit_info2.waitSemaphoreInfoCount = static_cast<std::uint32_t>(wait_infos.size());
+                submit_info2.pWaitSemaphoreInfos =
+                    wait_infos.empty() ? nullptr : wait_infos.data();
                 submit_info2.commandBufferInfoCount = 1U;
                 submit_info2.pCommandBufferInfos = &command_buffer_info;
                 submit_info2.signalSemaphoreInfoCount = 1U;
@@ -432,9 +431,11 @@ public:
 
             VkSubmitInfo submit_info{};
             submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-            submit_info.waitSemaphoreCount = wait_count;
-            submit_info.pWaitSemaphores = wait_semaphores.data();
-            submit_info.pWaitDstStageMask = wait_stage_masks.data();
+            submit_info.waitSemaphoreCount = static_cast<std::uint32_t>(wait_semaphores.size());
+            submit_info.pWaitSemaphores =
+                wait_semaphores.empty() ? nullptr : wait_semaphores.data();
+            submit_info.pWaitDstStageMask =
+                wait_stage_masks.empty() ? nullptr : wait_stage_masks.data();
             submit_info.commandBufferCount = 1U;
             submit_info.pCommandBuffers = &command_buffer_;
             submit_info.signalSemaphoreCount = 1U;

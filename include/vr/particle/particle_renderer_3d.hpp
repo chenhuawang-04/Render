@@ -42,6 +42,10 @@ namespace vr::resource {
 class GpuMemoryHost;
 }
 
+namespace vr::runtime::services {
+class RenderGraphRuntimeService;
+}
+
 namespace vr::particle {
 
 template<typename T>
@@ -128,6 +132,8 @@ public:
     void PrepareFrame(const render::ParticleRenderer3DPrepareView& prepare_view_);
     void DescribeGraphDescriptorBindings(render_graph::RenderGraphBuilder& builder_,
                                          render_graph::PassHandle pass_) const;
+    void RegisterGraphImportedResources(
+        runtime::services::RenderGraphRuntimeService& graph_runtime_service_) const;
     void Record(const render::FrameRecordContext& record_context_);
     void RecordSceneStage(const render::FrameRecordContext& record_context_,
                           render::SceneRenderStage stage_);
@@ -231,6 +237,8 @@ private:
         VkFormat depth_format_,
         BlendModeKind blend_mode_,
         DepthPipelineMode depth_mode_);
+    void ScheduleGraphComputeBuild(render_graph::RenderGraphBuilder& builder_,
+                                   render_graph::PassHandle pass_);
     void RemapCpuInstancesToBindless();
     [[nodiscard]] std::uint32_t ResolveTextureSlot(std::uint32_t texture_id_) const noexcept;
     [[nodiscard]] std::uint32_t ResolveSamplerSlot(std::uint32_t texture_id_) const noexcept;
@@ -275,6 +283,12 @@ private:
     ParticleRenderer3DMcVector<std::uint32_t> ordered_visible_component_indices{};
     Particle3DRuntimeUploadResult last_upload_result{};
     bool gpu_build_active = false;
+    bool graph_compute_pass_owned = false;
+    bool graph_compute_pass_scheduled = false;
+    render_graph::ResourceHandle graph_draw_instances_resource{};
+    render_graph::ResourceVersionHandle graph_draw_instances_version{};
+    render_graph::ResourceHandle graph_indirect_commands_resource{};
+    render_graph::ResourceVersionHandle graph_indirect_commands_version{};
 
     ParticleUploadHost* particle_upload_host = nullptr;
     ParticleSimulationHost* particle_simulation_host = nullptr;

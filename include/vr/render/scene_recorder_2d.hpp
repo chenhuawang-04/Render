@@ -100,6 +100,13 @@ concept SceneRecorder2DGraphDescriptorBindable =
         &RendererT::DescribeGraphDescriptorBindings;
     };
 
+template<typename RendererT>
+concept SceneRecorder2DGraphImportedResourceRegistrable =
+    requires(RendererT& renderer_,
+             runtime::services::RenderGraphRuntimeService& graph_runtime_service_) {
+        renderer_.RegisterGraphImportedResources(graph_runtime_service_);
+    };
+
 class SceneRecorder2D final {
 public:
     SceneRecorder2D() = default;
@@ -190,6 +197,8 @@ public:
             .record_fn = &RecordRenderer<RendererT>,
             .graph_record_fn = ResolveGraphRecordFn<RendererT>(),
             .describe_graph_bindings_fn = ResolveGraphDescriptorBindingsFn<RendererT>(),
+            .register_graph_imported_resources_fn =
+                ResolveGraphImportedResourcesFn<RendererT>(),
             .swapchain_recreated_fn = &OnSwapchainRecreatedRenderer<RendererT>,
             .configure_scene_fn = &ConfigureSceneRendererBinding<RendererT>,
             .configure_direct_scene_fn = &ConfigureDirectSceneRendererBinding<RendererT>,
@@ -214,6 +223,8 @@ public:
             .graph_record_fn = ResolveSceneConsumerGraphRecordFn<RendererT>(),
             .build_graph_color_attachment_fn = ResolveSceneConsumerGraphColorAttachmentFn<RendererT>(),
             .describe_graph_bindings_fn = ResolveGraphDescriptorBindingsFn<RendererT>(),
+            .register_graph_imported_resources_fn =
+                ResolveGraphImportedResourcesFn<RendererT>(),
             .swapchain_recreated_fn = &OnSwapchainRecreatedRenderer<RendererT>,
             .configure_scene_consumer_fn = &ConfigureSceneConsumerBinding<RendererT>,
             .set_output_target_fn = &SetOverlayOutputTarget<RendererT>,
@@ -235,6 +246,8 @@ public:
             .record_fn = &RecordRenderer<RendererT>,
             .graph_record_fn = ResolveGraphRecordFn<RendererT>(),
             .describe_graph_bindings_fn = ResolveGraphDescriptorBindingsFn<RendererT>(),
+            .register_graph_imported_resources_fn =
+                ResolveGraphImportedResourcesFn<RendererT>(),
             .swapchain_recreated_fn = &OnSwapchainRecreatedRenderer<RendererT>,
             .set_output_target_fn = &SetOverlayOutputTarget<RendererT>,
         };
@@ -294,6 +307,9 @@ private:
     using DescribeGraphBindingsFn = void (*)(void*,
                                              render_graph::RenderGraphBuilder&,
                                              render_graph::PassHandle);
+    using RegisterGraphImportedResourcesFn = void (*)(
+        void*,
+        runtime::services::RenderGraphRuntimeService&);
     using SwapchainRecreatedFn = void (*)(void*,
                                           std::uint32_t,
                                           VkExtent2D,
@@ -339,6 +355,7 @@ private:
         RecordFn record_fn = nullptr;
         GraphRecordFn graph_record_fn = nullptr;
         DescribeGraphBindingsFn describe_graph_bindings_fn = nullptr;
+        RegisterGraphImportedResourcesFn register_graph_imported_resources_fn = nullptr;
         SwapchainRecreatedFn swapchain_recreated_fn = nullptr;
         ConfigureSceneFn configure_scene_fn = nullptr;
         ConfigureDirectSceneFn configure_direct_scene_fn = nullptr;
@@ -355,6 +372,7 @@ private:
         GraphSceneConsumerRecordFn graph_record_fn = nullptr;
         BuildGraphColorAttachmentFn build_graph_color_attachment_fn = nullptr;
         DescribeGraphBindingsFn describe_graph_bindings_fn = nullptr;
+        RegisterGraphImportedResourcesFn register_graph_imported_resources_fn = nullptr;
         SwapchainRecreatedFn swapchain_recreated_fn = nullptr;
         ConfigureSceneConsumerFn configure_scene_consumer_fn = nullptr;
         SetOverlayOutputFn set_output_target_fn = nullptr;
@@ -368,6 +386,7 @@ private:
         RecordFn record_fn = nullptr;
         GraphRecordFn graph_record_fn = nullptr;
         DescribeGraphBindingsFn describe_graph_bindings_fn = nullptr;
+        RegisterGraphImportedResourcesFn register_graph_imported_resources_fn = nullptr;
         SwapchainRecreatedFn swapchain_recreated_fn = nullptr;
         SetOverlayOutputFn set_output_target_fn = nullptr;
     };
@@ -494,6 +513,23 @@ private:
     static constexpr DescribeGraphBindingsFn ResolveGraphDescriptorBindingsFn() noexcept {
         if constexpr (SceneRecorder2DGraphDescriptorBindable<RendererT>) {
             return &DescribeGraphBindings<RendererT>;
+        } else {
+            return nullptr;
+        }
+    }
+
+    template<typename RendererT>
+    static void RegisterGraphImportedResources(
+        void* renderer_,
+        runtime::services::RenderGraphRuntimeService& graph_runtime_service_) {
+        static_cast<RendererT*>(renderer_)->RegisterGraphImportedResources(
+            graph_runtime_service_);
+    }
+
+    template<typename RendererT>
+    static constexpr RegisterGraphImportedResourcesFn ResolveGraphImportedResourcesFn() noexcept {
+        if constexpr (SceneRecorder2DGraphImportedResourceRegistrable<RendererT>) {
+            return &RegisterGraphImportedResources<RendererT>;
         } else {
             return nullptr;
         }

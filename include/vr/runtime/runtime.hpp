@@ -6,7 +6,9 @@
 #include "vr/runtime/runtime_create_info.hpp"
 #include "vr/runtime/runtime_status.hpp"
 
+#include <array>
 #include <cstdint>
+#include <vector>
 
 namespace vr::runtime {
 
@@ -147,6 +149,14 @@ public:
         phase_driver.OnPreRecord(frame.token.frame_index,
                                  host.Loop().Sync().LastSubmittedValue(),
                                  host.Loop().Sync().CompletedSubmitValue());
+        auto* graph_service =
+            host.Services().template TryGet<services::RenderGraphRuntimeService>();
+        if (graph_service != nullptr &&
+            upload_flush.extra_wait_count != 0U &&
+            upload_flush.extra_wait.semaphore != VK_NULL_HANDLE) {
+            graph_service->RegisterExternalQueueSubmitWait(render_graph::QueueClass::compute,
+                                                           upload_flush.extra_wait.semaphore);
+        }
 
         kernel.Commands().BeginFrame(frame.token.frame_index);
         const VkCommandBuffer command_buffer = kernel.Commands().BeginPrimaryGraphics(
@@ -168,14 +178,32 @@ public:
                               command_buffer);
         kernel.Commands().End(command_buffer);
 
+        std::vector<vr::render::FrameSubmitWait> submit_waits{};
+        if (graph_service != nullptr &&
+            graph_service->HasPreparedMultiQueueSubmission()) {
+            (void)graph_service->SubmitPreparedMultiQueueWork(host.Context());
+            for (const auto& wait_ : graph_service->PendingGraphicsSubmitWaits()) {
+                submit_waits.push_back(wait_);
+            }
+        }
+        for (std::uint32_t wait_index = 0U;
+             wait_index < upload_flush.extra_wait_count;
+             ++wait_index) {
+            (void)wait_index;
+            submit_waits.push_back(upload_flush.extra_wait);
+        }
+
         const GraphicsSubmitResult submit_result = kernel.SubmitGraphics({
             .token = frame.token,
             .command_buffer = command_buffer,
             .wait_stage_mask = host.Config().render_loop.submit_wait_stage_mask,
-            .extra_waits = upload_flush.ExtraWaits(),
-            .extra_wait_count = upload_flush.extra_wait_count,
+            .extra_waits = submit_waits.empty() ? nullptr : submit_waits.data(),
+            .extra_wait_count = static_cast<std::uint32_t>(submit_waits.size()),
         });
         (void)submit_result;
+        if (graph_service != nullptr) {
+            graph_service->MarkGraphicsSubmissionEnqueued(frame.token);
+        }
         phase_driver.OnSubmit();
 
         phase_driver.OnPostRecord(frame.token.frame_index,

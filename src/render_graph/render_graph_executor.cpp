@@ -255,6 +255,79 @@ void PrepareDescriptorSetsForPass(GraphCommandContext& context_,
     context_.SetCurrentPassDescriptorSets(std::move(descriptor_sets));
 }
 
+void EmitDependencyInfo(const VkCommandBuffer command_buffer_,
+                        const VulkanDependencyInfoData* const dependency_,
+                        RenderGraphRecordStats& stats_) {
+    if (command_buffer_ == VK_NULL_HANDLE || dependency_ == nullptr) {
+        return;
+    }
+
+    const VkDependencyInfo dependency_info = dependency_->BuildVkDependencyInfo();
+    if (dependency_info.memoryBarrierCount == 0U &&
+        dependency_info.bufferMemoryBarrierCount == 0U &&
+        dependency_info.imageMemoryBarrierCount == 0U) {
+        return;
+    }
+
+    vkCmdPipelineBarrier2(command_buffer_, &dependency_info);
+    stats_.command_batch_count += 1U;
+    stats_.memory_barrier_count +=
+        static_cast<std::uint32_t>(dependency_->memory_barriers.size());
+    stats_.buffer_barrier_count +=
+        static_cast<std::uint32_t>(dependency_->buffer_barriers.size());
+    stats_.image_barrier_count +=
+        static_cast<std::uint32_t>(dependency_->image_barriers.size());
+}
+
+[[nodiscard]] std::vector<const VulkanCommandBarrierBatch*> BuildCommandBatchesByPass(
+    const GraphCommandContext& context_) {
+    std::vector<const VulkanCommandBarrierBatch*> command_batches_by_pass(
+        context_.Graph().Passes().size(),
+        nullptr);
+    for (const auto& batch_ : context_.CommandReadyBarriers().command_batches) {
+        if (batch_.pass.index < command_batches_by_pass.size()) {
+            command_batches_by_pass[batch_.pass.index] = &batch_;
+        }
+    }
+    return command_batches_by_pass;
+}
+
+void RecordPass(GraphCommandContext& context_,
+                const CompiledPass& pass_,
+                const std::vector<const VulkanCommandBarrierBatch*>& command_batches_by_pass_,
+                RenderGraphRecordStats& stats_) {
+    const auto* command_batch = (pass_.handle.index < command_batches_by_pass_.size())
+        ? command_batches_by_pass_[pass_.handle.index]
+        : nullptr;
+
+    EmitDependencyInfo(context_.CommandBuffer(),
+                       command_batch != nullptr ? &command_batch->dependency : nullptr,
+                       stats_);
+
+    const bool has_raster_pass = pass_.raster_pass.has_value();
+    if (!has_raster_pass && !pass_.execute) {
+        return;
+    }
+
+    context_.SetCurrentPass(pass_.handle);
+    PrepareDescriptorSetsForPass(context_, pass_);
+
+    if (has_raster_pass) {
+        const auto rendering_info = context_.BuildRenderingInfo(*pass_.raster_pass);
+        context_.BeginRendering(rendering_info);
+    }
+
+    if (pass_.execute) {
+        pass_.execute(context_);
+    }
+
+    if (has_raster_pass) {
+        context_.EndRendering();
+    }
+    context_.ClearCurrentPass();
+    stats_.pass_count += 1U;
+}
+
 } // namespace
 
 RenderGraphRecordStats RenderGraphExecutor::Record(GraphCommandContext& context_) {
@@ -271,63 +344,42 @@ RenderGraphRecordStats RenderGraphExecutor::Record(GraphCommandContext& context_
             "RenderGraphExecutor::Record currently supports only single-queue command batches");
     }
 
-    std::vector<const VulkanCommandBarrierBatch*> command_batches_by_pass(
-        context_.Graph().Passes().size(),
-        nullptr);
-    for (const auto& batch_ : command_ready.command_batches) {
-        if (batch_.pass.index < command_batches_by_pass.size()) {
-            command_batches_by_pass[batch_.pass.index] = &batch_;
-        }
-    }
+    const auto command_batches_by_pass = BuildCommandBatchesByPass(context_);
 
     for (const auto pass_handle_ : context_.Graph().ExecutionOrder()) {
         const auto* pass_ = context_.Graph().FindPass(pass_handle_);
         if (pass_ == nullptr) {
             continue;
         }
-
-        const auto* command_batch = (pass_->handle.index < command_batches_by_pass.size())
-            ? command_batches_by_pass[pass_->handle.index]
-            : nullptr;
-
-        if (command_batch != nullptr) {
-            const VkDependencyInfo dependency_info = command_batch->dependency.BuildVkDependencyInfo();
-            if (dependency_info.memoryBarrierCount != 0U ||
-                dependency_info.bufferMemoryBarrierCount != 0U ||
-                dependency_info.imageMemoryBarrierCount != 0U) {
-                vkCmdPipelineBarrier2(command_buffer, &dependency_info);
-                stats.command_batch_count += 1U;
-                stats.memory_barrier_count += static_cast<std::uint32_t>(command_batch->dependency.memory_barriers.size());
-                stats.buffer_barrier_count += static_cast<std::uint32_t>(command_batch->dependency.buffer_barriers.size());
-                stats.image_barrier_count += static_cast<std::uint32_t>(command_batch->dependency.image_barriers.size());
-            }
-        }
-
-        const bool has_raster_pass = pass_->raster_pass.has_value();
-        if (!has_raster_pass && !pass_->execute) {
-            continue;
-        }
-
-        context_.SetCurrentPass(pass_->handle);
-        PrepareDescriptorSetsForPass(context_, *pass_);
-
-        if (has_raster_pass) {
-            const auto rendering_info = context_.BuildRenderingInfo(*pass_->raster_pass);
-            context_.BeginRendering(rendering_info);
-        }
-
-        if (pass_->execute) {
-            pass_->execute(context_);
-        }
-
-        if (has_raster_pass) {
-            context_.EndRendering();
-        }
-        context_.ClearCurrentPass();
-        stats.pass_count += 1U;
+        RecordPass(context_, *pass_, command_batches_by_pass, stats);
     }
 
     stats.queue_transfer_batch_count = static_cast<std::uint32_t>(command_ready.queue_transfer_batches.size());
+    return stats;
+}
+
+RenderGraphRecordStats RenderGraphExecutor::RecordQueueBatch(
+    GraphCommandContext& context_,
+    const QueueSubmitBatch& queue_batch_,
+    const VulkanDependencyInfoData* begin_dependency_,
+    const VulkanDependencyInfoData* end_dependency_) {
+    RenderGraphRecordStats stats{};
+    if (context_.CommandBuffer() == VK_NULL_HANDLE) {
+        return stats;
+    }
+
+    const auto command_batches_by_pass = BuildCommandBatchesByPass(context_);
+    EmitDependencyInfo(context_.CommandBuffer(), begin_dependency_, stats);
+
+    for (const auto pass_handle_ : queue_batch_.passes) {
+        const auto* pass_ = context_.Graph().FindPass(pass_handle_);
+        if (pass_ == nullptr) {
+            continue;
+        }
+        RecordPass(context_, *pass_, command_batches_by_pass, stats);
+    }
+
+    EmitDependencyInfo(context_.CommandBuffer(), end_dependency_, stats);
     return stats;
 }
 

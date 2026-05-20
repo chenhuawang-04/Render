@@ -33,6 +33,10 @@ class UploadHost;
 class BindlessResourceSystem;
 }
 
+namespace vr::runtime::services {
+class RenderGraphRuntimeService;
+}
+
 namespace vr::render_graph {
 class GraphCommandContext;
 class RenderGraphBuilder;
@@ -103,6 +107,8 @@ public:
     void PrepareFrame(const render::ParticleRenderer2DPrepareView& prepare_view_);
     void DescribeGraphDescriptorBindings(render_graph::RenderGraphBuilder& builder_,
                                          render_graph::PassHandle pass_) const;
+    void RegisterGraphImportedResources(
+        runtime::services::RenderGraphRuntimeService& graph_runtime_service_) const;
     void Record(const render::FrameRecordContext& record_context_);
     void RecordGraphOverlay(render_graph::GraphCommandContext& context_,
                             render_graph::ResourceHandle color_target_);
@@ -156,6 +162,8 @@ private:
         render::PipelineHost& pipeline_host_,
         VkFormat color_format_,
         BlendModeKind blend_mode_);
+    void ScheduleGraphComputeBuild(render_graph::RenderGraphBuilder& builder_,
+                                   render_graph::PassHandle pass_);
     void RecordGraphInternal(render_graph::GraphCommandContext& context_,
                              render_graph::ResourceHandle color_target_);
     void RecordDrawBatches(VkCommandBuffer command_buffer_,
@@ -181,6 +189,12 @@ private:
     ParticleSimulationGpuBuildResult last_gpu_build_result{};
     Particle2DRuntimeUploadResult last_upload_result{};
     bool gpu_build_active = false;
+    bool graph_compute_pass_owned = false;
+    bool graph_compute_pass_scheduled = false;
+    render_graph::ResourceHandle graph_draw_instances_resource{};
+    render_graph::ResourceVersionHandle graph_draw_instances_version{};
+    render_graph::ResourceHandle graph_indirect_commands_resource{};
+    render_graph::ResourceVersionHandle graph_indirect_commands_version{};
 
     ParticleUploadHost* particle_upload_host = nullptr;
     ParticleSimulationHost* particle_simulation_host = nullptr;

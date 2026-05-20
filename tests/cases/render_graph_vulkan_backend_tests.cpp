@@ -5,6 +5,7 @@
 #include "vr/render/render_view_submission_utils.hpp"
 #include "vr/render/scene_recorder_3d.hpp"
 #include "vr/render_graph/frame_snapshot.hpp"
+#include "vr/render_graph/queue_execution_policy.hpp"
 #include "vr/render_graph/render_graph_executor.hpp"
 #include "vr/render_graph/vulkan_barrier_plan.hpp"
 #include "vr/render_graph/vulkan_resource_table.hpp"
@@ -99,6 +100,38 @@ struct ResolveFailureInjectionScope final {
     return false;
 }
 
+[[nodiscard]] bool HasEffectiveQueueBatchWithPass(
+    const vr::runtime::RenderGraphRuntimeDiagnostics& diagnostics_,
+    std::string_view queue_name_,
+    std::string_view pass_name_) {
+    return std::any_of(
+        diagnostics_.effective_queue_batches.begin(),
+        diagnostics_.effective_queue_batches.end(),
+        [&](const vr::runtime::RenderGraphQueueBatchDiagnostics& batch_) {
+            if (batch_.queue_name != queue_name_) {
+                return false;
+            }
+            return std::any_of(
+                batch_.pass_debug_names.begin(),
+                batch_.pass_debug_names.end(),
+                [&](const std::string& debug_name_) {
+                    return debug_name_ == pass_name_;
+                });
+        });
+}
+
+[[nodiscard]] bool AllEffectiveQueueBatchesUseQueue(
+    const vr::runtime::RenderGraphRuntimeDiagnostics& diagnostics_,
+    std::string_view queue_name_) {
+    return !diagnostics_.effective_queue_batches.empty() &&
+           std::all_of(
+               diagnostics_.effective_queue_batches.begin(),
+               diagnostics_.effective_queue_batches.end(),
+               [&](const vr::runtime::RenderGraphQueueBatchDiagnostics& batch_) {
+                   return batch_.queue_name == queue_name_;
+               });
+}
+
 [[nodiscard]] Host::CreateInfo MakeMinimalRenderTargetRuntimeCreateInfo(
     const bool enable_validation_ = false) {
     Host::CreateInfo create_info{};
@@ -131,6 +164,351 @@ struct ResolveFailureInjectionScope final {
         }
     }
     return nullptr;
+}
+
+[[nodiscard]] vr::render_graph::CompiledRenderGraph BuildCrossQueuePolicyGraph() {
+    vr::render_graph::RenderGraphBuilder builder{};
+    const auto payload = builder.CreateBuffer(
+        "cross_queue_payload",
+        vr::render_graph::BufferDesc{
+            .size_bytes = 256U,
+            .usage = vr::render_graph::buffer_usage_storage_flag |
+                     vr::render_graph::buffer_usage_transfer_dst_flag,
+        });
+    const auto upload = builder.AddPass("upload_payload",
+                                        false,
+                                        vr::render_graph::QueueClass::transfer);
+    const auto compute = builder.AddPass("simulate_payload",
+                                         false,
+                                         vr::render_graph::QueueClass::compute);
+    const auto consume = builder.AddPass("consume_payload",
+                                         true,
+                                         vr::render_graph::QueueClass::graphics);
+
+    const auto uploaded = builder.Write(
+        upload,
+        payload,
+        vr::render_graph::AccessDesc{
+            .access = vr::render_graph::AccessKind::transfer_write,
+            .buffer_range = {.offset_bytes = 0U, .size_bytes = 256U},
+        });
+    (void)builder.Read(
+        compute,
+        uploaded,
+        vr::render_graph::AccessDesc{
+            .access = vr::render_graph::AccessKind::shader_storage_read,
+            .buffer_range = {.offset_bytes = 0U, .size_bytes = 256U},
+        });
+    const auto simulated = builder.Write(
+        compute,
+        uploaded,
+        vr::render_graph::AccessDesc{
+            .access = vr::render_graph::AccessKind::shader_storage_write,
+            .buffer_range = {.offset_bytes = 0U, .size_bytes = 256U},
+        });
+    (void)builder.Read(
+        consume,
+        simulated,
+        vr::render_graph::AccessDesc{
+            .access = vr::render_graph::AccessKind::uniform_read,
+            .buffer_range = {.offset_bytes = 0U, .size_bytes = 256U},
+        });
+    return builder.Compile();
+}
+
+[[nodiscard]] bool HasDistinctTransferQueue(const vr::VulkanContext& device_) noexcept {
+    return device_.TransferQueue() != VK_NULL_HANDLE &&
+           device_.QueueFamilies().graphics.has_value() &&
+           device_.QueueFamilies().transfer.has_value() &&
+           device_.QueueFamilies().transfer.value() != device_.QueueFamilies().graphics.value();
+}
+
+[[nodiscard]] bool HasDistinctComputeQueue(const vr::VulkanContext& device_) noexcept {
+    return device_.ComputeQueue() != VK_NULL_HANDLE &&
+           device_.QueueFamilies().graphics.has_value() &&
+           device_.QueueFamilies().compute.has_value() &&
+           device_.QueueFamilies().compute.value() != device_.QueueFamilies().graphics.value();
+}
+
+[[nodiscard]] bool HasOwnedTransferSubmitQueue(const vr::VulkanContext& device_) noexcept {
+    return device_.TransferQueue() != VK_NULL_HANDLE;
+}
+
+[[nodiscard]] bool HasOwnedComputeSubmitQueue(const vr::VulkanContext& device_) noexcept {
+    return device_.ComputeQueue() != VK_NULL_HANDLE;
+}
+
+void EnableRenderGraphRuntimeExecutionFeatures(Host::CreateInfo& create_info_) noexcept {
+    create_info_.platform.device.required_vulkan13_features.dynamicRendering = VK_TRUE;
+    create_info_.platform.device.required_vulkan13_features.synchronization2 = VK_TRUE;
+    create_info_.render_loop.submit_wait_stage_mask = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+    create_info_.diagnostics.level = vr::runtime::DiagnosticsLevel::CountersOnly;
+}
+
+[[nodiscard]] vr::runtime::RenderGraphRuntimeDiagnostics MakeGraphicsFallbackQueueTimelineDiagnostics() {
+    vr::runtime::RenderGraphRuntimeDiagnostics diagnostics{};
+    diagnostics.available = true;
+    diagnostics.frame_compiled = true;
+    diagnostics.transfer_queue_requested = true;
+    diagnostics.compute_queue_requested = true;
+    diagnostics.multi_queue_requested = true;
+    diagnostics.graphics_fallback_active = true;
+    diagnostics.queue_fallback_reason = "distinct transfer/compute queues unavailable";
+    diagnostics.effective_queue_batch_count = 1U;
+    diagnostics.effective_queue_batches.push_back(
+        vr::runtime::RenderGraphQueueBatchDiagnostics{
+            .batch_index = 0U,
+            .queue_name = "graphics",
+            .pass_indices = {0U, 1U},
+            .pass_debug_names = {"upload_payload", "prepare_present_target"},
+        });
+    return diagnostics;
+}
+
+[[nodiscard]] vr::runtime::RenderGraphRuntimeDiagnostics MakeTransferEnabledQueueTimelineDiagnostics() {
+    vr::runtime::RenderGraphRuntimeDiagnostics diagnostics{};
+    diagnostics.available = true;
+    diagnostics.frame_compiled = true;
+    diagnostics.transfer_queue_requested = true;
+    diagnostics.multi_queue_requested = true;
+    diagnostics.transfer_queue_enabled = true;
+    diagnostics.multi_queue_enabled = true;
+    diagnostics.effective_queue_batch_count = 2U;
+    diagnostics.effective_queue_dependency_count = 1U;
+    diagnostics.graphics_submit_wait_count = 1U;
+    diagnostics.non_graphics_submit_batch_count = 1U;
+    diagnostics.effective_queue_batches.push_back(
+        vr::runtime::RenderGraphQueueBatchDiagnostics{
+            .batch_index = 0U,
+            .queue_name = "transfer",
+            .pass_indices = {0U},
+            .pass_debug_names = {"text_2d_upload_instances"},
+            .signal_dependency_indices = {0U},
+            .submit_signal_count = 1U,
+            .submitted_on_owned_queue = true,
+        });
+    diagnostics.effective_queue_batches.push_back(
+        vr::runtime::RenderGraphQueueBatchDiagnostics{
+            .batch_index = 1U,
+            .queue_name = "graphics",
+            .pass_indices = {1U},
+            .pass_debug_names = {"overlay_pass"},
+            .wait_dependency_indices = {0U},
+            .submit_wait_count = 1U,
+        });
+    diagnostics.effective_queue_dependencies.push_back(
+        vr::runtime::RenderGraphQueueDependencyDiagnostics{
+            .dependency_index = 0U,
+            .source_queue_name = "transfer",
+            .target_queue_name = "graphics",
+            .source_batch_index = 0U,
+            .target_batch_index = 1U,
+            .source_pass_index = 0U,
+            .target_pass_index = 1U,
+            .source_pass_debug_name = "text_2d_upload_instances",
+            .target_pass_debug_name = "overlay_pass",
+            .resource_count = 1U,
+            .queue_transfer = true,
+        });
+    return diagnostics;
+}
+
+[[nodiscard]] vr::runtime::RenderGraphRuntimeDiagnostics MakeComputeEnabledQueueTimelineDiagnostics() {
+    vr::runtime::RenderGraphRuntimeDiagnostics diagnostics{};
+    diagnostics.available = true;
+    diagnostics.frame_compiled = true;
+    diagnostics.compute_queue_requested = true;
+    diagnostics.multi_queue_requested = true;
+    diagnostics.compute_queue_enabled = true;
+    diagnostics.multi_queue_enabled = true;
+    diagnostics.effective_queue_batch_count = 2U;
+    diagnostics.effective_queue_dependency_count = 1U;
+    diagnostics.graphics_submit_wait_count = 1U;
+    diagnostics.non_graphics_submit_batch_count = 1U;
+    diagnostics.effective_queue_batches.push_back(
+        vr::runtime::RenderGraphQueueBatchDiagnostics{
+            .batch_index = 0U,
+            .queue_name = "compute",
+            .pass_indices = {0U},
+            .pass_debug_names = {"particle_2d_gpu_build"},
+            .signal_dependency_indices = {0U},
+            .submit_signal_count = 1U,
+            .submitted_on_owned_queue = true,
+        });
+    diagnostics.effective_queue_batches.push_back(
+        vr::runtime::RenderGraphQueueBatchDiagnostics{
+            .batch_index = 1U,
+            .queue_name = "graphics",
+            .pass_indices = {1U},
+            .pass_debug_names = {"overlay_pass"},
+            .wait_dependency_indices = {0U},
+            .submit_wait_count = 1U,
+        });
+    diagnostics.effective_queue_dependencies.push_back(
+        vr::runtime::RenderGraphQueueDependencyDiagnostics{
+            .dependency_index = 0U,
+            .source_queue_name = "compute",
+            .target_queue_name = "graphics",
+            .source_batch_index = 0U,
+            .target_batch_index = 1U,
+            .source_pass_index = 0U,
+            .target_pass_index = 1U,
+            .source_pass_debug_name = "particle_2d_gpu_build",
+            .target_pass_debug_name = "overlay_pass",
+            .resource_count = 1U,
+            .queue_transfer = true,
+        });
+    return diagnostics;
+}
+
+[[nodiscard]] vr::runtime::RenderGraphRuntimeDiagnostics MakeTransferComputeEnabledQueueTimelineDiagnostics() {
+    vr::runtime::RenderGraphRuntimeDiagnostics diagnostics{};
+    diagnostics.available = true;
+    diagnostics.frame_compiled = true;
+    diagnostics.transfer_queue_requested = true;
+    diagnostics.compute_queue_requested = true;
+    diagnostics.multi_queue_requested = true;
+    diagnostics.transfer_queue_enabled = true;
+    diagnostics.compute_queue_enabled = true;
+    diagnostics.multi_queue_enabled = true;
+    diagnostics.effective_queue_batch_count = 3U;
+    diagnostics.effective_queue_dependency_count = 2U;
+    diagnostics.graphics_submit_wait_count = 2U;
+    diagnostics.non_graphics_submit_batch_count = 2U;
+    diagnostics.effective_queue_batches.push_back(
+        vr::runtime::RenderGraphQueueBatchDiagnostics{
+            .batch_index = 0U,
+            .queue_name = "transfer",
+            .pass_indices = {0U},
+            .pass_debug_names = {"upload_payload"},
+            .signal_dependency_indices = {0U},
+            .submit_signal_count = 1U,
+            .submitted_on_owned_queue = true,
+        });
+    diagnostics.effective_queue_batches.push_back(
+        vr::runtime::RenderGraphQueueBatchDiagnostics{
+            .batch_index = 1U,
+            .queue_name = "compute",
+            .pass_indices = {1U},
+            .pass_debug_names = {"simulate_payload"},
+            .wait_dependency_indices = {0U},
+            .signal_dependency_indices = {1U},
+            .submit_wait_count = 1U,
+            .submit_signal_count = 1U,
+            .submitted_on_owned_queue = true,
+        });
+    diagnostics.effective_queue_batches.push_back(
+        vr::runtime::RenderGraphQueueBatchDiagnostics{
+            .batch_index = 2U,
+            .queue_name = "graphics",
+            .pass_indices = {2U},
+            .pass_debug_names = {"prepare_present_target"},
+            .wait_dependency_indices = {1U},
+            .submit_wait_count = 2U,
+        });
+    diagnostics.effective_queue_dependencies.push_back(
+        vr::runtime::RenderGraphQueueDependencyDiagnostics{
+            .dependency_index = 0U,
+            .source_queue_name = "transfer",
+            .target_queue_name = "compute",
+            .source_batch_index = 0U,
+            .target_batch_index = 1U,
+            .source_pass_index = 0U,
+            .target_pass_index = 1U,
+            .source_pass_debug_name = "upload_payload",
+            .target_pass_debug_name = "simulate_payload",
+            .resource_count = 1U,
+            .queue_transfer = true,
+        });
+    diagnostics.effective_queue_dependencies.push_back(
+        vr::runtime::RenderGraphQueueDependencyDiagnostics{
+            .dependency_index = 1U,
+            .source_queue_name = "compute",
+            .target_queue_name = "graphics",
+            .source_batch_index = 1U,
+            .target_batch_index = 2U,
+            .source_pass_index = 1U,
+            .target_pass_index = 2U,
+            .source_pass_debug_name = "simulate_payload",
+            .target_pass_debug_name = "prepare_present_target",
+            .resource_count = 1U,
+            .queue_transfer = true,
+        });
+    return diagnostics;
+}
+
+[[nodiscard]] vr::runtime::RenderGraphRuntimeDiagnostics MakeMultiGraphicsComputeEnabledQueueTimelineDiagnostics() {
+    vr::runtime::RenderGraphRuntimeDiagnostics diagnostics{};
+    diagnostics.available = true;
+    diagnostics.frame_compiled = true;
+    diagnostics.compute_queue_requested = true;
+    diagnostics.multi_queue_requested = true;
+    diagnostics.compute_queue_enabled = true;
+    diagnostics.multi_queue_enabled = true;
+    diagnostics.effective_queue_batch_count = 3U;
+    diagnostics.effective_queue_dependency_count = 2U;
+    diagnostics.graphics_submit_wait_count = 1U;
+    diagnostics.non_graphics_submit_batch_count = 2U;
+    diagnostics.effective_queue_batches.push_back(
+        vr::runtime::RenderGraphQueueBatchDiagnostics{
+            .batch_index = 0U,
+            .queue_name = "graphics",
+            .pass_indices = {0U},
+            .pass_debug_names = {"scene_prepare"},
+            .signal_dependency_indices = {0U},
+            .submit_signal_count = 1U,
+            .submitted_on_owned_queue = true,
+        });
+    diagnostics.effective_queue_batches.push_back(
+        vr::runtime::RenderGraphQueueBatchDiagnostics{
+            .batch_index = 1U,
+            .queue_name = "compute",
+            .pass_indices = {1U},
+            .pass_debug_names = {"simulate_payload"},
+            .wait_dependency_indices = {0U},
+            .signal_dependency_indices = {1U},
+            .submit_wait_count = 1U,
+            .submit_signal_count = 1U,
+            .submitted_on_owned_queue = true,
+        });
+    diagnostics.effective_queue_batches.push_back(
+        vr::runtime::RenderGraphQueueBatchDiagnostics{
+            .batch_index = 2U,
+            .queue_name = "graphics",
+            .pass_indices = {2U, 3U},
+            .pass_debug_names = {"prepare_present_target", "present_transition"},
+            .wait_dependency_indices = {1U},
+            .submit_wait_count = 1U,
+        });
+    diagnostics.effective_queue_dependencies.push_back(
+        vr::runtime::RenderGraphQueueDependencyDiagnostics{
+            .dependency_index = 0U,
+            .source_queue_name = "graphics",
+            .target_queue_name = "compute",
+            .source_batch_index = 0U,
+            .target_batch_index = 1U,
+            .source_pass_index = 0U,
+            .target_pass_index = 1U,
+            .source_pass_debug_name = "scene_prepare",
+            .target_pass_debug_name = "simulate_payload",
+            .resource_count = 1U,
+            .queue_transfer = true,
+        });
+    diagnostics.effective_queue_dependencies.push_back(
+        vr::runtime::RenderGraphQueueDependencyDiagnostics{
+            .dependency_index = 1U,
+            .source_queue_name = "compute",
+            .target_queue_name = "graphics",
+            .source_batch_index = 1U,
+            .target_batch_index = 2U,
+            .source_pass_index = 1U,
+            .target_pass_index = 2U,
+            .source_pass_debug_name = "simulate_payload",
+            .target_pass_debug_name = "prepare_present_target",
+            .resource_count = 1U,
+            .queue_transfer = true,
+        });
+    return diagnostics;
 }
 
 VR_TEST_CASE(RenderGraphVulkanBackend_builds_vulkan_create_infos_from_graph_descs,
@@ -364,11 +742,175 @@ VR_TEST_CASE(RenderGraphVulkanBackend_lowers_logical_barriers_and_exports_dump,
     VR_CHECK(compiled_json.find("\"barrierPlan\"") != std::string::npos);
 }
 
+VR_TEST_CASE(RenderGraphQueueExecutionPolicy_falls_back_to_graphics_until_multi_queue_submit_is_enabled,
+             "unit;render_graph;runtime;queue") {
+    const auto compiled = BuildCrossQueuePolicyGraph();
+
+    vr::render_graph::QueueExecutionCapabilities capabilities{};
+    capabilities.queue_families.graphics = 1U;
+    capabilities.queue_families.present = 1U;
+    capabilities.queue_families.transfer = 2U;
+    capabilities.queue_families.compute = 3U;
+    capabilities.has_graphics_queue = true;
+    capabilities.has_transfer_queue = true;
+    capabilities.has_compute_queue = true;
+
+    const auto policy = vr::render_graph::ResolveQueueExecutionPolicy(
+        compiled,
+        capabilities,
+        false);
+
+    VR_CHECK(policy.transfer_requested);
+    VR_CHECK(policy.compute_requested);
+    VR_CHECK(policy.multi_queue_requested);
+    VR_CHECK(!policy.transfer_enabled);
+    VR_CHECK(!policy.compute_enabled);
+    VR_CHECK(!policy.multi_queue_enabled);
+    VR_CHECK(policy.graphics_fallback_active);
+    VR_REQUIRE(policy.effective_queue_families.graphics.has_value());
+    VR_CHECK(policy.effective_queue_families.transfer ==
+             policy.effective_queue_families.graphics);
+    VR_CHECK(policy.effective_queue_families.compute ==
+             policy.effective_queue_families.graphics);
+    VR_CHECK(ContainsCaseInsensitive(policy.fallback_reason, "not enabled"));
+}
+
+VR_TEST_CASE(RenderGraphQueueExecutionPolicy_keeps_distinct_transfer_and_compute_queues_when_enabled,
+             "unit;render_graph;runtime;queue") {
+    const auto compiled = BuildCrossQueuePolicyGraph();
+
+    vr::render_graph::QueueExecutionCapabilities capabilities{};
+    capabilities.queue_families.graphics = 1U;
+    capabilities.queue_families.present = 1U;
+    capabilities.queue_families.transfer = 2U;
+    capabilities.queue_families.compute = 3U;
+    capabilities.has_graphics_queue = true;
+    capabilities.has_transfer_queue = true;
+    capabilities.has_compute_queue = true;
+
+    const auto policy = vr::render_graph::ResolveQueueExecutionPolicy(
+        compiled,
+        capabilities,
+        true);
+
+    VR_CHECK(policy.transfer_requested);
+    VR_CHECK(policy.compute_requested);
+    VR_CHECK(policy.transfer_enabled);
+    VR_CHECK(policy.compute_enabled);
+    VR_CHECK(policy.multi_queue_enabled);
+    VR_CHECK(!policy.graphics_fallback_active);
+    VR_CHECK(policy.fallback_reason.empty());
+    VR_CHECK(policy.effective_queue_families.transfer == capabilities.queue_families.transfer);
+    VR_CHECK(policy.effective_queue_families.compute == capabilities.queue_families.compute);
+}
+
+VR_TEST_CASE(RenderGraphQueueExecutionPolicy_keeps_owned_submit_enabled_when_transfer_and_compute_alias_graphics,
+             "unit;render_graph;runtime;queue") {
+    const auto compiled = BuildCrossQueuePolicyGraph();
+
+    vr::render_graph::QueueExecutionCapabilities capabilities{};
+    capabilities.queue_families.graphics = 1U;
+    capabilities.queue_families.present = 1U;
+    capabilities.queue_families.transfer = 1U;
+    capabilities.queue_families.compute = 1U;
+    capabilities.has_graphics_queue = true;
+    capabilities.has_transfer_queue = true;
+    capabilities.has_compute_queue = true;
+
+    const auto policy = vr::render_graph::ResolveQueueExecutionPolicy(
+        compiled,
+        capabilities,
+        true);
+
+    VR_CHECK(policy.transfer_requested);
+    VR_CHECK(policy.compute_requested);
+    VR_CHECK(policy.transfer_enabled);
+    VR_CHECK(policy.compute_enabled);
+    VR_CHECK(policy.multi_queue_enabled);
+    VR_CHECK(!policy.graphics_fallback_active);
+    VR_CHECK(policy.fallback_reason.empty());
+    VR_CHECK(policy.effective_queue_families.transfer == capabilities.queue_families.transfer);
+    VR_CHECK(policy.effective_queue_families.compute == capabilities.queue_families.compute);
+}
+
+VR_TEST_CASE(RenderGraphQueueTimelineView_classifies_fallback_transfer_and_compute_shapes,
+             "unit;render_graph;runtime;queue;diagnostics") {
+    const auto fallback_view = vr::runtime::BuildRenderGraphQueueTimelineView(
+        MakeGraphicsFallbackQueueTimelineDiagnostics());
+    VR_CHECK(fallback_view.available);
+    VR_CHECK(fallback_view.mode == vr::runtime::RenderGraphQueueTimelineMode::graphics_fallback);
+    VR_CHECK(fallback_view.mode_name == "graphics_fallback");
+    VR_CHECK(fallback_view.graphics_batch_count == 1U);
+    VR_CHECK(fallback_view.transfer_batch_count == 0U);
+    VR_CHECK(fallback_view.compute_batch_count == 0U);
+    VR_CHECK(fallback_view.cross_queue_dependency_count == 0U);
+
+    const auto transfer_view = vr::runtime::BuildRenderGraphQueueTimelineView(
+        MakeTransferEnabledQueueTimelineDiagnostics());
+    VR_CHECK(transfer_view.mode == vr::runtime::RenderGraphQueueTimelineMode::transfer_enabled);
+    VR_CHECK(transfer_view.graphics_batch_count == 1U);
+    VR_CHECK(transfer_view.transfer_batch_count == 1U);
+    VR_CHECK(transfer_view.compute_batch_count == 0U);
+    VR_CHECK(transfer_view.cross_queue_dependency_count == 1U);
+    VR_CHECK(transfer_view.total_submit_wait_count == 1U);
+    VR_CHECK(transfer_view.total_submit_signal_count == 1U);
+
+    const auto compute_view = vr::runtime::BuildRenderGraphQueueTimelineView(
+        MakeComputeEnabledQueueTimelineDiagnostics());
+    VR_CHECK(compute_view.mode == vr::runtime::RenderGraphQueueTimelineMode::compute_enabled);
+    VR_CHECK(compute_view.graphics_batch_count == 1U);
+    VR_CHECK(compute_view.transfer_batch_count == 0U);
+    VR_CHECK(compute_view.compute_batch_count == 1U);
+    VR_CHECK(compute_view.cross_queue_dependency_count == 1U);
+    VR_CHECK(compute_view.total_submit_wait_count == 1U);
+    VR_CHECK(compute_view.total_submit_signal_count == 1U);
+
+    const auto multi_graphics_view = vr::runtime::BuildRenderGraphQueueTimelineView(
+        MakeMultiGraphicsComputeEnabledQueueTimelineDiagnostics());
+    VR_CHECK(multi_graphics_view.mode == vr::runtime::RenderGraphQueueTimelineMode::compute_enabled);
+    VR_CHECK(multi_graphics_view.graphics_batch_count == 2U);
+    VR_CHECK(multi_graphics_view.transfer_batch_count == 0U);
+    VR_CHECK(multi_graphics_view.compute_batch_count == 1U);
+    VR_CHECK(multi_graphics_view.owned_submit_batch_count == 2U);
+    VR_CHECK(multi_graphics_view.cross_queue_dependency_count == 2U);
+    VR_CHECK(multi_graphics_view.total_submit_wait_count == 2U);
+    VR_CHECK(multi_graphics_view.total_submit_signal_count == 2U);
+}
+
+VR_TEST_CASE(RenderGraphQueueTimelineJson_serializes_stable_mode_batches_and_dependencies,
+             "unit;render_graph;runtime;queue;diagnostics") {
+    const auto diagnostics = MakeTransferComputeEnabledQueueTimelineDiagnostics();
+    const auto view = vr::runtime::BuildRenderGraphQueueTimelineView(diagnostics);
+    const std::string json = vr::runtime::BuildRenderGraphQueueTimelineJson(view);
+
+    VR_CHECK(view.mode == vr::runtime::RenderGraphQueueTimelineMode::transfer_compute_enabled);
+    VR_CHECK(view.batch_count == 3U);
+    VR_CHECK(view.dependency_count == 2U);
+    VR_CHECK(view.transfer_batch_count == 1U);
+    VR_CHECK(view.compute_batch_count == 1U);
+    VR_CHECK(view.graphics_batch_count == 1U);
+    VR_CHECK(view.owned_submit_batch_count == 2U);
+    VR_CHECK(view.cross_queue_dependency_count == 2U);
+    VR_CHECK(view.total_submit_wait_count == 3U);
+    VR_CHECK(view.total_submit_signal_count == 2U);
+    VR_CHECK(json.find("\"fallbackReason\": \"\"") != std::string::npos);
+    VR_CHECK(json.find("\"ownedSubmitBatches\": 2") != std::string::npos);
+    VR_CHECK(json.find("\"mode\": \"transfer_compute_enabled\"") != std::string::npos);
+    VR_CHECK(json.find("\"queue\": \"transfer\"") != std::string::npos);
+    VR_CHECK(json.find("\"queue\": \"compute\"") != std::string::npos);
+    VR_CHECK(json.find("\"queue\": \"graphics\"") != std::string::npos);
+    VR_CHECK(json.find("\"sourceQueue\": \"transfer\"") != std::string::npos);
+    VR_CHECK(json.find("\"targetQueue\": \"graphics\"") != std::string::npos);
+    VR_CHECK(json.find("\"passes\": [\"upload_payload\"]") != std::string::npos);
+}
+
 VR_TEST_CASE(RenderGraphVulkanBackend_builds_command_ready_barrier_batches_from_physical_resources,
              "integration;render_graph;vulkan") {
     Host host{};
     try {
-        host.Initialize(MakeMinimalRenderTargetRuntimeCreateInfo());
+        auto create_info = MakeMinimalRenderTargetRuntimeCreateInfo();
+        EnableRenderGraphRuntimeExecutionFeatures(create_info);
+        host.Initialize(create_info);
     } catch (const std::exception& exception_) {
         if (IsEnvironmentSkipError(exception_.what())) {
             VR_SKIP(exception_.what());
@@ -1514,6 +2056,599 @@ VR_TEST_CASE(RenderGraphRuntimeService_records_barrier_batches_when_execution_en
         VR_CHECK(stats.image_barrier_count == 0U);
     }
     VR_CHECK(stats.queue_transfer_batch_count == 0U);
+}
+
+VR_TEST_CASE(RenderGraphRuntimeService_resolves_cross_queue_graph_to_multi_queue_or_graphics_fallback,
+             "integration;render_graph;runtime;queue;vulkan") {
+    Host host{};
+    try {
+        auto create_info = MakeMinimalRenderTargetRuntimeCreateInfo();
+        EnableRenderGraphRuntimeExecutionFeatures(create_info);
+        host.Initialize(create_info);
+    } catch (const std::exception& exception_) {
+        if (IsEnvironmentSkipError(exception_.what())) {
+            VR_SKIP(exception_.what());
+        }
+        throw;
+    }
+
+    const bool graph_execution_supported =
+        host.Context().EnabledVulkan13Features().synchronization2 == VK_TRUE &&
+        host.Context().EnabledVulkan13Features().dynamicRendering == VK_TRUE;
+    const bool multi_queue_expected =
+        graph_execution_supported &&
+        HasOwnedTransferSubmitQueue(host.Context());
+    const bool distinct_transfer_queue = HasDistinctTransferQueue(host.Context());
+
+    host.EnsureSwapchainTargetsForFrame(0U, 0U);
+
+    struct MockPhaseContext final {
+        struct FrameContext final {
+            vr::VulkanContext& device;
+            Host::RuntimeServicesType& services;
+            struct FrameInfo final {
+                std::uint32_t frame_index = 0U;
+                std::uint32_t image_index = 0U;
+            } frame{};
+            struct ProgressInfo final {
+                std::uint64_t graphics_submitted = 0U;
+                std::uint64_t graphics_completed = 0U;
+            } progress{};
+            VkCommandBuffer command_buffer = VK_NULL_HANDLE;
+            vr::render::SwapchainTargetSet* swapchain_targets = nullptr;
+        } frame_context;
+    };
+
+    auto& service = host.Services().Get<RenderGraphRuntimeService>();
+    service.EnableRecordExecution();
+    service.EnableGraphOnlyRecordPath();
+    const VkCommandBuffer command_buffer = host.Context().BeginSingleTimeCommands();
+    MockPhaseContext context{
+        .frame_context = {
+            .device = host.Context(),
+            .services = host.Services(),
+            .frame = {.frame_index = 0U, .image_index = 0U},
+            .progress = {.graphics_submitted = 0U, .graphics_completed = 0U},
+            .command_buffer = command_buffer,
+            .swapchain_targets = &host.SwapchainTargets(),
+        },
+    };
+
+    service.BeginFrame(context);
+    service.SetDirectGraphBuildCallback(
+        [](vr::render_graph::RenderGraphBuilder& builder_,
+           const vr::render_graph::ResourceHandle present_target_,
+           const vr::render_graph::Extent3D&,
+           vr::render_graph::ResourceVersionHandle& present_ready_version_,
+           const RenderGraphRuntimeService::ImportedTextureRegisterFn&) {
+            const auto upload = builder_.AddPass("upload_present_target",
+                                                 false,
+                                                 vr::render_graph::QueueClass::transfer);
+            builder_.SetExecuteCallback(upload,
+                                        [](vr::render_graph::GraphCommandContext&) {});
+            present_ready_version_ = builder_.Write(
+                upload,
+                present_target_,
+                vr::render_graph::AccessDesc{
+                    .access = vr::render_graph::AccessKind::transfer_write,
+                    .subresource_range = {
+                        .base_mip_level = 0U,
+                        .level_count = 1U,
+                        .base_array_layer = 0U,
+                        .layer_count = 1U,
+                    },
+                });
+        });
+    service.PreRecord(context);
+
+    const auto& diagnostics = service.LastDiagnostics();
+    VR_CHECK(diagnostics.transfer_queue_requested);
+    VR_CHECK(!diagnostics.compute_queue_requested);
+    VR_CHECK(diagnostics.multi_queue_requested);
+    VR_CHECK(!diagnostics.effective_queue_timeline_debug_string.empty());
+    VR_CHECK(!diagnostics.effective_queue_timeline_json.empty());
+    VR_CHECK(diagnostics.effective_queue_batch_count > 0U);
+    VR_CHECK(multi_queue_expected);
+    VR_CHECK(!diagnostics.graphics_fallback_active);
+    VR_CHECK(diagnostics.transfer_queue_enabled);
+    VR_CHECK(diagnostics.multi_queue_enabled);
+    VR_CHECK(diagnostics.effective_queue_dependency_count > 0U);
+    VR_CHECK(HasEffectiveQueueBatchWithPass(diagnostics,
+                                           "transfer",
+                                           "upload_present_target"));
+    VR_CHECK(HasEffectiveQueueBatchWithPass(diagnostics,
+                                           "graphics",
+                                           "present_transition"));
+    VR_CHECK(service.PlannedCommandReadyVulkanBarriers().queue_transfer_batches.size() ==
+             (distinct_transfer_queue ? 1U : 0U));
+
+    service.Record(context);
+    host.Context().EndSingleTimeCommands(command_buffer);
+
+    const auto& stats = service.LastRecordStats();
+    if (graph_execution_supported) {
+        VR_CHECK(stats.pass_count >= 1U);
+        VR_CHECK(stats.command_batch_count >= 1U);
+        VR_CHECK(stats.image_barrier_count >= 1U);
+    } else {
+        VR_CHECK(stats.pass_count == 0U);
+        VR_CHECK(stats.command_batch_count == 0U);
+        VR_CHECK(stats.image_barrier_count == 0U);
+    }
+    VR_CHECK(stats.queue_transfer_batch_count == (distinct_transfer_queue ? 1U : 0U));
+}
+
+VR_TEST_CASE(RenderGraphRuntimeService_falls_back_to_graphics_for_host_boundary_cross_queue_graph,
+             "integration;render_graph;runtime;queue;fallback;vulkan") {
+    Host host{};
+    try {
+        auto create_info = MakeMinimalRenderTargetRuntimeCreateInfo();
+        EnableRenderGraphRuntimeExecutionFeatures(create_info);
+        host.Initialize(create_info);
+    } catch (const std::exception& exception_) {
+        if (IsEnvironmentSkipError(exception_.what())) {
+            VR_SKIP(exception_.what());
+        }
+        throw;
+    }
+
+    const bool graph_execution_supported =
+        host.Context().EnabledVulkan13Features().synchronization2 == VK_TRUE &&
+        host.Context().EnabledVulkan13Features().dynamicRendering == VK_TRUE;
+
+    host.EnsureSwapchainTargetsForFrame(0U, 0U);
+
+    struct MockPhaseContext final {
+        struct FrameContext final {
+            vr::VulkanContext& device;
+            Host::RuntimeServicesType& services;
+            struct FrameInfo final {
+                std::uint32_t frame_index = 0U;
+                std::uint32_t image_index = 0U;
+            } frame{};
+            struct ProgressInfo final {
+                std::uint64_t graphics_submitted = 0U;
+                std::uint64_t graphics_completed = 0U;
+            } progress{};
+            VkCommandBuffer command_buffer = VK_NULL_HANDLE;
+            vr::render::SwapchainTargetSet* swapchain_targets = nullptr;
+        } frame_context;
+    };
+
+    auto& service = host.Services().Get<RenderGraphRuntimeService>();
+    service.EnableRecordExecution();
+    service.EnableGraphOnlyRecordPath();
+    const VkCommandBuffer command_buffer = host.Context().BeginSingleTimeCommands();
+    MockPhaseContext context{
+        .frame_context = {
+            .device = host.Context(),
+            .services = host.Services(),
+            .frame = {.frame_index = 0U, .image_index = 0U},
+            .progress = {.graphics_submitted = 0U, .graphics_completed = 0U},
+            .command_buffer = command_buffer,
+            .swapchain_targets = &host.SwapchainTargets(),
+        },
+    };
+
+    service.BeginFrame(context);
+    service.SetDirectGraphBuildCallback(
+        [](vr::render_graph::RenderGraphBuilder& builder_,
+           const vr::render_graph::ResourceHandle present_target_,
+           const vr::render_graph::Extent3D&,
+           vr::render_graph::ResourceVersionHandle& present_ready_version_,
+           const RenderGraphRuntimeService::ImportedTextureRegisterFn&) {
+            const auto staging = builder_.CreateBuffer(
+                "host_boundary_payload",
+                vr::render_graph::BufferDesc{
+                    .size_bytes = 256U,
+                    .usage = vr::render_graph::buffer_usage_storage_flag |
+                             vr::render_graph::buffer_usage_transfer_dst_flag,
+                    .host_visible = true,
+                });
+            const auto upload = builder_.AddPass("upload_payload",
+                                                 false,
+                                                 vr::render_graph::QueueClass::transfer);
+            const auto cpu_read = builder_.AddPass("cpu_read_payload",
+                                                   true,
+                                                   vr::render_graph::QueueClass::graphics);
+            const auto present_prepare = builder_.AddPass("prepare_present_target",
+                                                          false,
+                                                          vr::render_graph::QueueClass::graphics);
+            builder_.SetExecuteCallback(upload,
+                                        [](vr::render_graph::GraphCommandContext&) {});
+            builder_.SetExecuteCallback(cpu_read,
+                                        [](vr::render_graph::GraphCommandContext&) {});
+            builder_.SetExecuteCallback(present_prepare,
+                                        [](vr::render_graph::GraphCommandContext&) {});
+
+            const auto uploaded = builder_.Write(
+                upload,
+                staging,
+                vr::render_graph::AccessDesc{
+                    .access = vr::render_graph::AccessKind::transfer_write,
+                    .buffer_range = {.offset_bytes = 0U, .size_bytes = 256U},
+                });
+            (void)builder_.Read(
+                cpu_read,
+                uploaded,
+                vr::render_graph::AccessDesc{
+                    .access = vr::render_graph::AccessKind::host_read,
+                    .buffer_range = {.offset_bytes = 0U, .size_bytes = 256U},
+                });
+            (void)builder_.Read(
+                present_prepare,
+                uploaded,
+                vr::render_graph::AccessDesc{
+                    .access = vr::render_graph::AccessKind::uniform_read,
+                    .buffer_range = {.offset_bytes = 0U, .size_bytes = 256U},
+                });
+            present_ready_version_ = builder_.Write(
+                present_prepare,
+                present_target_,
+                vr::render_graph::AccessDesc{
+                    .access = vr::render_graph::AccessKind::transfer_write,
+                    .subresource_range = {
+                        .base_mip_level = 0U,
+                        .level_count = 1U,
+                        .base_array_layer = 0U,
+                        .layer_count = 1U,
+                    },
+                });
+        });
+    service.PreRecord(context);
+
+    const auto& diagnostics = service.LastDiagnostics();
+    VR_CHECK(diagnostics.transfer_queue_requested);
+    VR_CHECK(!diagnostics.compute_queue_requested);
+    VR_CHECK(diagnostics.multi_queue_requested);
+    VR_CHECK(diagnostics.graphics_fallback_active);
+    VR_CHECK(!diagnostics.transfer_queue_enabled);
+    VR_CHECK(!diagnostics.multi_queue_enabled);
+    VR_CHECK(ContainsCaseInsensitive(diagnostics.queue_fallback_reason, "host boundary"));
+    VR_CHECK(!diagnostics.effective_queue_timeline_debug_string.empty());
+    VR_CHECK(!diagnostics.effective_queue_timeline_json.empty());
+    VR_CHECK(diagnostics.effective_queue_batch_count == 3U);
+    VR_CHECK(diagnostics.effective_queue_dependency_count == 2U);
+    VR_CHECK(AllEffectiveQueueBatchesUseQueue(diagnostics, "graphics"));
+    VR_CHECK(std::any_of(diagnostics.effective_queue_batches.begin(),
+                         diagnostics.effective_queue_batches.end(),
+                         [](const vr::runtime::RenderGraphQueueBatchDiagnostics& batch_) {
+                             return batch_.contains_host_boundary;
+                         }));
+    VR_CHECK(std::any_of(diagnostics.effective_queue_dependencies.begin(),
+                         diagnostics.effective_queue_dependencies.end(),
+                         [](const vr::runtime::RenderGraphQueueDependencyDiagnostics& dependency_) {
+                             return dependency_.host_boundary;
+                         }));
+    VR_CHECK(service.PlannedCommandReadyVulkanBarriers().queue_transfer_batches.empty());
+
+    service.Record(context);
+    host.Context().EndSingleTimeCommands(command_buffer);
+
+    const auto& stats = service.LastRecordStats();
+    if (graph_execution_supported) {
+        VR_CHECK(stats.pass_count >= 3U);
+        VR_CHECK(stats.command_batch_count >= 1U);
+        VR_CHECK(stats.image_barrier_count >= 1U);
+    } else {
+        VR_CHECK(stats.pass_count == 0U);
+        VR_CHECK(stats.command_batch_count == 0U);
+        VR_CHECK(stats.image_barrier_count == 0U);
+    }
+    VR_CHECK(stats.queue_transfer_batch_count == 0U);
+
+    host.Shutdown();
+}
+
+VR_TEST_CASE(RenderGraphRuntimeService_submits_cross_queue_graph_during_runtime_tick,
+             "integration;render_graph;runtime;queue;submit;vulkan") {
+    Host host{};
+    try {
+        auto create_info = MakeMinimalRenderTargetRuntimeCreateInfo();
+        EnableRenderGraphRuntimeExecutionFeatures(create_info);
+        host.Initialize(create_info);
+    } catch (const std::exception& exception_) {
+        if (IsEnvironmentSkipError(exception_.what())) {
+            VR_SKIP(exception_.what());
+        }
+        throw;
+    }
+
+    const bool graph_execution_supported =
+        host.Context().EnabledVulkan13Features().synchronization2 == VK_TRUE &&
+        host.Context().EnabledVulkan13Features().dynamicRendering == VK_TRUE;
+    const bool distinct_transfer_queue = HasDistinctTransferQueue(host.Context());
+    const bool distinct_compute_queue = HasDistinctComputeQueue(host.Context());
+    if (!graph_execution_supported) {
+        host.Shutdown();
+        VR_SKIP("synchronization2 or dynamicRendering feature unavailable");
+    }
+
+    struct TickRecorder final {
+        std::uint32_t legacy_record_count = 0U;
+
+        void PrepareFrame(const vr::render::FrameComposerPrepareView&) noexcept {}
+        void Record(const vr::render::FrameRecordContext&) noexcept {
+            legacy_record_count += 1U;
+        }
+        void BuildRenderGraph(
+            vr::render_graph::RenderGraphBuilder& builder_,
+            const vr::render_graph::ResourceHandle present_target_,
+            const vr::render_graph::Extent3D&,
+            vr::render_graph::ResourceVersionHandle& present_ready_version_,
+            const RenderGraphRuntimeService::ImportedTextureRegisterFn&) {
+            const auto payload = builder_.CreateBuffer(
+                "tick_cross_queue_payload",
+                vr::render_graph::BufferDesc{
+                    .size_bytes = 256U,
+                    .usage = vr::render_graph::buffer_usage_storage_flag |
+                             vr::render_graph::buffer_usage_transfer_dst_flag,
+                });
+            const auto upload = builder_.AddPass("upload_payload",
+                                                 false,
+                                                 vr::render_graph::QueueClass::transfer);
+            const auto simulate = builder_.AddPass("simulate_payload",
+                                                   false,
+                                                   vr::render_graph::QueueClass::compute);
+            const auto present_prepare = builder_.AddPass("prepare_present_target",
+                                                          false,
+                                                          vr::render_graph::QueueClass::graphics);
+            builder_.SetExecuteCallback(upload,
+                                        [](vr::render_graph::GraphCommandContext&) {});
+            builder_.SetExecuteCallback(simulate,
+                                        [](vr::render_graph::GraphCommandContext&) {});
+            builder_.SetExecuteCallback(present_prepare,
+                                        [](vr::render_graph::GraphCommandContext&) {});
+
+            const auto uploaded = builder_.Write(
+                upload,
+                payload,
+                vr::render_graph::AccessDesc{
+                    .access = vr::render_graph::AccessKind::transfer_write,
+                    .buffer_range = {.offset_bytes = 0U, .size_bytes = 256U},
+                });
+            (void)builder_.Read(
+                simulate,
+                uploaded,
+                vr::render_graph::AccessDesc{
+                    .access = vr::render_graph::AccessKind::shader_storage_read,
+                    .buffer_range = {.offset_bytes = 0U, .size_bytes = 256U},
+                });
+            const auto simulated = builder_.Write(
+                simulate,
+                uploaded,
+                vr::render_graph::AccessDesc{
+                    .access = vr::render_graph::AccessKind::shader_storage_write,
+                    .buffer_range = {.offset_bytes = 0U, .size_bytes = 256U},
+                });
+            (void)builder_.Read(
+                present_prepare,
+                simulated,
+                vr::render_graph::AccessDesc{
+                    .access = vr::render_graph::AccessKind::uniform_read,
+                    .buffer_range = {.offset_bytes = 0U, .size_bytes = 256U},
+                });
+            present_ready_version_ = builder_.Write(
+                present_prepare,
+                present_target_,
+                vr::render_graph::AccessDesc{
+                    .access = vr::render_graph::AccessKind::transfer_write,
+                    .subresource_range = {
+                        .base_mip_level = 0U,
+                        .level_count = 1U,
+                        .base_array_layer = 0U,
+                        .layer_count = 1U,
+                    },
+                });
+        }
+    } recorder{};
+
+    auto& service = host.Services().Get<RenderGraphRuntimeService>();
+    service.EnableRecordExecution();
+    service.EnableGraphOnlyRecordPath();
+
+    Host::RuntimeTickResult last_tick{};
+    std::uint32_t submitted_frames = 0U;
+    constexpr std::uint32_t max_ticks = 4U;
+    for (std::uint32_t tick_index = 0U; tick_index < max_ticks && host.IsRunning(); ++tick_index) {
+        last_tick = host.Tick(recorder);
+        if (last_tick.render.code == vr::render::TickCode::Submitted ||
+            last_tick.render.code == vr::render::TickCode::RecreateRequested) {
+            ++submitted_frames;
+        }
+        SDL_Delay(1U);
+    }
+
+    VR_CHECK(submitted_frames > 0U);
+    VR_CHECK(recorder.legacy_record_count == 0U);
+    VR_CHECK(service.LastDiagnostics().multi_queue_enabled);
+    VR_CHECK(!service.LastDiagnostics().graphics_fallback_active);
+    VR_CHECK(!service.LastDiagnostics().effective_queue_timeline_debug_string.empty());
+    VR_CHECK(!service.LastDiagnostics().effective_queue_timeline_json.empty());
+    VR_CHECK(service.LastDiagnostics().effective_queue_batch_count == 3U);
+    VR_CHECK(service.LastDiagnostics().effective_queue_dependency_count == 2U);
+    VR_CHECK(HasEffectiveQueueBatchWithPass(service.LastDiagnostics(),
+                                           "transfer",
+                                           "upload_payload"));
+    VR_CHECK(HasEffectiveQueueBatchWithPass(service.LastDiagnostics(),
+                                           "compute",
+                                           "simulate_payload"));
+    VR_CHECK(HasEffectiveQueueBatchWithPass(service.LastDiagnostics(),
+                                           "graphics",
+                                           "prepare_present_target"));
+    VR_CHECK(service.LastDiagnostics().graphics_submit_wait_count > 0U);
+    VR_CHECK(service.LastDiagnostics().non_graphics_submit_batch_count == 2U);
+    VR_CHECK(service.LastRecordStats().queue_transfer_batch_count ==
+             ((distinct_transfer_queue || distinct_compute_queue) ? 2U : 0U));
+    VR_CHECK(service.TransferSubmittedValue() > 0U);
+    VR_CHECK(service.ComputeSubmittedValue() > 0U);
+    VR_CHECK(last_tick.diagnostics.queues.transfer_submitted > 0U);
+    VR_CHECK(last_tick.diagnostics.queues.compute_submitted > 0U);
+    VR_CHECK(last_tick.diagnostics.queues.transfer_completed <=
+             last_tick.diagnostics.queues.transfer_submitted);
+    VR_CHECK(last_tick.diagnostics.queues.compute_completed <=
+             last_tick.diagnostics.queues.compute_submitted);
+
+    host.Shutdown();
+}
+
+VR_TEST_CASE(RenderGraphRuntimeService_submits_multi_graphics_compute_graph_during_runtime_tick,
+             "integration;render_graph;runtime;queue;submit;vulkan") {
+    Host host{};
+    try {
+        auto create_info = MakeMinimalRenderTargetRuntimeCreateInfo();
+        EnableRenderGraphRuntimeExecutionFeatures(create_info);
+        host.Initialize(create_info);
+    } catch (const std::exception& exception_) {
+        if (IsEnvironmentSkipError(exception_.what())) {
+            VR_SKIP(exception_.what());
+        }
+        throw;
+    }
+
+    const bool graph_execution_supported =
+        host.Context().EnabledVulkan13Features().synchronization2 == VK_TRUE &&
+        host.Context().EnabledVulkan13Features().dynamicRendering == VK_TRUE;
+    const bool distinct_compute_queue = HasDistinctComputeQueue(host.Context());
+    if (!graph_execution_supported) {
+        host.Shutdown();
+        VR_SKIP("synchronization2 or dynamicRendering feature unavailable");
+    }
+
+    struct TickRecorder final {
+        std::uint32_t legacy_record_count = 0U;
+
+        void PrepareFrame(const vr::render::FrameComposerPrepareView&) noexcept {}
+        void Record(const vr::render::FrameRecordContext&) noexcept {
+            legacy_record_count += 1U;
+        }
+        void BuildRenderGraph(
+            vr::render_graph::RenderGraphBuilder& builder_,
+            const vr::render_graph::ResourceHandle present_target_,
+            const vr::render_graph::Extent3D&,
+            vr::render_graph::ResourceVersionHandle& present_ready_version_,
+            const RenderGraphRuntimeService::ImportedTextureRegisterFn&) {
+            const auto payload = builder_.CreateBuffer(
+                "multi_graphics_payload",
+                vr::render_graph::BufferDesc{
+                    .size_bytes = 256U,
+                    .usage = vr::render_graph::buffer_usage_storage_flag |
+                             vr::render_graph::buffer_usage_uniform_flag,
+                });
+            const auto scene_prepare = builder_.AddPass("scene_prepare",
+                                                        false,
+                                                        vr::render_graph::QueueClass::graphics);
+            const auto simulate = builder_.AddPass("simulate_payload",
+                                                   false,
+                                                   vr::render_graph::QueueClass::compute);
+            const auto present_prepare = builder_.AddPass("prepare_present_target",
+                                                          false,
+                                                          vr::render_graph::QueueClass::graphics);
+            builder_.SetExecuteCallback(scene_prepare,
+                                        [](vr::render_graph::GraphCommandContext&) {});
+            builder_.SetExecuteCallback(simulate,
+                                        [](vr::render_graph::GraphCommandContext&) {});
+            builder_.SetExecuteCallback(present_prepare,
+                                        [](vr::render_graph::GraphCommandContext&) {});
+
+            const auto prepared = builder_.Write(
+                scene_prepare,
+                payload,
+                vr::render_graph::AccessDesc{
+                    .access = vr::render_graph::AccessKind::shader_storage_write,
+                    .buffer_range = {.offset_bytes = 0U, .size_bytes = 256U},
+                });
+            (void)builder_.Read(
+                simulate,
+                prepared,
+                vr::render_graph::AccessDesc{
+                    .access = vr::render_graph::AccessKind::shader_storage_read,
+                    .buffer_range = {.offset_bytes = 0U, .size_bytes = 256U},
+                });
+            const auto simulated = builder_.Write(
+                simulate,
+                payload,
+                vr::render_graph::AccessDesc{
+                    .access = vr::render_graph::AccessKind::shader_storage_write,
+                    .buffer_range = {.offset_bytes = 0U, .size_bytes = 256U},
+                });
+            (void)builder_.Read(
+                present_prepare,
+                simulated,
+                vr::render_graph::AccessDesc{
+                    .access = vr::render_graph::AccessKind::uniform_read,
+                    .buffer_range = {.offset_bytes = 0U, .size_bytes = 256U},
+                });
+            present_ready_version_ = builder_.Write(
+                present_prepare,
+                present_target_,
+                vr::render_graph::AccessDesc{
+                    .access = vr::render_graph::AccessKind::transfer_write,
+                    .subresource_range = {
+                        .base_mip_level = 0U,
+                        .level_count = 1U,
+                        .base_array_layer = 0U,
+                        .layer_count = 1U,
+                    },
+                });
+        }
+    } recorder{};
+
+    auto& service = host.Services().Get<RenderGraphRuntimeService>();
+    service.EnableRecordExecution();
+    service.EnableGraphOnlyRecordPath();
+
+    Host::RuntimeTickResult last_tick{};
+    std::uint32_t submitted_frames = 0U;
+    constexpr std::uint32_t max_ticks = 4U;
+    for (std::uint32_t tick_index = 0U; tick_index < max_ticks && host.IsRunning(); ++tick_index) {
+        last_tick = host.Tick(recorder);
+        if (last_tick.render.code == vr::render::TickCode::Submitted ||
+            last_tick.render.code == vr::render::TickCode::RecreateRequested) {
+            ++submitted_frames;
+        }
+        SDL_Delay(1U);
+    }
+
+    VR_CHECK(submitted_frames > 0U);
+    VR_CHECK(recorder.legacy_record_count == 0U);
+    VR_CHECK(service.LastDiagnostics().multi_queue_enabled);
+    VR_CHECK(!service.LastDiagnostics().graphics_fallback_active);
+    VR_CHECK(!service.LastDiagnostics().effective_queue_timeline_debug_string.empty());
+    VR_CHECK(!service.LastDiagnostics().effective_queue_timeline_json.empty());
+    VR_CHECK(service.LastDiagnostics().effective_queue_batch_count == 3U);
+    VR_CHECK(service.LastDiagnostics().effective_queue_dependency_count == 2U);
+    VR_CHECK(HasEffectiveQueueBatchWithPass(service.LastDiagnostics(),
+                                           "graphics",
+                                           "scene_prepare"));
+    VR_CHECK(HasEffectiveQueueBatchWithPass(service.LastDiagnostics(),
+                                           "compute",
+                                           "simulate_payload"));
+    VR_CHECK(HasEffectiveQueueBatchWithPass(service.LastDiagnostics(),
+                                           "graphics",
+                                           "prepare_present_target"));
+    VR_CHECK(service.LastDiagnostics().graphics_submit_wait_count > 0U);
+    VR_CHECK(service.LastDiagnostics().non_graphics_submit_batch_count == 2U);
+    VR_CHECK(service.LastRecordStats().queue_transfer_batch_count ==
+             (distinct_compute_queue ? 2U : 0U));
+    VR_CHECK(service.ComputeSubmittedValue() > 0U);
+    VR_CHECK(last_tick.diagnostics.queues.compute_submitted > 0U);
+    VR_CHECK(last_tick.diagnostics.queues.compute_completed <=
+             last_tick.diagnostics.queues.compute_submitted);
+
+    const auto owned_graphics_batch = std::find_if(
+        service.LastDiagnostics().effective_queue_batches.begin(),
+        service.LastDiagnostics().effective_queue_batches.end(),
+        [](const vr::runtime::RenderGraphQueueBatchDiagnostics& batch_) {
+            return batch_.queue_name == "graphics" &&
+                   batch_.submitted_on_owned_queue &&
+                   std::find(batch_.pass_debug_names.begin(),
+                             batch_.pass_debug_names.end(),
+                             "scene_prepare") != batch_.pass_debug_names.end();
+        });
+    VR_CHECK(owned_graphics_batch != service.LastDiagnostics().effective_queue_batches.end());
+
+    host.Shutdown();
 }
 
 VR_TEST_CASE(RenderGraphRuntimeService_executes_minimal_graph_during_runtime_tick,

@@ -7,6 +7,7 @@
 #include "vr/runtime/frame_scheduler.hpp"
 #include "vr/runtime/runtime_context.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <stdexcept>
 
@@ -280,6 +281,24 @@ public:
             compute_submitted = host->ParticleSimulationService().LastSubmittedValue();
             compute_completed = host->ParticleSimulationService().CompletedSubmitValue();
         }
+        if (host != nullptr) {
+            if (const auto* graph_service =
+                    host->Services().template TryGet<services::RenderGraphRuntimeService>();
+                graph_service != nullptr) {
+                if (graph_service->HasTransferQueueProgress()) {
+                    transfer_submitted =
+                        (std::max)(transfer_submitted, graph_service->TransferSubmittedValue());
+                    transfer_completed =
+                        (std::max)(transfer_completed, graph_service->CompletedTransferValue());
+                }
+                if (graph_service->HasComputeQueueProgress()) {
+                    compute_submitted =
+                        (std::max)(compute_submitted, graph_service->ComputeSubmittedValue());
+                    compute_completed =
+                        (std::max)(compute_completed, graph_service->CompletedComputeValue());
+                }
+            }
+        }
         return {
             .graphics_submitted = scheduler.LastSubmittedValue(),
             .graphics_completed = scheduler.CompletedSubmitValue(),
@@ -311,6 +330,34 @@ public:
                 .submitted_value = host->ParticleSimulationService().LastSubmittedValue(),
                 .completed_value = host->ParticleSimulationService().CompletedSubmitValue(),
             };
+        }
+        if (host != nullptr) {
+            if (const auto* graph_service =
+                    host->Services().template TryGet<services::RenderGraphRuntimeService>();
+                graph_service != nullptr) {
+                if (graph_service->HasTransferQueueProgress()) {
+                    timelines.transfer = {
+                        .semaphore = VK_NULL_HANDLE,
+                        .next_value = (std::max)(timelines.transfer.next_value,
+                                                 graph_service->NextTransferSignalValue()),
+                        .submitted_value = (std::max)(timelines.transfer.submitted_value,
+                                                      graph_service->TransferSubmittedValue()),
+                        .completed_value = (std::max)(timelines.transfer.completed_value,
+                                                      graph_service->CompletedTransferValue()),
+                    };
+                }
+                if (graph_service->HasComputeQueueProgress()) {
+                    timelines.compute = {
+                        .semaphore = VK_NULL_HANDLE,
+                        .next_value = (std::max)(timelines.compute.next_value,
+                                                 graph_service->NextComputeSignalValue()),
+                        .submitted_value = (std::max)(timelines.compute.submitted_value,
+                                                      graph_service->ComputeSubmittedValue()),
+                        .completed_value = (std::max)(timelines.compute.completed_value,
+                                                      graph_service->CompletedComputeValue()),
+                    };
+                }
+            }
         }
         return timelines;
     }

@@ -93,6 +93,7 @@ struct SceneRecorder2DPrepareView final {
     text::GlyphUploadHost* glyph_upload = nullptr;
     particle::ParticleUploadHost* particle_upload = nullptr;
     particle::ParticleSimulationHost* particle_simulation = nullptr;
+    bool prefer_graph_only_runtime_path = false;
     FrameStaticContext frame{};
     FrameGpuProgressContext progress{};
 };
@@ -119,6 +120,7 @@ struct SceneRecorder3DPrepareView final {
     particle::ParticleSimulationHost* particle_simulation = nullptr;
     std::uint32_t ibl_environment_id = 0U;
     std::uint32_t ibl_brdf_lut_texture_id = 0U;
+    bool prefer_graph_only_runtime_path = false;
     FrameStaticContext frame{};
     FrameGpuProgressContext progress{};
 };
@@ -160,6 +162,7 @@ struct TextRenderer2DPrepareView final {
     text::FreeTypeHost& freetype;
     text::GlyphAtlasHost& glyph_atlas;
     text::GlyphUploadHost& glyph_upload;
+    bool prefer_render_graph_upload_path = false;
     FrameStaticContext frame{};
     FrameGpuProgressContext progress{};
 };
@@ -174,6 +177,7 @@ struct TextRenderer3DPrepareView final {
     text::FreeTypeHost& freetype;
     text::GlyphAtlasHost& glyph_atlas;
     text::GlyphUploadHost& glyph_upload;
+    bool prefer_render_graph_upload_path = false;
     FrameStaticContext frame{};
     FrameGpuProgressContext progress{};
 };
@@ -331,6 +335,7 @@ struct ParticleRenderer2DPrepareView final {
     particle::ParticleUploadHost* particle_upload = nullptr;
     particle::ParticleSimulationHost* particle_simulation = nullptr;
     RenderTargetHost* render_target = nullptr;
+    bool prefer_render_graph_compute_path = false;
     FrameStaticContext frame{};
     FrameGpuProgressContext progress{};
 };
@@ -347,6 +352,7 @@ struct ParticleRenderer3DPrepareView final {
     particle::ParticleUploadHost* particle_upload = nullptr;
     particle::ParticleSimulationHost* particle_simulation = nullptr;
     RenderTargetHost* render_target = nullptr;
+    bool prefer_render_graph_compute_path = false;
     FrameStaticContext frame{};
     FrameGpuProgressContext progress{};
 };
@@ -675,6 +681,7 @@ template<typename T>
         .glyph_upload = detail::RequirePrepareService(prepare_view_.glyph_upload,
                                                       "glyph_upload",
                                                       "TextRenderer2DPrepareView"),
+        .prefer_render_graph_upload_path = prepare_view_.prefer_graph_only_runtime_path,
         .frame = prepare_view_.frame,
         .progress = prepare_view_.progress,
     };
@@ -704,6 +711,7 @@ template<typename T>
         .particle_upload = prepare_view_.particle_upload,
         .particle_simulation = prepare_view_.particle_simulation,
         .render_target = &prepare_view_.render_target,
+        .prefer_render_graph_compute_path = prepare_view_.prefer_graph_only_runtime_path,
         .frame = prepare_view_.frame,
         .progress = prepare_view_.progress,
     };
@@ -754,6 +762,7 @@ template<typename T>
         .glyph_upload = detail::RequirePrepareService(prepare_view_.glyph_upload,
                                                       "glyph_upload",
                                                       "TextRenderer2DPrepareView"),
+        .prefer_render_graph_upload_path = prepare_view_.prefer_graph_only_runtime_path,
         .frame = prepare_view_.frame,
         .progress = prepare_view_.progress,
     };
@@ -783,6 +792,7 @@ template<typename T>
         .particle_upload = prepare_view_.particle_upload,
         .particle_simulation = prepare_view_.particle_simulation,
         .render_target = &prepare_view_.render_target,
+        .prefer_render_graph_compute_path = prepare_view_.prefer_graph_only_runtime_path,
         .frame = prepare_view_.frame,
         .progress = prepare_view_.progress,
     };
@@ -851,6 +861,7 @@ template<typename T>
         .glyph_upload = detail::RequirePrepareService(prepare_view_.glyph_upload,
                                                       "glyph_upload",
                                                       "TextRenderer3DPrepareView"),
+        .prefer_render_graph_upload_path = prepare_view_.prefer_graph_only_runtime_path,
         .frame = prepare_view_.frame,
         .progress = prepare_view_.progress,
     };
@@ -1006,6 +1017,7 @@ template<typename T>
         .particle_upload = prepare_view_.particle_upload,
         .particle_simulation = prepare_view_.particle_simulation,
         .render_target = &prepare_view_.render_target,
+        .prefer_render_graph_compute_path = prepare_view_.prefer_graph_only_runtime_path,
         .frame = prepare_view_.frame,
         .progress = prepare_view_.progress,
     };

@@ -18,6 +18,11 @@ struct RenderGraphRecordStats final {
 class RenderGraphExecutor final {
 public:
     [[nodiscard]] static RenderGraphRecordStats Record(GraphCommandContext& context_);
+    [[nodiscard]] static RenderGraphRecordStats RecordQueueBatch(
+        GraphCommandContext& context_,
+        const QueueSubmitBatch& queue_batch_,
+        const VulkanDependencyInfoData* begin_dependency_ = nullptr,
+        const VulkanDependencyInfoData* end_dependency_ = nullptr);
 };
 
 } // namespace vr::render_graph

@@ -38,6 +38,8 @@
 #include "vr/render/render_target_host.hpp"
 #include "vr/render/render_target_pool.hpp"
 #include "vr/render/render_loop_host.hpp"
+
+#include <vector>
 #include "vr/render/runtime_prepare_views.hpp"
 #include "vr/render/swapchain_target_set.hpp"
 #include "vr/render/upload_host.hpp"
@@ -49,6 +51,7 @@
 #include "vr/text/glyph_atlas_host.hpp"
 #include "vr/text/glyph_upload_host.hpp"
 
+#include <array>
 #include <cstdint>
 #include <limits>
 #include <sstream>
@@ -610,6 +613,7 @@ public:
             render_loop.Shutdown(platform_host.Context(), swapchain);
             loop_initialized = false;
         }
+        render_graph_runtime_service_ref.Shutdown(platform_host.Context());
 
         DestroyUploadSyncObjects(device);
 
@@ -845,12 +849,22 @@ public:
     [[nodiscard]] TickResult SubmitPresentTickFrame(const AcquiredFrame& acquired_frame_,
                                                     const VkCommandBuffer command_buffer_,
                                                     const TickUploadFlushResult& upload_flush_) {
+        return SubmitPresentTickFrame(acquired_frame_,
+                                      command_buffer_,
+                                      upload_flush_.ExtraWaits(),
+                                      upload_flush_.extra_wait_count);
+    }
+
+    [[nodiscard]] TickResult SubmitPresentTickFrame(const AcquiredFrame& acquired_frame_,
+                                                    const VkCommandBuffer command_buffer_,
+                                                    const FrameSubmitWait* extra_waits_,
+                                                    const std::uint32_t extra_wait_count_) {
         const auto render_result = render_loop.SubmitPresentAndAdvance(platform_host.Context(),
                                                                        swapchain,
                                                                        acquired_frame_.token,
                                                                        command_buffer_,
-                                                                       upload_flush_.ExtraWaits(),
-                                                                       upload_flush_.extra_wait_count);
+                                                                       extra_waits_,
+                                                                       extra_wait_count_);
         last_tick_frame_index = render_result.frame_index;
         last_tick_image_index = render_result.image_index;
         return render_result;
@@ -904,6 +918,14 @@ public:
         phase_driver_.OnPreRecord(frame_index,
                                   render_loop.Sync().LastSubmittedValue(),
                                   render_loop.Sync().CompletedSubmitValue());
+        auto* graph_service =
+            services_ref.template TryGet<runtime::services::RenderGraphRuntimeService>();
+        if (graph_service != nullptr &&
+            upload_flush.extra_wait_count != 0U &&
+            upload_flush.extra_wait.semaphore != VK_NULL_HANDLE) {
+            graph_service->RegisterExternalQueueSubmitWait(render_graph::QueueClass::compute,
+                                                           upload_flush.extra_wait.semaphore);
+        }
 
         const AcquiredFrame acquired_frame = AcquireTickFrame(recorder_, frame_id, upload_flush);
         if (acquired_frame.code != TickCode::Submitted) {
@@ -929,7 +951,28 @@ public:
                                command_buffer);
         render_loop.Commands().EndCommandBuffer(command_buffer);
 
-        result.render = SubmitPresentTickFrame(acquired_frame, command_buffer, upload_flush);
+        std::vector<FrameSubmitWait> submit_waits{};
+        if (graph_service != nullptr &&
+            graph_service->HasPreparedMultiQueueSubmission()) {
+            (void)graph_service->SubmitPreparedMultiQueueWork(platform_host.Context());
+            for (const auto& wait_ : graph_service->PendingGraphicsSubmitWaits()) {
+                submit_waits.push_back(wait_);
+            }
+        }
+        for (std::uint32_t wait_index = 0U;
+             wait_index < upload_flush.extra_wait_count;
+             ++wait_index) {
+            (void)wait_index;
+            submit_waits.push_back(upload_flush.extra_wait);
+        }
+
+        result.render = SubmitPresentTickFrame(acquired_frame,
+                                               command_buffer,
+                                               submit_waits.empty() ? nullptr : submit_waits.data(),
+                                               static_cast<std::uint32_t>(submit_waits.size()));
+        if (graph_service != nullptr) {
+            graph_service->MarkGraphicsSubmissionEnqueued(acquired_frame.token);
+        }
         phase_driver_.OnSubmit();
 
         phase_driver_.OnPostRecord(frame_index,
@@ -2362,6 +2405,26 @@ private:
         if (upload_initialized && upload_host.UsesCrossQueueSubmit()) {
             diagnostics.queues.transfer_submitted = upload_host.LastSubmittedValue();
             diagnostics.queues.transfer_completed = upload_host.CompletedSubmitValue();
+        }
+        if (const auto* graph_service =
+                services_ref.template TryGet<runtime::services::RenderGraphRuntimeService>();
+            graph_service != nullptr) {
+            if (graph_service->HasTransferQueueProgress()) {
+                diagnostics.queues.transfer_submitted =
+                    (std::max)(diagnostics.queues.transfer_submitted,
+                               graph_service->TransferSubmittedValue());
+                diagnostics.queues.transfer_completed =
+                    (std::max)(diagnostics.queues.transfer_completed,
+                               graph_service->CompletedTransferValue());
+            }
+            if (graph_service->HasComputeQueueProgress()) {
+                diagnostics.queues.compute_submitted =
+                    (std::max)(diagnostics.queues.compute_submitted,
+                               graph_service->ComputeSubmittedValue());
+                diagnostics.queues.compute_completed =
+                    (std::max)(diagnostics.queues.compute_completed,
+                               graph_service->CompletedComputeValue());
+            }
         }
 
         diagnostics.commands.frame_slot_count = frames_in_flight_v;

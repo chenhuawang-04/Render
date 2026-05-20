@@ -346,6 +346,7 @@ void SceneRecorder3D::PrepareFrame(const SceneRecorder3DPrepareView& prepare_vie
     }
 
     SceneRecorder3DPrepareView resolved_prepare_view = prepare_view_;
+    resolved_prepare_view.prefer_graph_only_runtime_path = prefer_graph_only_runtime_path;
     resolved_prepare_view.ibl_environment_id = ibl_environment_id;
     resolved_prepare_view.ibl_brdf_lut_texture_id = ibl_brdf_lut_texture_id;
 
@@ -667,6 +668,11 @@ void SceneRecorder3D::BuildRenderGraph(
                                                    builder_,
                                                    build_result_.scene_pass);
             }
+            if (graph_runtime_service != nullptr &&
+                entry_->register_graph_imported_resources_fn != nullptr) {
+                entry_->register_graph_imported_resources_fn(entry_->renderer,
+                                                            *graph_runtime_service);
+            }
         }
         const auto scene_color = build_result_.scene_color;
         const auto scene_depth = build_result_.scene_depth;
@@ -736,6 +742,11 @@ void SceneRecorder3D::BuildRenderGraph(
                 entry_->describe_graph_bindings_fn(entry_->renderer,
                                                    builder_,
                                                    transparent_pass);
+            }
+            if (graph_runtime_service != nullptr &&
+                entry_->register_graph_imported_resources_fn != nullptr) {
+                entry_->register_graph_imported_resources_fn(entry_->renderer,
+                                                            *graph_runtime_service);
             }
         }
         const auto scene_color = build_result_.scene_color;
@@ -910,6 +921,11 @@ void SceneRecorder3D::BuildRenderGraph(
                     entry_->describe_graph_bindings_fn(entry_->renderer,
                                                        builder_,
                                                        build_result_.overlay_pass);
+                }
+                if (graph_runtime_service != nullptr &&
+                    entry_->register_graph_imported_resources_fn != nullptr) {
+                    entry_->register_graph_imported_resources_fn(entry_->renderer,
+                                                                *graph_runtime_service);
                 }
             }
             const auto overlay_target = build_result_.scene_color;

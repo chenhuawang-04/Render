@@ -91,3 +91,18 @@ add_test(
 set_tests_properties(vr_bench.scene_recorder_static_environment_smoke PROPERTIES
     LABELS "bench;performance;scene;background;recorder;fast"
 )
+
+add_test(
+    NAME vr_bench.render_graph_queue_timeline_gate
+    COMMAND ${VR_BENCH_TARGET}
+            --filter RenderGraphQueueTimelineConsumer_*
+            --warmup 1
+            --runs 3
+            --min-duration-ms 5
+            --baseline-json ${CMAKE_CURRENT_SOURCE_DIR}/baselines/render_graph_queue_timeline_gold.json
+            --fail-on-regression-percent 400
+            --require-baseline-match
+)
+set_tests_properties(vr_bench.render_graph_queue_timeline_gate PROPERTIES
+    LABELS "bench;performance;runtime;render_graph;queue;fast"
+)

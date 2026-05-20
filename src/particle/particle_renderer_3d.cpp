@@ -13,6 +13,7 @@
 #include "vr/render/render_loop_host.hpp"
 #include "vr/render/runtime_prepare_views.hpp"
 #include "vr/render/upload_host.hpp"
+#include "vr/runtime/services/render_graph_runtime_service.hpp"
 #include "vr/resource/gpu_memory_host.hpp"
 #include "vr/vulkan_context.hpp"
 
@@ -30,6 +31,14 @@ namespace vr::particle {
 namespace {
 
 constexpr VkPrimitiveTopology k_particle_topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+constexpr VkBufferUsageFlags k_graph_particle_draw_instances_imported_usage =
+    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+    VK_BUFFER_USAGE_VERTEX_BUFFER_BIT |
+    VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+constexpr VkBufferUsageFlags k_graph_particle_indirect_commands_imported_usage =
+    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+    VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
+    VK_BUFFER_USAGE_TRANSFER_DST_BIT;
 
 [[nodiscard]] render::BindlessTableId ResolveSampledImageTableId(
     const render::BindlessResourceSystem* bindless_resources_) noexcept {
@@ -105,6 +114,19 @@ constexpr VkPrimitiveTopology k_particle_topology = VK_PRIMITIVE_TOPOLOGY_TRIANG
                                                   prepare_desc.visible_particle_capacity);
     }
     return prepare_desc;
+}
+
+[[nodiscard]] bool HasDedicatedOwnedComputeQueue(const VulkanContext& context_) noexcept {
+    if (context_.GraphicsQueue() == VK_NULL_HANDLE ||
+        context_.ComputeQueue() == VK_NULL_HANDLE) {
+        return false;
+    }
+    if (context_.ComputeQueue() != context_.GraphicsQueue()) {
+        return true;
+    }
+    return context_.QueueFamilies().graphics.has_value() &&
+           context_.QueueFamilies().compute.has_value() &&
+           context_.QueueFamilies().graphics.value() != context_.QueueFamilies().compute.value();
 }
 
 } // namespace
@@ -266,6 +288,12 @@ void ParticleRenderer3D::Initialize(const ParticleRenderer3DCreateInfo& create_i
     last_gpu_build_result = {};
     last_upload_result = {};
     stats = {};
+    graph_compute_pass_owned = false;
+    graph_compute_pass_scheduled = false;
+    graph_draw_instances_resource = render_graph::invalid_resource_handle;
+    graph_draw_instances_version = render_graph::invalid_resource_version;
+    graph_indirect_commands_resource = render_graph::invalid_resource_handle;
+    graph_indirect_commands_version = render_graph::invalid_resource_version;
 
     particle_components = nullptr;
     particle_emitters = nullptr;
@@ -353,6 +381,12 @@ void ParticleRenderer3D::Shutdown(VulkanContext& context_) {
     last_gpu_build_result = {};
     last_upload_result = {};
     stats = {};
+    graph_compute_pass_owned = false;
+    graph_compute_pass_scheduled = false;
+    graph_draw_instances_resource = render_graph::invalid_resource_handle;
+    graph_draw_instances_version = render_graph::invalid_resource_version;
+    graph_indirect_commands_resource = render_graph::invalid_resource_handle;
+    graph_indirect_commands_version = render_graph::invalid_resource_version;
     active_frame_index = 0U;
     swapchain_extent = {};
     swapchain_format = VK_FORMAT_UNDEFINED;
@@ -689,6 +723,12 @@ void ParticleRenderer3D::PrepareFrame(const render::ParticleRenderer3DPrepareVie
     last_gpu_build_result = {};
     last_upload_result = {};
     gpu_build_active = false;
+    graph_compute_pass_owned = false;
+    graph_compute_pass_scheduled = false;
+    graph_draw_instances_resource = render_graph::invalid_resource_handle;
+    graph_draw_instances_version = render_graph::invalid_resource_version;
+    graph_indirect_commands_resource = render_graph::invalid_resource_handle;
+    graph_indirect_commands_version = render_graph::invalid_resource_version;
 
     if (particle_components == nullptr || particle_emitters == nullptr || transforms == nullptr || component_count == 0U) {
         runtime_scratch.instances.clear();
@@ -772,6 +812,10 @@ void ParticleRenderer3D::PrepareFrame(const render::ParticleRenderer3DPrepareVie
             texture_host,
             *bindless_resources);
         gpu_build_active = last_gpu_build_result.used_gpu_build;
+        graph_compute_pass_owned =
+            gpu_build_active &&
+            prepare_view_.prefer_render_graph_compute_path &&
+            HasDedicatedOwnedComputeQueue(*context);
     }
 
     if (gpu_build_active) {
@@ -863,6 +907,8 @@ void ParticleRenderer3D::DescribeGraphDescriptorBindings(render_graph::RenderGra
             "ParticleRenderer3D::DescribeGraphDescriptorBindings called before Initialize");
     }
 
+    const_cast<ParticleRenderer3D*>(this)->ScheduleGraphComputeBuild(builder_, pass_);
+
     const auto sampled_image_table = ResolveSampledImageTableId(bindless_resources);
     const auto sampler_table = ResolveSamplerTableId(bindless_resources);
     builder_.SetPassShaderContract(
@@ -878,6 +924,141 @@ void ParticleRenderer3D::DescribeGraphDescriptorBindings(render_graph::RenderGra
                                      render_graph::DescriptorBindingKind::sampler_table,
                                      sampler_table.value,
                                      render_graph::shader_stage_fragment_flag);
+}
+
+void ParticleRenderer3D::RegisterGraphImportedResources(
+    runtime::services::RenderGraphRuntimeService& graph_runtime_service_) const {
+    if (!graph_compute_pass_owned ||
+        !render_graph::IsValidResourceHandle(graph_draw_instances_resource) ||
+        !render_graph::IsValidResourceHandle(graph_indirect_commands_resource)) {
+        return;
+    }
+
+    if (last_gpu_build_result.resources.draw_instances.buffer != VK_NULL_HANDLE &&
+        last_gpu_build_result.resources.draw_instances.size_bytes != 0U) {
+        graph_runtime_service_.RegisterDirectImportedBuffer(
+            graph_draw_instances_resource,
+            render_graph::ImportedBufferBinding{
+                .buffer = last_gpu_build_result.resources.draw_instances.buffer,
+                .size_bytes = last_gpu_build_result.resources.draw_instances.size_bytes,
+                .usage = k_graph_particle_draw_instances_imported_usage,
+            });
+    }
+    if (last_gpu_build_result.resources.indirect_commands.buffer != VK_NULL_HANDLE &&
+        last_gpu_build_result.resources.indirect_commands.size_bytes != 0U) {
+        graph_runtime_service_.RegisterDirectImportedBuffer(
+            graph_indirect_commands_resource,
+            render_graph::ImportedBufferBinding{
+                .buffer = last_gpu_build_result.resources.indirect_commands.buffer,
+                .size_bytes = last_gpu_build_result.resources.indirect_commands.size_bytes,
+                .usage = k_graph_particle_indirect_commands_imported_usage,
+            });
+    }
+}
+
+void ParticleRenderer3D::ScheduleGraphComputeBuild(render_graph::RenderGraphBuilder& builder_,
+                                                   const render_graph::PassHandle pass_) {
+    if (!graph_compute_pass_owned) {
+        return;
+    }
+    const auto append_scene_reads = [&](const VkDeviceSize draw_instances_size_,
+                                        const VkDeviceSize indirect_commands_size_) {
+        (void)builder_.Read(
+            pass_,
+            graph_draw_instances_version,
+            render_graph::AccessDesc{
+                .access = render_graph::AccessKind::vertex_buffer_read,
+                .buffer_range = {
+                    .offset_bytes = 0U,
+                    .size_bytes = draw_instances_size_,
+                },
+            });
+        (void)builder_.Read(
+            pass_,
+            graph_indirect_commands_version,
+            render_graph::AccessDesc{
+                .access = render_graph::AccessKind::indirect_command_read,
+                .buffer_range = {
+                    .offset_bytes = 0U,
+                    .size_bytes = indirect_commands_size_,
+                },
+            });
+    };
+    if (graph_compute_pass_scheduled) {
+        if (render_graph::IsValidResourceVersionHandle(graph_draw_instances_version) &&
+            render_graph::IsValidResourceVersionHandle(graph_indirect_commands_version)) {
+            append_scene_reads(last_gpu_build_result.resources.draw_instances.size_bytes,
+                               last_gpu_build_result.resources.indirect_commands.size_bytes);
+        }
+        return;
+    }
+    if (last_gpu_build_result.resources.draw_instances.buffer == VK_NULL_HANDLE ||
+        last_gpu_build_result.resources.indirect_commands.buffer == VK_NULL_HANDLE ||
+        last_gpu_build_result.resources.draw_instances.size_bytes == 0U ||
+        last_gpu_build_result.resources.indirect_commands.size_bytes == 0U ||
+        particle_simulation_host == nullptr) {
+        graph_compute_pass_owned = false;
+        return;
+    }
+
+    graph_draw_instances_resource = builder_.CreateBuffer(
+        "particle_3d_draw_instances",
+        render_graph::BufferDesc{
+            .size_bytes = last_gpu_build_result.resources.draw_instances.size_bytes,
+            .usage = render_graph::buffer_usage_storage_flag |
+                     render_graph::buffer_usage_vertex_flag |
+                     render_graph::buffer_usage_transfer_dst_flag,
+        },
+        render_graph::ResourceLifetime::imported);
+    graph_indirect_commands_resource = builder_.CreateBuffer(
+        "particle_3d_indirect_commands",
+        render_graph::BufferDesc{
+            .size_bytes = last_gpu_build_result.resources.indirect_commands.size_bytes,
+            .usage = render_graph::buffer_usage_storage_flag |
+                     render_graph::buffer_usage_indirect_flag |
+                     render_graph::buffer_usage_transfer_dst_flag,
+        },
+        render_graph::ResourceLifetime::imported);
+
+    const auto compute_pass = builder_.AddPass("particle_3d_gpu_build",
+                                               false,
+                                               render_graph::QueueClass::compute);
+    graph_draw_instances_version = builder_.Write(
+        compute_pass,
+        graph_draw_instances_resource,
+        render_graph::AccessDesc{
+            .access = render_graph::AccessKind::shader_storage_write,
+            .buffer_range = {
+                .offset_bytes = 0U,
+                .size_bytes = last_gpu_build_result.resources.draw_instances.size_bytes,
+            },
+        });
+    graph_indirect_commands_version = builder_.Write(
+        compute_pass,
+        graph_indirect_commands_resource,
+        render_graph::AccessDesc{
+            .access = render_graph::AccessKind::shader_storage_write,
+            .buffer_range = {
+                .offset_bytes = 0U,
+                .size_bytes = last_gpu_build_result.resources.indirect_commands.size_bytes,
+            },
+        });
+    builder_.SetExecuteCallback(
+        compute_pass,
+        [this, frame_index = active_frame_index](render_graph::GraphCommandContext& context_) {
+            if (particle_simulation_host == nullptr) {
+                return;
+            }
+            particle_simulation_host->RecordBuild3D(*context,
+                                                    *pipeline_host,
+                                                    frame_index,
+                                                    ResolveCameraPosition(),
+                                                    ResolveCameraForward(),
+                                                    context_.CommandBuffer());
+        });
+    append_scene_reads(last_gpu_build_result.resources.draw_instances.size_bytes,
+                       last_gpu_build_result.resources.indirect_commands.size_bytes);
+    graph_compute_pass_scheduled = true;
 }
 
 void ParticleRenderer3D::Record(const render::FrameRecordContext& record_context_) {
@@ -1071,7 +1252,9 @@ void ParticleRenderer3D::RecordInternal(const render::FrameRecordContext& record
                           color_pass.target.format,
                           active_depth_format);
 
-    if (gpu_build_active && particle_simulation_host != nullptr) {
+    if (gpu_build_active &&
+        particle_simulation_host != nullptr &&
+        !graph_compute_pass_owned) {
         particle_simulation_host->RecordBuild3D(*context,
                                                 *pipeline_host,
                                                 active_frame_index,
@@ -1306,7 +1489,9 @@ void ParticleRenderer3D::RecordGraphInternal(render_graph::GraphCommandContext& 
                           resolved_color.format,
                           active_depth_format);
 
-    if (gpu_build_active && particle_simulation_host != nullptr) {
+    if (gpu_build_active &&
+        particle_simulation_host != nullptr &&
+        !graph_compute_pass_owned) {
         particle_simulation_host->RecordBuild3D(*context,
                                                 *pipeline_host,
                                                 active_frame_index,

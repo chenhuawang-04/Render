@@ -1,3 +1,4 @@
+#include "support/render_graph_test_utils.hpp"
 #include "support/test_framework.hpp"
 #include "support/render_graph_test_utils.hpp"
 #include "vr/ecs/system/bounds_system.hpp"
@@ -106,6 +107,49 @@ using CameraSystem3D = vr::ecs::CameraSystem<vr::ecs::Dim3>;
         }
     }
     return false;
+}
+
+[[nodiscard]] bool HasEffectiveQueueBatchWithPass(
+    const vr::runtime::RenderGraphRuntimeDiagnostics& diagnostics_,
+    std::string_view queue_name_,
+    std::string_view pass_name_) {
+    return std::any_of(
+        diagnostics_.effective_queue_batches.begin(),
+        diagnostics_.effective_queue_batches.end(),
+        [&](const vr::runtime::RenderGraphQueueBatchDiagnostics& batch_) {
+            if (batch_.queue_name != queue_name_) {
+                return false;
+            }
+            return std::any_of(
+                batch_.pass_debug_names.begin(),
+                batch_.pass_debug_names.end(),
+                [&](const std::string& debug_name_) {
+                    return debug_name_ == pass_name_;
+                });
+        });
+}
+
+[[nodiscard]] bool HasEffectiveQueueBatchOnQueue(
+    const vr::runtime::RenderGraphRuntimeDiagnostics& diagnostics_,
+    std::string_view queue_name_) {
+    return std::any_of(
+        diagnostics_.effective_queue_batches.begin(),
+        diagnostics_.effective_queue_batches.end(),
+        [&](const vr::runtime::RenderGraphQueueBatchDiagnostics& batch_) {
+            return batch_.queue_name == queue_name_;
+        });
+}
+
+[[nodiscard]] bool AllEffectiveQueueBatchesUseQueue(
+    const vr::runtime::RenderGraphRuntimeDiagnostics& diagnostics_,
+    std::string_view queue_name_) {
+    return !diagnostics_.effective_queue_batches.empty() &&
+           std::all_of(
+               diagnostics_.effective_queue_batches.begin(),
+               diagnostics_.effective_queue_batches.end(),
+               [&](const vr::runtime::RenderGraphQueueBatchDiagnostics& batch_) {
+                   return batch_.queue_name == queue_name_;
+               });
 }
 
 
@@ -647,6 +691,273 @@ VR_TEST_CASE(RuntimeIntegration_text_renderer_3d_bloom_post_stack_smoke,
     } catch (const std::exception& exception_) {
         if (runtime_initialized && runtime.IsInitialized() && recorder.IsInitialized()) {
             recorder.Shutdown(runtime.Context());
+        }
+        if (text_renderer_initialized && runtime_initialized && runtime.IsInitialized()) {
+            text_renderer.Shutdown(runtime.Context());
+            text_renderer_initialized = false;
+        }
+        if (runtime_initialized && runtime.IsInitialized()) {
+            runtime.Shutdown();
+            runtime_initialized = false;
+        }
+
+        if (IsEnvironmentSkipError(exception_.what())) {
+            VR_SKIP(exception_.what());
+        }
+        throw;
+    }
+}
+
+VR_TEST_CASE(RuntimeIntegration_scene_recorder_3d_text_graph_transfer_upload_uses_transfer_or_graphics_fallback,
+             "integration;gpu;sdl;runtime;text;scene3d;render_graph;queue;transfer") {
+    const std::string font_path = FindTestFontPath();
+    if (font_path.empty()) {
+        VR_SKIP("No usable system font found for SceneRecorder3D text graph transfer integration test.");
+    }
+
+    Runtime runtime{};
+    vr::render::SceneRecorder3D recorder{};
+    vr::text::TextRenderer3D text_renderer{};
+    bool runtime_initialized = false;
+    bool text_renderer_initialized = false;
+    bool recorder_initialized = false;
+
+    std::array<Text3D, 2U> text_components{};
+    InitializeTextComponent(text_components[0U], 1U, 3U, "Graph-owned transfer text upload");
+    TextSystem3D::SetWorldSize(text_components[0U], 0.65F);
+    TextSystem3D::SetBillboard(text_components[0U], false);
+    InitializeTextComponent(text_components[1U], 1U, 3U, "Frame: 0");
+    TextSystem3D::SetWorldSize(text_components[1U], 0.45F);
+
+    std::array<Transform3D, 2U> text_transforms{};
+    for (auto& transform : text_transforms) {
+        TransformSystem3D::Initialize(transform);
+    }
+    TransformSystem3D::SetLocalPosition(text_transforms[0U],
+                                        vr::ecs::Float3{.x = -1.0F, .y = 0.25F, .z = 0.0F});
+    TransformSystem3D::SetLocalPosition(text_transforms[1U],
+                                        vr::ecs::Float3{.x = -1.0F, .y = -0.55F, .z = 0.0F});
+
+    std::array<Bounds3D, 2U> bounds_components{};
+    for (auto& bounds : bounds_components) {
+        BoundsSystem3D::Initialize(bounds);
+    }
+    BoundsSystem3D::SetLocalCenterExtents(bounds_components[0U],
+                                          vr::ecs::Float3{.x = 0.0F, .y = 0.0F, .z = 0.0F},
+                                          vr::ecs::Float3{.x = 2.4F, .y = 0.6F, .z = 0.12F});
+    BoundsSystem3D::SetLocalCenterExtents(bounds_components[1U],
+                                          vr::ecs::Float3{.x = 0.0F, .y = 0.0F, .z = 0.0F},
+                                          vr::ecs::Float3{.x = 1.5F, .y = 0.55F, .z = 0.12F});
+    TransformSystem3D::UpdateHierarchy(text_transforms.data(),
+                                       static_cast<std::uint32_t>(text_transforms.size()));
+    (void)BoundsSystem3D::UpdateAligned(bounds_components.data(),
+                                        text_transforms.data(),
+                                        static_cast<std::uint32_t>(bounds_components.size()));
+
+    Camera3D camera{};
+    CameraSystem3D::Initialize(camera);
+    CameraSystem3D::SetAspectRatio(camera, 1280.0F / 720.0F);
+    CameraSystem3D::SetNearFar(camera, 0.05F, 256.0F);
+    CameraSystem3D::SetVerticalFovRadians(camera, 60.0F * 0.01745329251994329577F);
+
+    Transform3D camera_transform{};
+    TransformSystem3D::Initialize(camera_transform);
+    TransformSystem3D::SetLocalPosition(camera_transform,
+                                        vr::ecs::Float3{.x = 0.0F, .y = 0.0F, .z = 4.0F});
+    TransformSystem3D::UpdateHierarchy(&camera_transform, 1U);
+    CameraSystem3D::MarkViewDirty(camera);
+    CameraSystem3D::Update(camera, camera_transform);
+
+    try {
+        Runtime::CreateInfo create_info{};
+        create_info.platform.window.title = "vr_tests_scene_recorder_3d_text_graph_transfer";
+        create_info.platform.window.width = 640;
+        create_info.platform.window.height = 360;
+        create_info.platform.window.resizable = true;
+        create_info.platform.window.high_pixel_density = true;
+        create_info.platform.instance.enable_validation = false;
+        create_info.platform.device.required_vulkan13_features.dynamicRendering = VK_TRUE;
+        create_info.platform.device.required_vulkan13_features.synchronization2 = VK_TRUE;
+        create_info.render_loop.swapchain.enable_vsync = false;
+        create_info.render_loop.swapchain.preferred_image_count = 2U;
+        create_info.render_loop.commands.initial_primary_per_frame = 2U;
+        create_info.render_loop.commands.primary_growth_chunk = 2U;
+        create_info.render_loop.submit_wait_stage_mask = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+        create_info.diagnostics.level = vr::runtime::DiagnosticsLevel::Detailed;
+        create_info.poll_events_each_tick = true;
+
+        runtime.Initialize(create_info);
+        runtime_initialized = true;
+
+        vr::text::FontFaceCreateInfo face_create_info{};
+        face_create_info.file_path = font_path;
+        face_create_info.pixel_height = 32U;
+        const vr::text::FontFaceId base_face_id = runtime.FreeType().RegisterFace(face_create_info);
+        runtime.GlyphAtlas().MapFont(1U, base_face_id);
+
+        vr::render::SceneRecorder3DCreateInfo recorder_create_info{};
+        recorder_create_info.scene_target.color_debug_name = "RuntimeText3DGraphSceneColor";
+        recorder_create_info.scene_target.depth_debug_name = "RuntimeText3DGraphSceneDepth";
+        recorder_create_info.scene_target.enable_depth = true;
+        recorder_create_info.scene_target.color_lifetime = vr::render::RenderTargetLifetime::transient;
+        recorder_create_info.scene_target.depth_lifetime = vr::render::RenderTargetLifetime::transient;
+        recorder_create_info.reserve_scene_renderer_count = 1U;
+        recorder_create_info.reserve_overlay_renderer_count = 0U;
+        recorder.Initialize(recorder_create_info);
+        recorder_initialized = true;
+        recorder.BindRuntime(runtime);
+
+        vr::text::TextRenderer3DCreateInfo text_renderer_create_info{};
+        text_renderer_create_info.runtime_build.pixel_size_quantization = 1.0F;
+        text_renderer_create_info.runtime_build.enable_kerning = true;
+        text_renderer_create_info.reserve_component_count = static_cast<std::uint32_t>(text_components.size());
+        text_renderer_create_info.reserve_glyph_count = 4096U;
+        text_renderer_create_info.initial_vertex_buffer_bytes = 1024U * 1024U;
+        text_renderer_create_info.enable_depth = true;
+        text_renderer_create_info.clear_depth = true;
+        text_renderer_create_info.clear_swapchain = false;
+        text_renderer.Initialize(text_renderer_create_info);
+        text_renderer_initialized = true;
+        text_renderer.SetSceneData(text_components.data(),
+                                   text_transforms.data(),
+                                   static_cast<std::uint32_t>(text_components.size()),
+                                   &camera,
+                                   &camera_transform,
+                                   bounds_components.data());
+        recorder.RegisterTransparentSceneRenderer(text_renderer,
+                                                  vr::render::SceneRenderPassRole::single);
+
+        vr::render::RenderView3D main_view{};
+        vr::render::RenderScenePacket3D main_scene_packet{};
+        vr::render::RefreshExtentBoundWorldSceneSubmission(main_view,
+                                                           main_scene_packet,
+                                                           camera,
+                                                           camera_transform,
+                                                           runtime.Swapchain().Extent(),
+                                                           9101U);
+        recorder.SetFramePacket(&main_scene_packet);
+
+        std::uint32_t submitted_frames = 0U;
+        std::uint64_t max_uploaded_bytes = 0U;
+        bool graph_only_active = false;
+        bool transfer_requested = false;
+        bool transfer_enabled = false;
+        bool graphics_fallback_active = false;
+        bool graph_transfer_pass_seen = false;
+        bool queue_timeline_json_available = false;
+        std::uint32_t max_effective_queue_batch_count = 0U;
+        std::uint32_t max_effective_queue_dependency_count = 0U;
+        bool transfer_queue_batch_seen = false;
+        bool graphics_queue_batch_seen = false;
+        bool graphics_only_effective_batches_seen = false;
+        std::uint64_t max_transfer_submitted = 0U;
+        std::uint64_t max_transfer_completed = 0U;
+
+        constexpr std::uint32_t max_ticks = 8U;
+        for (std::uint32_t tick_index = 0U;
+             tick_index < max_ticks && runtime.IsRunning();
+             ++tick_index) {
+            char frame_text[64]{};
+            std::snprintf(frame_text, sizeof(frame_text), "Frame: %u", tick_index);
+            (void)TextSystem3D::SetText(text_components[1U], frame_text);
+            TransformSystem3D::UpdateHierarchy(text_transforms.data(),
+                                               static_cast<std::uint32_t>(text_transforms.size()));
+            (void)BoundsSystem3D::UpdateAligned(bounds_components.data(),
+                                                text_transforms.data(),
+                                                static_cast<std::uint32_t>(bounds_components.size()));
+            vr::render::RefreshExtentBoundWorldSceneSubmission(main_view,
+                                                               main_scene_packet,
+                                                               camera,
+                                                               camera_transform,
+                                                               runtime.Swapchain().Extent(),
+                                                               9101U + tick_index);
+            recorder.SetFramePacket(&main_scene_packet);
+
+            const Runtime::RuntimeTickResult tick_result = runtime.Tick(recorder);
+            if (tick_result.render.code == vr::render::TickCode::Submitted ||
+                tick_result.render.code == vr::render::TickCode::RecreateRequested) {
+                ++submitted_frames;
+            }
+
+            const auto& graph_diag = tick_result.diagnostics.render_graph;
+            graph_only_active =
+                graph_only_active || vr::test::IsGraphOnlyScene3DRecordActive(runtime);
+            transfer_requested = transfer_requested || graph_diag.transfer_queue_requested;
+            transfer_enabled = transfer_enabled || graph_diag.transfer_queue_enabled;
+            graphics_fallback_active =
+                graphics_fallback_active || graph_diag.graphics_fallback_active;
+            queue_timeline_json_available =
+                queue_timeline_json_available || !graph_diag.effective_queue_timeline_json.empty();
+            max_effective_queue_batch_count =
+                std::max(max_effective_queue_batch_count,
+                         graph_diag.effective_queue_batch_count);
+            max_effective_queue_dependency_count =
+                std::max(max_effective_queue_dependency_count,
+                         graph_diag.effective_queue_dependency_count);
+            transfer_queue_batch_seen =
+                transfer_queue_batch_seen ||
+                HasEffectiveQueueBatchOnQueue(graph_diag, "transfer");
+            graphics_queue_batch_seen =
+                graphics_queue_batch_seen ||
+                HasEffectiveQueueBatchOnQueue(graph_diag, "graphics");
+            graphics_only_effective_batches_seen =
+                graphics_only_effective_batches_seen ||
+                AllEffectiveQueueBatchesUseQueue(graph_diag, "graphics");
+            max_uploaded_bytes = std::max(max_uploaded_bytes, text_renderer.Stats().uploaded_bytes);
+            max_transfer_submitted = std::max(max_transfer_submitted,
+                                              tick_result.diagnostics.queues.transfer_submitted);
+            max_transfer_completed = std::max(max_transfer_completed,
+                                              tick_result.diagnostics.queues.transfer_completed);
+
+            const auto& graph_service =
+                runtime.Services().Get<vr::runtime::services::RenderGraphRuntimeService>();
+            if (const auto* compiled_graph = graph_service.TryGetCompiledGraph();
+                compiled_graph != nullptr) {
+                graph_transfer_pass_seen = graph_transfer_pass_seen ||
+                    std::any_of(compiled_graph->Passes().begin(),
+                                compiled_graph->Passes().end(),
+                                [](const auto& pass_) {
+                                    return pass_.debug_name == "text_3d_upload_instances" &&
+                                           pass_.executable;
+                                });
+            }
+
+            SDL_Delay(1U);
+        }
+
+        VR_REQUIRE(submitted_frames > 0U);
+        VR_CHECK(graph_only_active);
+        VR_CHECK(graph_transfer_pass_seen);
+        VR_CHECK(transfer_requested);
+        VR_CHECK(queue_timeline_json_available);
+        VR_CHECK(max_effective_queue_batch_count > 0U);
+        VR_CHECK(max_uploaded_bytes > 0U);
+        VR_CHECK(runtime.GlyphUpload().Stats().uploaded_rect_count > 0U);
+        VR_CHECK(recorder.Stats().frame_packet_record_count == 0U);
+
+        if (transfer_enabled) {
+            VR_CHECK(!graphics_fallback_active);
+            VR_CHECK(max_effective_queue_dependency_count > 0U);
+            VR_CHECK(transfer_queue_batch_seen);
+            VR_CHECK(graphics_queue_batch_seen);
+            VR_CHECK(max_transfer_submitted > 0U);
+            VR_CHECK(max_transfer_completed <= max_transfer_submitted);
+        } else {
+            VR_CHECK(graphics_fallback_active);
+            VR_CHECK(graphics_only_effective_batches_seen);
+            VR_CHECK(max_transfer_submitted == 0U);
+        }
+
+        recorder.Shutdown(runtime.Context());
+        recorder_initialized = false;
+        text_renderer.Shutdown(runtime.Context());
+        text_renderer_initialized = false;
+        runtime.Shutdown();
+        runtime_initialized = false;
+    } catch (const std::exception& exception_) {
+        if (recorder_initialized && runtime_initialized && runtime.IsInitialized()) {
+            recorder.Shutdown(runtime.Context());
+            recorder_initialized = false;
         }
         if (text_renderer_initialized && runtime_initialized && runtime.IsInitialized()) {
             text_renderer.Shutdown(runtime.Context());
