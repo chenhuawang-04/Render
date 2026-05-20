@@ -138,7 +138,9 @@ VR_TEST_CASE(RuntimeIntegration_frame_composer_prepare_and_tonemap_smoke,
         VR_CHECK(first_tick.diagnostics.collected);
         VR_CHECK(first_tick.diagnostics.frame_composer.prepared_frame_count >= 1U);
         VR_CHECK(first_tick.diagnostics.frame_composer.tonemap_record_count >= 1U);
-        VR_CHECK(graph_service.GraphOnlyRecordPathEnabled());
+        VR_CHECK(first_tick.diagnostics.render_target_pool.acquire_count == 0U);
+        VR_CHECK(graph_service.LastDiagnostics().graph_only_supported);
+        VR_CHECK(graph_service.LastDiagnostics().graph_only_active);
         VR_CHECK(graph_service.LastRecordStats().pass_count >= 1U);
         VR_CHECK(graph_service.LastRecordStats().command_batch_count >= 1U);
 
@@ -147,6 +149,7 @@ VR_TEST_CASE(RuntimeIntegration_frame_composer_prepare_and_tonemap_smoke,
         VR_CHECK(second_tick.diagnostics.frame_composer.prepared_frame_count >= 2U);
         VR_CHECK(second_tick.diagnostics.frame_composer.ready_frame_count >= 2U);
         VR_CHECK(second_tick.diagnostics.frame_composer.tonemap_record_count >= 2U);
+        VR_CHECK(second_tick.diagnostics.render_target_pool.acquire_count == 0U);
         VR_CHECK(graph_service.LastRecordStats().pass_count >= 1U);
         VR_CHECK(recorder.record_count == 0U);
 

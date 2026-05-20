@@ -135,10 +135,8 @@ struct RenderGraphQueueDependencyDiagnostics final {
 struct RenderGraphRuntimeDiagnostics final {
     bool available = false;
     bool frame_compiled = false;
-    bool graph_only_path_enabled = false;
     bool graph_only_supported = false;
     bool graph_only_active = false;
-    bool strict_graph_only_required = false;
     bool transfer_queue_requested = false;
     bool compute_queue_requested = false;
     bool multi_queue_requested = false;

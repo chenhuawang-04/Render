@@ -1,6 +1,7 @@
 ﻿#include "support/test_framework.hpp"
 #include "vr/render/render_pass_preset.hpp"
 #include "vr/render/animation_frame_coordinator.hpp"
+#include "vr/render/frame_composer_host.hpp"
 #include "vr/render/scene_recorder_2d.hpp"
 #include "vr/render/render_target_pass.hpp"
 #include "vr/render/render_target_desc.hpp"
@@ -12,6 +13,7 @@
 #include "vr/render/scene_render_target_set.hpp"
 
 #include <array>
+#include <string_view>
 #include <type_traits>
 
 namespace {
@@ -30,6 +32,21 @@ namespace {
     static vr::render::RenderTargetHost render_target{};
     return {
         .device = context,
+        .render_target = render_target,
+    };
+}
+
+[[nodiscard]] vr::render::FrameComposerPrepareView MakeFrameComposerPrepareViewForTests() {
+    static vr::VulkanContext context{};
+    static vr::render::DescriptorHost descriptor{};
+    static vr::render::PipelineHost pipeline{};
+    static vr::resource::SamplerHost sampler{};
+    static vr::render::RenderTargetHost render_target{};
+    return {
+        .device = context,
+        .descriptor = descriptor,
+        .pipeline = pipeline,
+        .sampler = sampler,
         .render_target = render_target,
     };
 }
@@ -906,6 +923,23 @@ VR_TEST_CASE(SceneRecorder2D_explicit_scene_target_bypasses_scene_consumer_route
     VR_CHECK(world_renderer.color_output.final_state == vr::render::RenderTargetStateKind::shader_read);
     VR_CHECK(consumer.prepare_count == 0U);
     VR_CHECK(consumer.source_set == false);
+}
+
+VR_TEST_CASE(FrameComposerHost_graph_only_mainline_rejects_transient_scene_targets,
+             "unit;core;frame_composer;render_graph") {
+    vr::render::FrameComposerHost host{};
+    vr::render::FrameComposerHostCreateInfo create_info{};
+    create_info.color_lifetime = vr::render::RenderTargetLifetime::transient;
+    host.Initialize(create_info);
+
+    bool threw = false;
+    try {
+        (void)host.PrepareFrame(MakeFrameComposerPrepareViewForTests());
+    } catch (const std::runtime_error& error_) {
+        threw = std::string_view(error_.what()).find("transient scene targets") != std::string_view::npos;
+    }
+
+    VR_CHECK(threw);
 }
 
 VR_TEST_CASE(SceneRecorder2D_direct_depth_output_routes_to_depth_capable_renderer,

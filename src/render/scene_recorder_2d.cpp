@@ -4,6 +4,7 @@
 
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace vr::render {
@@ -23,6 +24,11 @@ namespace {
         .sample_count = render_graph::SampleCount::x1,
         .allow_alias = true,
     };
+}
+
+[[noreturn]] void ThrowUnsupportedGraphOnlyMode(std::string_view mode_) {
+    throw std::runtime_error("SceneRecorder2D graph-only mainline does not support " +
+                             std::string(mode_));
 }
 
 } // namespace
@@ -176,10 +182,13 @@ void SceneRecorder2D::PrepareFrame(const SceneRecorder2DPrepareView& prepare_vie
                                    IsPostProcessEnabledForSubmission();
     const bool overlay_enabled = IsOverlayEnabledForSubmission();
     const bool shadow_enabled = IsShadowEnabledForSubmission();
-    const bool prefer_graph_only_runtime_path = PreferGraphOnlyRuntimePath(prepare_view_.device);
+    const bool graph_managed_scene_targets =
+        (context != nullptr) ? UsesGraphManagedSceneTargets()
+                             : SupportsGraphExecution(prepare_view_.device);
     SceneRecorder2DPrepareView resolved_prepare_view = prepare_view_;
-    resolved_prepare_view.prefer_graph_only_runtime_path = prefer_graph_only_runtime_path;
-    if (use_scene_targets && !prefer_graph_only_runtime_path) {
+    resolved_prepare_view.prefer_render_graph_upload_path = graph_managed_scene_targets;
+    resolved_prepare_view.prefer_render_graph_compute_path = graph_managed_scene_targets;
+    if (use_scene_targets && !graph_managed_scene_targets) {
         EnsureRuntimeBinding("PrepareFrame");
         (void)scene_targets.PrepareFrame(SceneRenderTargetSetPrepareView{
             .device = prepare_view_.device,
@@ -189,7 +198,7 @@ void SceneRecorder2D::PrepareFrame(const SceneRecorder2DPrepareView& prepare_vie
             .progress = prepare_view_.progress,
         });
     }
-    if (!prefer_graph_only_runtime_path) {
+    if (!graph_managed_scene_targets) {
         ConfigureBackgroundPassForTargets();
         ConfigureSceneRenderersForTargets();
         if (use_scene_targets) {
@@ -228,7 +237,7 @@ void SceneRecorder2D::PrepareFrame(const SceneRecorder2DPrepareView& prepare_vie
 
     if (use_scene_targets && scene_consumer_entry.renderer != nullptr &&
         IsLayerVisibleForSubmission(scene_consumer_entry.submission_layer_mask)) {
-        if (!prefer_graph_only_runtime_path &&
+        if (!graph_managed_scene_targets &&
             scene_consumer_entry.set_output_target_fn != nullptr) {
             scene_consumer_entry.set_output_target_fn(scene_consumer_entry.renderer,
                                                       BuildOverlayOutputConfig(scene_consumer_entry.output_target_config));
@@ -242,7 +251,7 @@ void SceneRecorder2D::PrepareFrame(const SceneRecorder2DPrepareView& prepare_vie
         if (!overlay_enabled || !IsOverlayLayerVisibleForSubmission(entry.submission_layer_mask)) {
             continue;
         }
-        if (!prefer_graph_only_runtime_path &&
+        if (!graph_managed_scene_targets &&
             entry.renderer != nullptr &&
             entry.set_output_target_fn != nullptr) {
             entry.set_output_target_fn(entry.renderer, BuildOverlayOutputConfig(entry.output_target_config));
@@ -271,12 +280,10 @@ void SceneRecorder2D::BuildRenderGraph(
     }
 
     if (HasExplicitSceneTargetForSubmission()) {
-        throw std::runtime_error(
-            "SceneRecorder2D::BuildRenderGraph does not support explicit scene targets");
+        ThrowUnsupportedGraphOnlyMode("explicit scene targets");
     }
     if (HasExplicitOverlayTargetForSubmission()) {
-        throw std::runtime_error(
-            "SceneRecorder2D::BuildRenderGraph does not support explicit overlay targets");
+        ThrowUnsupportedGraphOnlyMode("explicit overlay targets");
     }
 
     const bool shadow_enabled = IsShadowEnabledForSubmission();
@@ -288,8 +295,7 @@ void SceneRecorder2D::BuildRenderGraph(
             continue;
         }
         if (entry.renderer != nullptr) {
-            throw std::runtime_error(
-                "SceneRecorder2D::BuildRenderGraph does not yet support pre-scene renderer graph execution");
+            ThrowUnsupportedGraphOnlyMode("pre-scene renderers");
         }
     }
 
@@ -299,13 +305,11 @@ void SceneRecorder2D::BuildRenderGraph(
         IsPostProcessEnabledForSubmission();
     if (scene_consumer_enabled) {
         if (IsValidRenderTargetHandle(scene_consumer_entry.output_target_config.color_target)) {
-            throw std::runtime_error(
-                "SceneRecorder2D::BuildRenderGraph does not support explicit scene consumer output targets");
+            ThrowUnsupportedGraphOnlyMode("explicit scene-consumer output targets");
         }
         if (scene_consumer_entry.graph_record_fn == nullptr ||
             scene_consumer_entry.build_graph_color_attachment_fn == nullptr) {
-            throw std::runtime_error(
-                "SceneRecorder2D::BuildRenderGraph encountered a scene consumer without graph record support");
+            ThrowUnsupportedGraphOnlyMode("scene consumers without graph record support");
         }
     }
 
@@ -317,8 +321,7 @@ void SceneRecorder2D::BuildRenderGraph(
             continue;
         }
         if (entry.graph_record_fn == nullptr) {
-            throw std::runtime_error(
-                "SceneRecorder2D::BuildRenderGraph encountered a scene renderer without graph record support");
+            ThrowUnsupportedGraphOnlyMode("scene renderers without graph record support");
         }
         visible_scene_entries.push_back(&entry);
     }
@@ -472,8 +475,7 @@ void SceneRecorder2D::BuildRenderGraph(
             continue;
         }
         if (entry.graph_record_fn == nullptr) {
-            throw std::runtime_error(
-                "SceneRecorder2D::BuildRenderGraph encountered an overlay renderer without graph record support");
+            ThrowUnsupportedGraphOnlyMode("overlay renderers without graph record support");
         }
         visible_overlay_entries.push_back(&entry);
     }
@@ -587,8 +589,7 @@ void SceneRecorder2D::OnSwapchainRecreated(std::uint32_t image_count_,
                                    IsPostProcessEnabledForSubmission();
     const bool overlay_enabled = IsOverlayEnabledForSubmission();
     const bool shadow_enabled = IsShadowEnabledForSubmission();
-    const bool prefer_graph_only_runtime_path =
-        (context != nullptr) ? PreferGraphOnlyRuntimePath(*context) : false;
+    const bool graph_managed_scene_targets = UsesGraphManagedSceneTargets();
 
     background_pass.OnSwapchainRecreated(image_count_,
                                          extent_,
@@ -653,7 +654,7 @@ void SceneRecorder2D::OnSwapchainRecreated(std::uint32_t image_count_,
         }
     }
 
-    if (use_scene_targets && !prefer_graph_only_runtime_path) {
+    if (use_scene_targets && !graph_managed_scene_targets) {
         EnsureRuntimeBinding("OnSwapchainRecreated");
         (void)scene_targets.OnSwapchainRecreated(*context,
                                                  *render_target_host,
@@ -662,7 +663,7 @@ void SceneRecorder2D::OnSwapchainRecreated(std::uint32_t image_count_,
                                                  last_submitted_value_,
                                                  completed_submit_value_);
     }
-    if (!prefer_graph_only_runtime_path) {
+    if (!graph_managed_scene_targets) {
         ConfigureSceneRenderersForTargets();
         if (use_scene_targets) {
             ConfigureSceneConsumerForTargets();
@@ -905,9 +906,13 @@ bool SceneRecorder2D::IsOverlayLayerVisibleForSubmission(std::uint32_t submissio
             (OverlayLayerMask() & submission_layer_mask_) != 0U);
 }
 
-bool SceneRecorder2D::PreferGraphOnlyRuntimePath(const VulkanContext& device_) const noexcept {
+bool SceneRecorder2D::SupportsGraphExecution(const VulkanContext& device_) const noexcept {
     return graph_runtime_service != nullptr &&
-           graph_runtime_service->SupportsGraphOnlyRecord(device_);
+           graph_runtime_service->SupportsGraphExecution(device_);
+}
+
+bool SceneRecorder2D::UsesGraphManagedSceneTargets() const noexcept {
+    return context != nullptr && SupportsGraphExecution(*context);
 }
 
 void SceneRecorder2D::ConfigureBackgroundPassForTargets() {

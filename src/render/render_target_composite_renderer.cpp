@@ -208,10 +208,6 @@ void RenderTargetCompositeRenderer::Record(const FrameRecordContext& record_cont
         throw std::runtime_error("RenderTargetCompositeRenderer source target must differ from output target");
     }
 
-    render_target_host->RecordTransition(record_context_.command_buffer,
-                                         source_target,
-                                         source_expected_state);
-
     const ResolvedColorRenderPass color_pass = BuildColorRenderPass(record_context_,
                                                                     output_target_config,
                                                                     create_info_cache.clear_swapchain,

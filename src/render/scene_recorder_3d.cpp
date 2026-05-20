@@ -269,10 +269,10 @@ void SceneRecorder3D::PrepareFrame(const SceneRecorder3DPrepareView& prepare_vie
     const bool shadow_enabled = IsShadowEnabledForSubmission();
     const bool use_explicit_scene_target = HasExplicitSceneTargetForSubmission();
     const bool use_post_stack = ShouldUsePostStackForSubmission();
-    const bool prefer_graph_only_runtime_path =
-        (context != nullptr) ? PreferGraphOnlyRuntimePath(*context) : false;
-    const bool graph_only_post_stack_path =
-        prefer_graph_only_runtime_path && use_post_stack && !use_explicit_scene_target;
+    const bool graph_execution_supported =
+        (context != nullptr) ? SupportsGraphExecution(*context)
+                             : SupportsGraphExecution(prepare_view_.device);
+    const bool graph_managed_post_stack = UsesGraphManagedPostStack();
     const bool has_sky_environment_pass = HasSkyEnvironmentPassForSubmission();
     const bool record_sky_before_opaque = ShouldRecordSkyEnvironmentBeforeOpaque();
     const bool record_sky_after_opaque = ShouldRecordSkyEnvironmentAfterOpaque();
@@ -286,7 +286,7 @@ void SceneRecorder3D::PrepareFrame(const SceneRecorder3DPrepareView& prepare_vie
     SceneRenderTargetSet* targets = nullptr;
     if (use_post_stack) {
         targets = &post_stack.Targets();
-        if (!graph_only_post_stack_path) {
+        if (!graph_managed_post_stack) {
             (void)targets->PrepareFrame(SceneRenderTargetSetPrepareView{
                 .device = prepare_view_.device,
                 .render_target = prepare_view_.render_target,
@@ -346,11 +346,12 @@ void SceneRecorder3D::PrepareFrame(const SceneRecorder3DPrepareView& prepare_vie
     }
 
     SceneRecorder3DPrepareView resolved_prepare_view = prepare_view_;
-    resolved_prepare_view.prefer_graph_only_runtime_path = prefer_graph_only_runtime_path;
+    resolved_prepare_view.prefer_render_graph_upload_path = graph_execution_supported;
+    resolved_prepare_view.prefer_render_graph_compute_path = graph_execution_supported;
     resolved_prepare_view.ibl_environment_id = ibl_environment_id;
     resolved_prepare_view.ibl_brdf_lut_texture_id = ibl_brdf_lut_texture_id;
 
-    if (!graph_only_post_stack_path) {
+    if (!graph_managed_post_stack) {
         ConfigureSkyEnvironmentPassForTargets();
     } else {
         sky_environment_pass.ResetOutputTargetConfig();
@@ -388,8 +389,8 @@ void SceneRecorder3D::PrepareFrame(const SceneRecorder3DPrepareView& prepare_vie
         if (entry_.renderer == nullptr) {
             return;
         }
-        if (graph_only_post_stack_path) {
-            // Graph-only runtime path binds scene targets through RenderGraph.
+        if (graph_managed_post_stack) {
+            // Graph-managed 3D mainline binds scene targets through RenderGraph.
             // Keep only lighting/animation configuration below.
         } else if (use_explicit_scene_target) {
             if (entry_.configure_direct_scene_fn != nullptr) {
@@ -477,7 +478,7 @@ void SceneRecorder3D::PrepareFrame(const SceneRecorder3DPrepareView& prepare_vie
     };
     ForEachSceneRendererInStageOrder(configure_scene_renderer);
     if (targets != nullptr) {
-        if (!graph_only_post_stack_path) {
+        if (!graph_managed_post_stack) {
             (void)targets->ConfigureSceneConsumer(post_stack.Bloom());
             post_stack.Bloom().PrepareFrame(
                 MakeRenderTargetBloomRendererPrepareView(
@@ -503,7 +504,7 @@ void SceneRecorder3D::PrepareFrame(const SceneRecorder3DPrepareView& prepare_vie
         if (!overlay_enabled || !IsOverlayLayerVisibleForSubmission(entry.submission_layer_mask)) {
             continue;
         }
-        if (!graph_only_post_stack_path &&
+        if (!graph_managed_post_stack &&
             entry.renderer != nullptr &&
             entry.set_output_target_fn != nullptr) {
             entry.set_output_target_fn(entry.renderer, BuildOverlayOutputConfig(entry.output_target_config));
@@ -1092,12 +1093,6 @@ void SceneRecorder3D::Record(const FrameRecordContext& record_context_) {
 
     if (use_post_stack) {
         post_stack.Record(record_context_);
-        if (render_target_host != nullptr &&
-            post_stack.Targets().HasDepthTarget()) {
-            render_target_host->RecordTransition(record_context_.command_buffer,
-                                                post_stack.Targets().DepthTarget(),
-                                                post_stack.Targets().CreateInfo().depth_final_state);
-        }
     }
 
     for (const OverlayRendererEntry& entry : overlay_renderer_entries) {
@@ -1130,10 +1125,7 @@ void SceneRecorder3D::OnSwapchainRecreated(std::uint32_t image_count_,
     const bool shadow_enabled = IsShadowEnabledForSubmission();
     const bool use_explicit_scene_target = HasExplicitSceneTargetForSubmission();
     const bool use_post_stack = ShouldUsePostStackForSubmission();
-    const bool prefer_graph_only_runtime_path =
-        (context != nullptr) ? PreferGraphOnlyRuntimePath(*context) : false;
-    const bool graph_only_post_stack_path =
-        prefer_graph_only_runtime_path && use_post_stack && !use_explicit_scene_target;
+    const bool graph_managed_post_stack = UsesGraphManagedPostStack();
 
     sky_environment_pass.OnSwapchainRecreated(image_count_,
                                               extent_,
@@ -1189,21 +1181,22 @@ void SceneRecorder3D::OnSwapchainRecreated(std::uint32_t image_count_,
         }
     }
 
-    if (use_post_stack && !graph_only_post_stack_path) {
+    if (use_post_stack) {
         post_stack.Bloom().OnSwapchainRecreated(image_count_, extent_, format_);
-        (void)post_stack.Targets().OnSwapchainRecreated(*context,
-                                                        *render_target_host,
-                                                        render_target_pool,
-                                                        extent_,
-                                                        last_submitted_value_,
-                                                        completed_submit_value_);
-    } else if (graph_only_post_stack_path) {
-        post_stack.Bloom().OnSwapchainRecreated(image_count_, extent_, format_);
-        post_stack.Targets().InvalidateFrameTargets();
-        post_stack.Bloom().ClearSceneSourceTarget();
-        post_stack.Bloom().ResetOutputTargetConfig();
-        sky_environment_pass.ResetOutputTargetConfig();
-        sky_environment_pass.ResetDepthTargetConfig();
+    if (!graph_managed_post_stack) {
+            (void)post_stack.Targets().OnSwapchainRecreated(*context,
+                                                            *render_target_host,
+                                                            render_target_pool,
+                                                            extent_,
+                                                            last_submitted_value_,
+                                                            completed_submit_value_);
+        } else {
+            post_stack.Targets().InvalidateFrameTargets();
+            post_stack.Bloom().ClearSceneSourceTarget();
+            post_stack.Bloom().ResetOutputTargetConfig();
+            sky_environment_pass.ResetOutputTargetConfig();
+            sky_environment_pass.ResetDepthTargetConfig();
+        }
     }
 
     auto reconfigure_scene_renderer = [&](const SceneRendererEntry& entry_) {
@@ -1213,8 +1206,8 @@ void SceneRecorder3D::OnSwapchainRecreated(std::uint32_t image_count_,
         if (entry_.renderer == nullptr) {
             return;
         }
-        if (graph_only_post_stack_path) {
-            // Graph-only runtime path keeps scene targets in RenderGraph state only.
+        if (graph_managed_post_stack) {
+            // Graph-managed 3D mainline keeps scene targets in RenderGraph state only.
         } else if (use_explicit_scene_target) {
             if (entry_.configure_direct_scene_fn != nullptr) {
                 const RenderTargetColorOutputConfig color_output =
@@ -1261,14 +1254,14 @@ void SceneRecorder3D::OnSwapchainRecreated(std::uint32_t image_count_,
         }
     };
     ForEachSceneRendererInStageOrder(reconfigure_scene_renderer);
-    if (use_post_stack && !graph_only_post_stack_path) {
+    if (use_post_stack && !graph_managed_post_stack) {
         (void)post_stack.Targets().ConfigureSceneConsumer(post_stack.Bloom());
     }
     for (const OverlayRendererEntry& entry : overlay_renderer_entries) {
         if (!overlay_enabled || !IsOverlayLayerVisibleForSubmission(entry.submission_layer_mask)) {
             continue;
         }
-        if (!graph_only_post_stack_path &&
+        if (!graph_managed_post_stack &&
             entry.renderer != nullptr &&
             entry.set_output_target_fn != nullptr) {
             entry.set_output_target_fn(entry.renderer, BuildOverlayOutputConfig(entry.output_target_config));
@@ -1620,9 +1613,16 @@ bool SceneRecorder3D::IsPostProcessEnabledForSubmission() const noexcept {
     return ResolveScenePostProcessEnabledForView(*frame_packet, scene_view);
 }
 
-bool SceneRecorder3D::PreferGraphOnlyRuntimePath(const VulkanContext& device_) const noexcept {
+bool SceneRecorder3D::SupportsGraphExecution(const VulkanContext& device_) const noexcept {
     return graph_runtime_service != nullptr &&
-           graph_runtime_service->SupportsGraphOnlyRecord(device_);
+           graph_runtime_service->SupportsGraphExecution(device_);
+}
+
+bool SceneRecorder3D::UsesGraphManagedPostStack() const noexcept {
+    return context != nullptr &&
+           ShouldUsePostStackForSubmission() &&
+           !HasExplicitSceneTargetForSubmission() &&
+           SupportsGraphExecution(*context);
 }
 
 bool SceneRecorder3D::HasSkyEnvironmentPassForSubmission() const noexcept {

@@ -2,6 +2,7 @@
 
 
 #include <limits>
+#include <string>
 #include <stdexcept>
 
 namespace vr::render {
@@ -59,7 +60,6 @@ void FrameComposerHost::Initialize(const FrameComposerHostCreateInfo& create_inf
     tonemap_output_target_config = {};
     context = nullptr;
     render_target_host = nullptr;
-    render_target_pool = nullptr;
     tonemap_output_override = false;
     initialized = true;
 }
@@ -76,7 +76,6 @@ void FrameComposerHost::Shutdown(VulkanContext& context_) {
     tonemap_output_target_config = {};
     context = nullptr;
     render_target_host = nullptr;
-    render_target_pool = nullptr;
     tonemap_output_override = false;
     stats = {};
     initialized = false;
@@ -89,11 +88,7 @@ bool FrameComposerHost::PrepareFrame(const FrameComposerPrepareView& prepare_vie
 
     context = &prepare_view_.device;
     render_target_host = &prepare_view_.render_target;
-    render_target_pool = prepare_view_.render_target_pool;
-
-    const bool ready = scene_targets.PrepareFrameAndConfigure(
-        MakeSceneRenderTargetSetPrepareView(prepare_view_),
-        &tonemap_renderer);
+    const bool ready = PrepareGraphManagedSceneTargets(prepare_view_);
     if (tonemap_output_override) {
         tonemap_renderer.SetOutputTargetConfig(tonemap_output_target_config);
     } else {
@@ -128,16 +123,12 @@ bool FrameComposerHost::OnSwapchainRecreated(VulkanContext& context_,
 
     context = &context_;
     render_target_host = &render_target_host_;
-    render_target_pool = render_target_pool_;
-
-    const bool ready =
-        scene_targets.OnSwapchainRecreatedAndConfigure(context_,
+    (void)render_target_pool_;
+    const bool ready = RefreshGraphManagedSceneTargets(context_,
                                                        render_target_host_,
-                                                       render_target_pool_,
                                                        swapchain_extent_,
                                                        last_submitted_value_,
-                                                       completed_submit_value_,
-                                                       &tonemap_renderer);
+                                                       completed_submit_value_);
     if (tonemap_output_override) {
         tonemap_renderer.SetOutputTargetConfig(tonemap_output_target_config);
     } else {
@@ -191,7 +182,7 @@ void FrameComposerHost::BuildRenderGraph(
     if (!scene_targets.IsReady() ||
         !IsValidRenderTargetHandle(scene_targets.ColorTarget())) {
         throw std::runtime_error(
-            "FrameComposerHost::BuildRenderGraph requires ready scene targets from PrepareFrame");
+            "FrameComposerHost::BuildRenderGraph requires ready graph-managed scene targets from PrepareFrame");
     }
     if (!register_imported_texture_) {
         throw std::runtime_error(
@@ -200,7 +191,7 @@ void FrameComposerHost::BuildRenderGraph(
     if (tonemap_output_override &&
         IsValidRenderTargetHandle(tonemap_output_target_config.color_target)) {
         throw std::runtime_error(
-            "FrameComposerHost::BuildRenderGraph does not support explicit tonemap output targets");
+            "FrameComposerHost::BuildRenderGraph graph-only mainline does not support explicit tonemap output targets");
     }
 
     const RenderTargetHandle hdr_color_target = scene_targets.ColorTarget();
@@ -298,6 +289,59 @@ const FrameComposerHostStats& FrameComposerHost::Stats() const noexcept {
 
 const FrameComposerHostCreateInfo& FrameComposerHost::CreateInfo() const noexcept {
     return create_info_cache;
+}
+
+void FrameComposerHost::EnsureGraphManagedSceneTargetContract(const char* operation_) const {
+    const bool uses_transient_color =
+        create_info_cache.color_lifetime == RenderTargetLifetime::transient;
+    const bool uses_transient_depth =
+        create_info_cache.depth_lifetime == RenderTargetLifetime::transient;
+    if (!uses_transient_color && !uses_transient_depth) {
+        return;
+    }
+
+    throw std::runtime_error(std::string("FrameComposerHost::") +
+                             operation_ +
+                             " graph-only mainline does not support transient scene targets");
+}
+
+bool FrameComposerHost::PrepareGraphManagedSceneTargets(
+    const FrameComposerPrepareView& prepare_view_) {
+    EnsureGraphManagedSceneTargetContract("PrepareFrame");
+    const bool ready = scene_targets.PrepareFrame(SceneRenderTargetSetPrepareView{
+        .device = prepare_view_.device,
+        .render_target = prepare_view_.render_target,
+        .render_target_pool = nullptr,
+        .frame = prepare_view_.frame,
+        .progress = prepare_view_.progress,
+    });
+    if (ready) {
+        (void)scene_targets.ConfigureCompositeRenderer(tonemap_renderer);
+    } else {
+        scene_targets.ResetCompositeRenderer(tonemap_renderer);
+    }
+    return ready;
+}
+
+bool FrameComposerHost::RefreshGraphManagedSceneTargets(
+    VulkanContext& context_,
+    RenderTargetHost& render_target_host_,
+    VkExtent2D swapchain_extent_,
+    std::uint64_t last_submitted_value_,
+    std::uint64_t completed_submit_value_) {
+    EnsureGraphManagedSceneTargetContract("OnSwapchainRecreated");
+    const bool ready = scene_targets.OnSwapchainRecreated(context_,
+                                                          render_target_host_,
+                                                          nullptr,
+                                                          swapchain_extent_,
+                                                          last_submitted_value_,
+                                                          completed_submit_value_);
+    if (ready) {
+        (void)scene_targets.ConfigureCompositeRenderer(tonemap_renderer);
+    } else {
+        scene_targets.ResetCompositeRenderer(tonemap_renderer);
+    }
+    return ready;
 }
 
 SceneRenderTargetSetCreateInfo FrameComposerHost::BuildSceneRenderTargetSetCreateInfo(

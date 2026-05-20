@@ -2153,6 +2153,11 @@ VR_TEST_CASE(RenderGraphRuntimeService_builds_bloom_chain_from_scene_recorder_3d
 
     host.EnsureSwapchainTargetsForFrame(0U, 0U);
     host.PrepareTickFrame(graph_recorder, 0U);
+    VR_CHECK(recorder.Stats().frame_packet_record_count == 0U);
+    VR_CHECK(!host.HasRenderTargetPool() ||
+             host.TargetPool().Stats().acquire_count == 0U);
+    VR_CHECK(!host.HasRenderTargetPool() ||
+             host.TargetPool().Stats().reuse_hit_count == 0U);
 
     struct MockPhaseContext final {
         struct FrameContext final {
@@ -2186,6 +2191,11 @@ VR_TEST_CASE(RenderGraphRuntimeService_builds_bloom_chain_from_scene_recorder_3d
 
     const auto* compiled = service.TryGetCompiledGraph();
     VR_REQUIRE(compiled != nullptr);
+    VR_CHECK(recorder.Stats().frame_packet_record_count == 0U);
+    VR_CHECK(!host.HasRenderTargetPool() ||
+             host.TargetPool().Stats().acquire_count == 0U);
+    VR_CHECK(!host.HasRenderTargetPool() ||
+             host.TargetPool().Stats().reuse_hit_count == 0U);
     VR_CHECK(!compiled->Passes().empty());
     VR_CHECK(compiled->HasExecutablePasses());
     VR_CHECK(compiled->TransientAllocations().timeline.saved_bytes > 0U);
@@ -2311,8 +2321,6 @@ VR_TEST_CASE(RenderGraphRuntimeService_records_barrier_batches_when_execution_en
     };
 
     auto& service = host.Services().Get<RenderGraphRuntimeService>();
-    service.EnableRecordExecution();
-    service.EnableGraphOnlyRecordPath();
     const VkCommandBuffer command_buffer = host.Context().BeginSingleTimeCommands();
     MockPhaseContext context{
         .frame_context = {
@@ -2386,8 +2394,6 @@ VR_TEST_CASE(RenderGraphRuntimeService_resolves_cross_queue_graph_to_multi_queue
     };
 
     auto& service = host.Services().Get<RenderGraphRuntimeService>();
-    service.EnableRecordExecution();
-    service.EnableGraphOnlyRecordPath();
     const VkCommandBuffer command_buffer = host.Context().BeginSingleTimeCommands();
     MockPhaseContext context{
         .frame_context = {
@@ -2502,8 +2508,6 @@ VR_TEST_CASE(RenderGraphRuntimeService_falls_back_to_graphics_for_host_boundary_
     };
 
     auto& service = host.Services().Get<RenderGraphRuntimeService>();
-    service.EnableRecordExecution();
-    service.EnableGraphOnlyRecordPath();
     const VkCommandBuffer command_buffer = host.Context().BeginSingleTimeCommands();
     MockPhaseContext context{
         .frame_context = {
@@ -2730,9 +2734,6 @@ VR_TEST_CASE(RenderGraphRuntimeService_submits_cross_queue_graph_during_runtime_
     } recorder{};
 
     auto& service = host.Services().Get<RenderGraphRuntimeService>();
-    service.EnableRecordExecution();
-    service.EnableGraphOnlyRecordPath();
-
     Host::RuntimeTickResult last_tick{};
     std::uint32_t submitted_frames = 0U;
     constexpr std::uint32_t max_ticks = 4U;
@@ -2881,9 +2882,6 @@ VR_TEST_CASE(RenderGraphRuntimeService_submits_multi_graphics_compute_graph_duri
     } recorder{};
 
     auto& service = host.Services().Get<RenderGraphRuntimeService>();
-    service.EnableRecordExecution();
-    service.EnableGraphOnlyRecordPath();
-
     Host::RuntimeTickResult last_tick{};
     std::uint32_t submitted_frames = 0U;
     constexpr std::uint32_t max_ticks = 4U;
@@ -2975,9 +2973,6 @@ VR_TEST_CASE(RenderGraphRuntimeService_executes_minimal_graph_during_runtime_tic
     recorder.frame_packet = &packet;
 
     auto& service = host.Services().Get<RenderGraphRuntimeService>();
-    service.EnableRecordExecution();
-    service.EnableGraphOnlyRecordPath();
-
     const bool graph_execution_supported =
         host.Context().EnabledVulkan13Features().synchronization2 == VK_TRUE &&
         host.Context().EnabledVulkan13Features().dynamicRendering == VK_TRUE;
@@ -3002,13 +2997,8 @@ VR_TEST_CASE(RenderGraphRuntimeService_executes_minimal_graph_during_runtime_tic
     }
 
     VR_CHECK(submitted_frames > 0U);
-    if (graph_execution_supported) {
-        VR_CHECK(executed_graph_frames > 0U);
-        VR_CHECK(recorder.legacy_record_count == 0U);
-    } else {
-        VR_CHECK(executed_graph_frames == 0U);
-        VR_CHECK(recorder.legacy_record_count > 0U);
-    }
+    VR_CHECK(executed_graph_frames > 0U);
+    VR_CHECK(recorder.legacy_record_count == 0U);
 
     host.Shutdown();
 }
@@ -3056,9 +3046,6 @@ VR_TEST_CASE(RenderGraphRuntimeService_handles_swapchain_recreate_with_graph_exe
     recorder.frame_packet = &packet;
 
     auto& service = host.Services().Get<RenderGraphRuntimeService>();
-    service.EnableRecordExecution();
-    service.EnableGraphOnlyRecordPath();
-
     auto tick_result = host.Tick(recorder);
     VR_CHECK(tick_result.render.code == vr::render::TickCode::Submitted ||
              tick_result.render.code == vr::render::TickCode::RecreateRequested);
@@ -3129,9 +3116,6 @@ VR_TEST_CASE(RenderGraphRuntimeService_validation_enabled_minimal_tick_and_resiz
     recorder.frame_packet = &packet;
 
     auto& service = host.Services().Get<RenderGraphRuntimeService>();
-    service.EnableRecordExecution();
-    service.EnableGraphOnlyRecordPath();
-
     std::uint32_t submitted_frames = 0U;
     const auto first_tick = host.Tick(recorder);
     if (first_tick.render.code == vr::render::TickCode::Submitted ||

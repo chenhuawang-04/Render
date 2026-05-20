@@ -1075,8 +1075,8 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_graph_only_record_path_smok
         VR_CHECK(executed_graph_frames > 0U);
         VR_CHECK(graph_recorder.legacy_record_count == 0U);
         VR_CHECK(saw_executable_scene_pass);
-        VR_CHECK(service.RecordExecutionEnabled());
-        VR_CHECK(service.GraphOnlyRecordPathEnabled());
+        VR_CHECK(service.LastDiagnostics().graph_only_supported);
+        VR_CHECK(service.LastDiagnostics().graph_only_active);
         VR_CHECK(max_descriptor_updates == 0U);
         VR_CHECK(max_transient_descriptor_updates > 0U);
     } catch (const std::exception& exception_) {

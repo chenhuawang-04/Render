@@ -9,9 +9,7 @@ template<typename RuntimeT>
     using Service = vr::runtime::services::RenderGraphRuntimeService;
     const auto* service = runtime_.Services().template TryGet<Service>();
     return service != nullptr &&
-           service->GraphOnlyRecordPathEnabled() &&
-           service->CanExecuteGraphRecord(runtime_.Context()) &&
-           service->LastRecordStats().pass_count > 0U;
+           service->LastDiagnostics().graph_only_active;
 }
 
 template<typename RuntimeT>
@@ -19,9 +17,7 @@ template<typename RuntimeT>
     using Service = vr::runtime::services::RenderGraphRuntimeService;
     const auto* service = runtime_.Services().template TryGet<Service>();
     return service != nullptr &&
-           service->GraphOnlyRecordPathEnabled() &&
-           service->CanExecuteGraphRecord(runtime_.Context()) &&
-           service->LastRecordStats().pass_count > 0U;
+           service->LastDiagnostics().graph_only_active;
 }
 
 } // namespace vr::test

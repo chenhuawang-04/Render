@@ -691,7 +691,8 @@ private:
     [[nodiscard]] bool HasBackgroundPassForSubmission() const noexcept;
     [[nodiscard]] bool IsLayerVisibleForSubmission(std::uint32_t submission_layer_mask_) const noexcept;
     [[nodiscard]] bool IsOverlayLayerVisibleForSubmission(std::uint32_t submission_layer_mask_) const noexcept;
-    [[nodiscard]] bool PreferGraphOnlyRuntimePath(const VulkanContext& device_) const noexcept;
+    [[nodiscard]] bool SupportsGraphExecution(const VulkanContext& device_) const noexcept;
+    [[nodiscard]] bool UsesGraphManagedSceneTargets() const noexcept;
     void ConfigureBackgroundPassForTargets();
     void ConfigureSceneRenderersForTargets();
     void ConfigureSceneConsumerForTargets();

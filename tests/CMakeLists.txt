@@ -47,6 +47,11 @@ add_executable(${VR_TEST_TARGET}
     cases/render_shadow_atlas_binding_coordinator_tests.cpp
     cases/render_shadow_frame_coordinator_tests.cpp
     cases/render_target_types_tests.cpp
+    cases/scene_recorder_2d_graph_only_contract_tests.cpp
+    cases/scene_recorder_3d_graph_only_contract_tests.cpp
+    cases/frame_composer_graph_only_contract_tests.cpp
+    cases/runtime_graph_only_contract_tests.cpp
+    cases/phase12_graph_only_closeout_contract_tests.cpp
     cases/render_graph_builder_tests.cpp
     cases/render_graph_descriptor_tests.cpp
     cases/render_graph_alias_allocator_tests.cpp

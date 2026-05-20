@@ -785,7 +785,8 @@ private:
     [[nodiscard]] bool IsShadowEnabledForSubmission() const noexcept;
     [[nodiscard]] bool IsOverlayEnabledForSubmission() const noexcept;
     [[nodiscard]] bool IsPostProcessEnabledForSubmission() const noexcept;
-    [[nodiscard]] bool PreferGraphOnlyRuntimePath(const VulkanContext& device_) const noexcept;
+    [[nodiscard]] bool SupportsGraphExecution(const VulkanContext& device_) const noexcept;
+    [[nodiscard]] bool UsesGraphManagedPostStack() const noexcept;
     [[nodiscard]] bool HasSkyEnvironmentPassForSubmission() const noexcept;
     [[nodiscard]] bool HasVisibleSceneRendererForSubmission() const noexcept;
     [[nodiscard]] bool HasVisibleOpaqueSceneRendererForSubmission() const noexcept;

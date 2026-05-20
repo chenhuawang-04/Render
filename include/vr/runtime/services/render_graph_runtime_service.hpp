@@ -87,13 +87,13 @@ public:
         prepared_multi_queue_submission = {};
         graph_build_callback_2d = {};
         graph_build_callback_3d = {};
+        direct_graph_build_callback = {};
         has_compiled_graph = false;
         queue_execution_policy = {};
         frame_snapshot = std::monostate{};
         direct_imported_textures.clear();
         direct_imported_buffers.clear();
         external_queue_waits.clear();
-        strict_graph_only_record_required = false;
         last_diagnostics = {};
     }
 
@@ -342,25 +342,13 @@ public:
                                                   render_graph::ResourceVersionHandle&)> callback_) {
         if constexpr (std::is_same_v<DimensionT, ecs::Dim2>) {
             graph_build_callback_2d = std::move(callback_);
-            if (graph_build_callback_2d) {
-                EnableRecordExecution(true);
-                EnableGraphOnlyRecordPath(true);
-            }
         } else {
             graph_build_callback_3d = std::move(callback_);
-            if (graph_build_callback_3d) {
-                EnableRecordExecution(true);
-                EnableGraphOnlyRecordPath(true);
-            }
         }
     }
 
     void SetDirectGraphBuildCallback(DirectGraphBuildCallback callback_) {
         direct_graph_build_callback = std::move(callback_);
-        if (direct_graph_build_callback) {
-            EnableRecordExecution(true);
-            EnableGraphOnlyRecordPath(true);
-        }
     }
 
     template<ecs::DimensionTag DimensionT>
@@ -376,42 +364,21 @@ public:
         return physical_resources;
     }
 
-    void EnableRecordExecution(const bool value_ = true) noexcept {
-        record_execution_enabled = value_;
-    }
-
-    void EnableGraphOnlyRecordPath(const bool value_ = true) noexcept {
-        graph_only_record_path_enabled = value_;
-    }
-
-    [[nodiscard]] bool RecordExecutionEnabled() const noexcept {
-        return record_execution_enabled;
-    }
-
-    [[nodiscard]] bool GraphOnlyRecordPathEnabled() const noexcept {
-        return graph_only_record_path_enabled;
-    }
-
-    void RequireStrictGraphOnlyRecord(const bool value_ = true) noexcept {
-        strict_graph_only_record_required = value_;
-    }
-
-    [[nodiscard]] bool StrictGraphOnlyRecordRequired() const noexcept {
-        return strict_graph_only_record_required;
-    }
-
-    [[nodiscard]] bool SupportsGraphOnlyRecord(const VulkanContext& device_) const noexcept {
-        return record_execution_enabled &&
-               graph_only_record_path_enabled &&
+    [[nodiscard]] bool SupportsGraphExecution(const VulkanContext& device_) const noexcept {
+        return
                device_.EnabledVulkan13Features().synchronization2 == VK_TRUE &&
                device_.EnabledVulkan13Features().dynamicRendering == VK_TRUE;
     }
 
     [[nodiscard]] bool CanExecuteGraphRecord(const VulkanContext& device_) const noexcept {
-        return SupportsGraphOnlyRecord(device_) &&
+        return SupportsGraphExecution(device_) &&
                has_compiled_graph &&
                compiled_graph.HasExecutablePasses() &&
                !compiled_graph.Passes().empty();
+    }
+
+    [[nodiscard]] bool HasGraphRecordWorkSource() const noexcept {
+        return HasFrameSnapshot() || static_cast<bool>(direct_graph_build_callback);
     }
 
     [[nodiscard]] const render_graph::VulkanBarrierPlan& PlannedVulkanBarriers() const noexcept {
@@ -1493,13 +1460,11 @@ private:
         vr::runtime::RenderGraphRuntimeDiagnostics diagnostics{};
         diagnostics.available = has_compiled_graph;
         diagnostics.frame_compiled = has_compiled_graph && !compiled_graph.Empty();
-        diagnostics.graph_only_path_enabled = graph_only_record_path_enabled;
-        diagnostics.graph_only_supported = SupportsGraphOnlyRecord(device_);
+        diagnostics.graph_only_supported = SupportsGraphExecution(device_);
         diagnostics.graph_only_active =
             diagnostics.graph_only_supported &&
             CanExecuteGraphRecord(device_) &&
             record_stats.pass_count > 0U;
-        diagnostics.strict_graph_only_required = strict_graph_only_record_required;
         diagnostics.transfer_queue_requested = queue_execution_policy.transfer_requested;
         diagnostics.compute_queue_requested = queue_execution_policy.compute_requested;
         diagnostics.multi_queue_requested = queue_execution_policy.multi_queue_requested;
@@ -1710,9 +1675,6 @@ private:
     DirectGraphBuildCallback direct_graph_build_callback{};
     render_graph::VulkanResourceTable physical_resources{};
     bool has_compiled_graph = false;
-    bool record_execution_enabled = false;
-    bool graph_only_record_path_enabled = false;
-    bool strict_graph_only_record_required = false;
     vr::runtime::RenderGraphRuntimeDiagnostics last_diagnostics{};
     FrameSnapshotVariant frame_snapshot{};
     std::vector<ImportedTextureBinding> direct_imported_textures{};

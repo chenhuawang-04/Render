@@ -1815,7 +1815,6 @@ private:
                                          render_graph::ResourceVersionHandle& color_chain_ref_) {
                                 recorder_.BuildRenderGraph(builder_ref_, snapshot_ref_, build_result_ref_, color_chain_ref_);
                             });
-                        render_graph_service.RequireStrictGraphOnlyRecord(true);
                     }
                 }
             }
@@ -1871,7 +1870,6 @@ private:
                                          render_graph::ResourceVersionHandle& color_chain_ref_) {
                                 recorder_.BuildRenderGraph(builder_ref_, snapshot_ref_, build_result_ref_, color_chain_ref_);
                             });
-                        render_graph_service.RequireStrictGraphOnlyRecord(true);
                     }
                 }
             }
@@ -1916,7 +1914,6 @@ private:
                                                    present_ready_version_ref_,
                                                    register_imported_texture_ref_);
                     });
-                render_graph_service.RequireStrictGraphOnlyRecord(true);
             }
         } else if constexpr (requires(RecorderT& recorder_ref_,
                                       const SceneRenderTargetSetPrepareView& prepare_view_) {
@@ -2176,17 +2173,10 @@ private:
             augmented.swapchain_targets = runtime.render_target_initialized ? &runtime.swapchain_targets : nullptr;
 
             const auto& graph_service = runtime.services_ref.template Get<runtime::services::RenderGraphRuntimeService>();
-            if (graph_service.StrictGraphOnlyRecordRequired()) {
-                if (!graph_service.CanExecuteGraphRecord(runtime.platform_host.Context())) {
+            if (graph_service.HasGraphRecordWorkSource()) {
+                if (!graph_service.SupportsGraphExecution(runtime.platform_host.Context())) {
                     throw std::runtime_error(
-                        "RenderRuntimeHost strict graph-only record path requires an executable compiled render graph");
-                }
-                return;
-            }
-            if (graph_service.SupportsGraphOnlyRecord(runtime.platform_host.Context())) {
-                if (!graph_service.CanExecuteGraphRecord(runtime.platform_host.Context())) {
-                    throw std::runtime_error(
-                        "RenderRuntimeHost graph-only record path enabled without an executable compiled graph");
+                        "RenderRuntimeHost graph-only scheduling requires synchronization2 and dynamicRendering support");
                 }
                 return;
             }

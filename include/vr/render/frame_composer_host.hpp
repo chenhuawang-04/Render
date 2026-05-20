@@ -103,6 +103,13 @@ public:
 private:
     [[nodiscard]] static SceneRenderTargetSetCreateInfo BuildSceneRenderTargetSetCreateInfo(
         const FrameComposerHostCreateInfo& create_info_) noexcept;
+    void EnsureGraphManagedSceneTargetContract(const char* operation_) const;
+    [[nodiscard]] bool PrepareGraphManagedSceneTargets(const FrameComposerPrepareView& prepare_view_);
+    [[nodiscard]] bool RefreshGraphManagedSceneTargets(VulkanContext& context_,
+                                                       RenderTargetHost& render_target_host_,
+                                                       VkExtent2D swapchain_extent_,
+                                                       std::uint64_t last_submitted_value_,
+                                                       std::uint64_t completed_submit_value_);
     void RefreshFrameTargets(std::uint32_t frame_index_) noexcept;
     void ClearFrameTargets() noexcept;
     void DestroyOwnedTargets(VulkanContext& context_) noexcept;
@@ -118,7 +125,6 @@ private:
     RenderTargetColorOutputConfig tonemap_output_target_config{};
     VulkanContext* context = nullptr;
     RenderTargetHost* render_target_host = nullptr;
-    RenderTargetPool* render_target_pool = nullptr;
     bool tonemap_output_override = false;
     bool initialized = false;
 };
