@@ -5,7 +5,7 @@
 #include "vr/ecs/system/camera_system.hpp"
 #include "vr/ecs/system/surface_system.hpp"
 #include "vr/ecs/system/transform_system.hpp"
-#include "vr/render/render_runtime_host.hpp"
+#include "vr/runtime/runtime.hpp"
 #include "vr/render/render_view_submission_utils.hpp"
 #include "vr/render/scene_recorder_3d.hpp"
 #include "vr/surface/surface_image_host.hpp"
@@ -23,7 +23,7 @@
 
 namespace {
 
-using Runtime = vr::render::RenderRuntimeHost<vr::platform::ActiveBackendTag, 2U>;
+using Runtime = vr::runtime::Runtime<vr::platform::ActiveBackendTag, 2U>;
 using Surface3D = vr::ecs::Surface<vr::ecs::Dim3>;
 using SurfaceSystem3D = vr::ecs::SurfaceSystem<vr::ecs::Dim3>;
 using Appearance3D = vr::ecs::Appearance<vr::ecs::Dim3>;
@@ -477,8 +477,6 @@ VR_TEST_CASE(RuntimeIntegration_surface_renderer_3d_bloom_post_stack_smoke,
         VR_CHECK(recorder.ActiveView() != nullptr);
         VR_CHECK(recorder.ActiveView()->camera == &camera);
         VR_CHECK(surface_image_host.Stats().image_count >= 2U);
-        VR_CHECK(runtime.RenderTargetPoolStats().acquire_count == 0U);
-        VR_CHECK(runtime.RenderTargetPoolStats().reuse_hit_count == 0U);
         VR_CHECK(runtime.Ibl().Stats().prepared_frame_count > 0U);
         VR_CHECK(surface_image_host.ResolveBindlessImageSlot(6101U).IsValid());
         VR_CHECK(surface_image_host.ResolveBindlessImageSlot(6102U).IsValid());

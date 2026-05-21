@@ -16,6 +16,7 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <cstdio>
 #include <cstring>
 #include <limits>
 #include <stdexcept>
@@ -243,8 +244,6 @@ void TextRenderer3D::Initialize(const TextRenderer3DCreateInfo& create_info_) {
     for (auto& pipeline_id : graphics_pipeline_ids) {
         pipeline_id = {};
     }
-    output_target_config = {};
-    depth_output_target_config = {};
     pipeline_depth_format = VK_FORMAT_UNDEFINED;
     depth_format = VK_FORMAT_UNDEFINED;
     depth_images.clear();
@@ -300,8 +299,6 @@ void TextRenderer3D::Shutdown(VulkanContext& context_) {
     for (auto& pipeline_id : graphics_pipeline_ids) {
         pipeline_id = {};
     }
-    output_target_config = {};
-    depth_output_target_config = {};
     pipeline_color_format = VK_FORMAT_UNDEFINED;
     pipeline_depth_format = VK_FORMAT_UNDEFINED;
     depth_format = VK_FORMAT_UNDEFINED;
@@ -364,24 +361,6 @@ void TextRenderer3D::SetSceneData(ecs::Text<ecs::Dim3>* text_components_,
     if (component_count_ > 0U) {
         ecs::CullingSystem<ecs::Dim3>::Reserve(culling_scratch, component_count_);
     }
-}
-
-void TextRenderer3D::SetOutputTargetConfig(
-    const render::RenderTargetColorOutputConfig& output_target_config_) noexcept {
-    output_target_config = output_target_config_;
-}
-
-void TextRenderer3D::ResetOutputTargetConfig() noexcept {
-    output_target_config = {};
-}
-
-void TextRenderer3D::SetDepthTargetConfig(
-    const render::RenderTargetDepthOutputConfig& depth_output_target_config_) noexcept {
-    depth_output_target_config = depth_output_target_config_;
-}
-
-void TextRenderer3D::ResetDepthTargetConfig() noexcept {
-    depth_output_target_config = {};
 }
 
 void TextRenderer3D::PrepareFrame(const render::TextRenderer3DPrepareView& prepare_view_) {
@@ -577,7 +556,7 @@ void TextRenderer3D::PrepareFrame(const render::TextRenderer3DPrepareView& prepa
         static_cast<VkDeviceSize>(render_scratch.instances.size()) * sizeof(ecs::Text3DGpuInstance);
 
     EnsureGpuResourcesForFrame(*context, prepare_view_, active_frame_index, required_bytes);
-    if (prepare_view_.prefer_render_graph_upload_path) {
+    if (prepare_view_.render_graph_upload_active) {
         EnsureGraphUploadStagingForFrame(*context,
                                          prepare_view_,
                                          active_frame_index,
@@ -597,7 +576,7 @@ void TextRenderer3D::PrepareFrame(const render::TextRenderer3DPrepareView& prepa
         return;
     }
 
-    if (prepare_view_.prefer_render_graph_upload_path) {
+    if (prepare_view_.render_graph_upload_active) {
         return;
     }
 
@@ -623,6 +602,158 @@ void TextRenderer3D::PrepareFrame(const render::TextRenderer3DPrepareView& prepa
 
     frame_state.uploaded_revision = runtime_geometry_revision;
     stats.uploaded_bytes = required_bytes;
+}
+
+void TextRenderer3D::BuildDirectRuntimeGraph(
+    const render::RuntimeDirectGraphBuildView& graph_view_) {
+    if (!initialized) {
+        throw std::runtime_error(
+            "TextRenderer3D::BuildDirectRuntimeGraph called before Initialize");
+    }
+
+    render_graph::ResourceHandle depth_target = render_graph::invalid_resource_handle;
+    if (create_info_cache.enable_depth) {
+        const render_graph::Extent3D depth_extent{
+            .width = graph_view_.reference_extent.width != 0U ? graph_view_.reference_extent.width : 1U,
+            .height = graph_view_.reference_extent.height != 0U ? graph_view_.reference_extent.height : 1U,
+            .depth = graph_view_.reference_extent.depth != 0U ? graph_view_.reference_extent.depth : 1U,
+        };
+        render_graph::TextureDesc depth_desc{
+            .dimension = render_graph::TextureDimension::image_2d,
+            .format = render_graph::TextureFormat::d32_sfloat,
+            .extent = depth_extent,
+            .usage = render_graph::texture_usage_depth_stencil_attachment_flag,
+            .mip_level_count = 1U,
+            .array_layer_count = 1U,
+            .sample_count = render_graph::SampleCount::x1,
+            .prefer_lazy_memory = create_info_cache.clear_depth,
+        };
+        if (!create_info_cache.clear_depth &&
+            descriptor_host != nullptr &&
+            descriptor_host->FramesInFlight() > 1U) {
+            const std::uint32_t frames_in_flight =
+                (std::max)(descriptor_host->FramesInFlight(), 1U);
+            const std::uint32_t selected_frame_slot = active_frame_index % frames_in_flight;
+            for (std::uint32_t frame_slot = 0U; frame_slot < frames_in_flight; ++frame_slot) {
+                char debug_name[64]{};
+                std::snprintf(debug_name,
+                              sizeof(debug_name),
+                              "text_renderer_3d_depth_slot_%u",
+                              frame_slot);
+                const auto candidate = graph_view_.builder.CreateTexture(
+                    debug_name,
+                    depth_desc,
+                    render_graph::ResourceLifetime::persistent);
+                if (frame_slot == selected_frame_slot) {
+                    depth_target = candidate;
+                }
+            }
+        } else {
+            depth_target = graph_view_.builder.CreateTexture(
+                "text_renderer_3d_depth",
+                depth_desc,
+                create_info_cache.clear_depth
+                    ? render_graph::ResourceLifetime::transient
+                    : render_graph::ResourceLifetime::persistent);
+        }
+    }
+
+    render_graph::ResourceVersionHandle color_version =
+        render_graph::invalid_resource_version;
+    render_graph::ResourceVersionHandle depth_version =
+        render_graph::invalid_resource_version;
+    auto append_stage_pass = [&](const render::SceneRenderStage stage_,
+                                 const char* debug_name_,
+                                 const bool clear_color_,
+                                 const bool clear_depth_) {
+        const auto pass = graph_view_.builder.AddPass(debug_name_);
+        if (render_graph::IsValidResourceVersionHandle(color_version)) {
+            (void)graph_view_.builder.Read(
+                pass,
+                color_version,
+                render_graph::AccessDesc{
+                    .access = render_graph::AccessKind::color_attachment_read,
+                });
+        }
+        color_version = graph_view_.builder.Write(
+            pass,
+            graph_view_.present_target,
+            render_graph::AccessDesc{
+                .access = render_graph::AccessKind::color_attachment_write,
+            });
+
+        render_graph::RasterPassDesc raster_pass_desc{
+            .color_attachments = {
+                render_graph::RasterColorAttachmentDesc{
+                    .target = graph_view_.present_target,
+                    .load_op = clear_color_
+                        ? render_graph::AttachmentLoadOp::clear
+                        : render_graph::AttachmentLoadOp::load,
+                    .store_op = render_graph::AttachmentStoreOp::store,
+                    .clear_value = {
+                        .red = create_info_cache.clear_color.float32[0],
+                        .green = create_info_cache.clear_color.float32[1],
+                        .blue = create_info_cache.clear_color.float32[2],
+                        .alpha = create_info_cache.clear_color.float32[3],
+                    },
+                },
+            },
+        };
+
+        if (render_graph::IsValidResourceHandle(depth_target)) {
+            if (render_graph::IsValidResourceVersionHandle(depth_version)) {
+                (void)graph_view_.builder.Read(
+                    pass,
+                    depth_version,
+                    render_graph::AccessDesc{
+                        .access = render_graph::AccessKind::depth_stencil_read,
+                    });
+            }
+            depth_version = graph_view_.builder.Write(
+                pass,
+                depth_target,
+                render_graph::AccessDesc{
+                    .access = render_graph::AccessKind::depth_stencil_write,
+                });
+            raster_pass_desc.has_depth_attachment = true;
+            raster_pass_desc.depth_attachment = render_graph::RasterDepthAttachmentDesc{
+                .target = depth_target,
+                .load_op = clear_depth_
+                    ? render_graph::AttachmentLoadOp::clear
+                    : render_graph::AttachmentLoadOp::load,
+                .store_op = render_graph::AttachmentStoreOp::store,
+                .stencil_load_op = clear_depth_
+                    ? render_graph::AttachmentLoadOp::clear
+                    : render_graph::AttachmentLoadOp::load,
+                .stencil_store_op = render_graph::AttachmentStoreOp::store,
+                .clear_value = {
+                    .depth = create_info_cache.clear_depth_value,
+                    .stencil = create_info_cache.clear_stencil_value,
+                },
+            };
+        }
+
+        graph_view_.builder.SetRasterPassDesc(pass, raster_pass_desc);
+        DescribeGraphDescriptorBindings(graph_view_.builder, pass);
+        graph_view_.builder.SetExecuteCallback(
+            pass,
+            [this,
+             stage_,
+             color_target = graph_view_.present_target,
+             depth_target](render_graph::GraphCommandContext& context_) {
+                RecordGraphSceneStage(context_, stage_, color_target, depth_target);
+            });
+    };
+
+    append_stage_pass(render::SceneRenderStage::opaque,
+                      "text_renderer_3d_direct_opaque",
+                      create_info_cache.clear_swapchain,
+                      create_info_cache.clear_depth);
+    append_stage_pass(render::SceneRenderStage::transparent,
+                      "text_renderer_3d_direct_transparent",
+                      false,
+                      false);
+    graph_view_.present_ready_version = color_version;
 }
 
 void TextRenderer3D::DescribeGraphDescriptorBindings(render_graph::RenderGraphBuilder& builder_,
@@ -651,15 +782,6 @@ void TextRenderer3D::DescribeGraphDescriptorBindings(render_graph::RenderGraphBu
                                      render_graph::shader_stage_fragment_flag);
 }
 
-void TextRenderer3D::Record(const render::FrameRecordContext& record_context_) {
-    RecordInternal(record_context_, 0U, false);
-}
-
-void TextRenderer3D::RecordSceneStage(const render::FrameRecordContext& record_context_,
-                                      render::SceneRenderStage stage_) {
-    RecordInternal(record_context_, render::SceneRenderStagePassHintValue(stage_), true);
-}
-
 void TextRenderer3D::RecordGraphSceneStage(render_graph::GraphCommandContext& context_,
                                            render::SceneRenderStage stage_,
                                            render_graph::ResourceHandle color_target_,
@@ -669,304 +791,6 @@ void TextRenderer3D::RecordGraphSceneStage(render_graph::GraphCommandContext& co
                         true,
                         color_target_,
                         depth_target_);
-}
-
-void TextRenderer3D::RecordInternal(const render::FrameRecordContext& record_context_,
-                                    std::uint32_t pass_bucket_,
-                                    bool filter_by_pass_bucket_) {
-    if (!initialized) {
-        throw std::runtime_error("TextRenderer3D::Record called before Initialize");
-    }
-    if (context == nullptr || descriptor_host == nullptr || pipeline_host == nullptr ||
-        glyph_upload_host == nullptr || bindless_resources == nullptr) {
-        throw std::runtime_error("TextRenderer3D::Record called before PrepareFrame");
-    }
-    if (record_context_.command_buffer == VK_NULL_HANDLE) {
-        throw std::runtime_error("TextRenderer3D::Record requires valid command buffer");
-    }
-
-    if (record_context_.image_index >= image_initialized.size()) {
-        const std::size_t previous_size = image_initialized.size();
-        image_initialized.resize(record_context_.image_index + 1U);
-        for (std::size_t i = previous_size; i < image_initialized.size(); ++i) {
-            image_initialized[i] = 0U;
-        }
-    }
-    bool has_previous_content = image_initialized[record_context_.image_index] != 0U;
-    if (record_context_.render_target_host != nullptr) {
-        const render::ResolvedColorRenderTarget resolved_color_target =
-            render::ResolveColorRenderTarget(record_context_, output_target_config);
-        if (resolved_color_target.using_render_target_host &&
-            IsValidRenderTargetHandle(resolved_color_target.handle)) {
-            const render::RenderTargetResolvedView color_view =
-                record_context_.render_target_host->ResolveView(resolved_color_target.handle);
-            has_previous_content = color_view.state != render::RenderTargetStateKind::undefined;
-        }
-    }
-    const render::ResolvedColorRenderTarget resolved_color_target =
-        render::ResolveColorRenderTarget(record_context_, output_target_config);
-    const VkExtent2D render_extent = resolved_color_target.extent;
-    if (render_extent.width == 0U || render_extent.height == 0U) {
-        throw std::runtime_error("TextRenderer3D::Record resolved zero-sized render extent");
-    }
-
-    const bool depth_enabled = create_info_cache.enable_depth;
-    bool using_external_depth_target = false;
-    VkFormat active_depth_format = VK_FORMAT_UNDEFINED;
-    bool use_depth_attachment = false;
-    bool has_previous_depth_content = false;
-
-    if (depth_enabled &&
-        record_context_.render_target_host != nullptr &&
-        record_context_.render_target_host->IsValid(depth_output_target_config.depth_target)) {
-        const render::RenderTargetResolvedView depth_view =
-            record_context_.render_target_host->ResolveView(depth_output_target_config.depth_target);
-        if (depth_view.image_view == VK_NULL_HANDLE) {
-            throw std::runtime_error("TextRenderer3D::Record external depth target has null view");
-        }
-        has_previous_depth_content = depth_view.state != render::RenderTargetStateKind::undefined;
-    }
-
-    render::ResolvedColorRenderPass color_pass{};
-
-    if (depth_enabled &&
-        record_context_.render_target_host != nullptr &&
-        record_context_.render_target_host->IsValid(depth_output_target_config.depth_target)) {
-        render::RenderTargetDepthOutputConfig effective_depth_output_config = depth_output_target_config;
-        if (!effective_depth_output_config.use_explicit_load_op && create_info_cache.clear_depth) {
-            effective_depth_output_config.use_explicit_load_op = true;
-            effective_depth_output_config.load_op = VK_ATTACHMENT_LOAD_OP_CLEAR;
-        }
-        color_pass = render::BuildColorDepthRenderPass(record_context_,
-                                                       output_target_config,
-                                                       effective_depth_output_config,
-                                                       create_info_cache.clear_swapchain,
-                                                       create_info_cache.clear_color,
-                                                       has_previous_content,
-                                                       has_previous_depth_content);
-        use_depth_attachment = true;
-        using_external_depth_target = true;
-        active_depth_format = color_pass.depth_target.format;
-    } else if (depth_enabled) {
-        color_pass = render::BuildColorRenderPass(record_context_,
-                                                  output_target_config,
-                                                  create_info_cache.clear_swapchain,
-                                                  create_info_cache.clear_color,
-                                                  has_previous_content);
-        if (depth_format == VK_FORMAT_UNDEFINED) {
-            depth_format = ResolveDepthFormat(*context, create_info_cache.preferred_depth_format);
-        }
-
-        EnsureDepthResources(*context,
-                             static_cast<std::uint32_t>(image_initialized.size()),
-                             render_extent);
-
-        use_depth_attachment =
-            depth_format != VK_FORMAT_UNDEFINED &&
-            record_context_.image_index < depth_images.size() &&
-            depth_images[record_context_.image_index].default_view != VK_NULL_HANDLE;
-
-        if (use_depth_attachment) {
-            if (record_context_.image_index >= depth_image_initialized.size()) {
-                const std::size_t previous_size = depth_image_initialized.size();
-                depth_image_initialized.resize(record_context_.image_index + 1U);
-                for (std::size_t i = previous_size; i < depth_image_initialized.size(); ++i) {
-                    depth_image_initialized[i] = 0U;
-                }
-            }
-
-            const bool depth_initialized = depth_image_initialized[record_context_.image_index] != 0U;
-            RecordDepthTransitionToAttachment(record_context_.command_buffer,
-                                              depth_images[record_context_.image_index],
-                                              depth_initialized);
-            color_pass.rendering_info.depth_attachment = {};
-            color_pass.rendering_info.depth_attachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-            color_pass.rendering_info.depth_attachment.imageView =
-                depth_images[record_context_.image_index].default_view;
-            color_pass.rendering_info.depth_attachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
-            color_pass.rendering_info.depth_attachment.resolveMode = VK_RESOLVE_MODE_NONE;
-            color_pass.rendering_info.depth_attachment.resolveImageView = VK_NULL_HANDLE;
-            color_pass.rendering_info.depth_attachment.resolveImageLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-            color_pass.rendering_info.depth_attachment.loadOp =
-                (create_info_cache.clear_depth || !depth_initialized)
-                    ? VK_ATTACHMENT_LOAD_OP_CLEAR
-                    : VK_ATTACHMENT_LOAD_OP_LOAD;
-            color_pass.rendering_info.depth_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-            color_pass.rendering_info.depth_attachment.clearValue.depthStencil.depth =
-                create_info_cache.clear_depth_value;
-            color_pass.rendering_info.depth_attachment.clearValue.depthStencil.stencil =
-                create_info_cache.clear_stencil_value;
-            color_pass.rendering_info.has_depth_attachment = true;
-            active_depth_format = depth_format;
-        }
-    } else {
-        color_pass = render::BuildColorRenderPass(record_context_,
-                                                  output_target_config,
-                                                  create_info_cache.clear_swapchain,
-                                                  create_info_cache.clear_color,
-                                                  has_previous_content);
-    }
-
-    EnsurePipelineObjects(*context,
-                          *descriptor_host,
-                          *pipeline_host,
-                          color_pass.target.format,
-                          use_depth_attachment ? active_depth_format : VK_FORMAT_UNDEFINED);
-
-    vkCmdBeginRendering(record_context_.command_buffer, color_pass.rendering_info.VkInfoPtr());
-
-    VkViewport viewport{};
-    viewport.x = 0.0F;
-    viewport.y = 0.0F;
-    viewport.width = static_cast<float>(render_extent.width);
-    viewport.height = static_cast<float>(render_extent.height);
-    viewport.minDepth = 0.0F;
-    viewport.maxDepth = 1.0F;
-    vkCmdSetViewport(record_context_.command_buffer, 0U, 1U, &viewport);
-
-    VkRect2D scissor{};
-    scissor.offset = {0, 0};
-    scissor.extent = render_extent;
-    vkCmdSetScissor(record_context_.command_buffer, 0U, 1U, &scissor);
-
-    const VkPipelineLayout pipeline_layout = pipeline_host->GetPipelineLayout(pipeline_layout_id);
-
-    PushConstants push_constants{};
-    push_constants.view_projection = frame_data_cache.view_projection;
-    push_constants.shading_params = ecs::Float4{
-        .x = create_info_cache.sdf_smooth,
-        .y = create_info_cache.bitmap_gamma,
-        .z = create_info_cache.bitmap_edge_sharpness,
-        .w = 0.0F,
-    };
-    push_constants.texture_slot = 0U;
-    push_constants.sampler_slot = 0U;
-    push_constants.reserved0 = 0U;
-    push_constants.reserved1 = 0U;
-    vkCmdPushConstants(record_context_.command_buffer,
-                       pipeline_layout,
-                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                       0U,
-                       sizeof(PushConstants),
-                       &push_constants);
-
-    const std::uint32_t frame_index = record_context_.frame_index;
-    if (frame_index < frame_states.size()) {
-        const PerFrameState& frame_state = frame_states[frame_index];
-        if (frame_state.instance_count > 0U && frame_state.vertex_buffer.buffer != VK_NULL_HANDLE) {
-            std::uint32_t stage_draw_call_count = 0U;
-            std::uint32_t stage_filtered_batch_count = 0U;
-            const VkDescriptorSet bindless_sets[] = {
-                bindless_resources->SampledImageSet(),
-                bindless_resources->SamplerSet()
-            };
-            vkCmdBindDescriptorSets(record_context_.command_buffer,
-                                    VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                    pipeline_layout,
-                                    0U,
-                                    2U,
-                                    bindless_sets,
-                                    0U,
-                                    nullptr);
-            stats.descriptor_set_bind_count += 2U;
-
-            const VkBuffer vertex_buffer = frame_state.vertex_buffer.buffer;
-            const VkDeviceSize vertex_offset = 0U;
-            vkCmdBindVertexBuffers(record_context_.command_buffer, 0U, 1U, &vertex_buffer, &vertex_offset);
-
-            render::GraphicsPipelineId bound_pipeline_id{};
-            for (const auto& batch : render_scratch.draw_batches) {
-                if (filter_by_pass_bucket_ &&
-                    ecs::TextSystem<ecs::Dim3>::ExtractPassBucket(batch.sort_key) != pass_bucket_) {
-                    ++stage_filtered_batch_count;
-                    continue;
-                }
-                if (batch.glyph_count == 0U) {
-                    continue;
-                }
-                if (batch.atlas_page_id >= glyph_upload_host->PageCount()) {
-                    ++stats.skipped_draw_batch_count;
-                    continue;
-                }
-
-                const render::BindlessSlot texture_slot =
-                    glyph_upload_host->ResolveBindlessImageSlot(batch.atlas_page_id);
-                const render::BindlessSlot sampler_slot =
-                    glyph_upload_host->BindlessConfig().sampler_slot;
-                if (!texture_slot.IsValid() || !sampler_slot.IsValid()) {
-                    ++stats.skipped_draw_batch_count;
-                    continue;
-                }
-
-                const DepthPipelineMode mode = ResolveDepthPipelineMode(batch,
-                                                                        use_depth_attachment,
-                                                                        active_camera_reverse_z);
-                const render::GraphicsPipelineId pipeline_id =
-                    EnsureGraphicsPipelineForMode(*context,
-                                                  *pipeline_host,
-                                                  color_pass.target.format,
-                                                  use_depth_attachment ? active_depth_format : VK_FORMAT_UNDEFINED,
-                                                  mode);
-                if (!pipeline_id.IsValid()) {
-                    ++stats.skipped_draw_batch_count;
-                    continue;
-                }
-                if (!bound_pipeline_id.IsValid() || bound_pipeline_id.value != pipeline_id.value) {
-                    vkCmdBindPipeline(record_context_.command_buffer,
-                                      VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                      pipeline_host->GetGraphicsPipeline(pipeline_id));
-                    bound_pipeline_id = pipeline_id;
-                    ++stats.depth_pipeline_bind_count;
-                }
-
-                push_constants.texture_slot = texture_slot.index;
-                push_constants.sampler_slot = sampler_slot.index;
-                vkCmdPushConstants(record_context_.command_buffer,
-                                   pipeline_layout,
-                                   VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                                   0U,
-                                   sizeof(PushConstants),
-                                   &push_constants);
-
-                vkCmdDraw(record_context_.command_buffer,
-                          4U,
-                          batch.glyph_count,
-                          0U,
-                          batch.glyph_begin);
-                ++stats.draw_call_count;
-                ++stage_draw_call_count;
-                if (mode == DepthPipelineMode::depth_test_reverse_z ||
-                    mode == DepthPipelineMode::depth_test_write_reverse_z) {
-                    ++stats.reverse_z_draw_call_count;
-                }
-            }
-
-            if (filter_by_pass_bucket_) {
-                stats.stage_filtered_batch_count += stage_filtered_batch_count;
-                if (stage_draw_call_count == 0U) {
-                    ++stats.empty_stage_pass_count;
-                }
-                if (pass_bucket_ == static_cast<std::uint32_t>(ecs::TextRenderPassHint::opaque)) {
-                    stats.opaque_draw_call_count += stage_draw_call_count;
-                } else if (pass_bucket_ == static_cast<std::uint32_t>(ecs::TextRenderPassHint::transparent)) {
-                    stats.transparent_draw_call_count += stage_draw_call_count;
-                }
-            }
-        }
-    }
-
-    vkCmdEndRendering(record_context_.command_buffer);
-    if (using_external_depth_target) {
-        render::RecordEndColorDepthPass(record_context_, output_target_config, depth_output_target_config);
-    } else {
-        render::RecordEndColorPass(record_context_, output_target_config);
-    }
-    image_initialized[record_context_.image_index] = 1U;
-    if (use_depth_attachment &&
-        !using_external_depth_target &&
-        record_context_.image_index < depth_image_initialized.size()) {
-        depth_image_initialized[record_context_.image_index] = 1U;
-    }
 }
 
 void TextRenderer3D::RecordGraphInternal(render_graph::GraphCommandContext& context_,
@@ -1321,6 +1145,18 @@ void TextRenderer3D::ScheduleGraphInstanceUpload(render_graph::RenderGraphBuilde
     const VkDeviceSize required_bytes =
         static_cast<VkDeviceSize>(frame_state.instance_count) * sizeof(ecs::Text3DGpuInstance);
     if (frame_state.instance_count == 0U || required_bytes == 0U) {
+        return;
+    }
+    if (render_graph::IsValidResourceVersionHandle(frame_state.graph_vertex_version) &&
+        render_graph::IsValidResourceHandle(frame_state.graph_vertex_buffer) &&
+        frame_state.graph_vertex_size_bytes == required_bytes) {
+        (void)builder_.Read(
+            pass_,
+            frame_state.graph_vertex_version,
+            render_graph::AccessDesc{
+                .access = render_graph::AccessKind::vertex_buffer_read,
+                .buffer_range = {.offset_bytes = 0U, .size_bytes = required_bytes},
+            });
         return;
     }
     if (frame_state.graph_staging_buffer.buffer == VK_NULL_HANDLE ||
@@ -1719,112 +1555,6 @@ void TextRenderer3D::EnsureDepthResources(VulkanContext& context_,
     }
 }
 
-void TextRenderer3D::RecordImageTransitionToColorAttachment(
-    const render::FrameRecordContext& record_context_,
-    bool has_previous_content_) const {
-    VkImageMemoryBarrier barrier{};
-    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    barrier.srcAccessMask = has_previous_content_ ? VK_ACCESS_MEMORY_READ_BIT : 0U;
-    barrier.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-    barrier.oldLayout = has_previous_content_
-        ? VK_IMAGE_LAYOUT_PRESENT_SRC_KHR
-        : VK_IMAGE_LAYOUT_UNDEFINED;
-    barrier.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.image = record_context_.image;
-    barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    barrier.subresourceRange.baseMipLevel = 0U;
-    barrier.subresourceRange.levelCount = 1U;
-    barrier.subresourceRange.baseArrayLayer = 0U;
-    barrier.subresourceRange.layerCount = 1U;
-
-    vkCmdPipelineBarrier(record_context_.command_buffer,
-                         has_previous_content_
-                             ? VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT
-                             : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                         VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-                         0U,
-                         0U,
-                         nullptr,
-                         0U,
-                         nullptr,
-                         1U,
-                         &barrier);
-}
-
-void TextRenderer3D::RecordDepthTransitionToAttachment(VkCommandBuffer command_buffer_,
-                                                       const resource::ImageResource& depth_resource_,
-                                                       bool initialized_) const {
-    if (command_buffer_ == VK_NULL_HANDLE ||
-        depth_resource_.image == VK_NULL_HANDLE ||
-        depth_format == VK_FORMAT_UNDEFINED) {
-        return;
-    }
-
-    VkImageMemoryBarrier barrier{};
-    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    barrier.srcAccessMask = initialized_
-        ? (VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT)
-        : 0U;
-    barrier.dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
-                            VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-    barrier.oldLayout = initialized_
-        ? VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL
-        : VK_IMAGE_LAYOUT_UNDEFINED;
-    barrier.newLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
-    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.image = depth_resource_.image;
-    barrier.subresourceRange.aspectMask = DepthImageAspectMask(depth_format);
-    barrier.subresourceRange.baseMipLevel = 0U;
-    barrier.subresourceRange.levelCount = 1U;
-    barrier.subresourceRange.baseArrayLayer = 0U;
-    barrier.subresourceRange.layerCount = 1U;
-
-    vkCmdPipelineBarrier(command_buffer_,
-                         initialized_
-                             ? VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT
-                             : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                         VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
-                             VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
-                         0U,
-                         0U,
-                         nullptr,
-                         0U,
-                         nullptr,
-                         1U,
-                         &barrier);
-}
-
-void TextRenderer3D::RecordImageTransitionToPresent(
-    const render::FrameRecordContext& record_context_) const {
-    VkImageMemoryBarrier barrier{};
-    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    barrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-    barrier.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT;
-    barrier.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    barrier.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.image = record_context_.image;
-    barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    barrier.subresourceRange.baseMipLevel = 0U;
-    barrier.subresourceRange.levelCount = 1U;
-    barrier.subresourceRange.baseArrayLayer = 0U;
-    barrier.subresourceRange.layerCount = 1U;
-
-    vkCmdPipelineBarrier(record_context_.command_buffer,
-                         VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-                         VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
-                         0U,
-                         0U,
-                         nullptr,
-                         0U,
-                         nullptr,
-                         1U,
-                         &barrier);
-}
 
 } // namespace vr::text
 

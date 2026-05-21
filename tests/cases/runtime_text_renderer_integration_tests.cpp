@@ -1,6 +1,6 @@
-﻿#include "support/test_framework.hpp"
+﻿#include "support/render_graph_test_utils.hpp"
+#include "support/test_framework.hpp"
 #include "vr/ecs/system/text_system.hpp"
-#include "vr/render/render_runtime_host.hpp"
 #include "vr/runtime/runtime.hpp"
 #include "vr/text/text_renderer_2d.hpp"
 
@@ -17,7 +17,7 @@
 
 namespace {
 
-using Runtime = vr::render::RenderRuntimeHost<vr::platform::ActiveBackendTag, 2U>;
+using Runtime = vr::runtime::Runtime<vr::platform::ActiveBackendTag, 2U>;
 using RuntimeRoot = vr::runtime::Runtime<vr::platform::ActiveBackendTag, 2U>;
 using Text2D = vr::ecs::Text<vr::ecs::Dim2>;
 using TextSystem2D = vr::ecs::TextSystem<vr::ecs::Dim2>;
@@ -157,6 +157,7 @@ VR_TEST_CASE(RuntimeIntegration_text_renderer_2d_end_to_end_smoke, "integration;
         text_renderer_create_info.reserve_glyph_count = 8192U;
         text_renderer_create_info.initial_vertex_buffer_bytes = 2U * 1024U * 1024U;
         text_renderer_create_info.clear_swapchain = true;
+        text_renderer_create_info.clear_color = VkClearColorValue{{0.21F, 0.32F, 0.43F, 1.0F}};
         text_renderer.Initialize(text_renderer_create_info);
         renderer_initialized = true;
         text_renderer.SetComponents(text_components.data(),
@@ -166,6 +167,9 @@ VR_TEST_CASE(RuntimeIntegration_text_renderer_2d_end_to_end_smoke, "integration;
         std::uint32_t max_glyph_quads = 0U;
         std::uint32_t max_draw_batches = 0U;
         std::uint32_t max_draw_calls = 0U;
+        bool direct_pass_seen = false;
+        bool direct_pass_clear_policy_seen = false;
+        bool direct_pass_descriptor_bindings_seen = false;
 
         constexpr std::uint32_t max_ticks = 18U;
         for (std::uint32_t tick_index = 0U;
@@ -188,6 +192,38 @@ VR_TEST_CASE(RuntimeIntegration_text_renderer_2d_end_to_end_smoke, "integration;
             VR_CHECK(stats.descriptor_set_update_count <= stats.draw_batch_count);
             VR_CHECK(stats.descriptor_set_bind_count <= stats.draw_call_count);
 
+            const auto& graph_service =
+                runtime.Services().Get<vr::runtime::services::RenderGraphRuntimeService>();
+            if (const auto* compiled_graph = graph_service.TryGetCompiledGraph();
+                compiled_graph != nullptr) {
+                if (const auto* direct_pass =
+                        vr::test::FindCompiledPassByName(*compiled_graph,
+                                                         "text_renderer_2d_direct");
+                    direct_pass != nullptr &&
+                    direct_pass->executable &&
+                    direct_pass->raster_pass.has_value() &&
+                    !direct_pass->raster_pass->color_attachments.empty()) {
+                    direct_pass_seen = true;
+                    const auto& color_attachment =
+                        direct_pass->raster_pass->color_attachments.front();
+                    direct_pass_clear_policy_seen =
+                        direct_pass_clear_policy_seen ||
+                        (color_attachment.load_op ==
+                             vr::render_graph::AttachmentLoadOp::clear &&
+                         color_attachment.clear_value.red ==
+                             text_renderer_create_info.clear_color.float32[0] &&
+                         color_attachment.clear_value.green ==
+                             text_renderer_create_info.clear_color.float32[1] &&
+                         color_attachment.clear_value.blue ==
+                             text_renderer_create_info.clear_color.float32[2] &&
+                         color_attachment.clear_value.alpha ==
+                             text_renderer_create_info.clear_color.float32[3]);
+                    direct_pass_descriptor_bindings_seen =
+                        direct_pass_descriptor_bindings_seen ||
+                        !direct_pass->descriptor_bindings.empty();
+                }
+            }
+
             SDL_Delay(1U);
         }
 
@@ -195,6 +231,9 @@ VR_TEST_CASE(RuntimeIntegration_text_renderer_2d_end_to_end_smoke, "integration;
         VR_CHECK(max_glyph_quads > 0U);
         VR_CHECK(max_draw_batches > 0U);
         VR_CHECK(max_draw_calls > 0U);
+        VR_CHECK(direct_pass_seen);
+        VR_CHECK(direct_pass_clear_policy_seen);
+        VR_CHECK(direct_pass_descriptor_bindings_seen);
         VR_CHECK(runtime.GlyphUpload().Stats().uploaded_rect_count > 0U);
 
         text_renderer.Shutdown(runtime.Context());

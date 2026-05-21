@@ -2,7 +2,7 @@
 #include "vr/ecs/system/camera_system.hpp"
 #include "vr/ecs/system/text_system.hpp"
 #include "vr/ecs/system/transform_system.hpp"
-#include "vr/render/render_runtime_host.hpp"
+#include "vr/runtime/runtime.hpp"
 #include "vr/render/render_view_submission_utils.hpp"
 #include "vr/runtime/crash_tracer_support.hpp"
 #include "vr/render/scene_recorder_3d.hpp"
@@ -22,7 +22,7 @@
 
 namespace {
 
-using Runtime = vr::render::RenderRuntimeHost<vr::platform::ActiveBackendTag, 2U>;
+using Runtime = vr::runtime::Runtime<vr::platform::ActiveBackendTag, 2U>;
 using Text3D = vr::ecs::Text<vr::ecs::Dim3>;
 using TextSystem3D = vr::ecs::TextSystem<vr::ecs::Dim3>;
 using Transform3D = vr::ecs::Transform<vr::ecs::Dim3>;
@@ -623,9 +623,9 @@ int main(int argc_,
                           stats.depth_write_batch_count,
                           stats.culling_visible_count,
                           stats.culling_input_count,
-                          recorder.PostStack().Stats().prefilter_draw_call_count,
-                          recorder.PostStack().Stats().blur_draw_call_count,
-                          recorder.PostStack().Stats().combine_draw_call_count);
+                          recorder.BloomStats().prefilter_draw_call_count,
+                          recorder.BloomStats().blur_draw_call_count,
+                          recorder.BloomStats().combine_draw_call_count);
             (void)TextSystem3D::SetText(components[runtime_stats], stats_text);
 
             SDL_Delay(8U);

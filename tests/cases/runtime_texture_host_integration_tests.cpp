@@ -1,6 +1,6 @@
 ﻿#include "support/test_framework.hpp"
 #include "vr/asset/texture_host.hpp"
-#include "vr/render/render_runtime_host.hpp"
+#include "vr/runtime/runtime.hpp"
 
 #include <array>
 #include <cctype>
@@ -10,7 +10,7 @@
 
 namespace {
 
-using Runtime = vr::render::RenderRuntimeHost<vr::platform::ActiveBackendTag, 2U>;
+using Runtime = vr::runtime::Runtime<vr::platform::ActiveBackendTag, 2U>;
 
 [[nodiscard]] std::string ToLower(std::string_view value_) {
     std::string lowered{};

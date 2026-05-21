@@ -104,9 +104,9 @@ VR_TEST_CASE(Phase12_graph_only_closeout_source_contract_blocks_legacy_orchestra
         {"include/vr/runtime/services/render_graph_runtime_service.hpp", "RequireStrictGraphOnlyRecord("},
         {"include/vr/runtime/services/render_graph_runtime_service.hpp", "StrictGraphOnlyRecordRequired("},
         {"include/vr/runtime/services/render_graph_runtime_service.hpp", "SupportsGraphOnlyRecord("},
-        {"include/vr/render/render_runtime_host.hpp", "RequireStrictGraphOnlyRecord("},
-        {"include/vr/render/render_runtime_host.hpp", "StrictGraphOnlyRecordRequired("},
-        {"include/vr/render/render_runtime_host.hpp", "SupportsGraphOnlyRecord("},
+        {"include/vr/runtime/detail/render_runtime_host.hpp", "RequireStrictGraphOnlyRecord("},
+        {"include/vr/runtime/detail/render_runtime_host.hpp", "StrictGraphOnlyRecordRequired("},
+        {"include/vr/runtime/detail/render_runtime_host.hpp", "SupportsGraphOnlyRecord("},
         {"include/vr/render/runtime_prepare_views.hpp", "prefer_graph_only_runtime_path"},
         {"src/render/scene_recorder_2d.cpp", "RecordTransition("},
         {"src/render/scene_recorder_2d.cpp", "AcquireTransientTarget("},
@@ -183,7 +183,7 @@ VR_TEST_CASE(Phase12_graph_only_closeout_source_contract_removes_supported_scene
         ReadUtf8TextFile(SourceRoot() / "include" / "vr" / "runtime" /
                          "runtime_views.hpp");
     const std::string runtime_host_header =
-        ReadUtf8TextFile(SourceRoot() / "include" / "vr" / "render" /
+        ReadUtf8TextFile(SourceRoot() / "include" / "vr" / "runtime" / "detail" /
                          "render_runtime_host.hpp");
     const std::string recorder_2d_header =
         ReadUtf8TextFile(SourceRoot() / "include" / "vr" / "render" /
@@ -249,7 +249,7 @@ VR_TEST_CASE(Phase12_graph_only_closeout_source_contract_removes_supported_scene
 
 VR_TEST_CASE(Phase12_graph_only_closeout_source_contract_isolates_transition_and_transient_tokens_to_low_level_helpers,
              "unit;contract;phase12;render_graph") {
-    const std::array<TokenAllowlist, 3U> allowlists{{
+    const std::array<TokenAllowlist, 2U> allowlists{{
         TokenAllowlist{
             .token = "RecordTransition(",
             .allowed_paths = {
@@ -260,19 +260,10 @@ VR_TEST_CASE(Phase12_graph_only_closeout_source_contract_isolates_transition_and
             },
         },
         TokenAllowlist{
-            .token = "AcquireTransientTarget(",
-            .allowed_paths = {
-                "include/vr/render/render_target_pool.hpp",
-                "src/render/render_target_bloom_renderer.cpp",
-                "src/render/render_target_pool.cpp",
-            },
-        },
-        TokenAllowlist{
             .token = "CreateTransientTarget(",
             .allowed_paths = {
                 "include/vr/render/render_target_host.hpp",
                 "src/render/render_target_host.cpp",
-                "src/render/render_target_pool.cpp",
             },
         },
     }};

@@ -1,5 +1,4 @@
 ﻿#include "support/test_framework.hpp"
-#include "vr/render/render_runtime_host.hpp"
 #include "vr/runtime/runtime.hpp"
 #include "vr/runtime/profiles/minimal_profile.hpp"
 #include "vr/runtime/profiles/runtime_2d_profile.hpp"
@@ -19,7 +18,6 @@
 #include "vr/runtime/services/particle_simulation_service.hpp"
 #include "vr/runtime/services/particle_upload_service.hpp"
 #include "vr/runtime/services/pipeline_service.hpp"
-#include "vr/runtime/services/render_target_pool_service.hpp"
 #include "vr/runtime/services/render_target_service.hpp"
 #include "vr/runtime/services/sampler_service.hpp"
 #include "vr/runtime/services/sky_environment_service.hpp"
@@ -37,7 +35,7 @@
 
 namespace {
 
-using Runtime = vr::render::RenderRuntimeHost<vr::platform::ActiveBackendTag, 2U>;
+using Runtime = vr::runtime::Runtime<vr::platform::ActiveBackendTag, 2U>;
 
 class NoopRecorder final {
 public:
@@ -205,7 +203,7 @@ struct MockPhaseServiceB final {
 };
 
 VR_TEST_CASE(RuntimeConfig_modules_default_to_enabled, "unit;core;runtime") {
-    vr::render::RuntimeModulesCreateInfo modules{};
+    vr::runtime::RuntimeModulesCreateInfo modules{};
     VR_CHECK(modules.enable_texture_host);
     VR_CHECK(modules.enable_frame_composer_host);
     VR_CHECK(modules.enable_ibl_host);
@@ -215,7 +213,6 @@ VR_TEST_CASE(RuntimeConfig_modules_default_to_enabled, "unit;core;runtime") {
     VR_CHECK(modules.enable_descriptor_host);
     VR_CHECK(modules.enable_pipeline_host);
     VR_CHECK(modules.enable_render_target_host);
-    VR_CHECK(modules.enable_render_target_pool);
     VR_CHECK(modules.enable_sampler_host);
     VR_CHECK(modules.enable_freetype_host);
     VR_CHECK(modules.enable_glyph_atlas_host);
@@ -238,7 +235,6 @@ VR_TEST_CASE(RuntimeConfig_default_state_before_initialize_is_safe, "unit;core;r
     VR_CHECK(!runtime.HasDescriptorHost());
     VR_CHECK(!runtime.HasPipelineHost());
     VR_CHECK(!runtime.HasRenderTargetHost());
-    VR_CHECK(!runtime.HasRenderTargetPool());
     VR_CHECK(!runtime.HasSamplerHost());
     VR_CHECK(!runtime.HasFreeTypeHost());
     VR_CHECK(!runtime.HasGlyphAtlasHost());
@@ -260,7 +256,6 @@ VR_TEST_CASE(RuntimeConfig_default_state_before_initialize_is_safe, "unit;core;r
     VR_CHECK(config.modules.enable_descriptor_host);
     VR_CHECK(config.modules.enable_pipeline_host);
     VR_CHECK(config.modules.enable_render_target_host);
-    VR_CHECK(config.modules.enable_render_target_pool);
     VR_CHECK(config.modules.enable_sampler_host);
     VR_CHECK(config.modules.enable_freetype_host);
     VR_CHECK(config.modules.enable_glyph_atlas_host);
@@ -320,8 +315,6 @@ VR_TEST_CASE(RuntimeConfig_unavailable_modules_throw_before_initialize, "unit;co
     VR_CHECK(ThrowsAnyException([&]() { (void)runtime.Descriptor(); }));
     VR_CHECK(ThrowsAnyException([&]() { (void)runtime.Pipeline(); }));
     VR_CHECK(ThrowsAnyException([&]() { (void)runtime.RenderTarget(); }));
-    VR_CHECK(runtime.RenderTargetPoolStats().acquire_count == 0U);
-    VR_CHECK(runtime.RenderTargetPoolStats().reuse_hit_count == 0U);
     VR_CHECK(ThrowsAnyException([&]() { (void)runtime.Sampler(); }));
     VR_CHECK(ThrowsAnyException([&]() { (void)runtime.FreeType(); }));
     VR_CHECK(ThrowsAnyException([&]() { (void)runtime.GlyphAtlas(); }));
@@ -345,8 +338,6 @@ VR_TEST_CASE(RuntimeConfig_particle_service_dependency_contract_matches_runtime_
     static_assert(service_depends_on_v<TextureService, UploadService>);
     static_assert(service_depends_on_v<RenderTargetService, GpuMemoryService>);
     static_assert(service_depends_on_v<FrameComposerService, RenderTargetService>);
-    static_assert(!profile_contains_v<Runtime2DProfile, services::RenderTargetPoolService>);
-    static_assert(!profile_contains_v<Runtime3DProfile, services::RenderTargetPoolService>);
     static_assert(service_depends_on_v<IblService, TextureService>);
     static_assert(service_depends_on_v<SkyEnvironmentService, TextureService>);
     static_assert(service_depends_on_v<SkyEnvironmentService, DescriptorService>);
@@ -535,8 +526,6 @@ VR_TEST_CASE(RuntimeConfig_runtime_root_wraps_legacy_facade_with_typed_status,
 
     static_assert(std::is_same_v<RuntimeRoot::CreateInfo,
                                  vr::runtime::RuntimeCreateInfo<vr::platform::ActiveBackendTag, 2U>>);
-    static_assert(std::is_same_v<RuntimeRoot::HostType,
-                                 vr::render::RenderRuntimeHost<vr::platform::ActiveBackendTag, 2U>>);
 
     RuntimeRoot runtime{};
     VR_CHECK(runtime.Kernel().IsBound());
@@ -564,7 +553,6 @@ VR_TEST_CASE(RuntimeConfig_runtime_root_wraps_legacy_facade_with_typed_status,
     VR_CHECK(compute_dependency.value == 0U);
     VR_CHECK(runtime.Services().TryGet<ParticleRenderService>() != nullptr);
     VR_CHECK(runtime.Services().TryGet<ParticleSimulationService>() != nullptr);
-    VR_CHECK(runtime.Host().Services().TryGet<ParticleRenderService>() != nullptr);
     VR_CHECK(!runtime.Services().Get<ParticleSimulationService>().HasComputeTimelineProgress());
     VR_CHECK(runtime.Services().Get<ParticleSimulationService>().LastSubmittedValue() == 0U);
     VR_CHECK(runtime.Services().Get<ParticleSimulationService>().CompletedSubmitValue() == 0U);

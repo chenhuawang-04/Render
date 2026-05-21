@@ -28,6 +28,7 @@ class TextureHost;
 
 namespace vr::render {
 struct ParticleRenderer2DPrepareView;
+struct RuntimeDirectGraphBuildView;
 struct FrameRecordContext;
 class UploadHost;
 class BindlessResourceSystem;
@@ -101,15 +102,12 @@ public:
                       ecs::ParticleEmitter<ecs::Dim2>* particle_emitters_,
                       ecs::Transform<ecs::Dim2>* transforms_,
                       std::uint32_t component_count_) noexcept;
-    void SetOutputTargetConfig(const render::RenderTargetColorOutputConfig& output_target_config_) noexcept;
-    void ResetOutputTargetConfig() noexcept;
-
     void PrepareFrame(const render::ParticleRenderer2DPrepareView& prepare_view_);
+    void BuildDirectRuntimeGraph(const render::RuntimeDirectGraphBuildView& graph_view_);
     void DescribeGraphDescriptorBindings(render_graph::RenderGraphBuilder& builder_,
                                          render_graph::PassHandle pass_) const;
     void RegisterGraphImportedResources(
         runtime::services::RenderGraphRuntimeService& graph_runtime_service_) const;
-    void Record(const render::FrameRecordContext& record_context_);
     void RecordGraphOverlay(render_graph::GraphCommandContext& context_,
                             render_graph::ResourceHandle color_target_);
     void OnSwapchainRecreated(std::uint32_t image_count_,
@@ -218,8 +216,6 @@ private:
     render::ShaderModuleId shader_fragment_id{};
     std::array<render::GraphicsPipelineId, static_cast<std::size_t>(BlendModeKind::count)> pipeline_ids{};
     VkFormat pipeline_color_format = VK_FORMAT_UNDEFINED;
-
-    render::RenderTargetColorOutputConfig output_target_config{};
     ParticleRenderer2DMcVector<std::uint8_t> image_initialized{};
     bool initialized = false;
 };

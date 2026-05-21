@@ -5,7 +5,7 @@
 #include "vr/ecs/system/text_system.hpp"
 #include "vr/ecs/system/transform_system.hpp"
 #include "vr/particle/particle_renderer_2d.hpp"
-#include "vr/render/render_runtime_host.hpp"
+#include "vr/runtime/runtime.hpp"
 #include "vr/render/scene_recorder_2d.hpp"
 #include "vr/text/text_renderer_2d.hpp"
 
@@ -22,7 +22,7 @@
 
 namespace {
 
-using Runtime = vr::render::RenderRuntimeHost<vr::platform::ActiveBackendTag, 2U>;
+using Runtime = vr::runtime::Runtime<vr::platform::ActiveBackendTag, 2U>;
 using Text2D = vr::ecs::Text<vr::ecs::Dim2>;
 using TextSystem2D = vr::ecs::TextSystem<vr::ecs::Dim2>;
 using Particle2D = vr::ecs::Particle<vr::ecs::Dim2>;
@@ -313,7 +313,7 @@ VR_TEST_CASE(RuntimeIntegration_scene_recorder_2d_text_overlay_graph_smoke,
         recorder.Initialize({});
         recorder_initialized = true;
         recorder.BindRuntime(runtime);
-        recorder.RegisterOverlayRenderer(text_renderer, vr::render::SceneRecorder2D::MakePresentOverlayOutputConfig(), 0x1U);
+        recorder.RegisterOverlayRenderer(text_renderer, 0x1U);
 
         std::array<vr::render::RenderView2D, 2U> views{};
         vr::render::RenderScenePacket2D packet{};
@@ -456,9 +456,7 @@ VR_TEST_CASE(RuntimeIntegration_scene_recorder_2d_text_overlay_graph_transfer_up
         recorder.Initialize({});
         recorder_initialized = true;
         recorder.BindRuntime(runtime);
-        recorder.RegisterOverlayRenderer(text_renderer,
-                                         vr::render::SceneRecorder2D::MakePresentOverlayOutputConfig(),
-                                         0x1U);
+        recorder.RegisterOverlayRenderer(text_renderer, 0x1U);
 
         vr::render::RenderView2D overlay_view{};
         vr::render::RenderScenePacket2D packet{};
@@ -676,9 +674,7 @@ VR_TEST_CASE(RuntimeIntegration_scene_recorder_2d_particle_overlay_graph_smoke,
         recorder.Initialize({});
         recorder_initialized = true;
         recorder.BindRuntime(runtime);
-        recorder.RegisterOverlayRenderer(particle_renderer,
-                                         vr::render::SceneRecorder2D::MakePresentOverlayOutputConfig(),
-                                         0x1U);
+        recorder.RegisterOverlayRenderer(particle_renderer, 0x1U);
 
         std::array<vr::render::RenderView2D, 2U> views{};
         vr::render::RenderScenePacket2D packet{};
@@ -852,9 +848,7 @@ VR_TEST_CASE(RuntimeIntegration_scene_recorder_2d_particle_overlay_graph_async_c
         recorder.Initialize({});
         recorder_initialized = true;
         recorder.BindRuntime(runtime);
-        recorder.RegisterOverlayRenderer(particle_renderer,
-                                         vr::render::SceneRecorder2D::MakePresentOverlayOutputConfig(),
-                                         0x1U);
+        recorder.RegisterOverlayRenderer(particle_renderer, 0x1U);
 
         vr::render::RenderView2D overlay_view{};
         vr::render::RenderScenePacket2D packet{};

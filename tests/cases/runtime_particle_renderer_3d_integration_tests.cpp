@@ -8,7 +8,7 @@
 #include "vr/particle/particle_renderer_3d.hpp"
 #include "vr/particle/particle_simulation_host.hpp"
 #include "vr/particle/particle_upload_host.hpp"
-#include "vr/render/render_runtime_host.hpp"
+#include "vr/runtime/runtime.hpp"
 #include "vr/render/render_view_submission_utils.hpp"
 #include "vr/render/scene_recorder_3d.hpp"
 #include "vr/render/scene_render_stage.hpp"
@@ -23,7 +23,7 @@
 
 namespace {
 
-using Runtime = vr::render::RenderRuntimeHost<vr::platform::ActiveBackendTag, 2U>;
+using Runtime = vr::runtime::Runtime<vr::platform::ActiveBackendTag, 2U>;
 using Particle3D = vr::ecs::Particle<vr::ecs::Dim3>;
 using ParticleEmitter3D = vr::ecs::ParticleEmitter<vr::ecs::Dim3>;
 using Transform3D = vr::ecs::Transform<vr::ecs::Dim3>;
@@ -148,30 +148,6 @@ void ConfigureParticle3DRuntimeCreateInfo(Runtime::CreateInfo& create_info_,
                });
 }
 
-struct ParticleStageRecorder3D final {
-    vr::particle::ParticleRenderer3D* renderer = nullptr;
-
-    void PrepareFrame(const vr::render::ParticleRenderer3DPrepareView& prepare_view_) {
-        renderer->PrepareFrame(prepare_view_);
-    }
-
-    void Record(const vr::render::FrameRecordContext& record_context_) {
-        renderer->RecordSceneStage(record_context_, vr::render::SceneRenderStage::transparent);
-    }
-
-    void OnSwapchainRecreated(std::uint32_t image_count_,
-                              VkExtent2D extent_,
-                              VkFormat format_,
-                              std::uint64_t last_submitted_value_,
-                              std::uint64_t completed_submit_value_) {
-        renderer->OnSwapchainRecreated(image_count_,
-                                       extent_,
-                                       format_,
-                                       last_submitted_value_,
-                                       completed_submit_value_);
-    }
-};
-
 VR_TEST_CASE(RuntimeIntegration_particle_renderer_3d_transparent_stage_smoke,
              "integration;gpu;sdl;runtime;particle;render3d") {
     Runtime runtime{};
@@ -246,7 +222,9 @@ VR_TEST_CASE(RuntimeIntegration_particle_renderer_3d_transparent_stage_smoke,
         renderer_create_info.reserve_particle_count = 256U;
         renderer_create_info.enable_depth = true;
         renderer_create_info.clear_depth = true;
-        renderer_create_info.clear_swapchain = false;
+        renderer_create_info.clear_depth_value = 0.46F;
+        renderer_create_info.clear_swapchain = true;
+        renderer_create_info.clear_color = VkClearColorValue{{0.14F, 0.25F, 0.39F, 1.0F}};
         particle_renderer.Initialize(renderer_create_info);
         renderer_initialized = true;
         runtime.Services().Get<vr::runtime::services::ParticleRenderService>().ConfigureRenderer(
@@ -259,8 +237,6 @@ VR_TEST_CASE(RuntimeIntegration_particle_renderer_3d_transparent_stage_smoke,
                                        &camera_transform,
                                        &particle_bounds);
 
-        ParticleStageRecorder3D recorder{.renderer = &particle_renderer};
-
         std::uint32_t submitted_frames = 0U;
         std::uint32_t max_draw_calls = 0U;
         std::uint32_t max_transparent_draw_calls = 0U;
@@ -270,12 +246,18 @@ VR_TEST_CASE(RuntimeIntegration_particle_renderer_3d_transparent_stage_smoke,
         std::uint32_t max_descriptor_updates = 0U;
         bool observed_depth_interaction = false;
         bool observed_bounds_culling = false;
+        bool opaque_pass_seen = false;
+        bool transparent_pass_seen = false;
+        bool opaque_pass_policy_seen = false;
+        bool transparent_pass_policy_seen = false;
+        bool opaque_descriptor_bindings_seen = false;
+        bool transparent_descriptor_bindings_seen = false;
 
         constexpr std::uint32_t max_ticks = 12U;
         for (std::uint32_t tick_index = 0U;
              tick_index < max_ticks && runtime.IsRunning();
              ++tick_index) {
-            const auto tick_result = runtime.Tick(recorder);
+            const auto tick_result = runtime.Tick(particle_renderer);
             if (tick_result.render.code != vr::render::TickCode::Submitted) {
                 continue;
             }
@@ -297,6 +279,66 @@ VR_TEST_CASE(RuntimeIntegration_particle_renderer_3d_transparent_stage_smoke,
                                          renderer_stats.depth_interaction_enabled;
             observed_bounds_culling = observed_bounds_culling ||
                                       renderer_stats.used_bounds_culling;
+            const auto& graph_service =
+                runtime.Services().Get<vr::runtime::services::RenderGraphRuntimeService>();
+            if (const auto* compiled_graph = graph_service.TryGetCompiledGraph();
+                compiled_graph != nullptr) {
+                if (const auto* opaque_pass =
+                        vr::test::FindCompiledPassByName(*compiled_graph,
+                                                         "particle_renderer_3d_direct_opaque");
+                    opaque_pass != nullptr &&
+                    opaque_pass->executable &&
+                    opaque_pass->raster_pass.has_value() &&
+                    !opaque_pass->raster_pass->color_attachments.empty() &&
+                    opaque_pass->raster_pass->has_depth_attachment) {
+                    opaque_pass_seen = true;
+                    const auto& color_attachment =
+                        opaque_pass->raster_pass->color_attachments.front();
+                    const auto& depth_attachment = opaque_pass->raster_pass->depth_attachment;
+                    opaque_pass_policy_seen =
+                        opaque_pass_policy_seen ||
+                        (color_attachment.load_op ==
+                             vr::render_graph::AttachmentLoadOp::clear &&
+                         depth_attachment.load_op ==
+                             vr::render_graph::AttachmentLoadOp::clear &&
+                         depth_attachment.clear_value.depth ==
+                             renderer_create_info.clear_depth_value &&
+                         color_attachment.clear_value.red ==
+                             renderer_create_info.clear_color.float32[0] &&
+                         color_attachment.clear_value.green ==
+                             renderer_create_info.clear_color.float32[1] &&
+                         color_attachment.clear_value.blue ==
+                             renderer_create_info.clear_color.float32[2] &&
+                         color_attachment.clear_value.alpha ==
+                             renderer_create_info.clear_color.float32[3]);
+                    opaque_descriptor_bindings_seen =
+                        opaque_descriptor_bindings_seen ||
+                        !opaque_pass->descriptor_bindings.empty();
+                }
+                if (const auto* transparent_pass =
+                        vr::test::FindCompiledPassByName(*compiled_graph,
+                                                         "particle_renderer_3d_direct_transparent");
+                    transparent_pass != nullptr &&
+                    transparent_pass->executable &&
+                    transparent_pass->raster_pass.has_value() &&
+                    !transparent_pass->raster_pass->color_attachments.empty() &&
+                    transparent_pass->raster_pass->has_depth_attachment) {
+                    transparent_pass_seen = true;
+                    const auto& color_attachment =
+                        transparent_pass->raster_pass->color_attachments.front();
+                    const auto& depth_attachment =
+                        transparent_pass->raster_pass->depth_attachment;
+                    transparent_pass_policy_seen =
+                        transparent_pass_policy_seen ||
+                        (color_attachment.load_op ==
+                             vr::render_graph::AttachmentLoadOp::load &&
+                         depth_attachment.load_op ==
+                             vr::render_graph::AttachmentLoadOp::load);
+                    transparent_descriptor_bindings_seen =
+                        transparent_descriptor_bindings_seen ||
+                        !transparent_pass->descriptor_bindings.empty();
+                }
+            }
         }
 
         VR_REQUIRE(submitted_frames > 0U);
@@ -304,10 +346,16 @@ VR_TEST_CASE(RuntimeIntegration_particle_renderer_3d_transparent_stage_smoke,
         VR_REQUIRE(max_draw_calls > 0U);
         VR_REQUIRE(max_transparent_draw_calls > 0U);
         VR_REQUIRE(max_descriptor_binds > 0U);
-        VR_CHECK(max_descriptor_binds <= max_draw_calls);
+        VR_CHECK(max_descriptor_binds <= 4U);
         VR_CHECK(max_descriptor_updates == 0U);
         VR_REQUIRE(observed_depth_interaction);
         VR_REQUIRE(observed_bounds_culling);
+        VR_CHECK(opaque_pass_seen);
+        VR_CHECK(transparent_pass_seen);
+        VR_CHECK(opaque_pass_policy_seen);
+        VR_CHECK(transparent_pass_policy_seen);
+        VR_CHECK(opaque_descriptor_bindings_seen);
+        VR_CHECK(transparent_descriptor_bindings_seen);
         const auto& particle_simulation_service =
             runtime.Services().Get<vr::runtime::services::ParticleSimulationService>();
         VR_REQUIRE(particle_simulation_service.Stats().prepared_frame_count > 0U);
@@ -437,8 +485,6 @@ VR_TEST_CASE(RuntimeIntegration_particle_renderer_3d_gpu_persistent_seed_once,
                                        &camera_transform,
                                        &particle_bounds);
 
-        ParticleStageRecorder3D recorder{.renderer = &particle_renderer};
-
         std::uint32_t submitted_frames = 0U;
         std::uint32_t max_indirect_draw_calls = 0U;
         std::uint32_t max_uploaded_instances = 0U;
@@ -450,7 +496,7 @@ VR_TEST_CASE(RuntimeIntegration_particle_renderer_3d_gpu_persistent_seed_once,
         for (std::uint32_t tick_index = 0U;
              tick_index < max_ticks && runtime.IsRunning();
              ++tick_index) {
-            const auto tick_result = runtime.Tick(recorder);
+            const auto tick_result = runtime.Tick(particle_renderer);
             if (tick_result.render.code != vr::render::TickCode::Submitted) {
                 continue;
             }
@@ -473,7 +519,7 @@ VR_TEST_CASE(RuntimeIntegration_particle_renderer_3d_gpu_persistent_seed_once,
         VR_REQUIRE(max_uploaded_instances > 0U);
         VR_REQUIRE(max_draw_calls > 0U);
         VR_REQUIRE(max_descriptor_binds > 0U);
-        VR_CHECK(max_descriptor_binds <= max_draw_calls);
+        VR_CHECK(max_descriptor_binds <= 4U);
         VR_CHECK(max_descriptor_updates == 0U);
         const auto& particle_simulation_service_gpu =
             runtime.Services().Get<vr::runtime::services::ParticleSimulationService>();

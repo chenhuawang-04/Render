@@ -20,7 +20,7 @@
 #include "vr/geometry/geometry_upload_host.hpp"
 #include "vr/render/animation_frame_coordinator.hpp"
 #include "vr/render/light_frame_coordinator.hpp"
-#include "vr/render/render_runtime_host.hpp"
+#include "vr/runtime/runtime.hpp"
 #include "vr/render/render_view_submission_utils.hpp"
 #include "vr/render/scene_recorder_3d.hpp"
 #include "vr/scene/background/sky_environment.hpp"
@@ -47,7 +47,7 @@
 
 namespace {
 
-using Runtime = vr::render::RenderRuntimeHost<vr::platform::ActiveBackendTag, 2U>;
+using Runtime = vr::runtime::Runtime<vr::platform::ActiveBackendTag, 2U>;
 using Appearance3D = vr::ecs::Appearance<vr::ecs::Dim3>;
 using AppearanceSystem3D = vr::ecs::AppearanceSystem<vr::ecs::Dim3>;
 using Geometry3D = vr::ecs::Geometry<vr::ecs::Dim3>;
@@ -1230,8 +1230,6 @@ VR_TEST_CASE(RuntimeIntegration_unified_scene_3d_bloom_post_stack_smoke,
         VR_CHECK(recorder.ActiveView() == &main_view);
         VR_CHECK(recorder.ActiveView() != nullptr);
         VR_CHECK(recorder.ActiveView()->camera == &camera);
-        VR_CHECK(runtime.RenderTargetPoolStats().acquire_count == 0U);
-        VR_CHECK(runtime.RenderTargetPoolStats().reuse_hit_count == 0U);
         VR_CHECK(runtime.Ibl().Stats().prepared_frame_count > 0U);
         VR_CHECK(runtime.Ibl().Stats().environment_count >= 1U);
         VR_CHECK(runtime.Ibl().Stats().descriptor_update_count <= submitted_frames + 2U);

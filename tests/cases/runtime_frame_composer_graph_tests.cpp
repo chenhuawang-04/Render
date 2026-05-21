@@ -1,6 +1,6 @@
 ﻿#include "support/test_framework.hpp"
 #include "vr/render/frame_composer_host.hpp"
-#include "vr/render/render_runtime_host.hpp"
+#include "vr/runtime/runtime.hpp"
 #include "vr/render/runtime_prepare_views.hpp"
 
 #include <array>
@@ -11,7 +11,7 @@
 
 namespace {
 
-using Runtime = vr::render::RenderRuntimeHost<vr::platform::ActiveBackendTag, 2U>;
+using Runtime = vr::runtime::Runtime<vr::platform::ActiveBackendTag, 2U>;
 
 [[nodiscard]] std::string ToLower(std::string_view value_) {
     std::string lowered{};
@@ -121,7 +121,6 @@ VR_TEST_CASE(RuntimeIntegration_frame_composer_prepare_and_tonemap_smoke,
         VR_CHECK(first_tick.diagnostics.collected);
         VR_CHECK(first_tick.diagnostics.frame_composer.prepared_frame_count >= 1U);
         VR_CHECK(first_tick.diagnostics.frame_composer.tonemap_record_count >= 1U);
-        VR_CHECK(first_tick.diagnostics.render_target_pool.acquire_count == 0U);
         VR_CHECK(graph_service.LastDiagnostics().graph_only_supported);
         VR_CHECK(graph_service.LastDiagnostics().graph_only_active);
         VR_CHECK(graph_service.LastRecordStats().pass_count >= 1U);
@@ -132,7 +131,6 @@ VR_TEST_CASE(RuntimeIntegration_frame_composer_prepare_and_tonemap_smoke,
         VR_CHECK(second_tick.diagnostics.frame_composer.prepared_frame_count >= 2U);
         VR_CHECK(second_tick.diagnostics.frame_composer.ready_frame_count >= 2U);
         VR_CHECK(second_tick.diagnostics.frame_composer.tonemap_record_count >= 2U);
-        VR_CHECK(second_tick.diagnostics.render_target_pool.acquire_count == 0U);
         VR_CHECK(graph_service.LastRecordStats().pass_count >= 1U);
 
         runtime.Shutdown();

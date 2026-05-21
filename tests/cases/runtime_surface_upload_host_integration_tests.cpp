@@ -1,7 +1,7 @@
 ﻿#include "support/test_framework.hpp"
 #include "vr/ecs/system/surface_system.hpp"
 #include "vr/ecs/system/transform_system.hpp"
-#include "vr/render/render_runtime_host.hpp"
+#include "vr/runtime/runtime.hpp"
 #include "vr/surface/surface_upload_host.hpp"
 
 #include <array>
@@ -12,7 +12,7 @@
 
 namespace {
 
-using Runtime = vr::render::RenderRuntimeHost<vr::platform::ActiveBackendTag, 2U>;
+using Runtime = vr::runtime::Runtime<vr::platform::ActiveBackendTag, 2U>;
 using Surface3D = vr::ecs::Surface<vr::ecs::Dim3>;
 using Transform3D = vr::ecs::Transform<vr::ecs::Dim3>;
 using SurfaceSystem3D = vr::ecs::SurfaceSystem<vr::ecs::Dim3>;

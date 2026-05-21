@@ -1,5 +1,5 @@
 ﻿#include "vr/ecs/system/text_system.hpp"
-#include "vr/render/render_runtime_host.hpp"
+#include "vr/runtime/runtime.hpp"
 #include "vr/runtime/crash_tracer_support.hpp"
 #include "vr/text/text_renderer_2d.hpp"
 
@@ -17,7 +17,7 @@
 
 namespace {
 
-using Runtime = vr::render::RenderRuntimeHost<vr::platform::ActiveBackendTag, 2U>;
+using Runtime = vr::runtime::Runtime<vr::platform::ActiveBackendTag, 2U>;
 using Text2D = vr::ecs::Text<vr::ecs::Dim2>;
 using TextSystem2D = vr::ecs::TextSystem<vr::ecs::Dim2>;
 

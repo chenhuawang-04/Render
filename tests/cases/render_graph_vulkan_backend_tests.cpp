@@ -1,7 +1,7 @@
 ﻿#include "support/test_framework.hpp"
 #include "vr/ecs/system/camera_system.hpp"
 #include "vr/ecs/system/transform_system.hpp"
-#include "vr/render/render_runtime_host.hpp"
+#include "vr/runtime/detail/render_runtime_host.hpp"
 #include "vr/render/render_view_submission_utils.hpp"
 #include "vr/render/scene_recorder_3d.hpp"
 #include "vr/render_graph/frame_snapshot.hpp"
@@ -26,7 +26,7 @@ void SetVulkanResourceTableResolveFailureBeforePublishForTesting(bool enabled_) 
 
 namespace {
 
-using Host = vr::render::RenderRuntimeHost<vr::platform::ActiveBackendTag, 2U>;
+using Host = vr::runtime::detail::RuntimeHost<vr::platform::ActiveBackendTag, 2U>;
 using RenderGraphRuntimeService = vr::runtime::services::RenderGraphRuntimeService;
 
 struct ResolveFailureInjectionScope final {
@@ -145,7 +145,6 @@ struct ResolveFailureInjectionScope final {
     create_info.modules.enable_descriptor_host = false;
     create_info.modules.enable_pipeline_host = false;
     create_info.modules.enable_render_target_host = true;
-    create_info.modules.enable_render_target_pool = false;
     create_info.modules.enable_sampler_host = false;
     create_info.modules.enable_freetype_host = false;
     create_info.modules.enable_glyph_atlas_host = false;
@@ -2154,10 +2153,6 @@ VR_TEST_CASE(RenderGraphRuntimeService_builds_bloom_chain_from_scene_recorder_3d
     host.EnsureSwapchainTargetsForFrame(0U, 0U);
     host.PrepareTickFrame(graph_recorder, 0U);
     VR_CHECK(recorder.Stats().frame_packet_record_count == 0U);
-    VR_CHECK(!host.HasRenderTargetPool() ||
-             host.RenderTargetPoolStats().acquire_count == 0U);
-    VR_CHECK(!host.HasRenderTargetPool() ||
-             host.RenderTargetPoolStats().reuse_hit_count == 0U);
 
     struct MockPhaseContext final {
         struct FrameContext final {
@@ -2192,10 +2187,6 @@ VR_TEST_CASE(RenderGraphRuntimeService_builds_bloom_chain_from_scene_recorder_3d
     const auto* compiled = service.TryGetCompiledGraph();
     VR_REQUIRE(compiled != nullptr);
     VR_CHECK(recorder.Stats().frame_packet_record_count == 0U);
-    VR_CHECK(!host.HasRenderTargetPool() ||
-             host.RenderTargetPoolStats().acquire_count == 0U);
-    VR_CHECK(!host.HasRenderTargetPool() ||
-             host.RenderTargetPoolStats().reuse_hit_count == 0U);
     VR_CHECK(!compiled->Passes().empty());
     VR_CHECK(compiled->HasExecutablePasses());
     VR_CHECK(compiled->TransientAllocations().timeline.saved_bytes > 0U);

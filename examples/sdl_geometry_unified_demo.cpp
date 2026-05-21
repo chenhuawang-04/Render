@@ -10,7 +10,7 @@
 #include "vr/geometry/geometry_renderer_3d.hpp"
 #include "vr/geometry/geometry_resource_host.hpp"
 #include "vr/geometry/geometry_upload_host.hpp"
-#include "vr/render/render_runtime_host.hpp"
+#include "vr/runtime/runtime.hpp"
 #include "vr/render/render_view_submission_utils.hpp"
 #include "vr/runtime/crash_tracer_support.hpp"
 #include "vr/render/scene_recorder_3d.hpp"
@@ -27,7 +27,7 @@
 
 namespace {
 
-using Runtime = vr::render::RenderRuntimeHost<vr::platform::ActiveBackendTag, 2U>;
+using Runtime = vr::runtime::Runtime<vr::platform::ActiveBackendTag, 2U>;
 using Geometry2D = vr::ecs::Geometry<vr::ecs::Dim2>;
 using Geometry3D = vr::ecs::Geometry<vr::ecs::Dim3>;
 using Appearance2D = vr::ecs::Appearance<vr::ecs::Dim2>;
@@ -476,8 +476,7 @@ int main(int argc_,
         renderer_2d.SetHost(&geometry_upload_host);
         renderer_2d.SetSceneData(geometry_2d_components.data(),
                                  static_cast<std::uint32_t>(geometry_2d_components.size()));
-        recorder.RegisterOverlayRenderer(renderer_2d,
-                                         vr::render::SceneRecorder3D::MakePresentOverlayOutputConfig());
+        recorder.RegisterOverlayRenderer(renderer_2d);
 
         vr::render::RenderView3D main_view{};
         vr::render::RenderScenePacket3D main_scene_packet{};
@@ -544,9 +543,8 @@ int main(int argc_,
                        static_cast<float>(fps_window_elapsed))
                     : 0.0F;
                 const vr::geometry::GeometryRenderer3DStats stats_3d = renderer_3d.Stats();
-                const auto bloom_stats = recorder.PostStack().Stats();
+                const auto bloom_stats = recorder.BloomStats();
                 const vr::geometry::GeometryRenderer2DStats stats_2d = renderer_2d.Stats();
-                const vr::render::RenderTargetPoolStats pool_stats = runtime.TargetPool().Stats();
                 std::cout << "FPS: " << fps
                           << " | Frame:" << frame_index
                           << " | 3D Draw:" << stats_3d.draw_call_count
@@ -558,8 +556,6 @@ int main(int argc_,
                           << " DSU:" << bloom_stats.descriptor_set_update_count
                           << " | 2D Draw:" << stats_2d.draw_call_count
                           << " Prim:" << stats_2d.primitive_count
-                          << " | Pool Acquire:" << pool_stats.acquire_count
-                          << " Reuse:" << pool_stats.reuse_hit_count
                           << '\n';
                 fps_window_begin_ticks = now_ticks;
                 fps_window_frame_count = 0U;

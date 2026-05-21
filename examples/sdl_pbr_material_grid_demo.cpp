@@ -8,7 +8,7 @@
 #include "vr/geometry/geometry_renderer_3d.hpp"
 #include "vr/geometry/geometry_resource_host.hpp"
 #include "vr/geometry/geometry_upload_host.hpp"
-#include "vr/render/render_runtime_host.hpp"
+#include "vr/runtime/runtime.hpp"
 #include "vr/render/render_view_submission_utils.hpp"
 #include "vr/render/scene_recorder_3d.hpp"
 #include "vr/runtime/crash_tracer_support.hpp"
@@ -27,7 +27,7 @@
 
 namespace {
 
-using Runtime = vr::render::RenderRuntimeHost<vr::platform::ActiveBackendTag, 2U>;
+using Runtime = vr::runtime::Runtime<vr::platform::ActiveBackendTag, 2U>;
 using Geometry3D = vr::ecs::Geometry<vr::ecs::Dim3>;
 using Appearance3D = vr::ecs::Appearance<vr::ecs::Dim3>;
 using Transform3D = vr::ecs::Transform<vr::ecs::Dim3>;
@@ -846,7 +846,7 @@ int main(int argc_,
                        static_cast<float>(fps_window_elapsed))
                     : 0.0F;
                 const auto stats = geometry_renderer.Stats();
-                const auto bloom_stats = recorder.PostStack().Stats();
+                const auto bloom_stats = recorder.BloomStats();
                 const auto env_stats = recorder.EnvironmentPass().Stats();
                 std::cout << "FPS: " << fps
                           << " | Frame:" << frame_index

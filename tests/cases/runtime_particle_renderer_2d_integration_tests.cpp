@@ -1,11 +1,12 @@
-﻿#include "support/test_framework.hpp"
+﻿#include "support/render_graph_test_utils.hpp"
+#include "support/test_framework.hpp"
 #include "vr/ecs/system/particle_emitter_system.hpp"
 #include "vr/ecs/system/particle_system.hpp"
 #include "vr/ecs/system/transform_system.hpp"
 #include "vr/particle/particle_renderer_2d.hpp"
 #include "vr/particle/particle_simulation_host.hpp"
 #include "vr/particle/particle_upload_host.hpp"
-#include "vr/render/render_runtime_host.hpp"
+#include "vr/runtime/runtime.hpp"
 
 #include <SDL3/SDL.h>
 
@@ -17,7 +18,7 @@
 
 namespace {
 
-using Runtime = vr::render::RenderRuntimeHost<vr::platform::ActiveBackendTag, 2U>;
+using Runtime = vr::runtime::Runtime<vr::platform::ActiveBackendTag, 2U>;
 using Particle2D = vr::ecs::Particle<vr::ecs::Dim2>;
 using ParticleEmitter2D = vr::ecs::ParticleEmitter<vr::ecs::Dim2>;
 using Transform2D = vr::ecs::Transform<vr::ecs::Dim2>;
@@ -71,30 +72,6 @@ using TransformSystem2D = vr::ecs::TransformSystem<vr::ecs::Dim2>;
     }
     return false;
 }
-
-struct ParticleRecorder2D final {
-    vr::particle::ParticleRenderer2D* renderer = nullptr;
-
-    void PrepareFrame(const vr::render::ParticleRenderer2DPrepareView& prepare_view_) {
-        renderer->PrepareFrame(prepare_view_);
-    }
-
-    void Record(const vr::render::FrameRecordContext& record_context_) {
-        renderer->Record(record_context_);
-    }
-
-    void OnSwapchainRecreated(std::uint32_t image_count_,
-                              VkExtent2D extent_,
-                              VkFormat format_,
-                              std::uint64_t last_submitted_value_,
-                              std::uint64_t completed_submit_value_) {
-        renderer->OnSwapchainRecreated(image_count_,
-                                       extent_,
-                                       format_,
-                                       last_submitted_value_,
-                                       completed_submit_value_);
-    }
-};
 
 void ConfigureParticle2DRuntimeCreateInfo(Runtime::CreateInfo& create_info_,
                                           const char* window_title_) {
@@ -168,14 +145,13 @@ VR_TEST_CASE(RuntimeIntegration_particle_renderer_2d_hybrid_smoke,
         vr::particle::ParticleRenderer2DCreateInfo renderer_create_info{};
         renderer_create_info.reserve_component_count = 1U;
         renderer_create_info.reserve_particle_count = 256U;
-        renderer_create_info.clear_swapchain = false;
+        renderer_create_info.clear_swapchain = true;
+        renderer_create_info.clear_color = VkClearColorValue{{0.12F, 0.24F, 0.36F, 1.0F}};
         particle_renderer.Initialize(renderer_create_info);
         renderer_initialized = true;
         runtime.Services().Get<vr::runtime::services::ParticleRenderService>().ConfigureRenderer(
             particle_renderer);
         particle_renderer.SetSceneData(&particle, &emitter, &transform, 1U);
-
-        ParticleRecorder2D recorder{.renderer = &particle_renderer};
 
         std::uint32_t submitted_frames = 0U;
         std::uint32_t max_uploaded_instances = 0U;
@@ -183,12 +159,15 @@ VR_TEST_CASE(RuntimeIntegration_particle_renderer_2d_hybrid_smoke,
         std::uint32_t max_indirect_draw_calls = 0U;
         std::uint32_t max_descriptor_binds = 0U;
         std::uint32_t max_descriptor_updates = 0U;
+        bool direct_pass_seen = false;
+        bool direct_pass_clear_policy_seen = false;
+        bool direct_pass_descriptor_bindings_seen = false;
 
         constexpr std::uint32_t max_ticks = 10U;
         for (std::uint32_t tick_index = 0U;
              tick_index < max_ticks && runtime.IsRunning();
              ++tick_index) {
-            const auto tick_result = runtime.Tick(recorder);
+            const auto tick_result = runtime.Tick(particle_renderer);
             if (tick_result.render.code != vr::render::TickCode::Submitted) {
                 continue;
             }
@@ -203,6 +182,37 @@ VR_TEST_CASE(RuntimeIntegration_particle_renderer_2d_hybrid_smoke,
                                             renderer_stats.descriptor_set_bind_count);
             max_descriptor_updates = std::max(max_descriptor_updates,
                                               renderer_stats.descriptor_set_update_count);
+            const auto& graph_service =
+                runtime.Services().Get<vr::runtime::services::RenderGraphRuntimeService>();
+            if (const auto* compiled_graph = graph_service.TryGetCompiledGraph();
+                compiled_graph != nullptr) {
+                if (const auto* direct_pass =
+                        vr::test::FindCompiledPassByName(*compiled_graph,
+                                                         "particle_renderer_2d_direct");
+                    direct_pass != nullptr &&
+                    direct_pass->executable &&
+                    direct_pass->raster_pass.has_value() &&
+                    !direct_pass->raster_pass->color_attachments.empty()) {
+                    direct_pass_seen = true;
+                    const auto& color_attachment =
+                        direct_pass->raster_pass->color_attachments.front();
+                    direct_pass_clear_policy_seen =
+                        direct_pass_clear_policy_seen ||
+                        (color_attachment.load_op ==
+                             vr::render_graph::AttachmentLoadOp::clear &&
+                         color_attachment.clear_value.red ==
+                             renderer_create_info.clear_color.float32[0] &&
+                         color_attachment.clear_value.green ==
+                             renderer_create_info.clear_color.float32[1] &&
+                         color_attachment.clear_value.blue ==
+                             renderer_create_info.clear_color.float32[2] &&
+                         color_attachment.clear_value.alpha ==
+                             renderer_create_info.clear_color.float32[3]);
+                    direct_pass_descriptor_bindings_seen =
+                        direct_pass_descriptor_bindings_seen ||
+                        !direct_pass->descriptor_bindings.empty();
+                }
+            }
         }
 
         VR_REQUIRE(submitted_frames > 0U);
@@ -211,6 +221,9 @@ VR_TEST_CASE(RuntimeIntegration_particle_renderer_2d_hybrid_smoke,
         VR_REQUIRE(max_descriptor_binds > 0U);
         VR_CHECK(max_descriptor_binds <= max_draw_calls);
         VR_CHECK(max_descriptor_updates == 0U);
+        VR_CHECK(direct_pass_seen);
+        VR_CHECK(direct_pass_clear_policy_seen);
+        VR_CHECK(direct_pass_descriptor_bindings_seen);
         const auto& particle_simulation_service =
             runtime.Services().Get<vr::runtime::services::ParticleSimulationService>();
         VR_REQUIRE(particle_simulation_service.Stats().prepared_frame_count > 0U);
@@ -310,8 +323,6 @@ VR_TEST_CASE(RuntimeIntegration_particle_renderer_2d_gpu_persistent_seed_once,
             particle_renderer);
         particle_renderer.SetSceneData(&particle, &emitter, &transform, 1U);
 
-        ParticleRecorder2D recorder{.renderer = &particle_renderer};
-
         std::uint32_t submitted_frames = 0U;
         std::uint32_t max_indirect_draw_calls = 0U;
         std::uint32_t max_uploaded_instances = 0U;
@@ -323,7 +334,7 @@ VR_TEST_CASE(RuntimeIntegration_particle_renderer_2d_gpu_persistent_seed_once,
         for (std::uint32_t tick_index = 0U;
              tick_index < max_ticks && runtime.IsRunning();
              ++tick_index) {
-            const auto tick_result = runtime.Tick(recorder);
+            const auto tick_result = runtime.Tick(particle_renderer);
             if (tick_result.render.code != vr::render::TickCode::Submitted) {
                 continue;
             }

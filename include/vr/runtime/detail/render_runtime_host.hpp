@@ -8,6 +8,7 @@
 #include "vr/platform/render_host.hpp"
 #include "vr/particle/particle_simulation_host.hpp"
 #include "vr/particle/particle_upload_host.hpp"
+#include "vr/runtime/runtime_create_info.hpp"
 #include "vr/runtime/runtime_diagnostics.hpp"
 #include "vr/runtime/runtime_execution.hpp"
 #include "vr/runtime/profiles/runtime_3d_profile.hpp"
@@ -35,7 +36,6 @@
 #include "vr/render/bindless_resource_system.hpp"
 #include "vr/render/pipeline_host.hpp"
 #include "vr/render/render_target_host.hpp"
-#include "vr/render/render_target_pool.hpp"
 #include "vr/render/render_loop_host.hpp"
 
 #include <vector>
@@ -58,27 +58,33 @@
 
 namespace vr::render {
 
-struct RuntimeModulesCreateInfo {
-    bool enable_texture_host = true;
-    bool enable_frame_composer_host = true;
-    bool enable_ibl_host = true;
-    bool enable_ibl_bake_host = false;
-    bool enable_sky_environment_gpu_host = true;
-    bool enable_upload_host = true;
-    bool enable_descriptor_host = true;
-    bool enable_pipeline_host = true;
-    bool enable_render_target_host = true;
-    bool enable_render_target_pool = true;
-    bool enable_sampler_host = true;
-    bool enable_freetype_host = true;
-    bool enable_glyph_atlas_host = true;
-    bool enable_glyph_upload_host = true;
-    bool enable_particle_upload_host = true;
-    bool enable_particle_simulation_host = true;
-};
-
 using RuntimeDiagnosticsCreateInfo = vr::runtime::RuntimeDiagnosticsCreateInfo;
 using RuntimeFrameDiagnostics = vr::runtime::RuntimeFrameDiagnosticsV2;
+
+template<typename RecorderT, typename PrepareViewT>
+concept RuntimeDirectGraphRecorder =
+    requires(RecorderT& recorder_,
+             const PrepareViewT& prepare_view_,
+             const RuntimeDirectGraphBuildView& graph_view_) {
+        recorder_.PrepareFrame(prepare_view_);
+        recorder_.BuildDirectRuntimeGraph(graph_view_);
+    };
+
+template<typename RecorderT, typename PrepareViewT>
+concept RuntimeDirectGraphDescriptorRecorder =
+    RuntimeDirectGraphRecorder<RecorderT, PrepareViewT> &&
+    requires(const RecorderT& recorder_,
+             render_graph::RenderGraphBuilder& builder_,
+             const render_graph::PassHandle pass_) {
+        recorder_.DescribeGraphDescriptorBindings(builder_, pass_);
+    };
+
+template<typename RecorderT>
+concept RuntimeDirectGraphImportedResourceRecorder =
+    requires(RecorderT& recorder_,
+             runtime::services::RenderGraphRuntimeService& graph_runtime_service_) {
+        recorder_.RegisterGraphImportedResources(graph_runtime_service_);
+    };
 
 template<typename RecorderT>
 concept RuntimeTickRecorder = FrameRecorder<RecorderT> ||
@@ -95,24 +101,40 @@ concept RuntimeTickRecorder = FrameRecorder<RecorderT> ||
                                        const FrameComposerPrepareView& prepare_view_) {
                                   recorder_.PrepareFrame(prepare_view_);
                               } ||
-                              requires(RecorderT& recorder_,
-                                       const RenderTargetBloomRendererPrepareView& prepare_view_) {
-                                  recorder_.PrepareFrame(prepare_view_);
-                              } ||
-                              requires(RecorderT& recorder_,
-                                       const RenderTargetCompositeRendererPrepareView& prepare_view_) {
-                                  recorder_.PrepareFrame(prepare_view_);
-                              };
+                               requires(RecorderT& recorder_,
+                                        const RenderTargetCompositeRendererPrepareView& prepare_view_) {
+                                   recorder_.PrepareFrame(prepare_view_);
+                               } ||
+                               RuntimeDirectGraphDescriptorRecorder<RecorderT,
+                                                                    TextRenderer2DPrepareView> ||
+                               RuntimeDirectGraphDescriptorRecorder<RecorderT,
+                                                                    TextRenderer3DPrepareView> ||
+                               RuntimeDirectGraphRecorder<RecorderT,
+                                                          GeometryRenderer2DPrepareView> ||
+                               RuntimeDirectGraphDescriptorRecorder<RecorderT,
+                                                                    GeometryRenderer3DPrepareView> ||
+                               RuntimeDirectGraphDescriptorRecorder<RecorderT,
+                                                                    SurfaceRenderer2DPrepareView> ||
+                               RuntimeDirectGraphDescriptorRecorder<RecorderT,
+                                                                    SurfaceRenderer3DPrepareView> ||
+                               RuntimeDirectGraphDescriptorRecorder<RecorderT,
+                                                                    ParticleRenderer2DPrepareView> ||
+                               RuntimeDirectGraphDescriptorRecorder<RecorderT,
+                                                                    ParticleRenderer3DPrepareView>;
 
 template<typename BackendTagT = platform::ActiveBackendTag,
          uint32_t frames_in_flight_v = 2U>
-// Legacy runtime facade retained during the runtime-core refactor.
-// Prefer vr::runtime::Runtime for new public entry points.
+// Internal runtime-core host implementation.
+// Public entry points should route through vr::runtime::Runtime.
 class RenderRuntimeHost final {
 public:
     static_assert(frames_in_flight_v > 0U, "frames_in_flight_v must be >= 1");
 
     using BackendTag = BackendTagT;
+    using CreateInfo = vr::runtime::RuntimeCreateInfo<BackendTagT, frames_in_flight_v>;
+    using PipelineWarmupCreateInfo =
+        vr::runtime::RuntimePipelineWarmupCreateInfo<BackendTagT, frames_in_flight_v>;
+    using RuntimeModulesCreateInfo = vr::runtime::RuntimeModulesCreateInfo;
     using PlatformHostType = platform::RenderHost<BackendTag>;
     using WindowSurfaceType = typename PlatformHostType::WindowSurfaceType;
     using SwapchainType = SwapchainHost<WindowSurfaceType>;
@@ -197,45 +219,6 @@ private:
     }
 
 public:
-
-    struct PipelineWarmupCreateInfo {
-        uint32_t max_graphics_compiles_per_tick = 0U;
-        uint32_t max_compute_compiles_per_tick = 0U;
-        bool compile_before_render = true;
-        bool compile_after_render = false;
-    };
-
-    struct CreateInfo {
-        platform::RenderHostCreateInfo platform{};
-        RenderLoopCreateInfo render_loop{};
-
-        resource::GpuMemoryHostCreateInfo gpu_memory{};
-        asset::TextureHostCreateInfo texture{};
-        FrameComposerHostCreateInfo frame_composer{};
-        IblHostCreateInfo ibl{};
-        IblBakeHostCreateInfo ibl_bake{};
-        SkyEnvironmentGpuHostCreateInfo sky_environment{};
-        UploadHostCreateInfo upload{};
-        DescriptorHostCreateInfo descriptor{};
-        BindlessResourceSystemCreateInfo bindless{};
-        PipelineHostCreateInfo pipeline{};
-        RenderTargetHostCreateInfo render_target{};
-        RenderTargetPoolCreateInfo render_target_pool{};
-        resource::SamplerHostCreateInfo sampler{};
-        text::FreeTypeHostCreateInfo freetype{};
-        text::GlyphAtlasCreateInfo glyph_atlas{};
-        text::GlyphUploadHostCreateInfo glyph_upload{};
-        particle::ParticleUploadHostCreateInfo particle_upload{};
-        particle::ParticleSimulationHostCreateInfo particle_simulation{};
-
-        RuntimeModulesCreateInfo modules{};
-        RuntimeDiagnosticsCreateInfo diagnostics{};
-        PipelineWarmupCreateInfo pipeline_warmup{};
-
-        bool poll_events_each_tick = true;
-        VkPipelineStageFlags upload_wait_stage_mask = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
-    };
-
     struct RuntimeTickResult {
         std::uint64_t frame_id = 0U;
         TickResult render{};
@@ -444,15 +427,6 @@ public:
                 }
             }
 
-            if (create_info_cache.modules.enable_render_target_pool) {
-                if (!render_target_initialized) {
-                    throw std::runtime_error(
-                        "RenderRuntimeHost::Initialize requires RenderTargetHost when render_target_pool is enabled");
-                }
-                render_target_pool.Initialize(create_info_cache.render_target_pool);
-                render_target_pool_initialized = true;
-            }
-
             if (create_info_cache.modules.enable_upload_host) {
                 UploadHostCreateInfo upload_info = create_info_cache.upload;
                 upload_info.frames_in_flight = frames_in_flight_v;
@@ -573,16 +547,6 @@ public:
                 texture_host.Shutdown(platform_host.Context());
                 texture_initialized = false;
             }
-            if (render_target_pool_initialized) {
-                if (render_target_initialized) {
-                    render_target_pool.InvalidateAll(platform_host.Context(),
-                                                    render_target_host,
-                                                    0U,
-                                                    0U);
-                }
-                render_target_pool.Shutdown();
-                render_target_pool_initialized = false;
-            }
             if (render_target_initialized) {
                 InvalidateSwapchainTargets(0U, 0U);
                 render_target_host.Shutdown(platform_host.Context());
@@ -683,21 +647,6 @@ public:
         if (texture_initialized) {
             texture_host.Shutdown(platform_host.Context());
             texture_initialized = false;
-        }
-
-        if (render_target_pool_initialized) {
-            if (render_target_initialized) {
-                const std::uint64_t last_submitted_value =
-                    loop_initialized ? render_loop.Sync().LastSubmittedValue() : 0U;
-                const std::uint64_t completed_submit_value =
-                    loop_initialized ? render_loop.Sync().CompletedSubmitValue() : 0U;
-                render_target_pool.InvalidateAll(platform_host.Context(),
-                                                render_target_host,
-                                                last_submitted_value,
-                                                completed_submit_value);
-            }
-            render_target_pool.Shutdown();
-            render_target_pool_initialized = false;
         }
 
         if (render_target_initialized) {
@@ -1056,14 +1005,6 @@ public:
 
     [[nodiscard]] bool HasRenderTargetHost() const noexcept {
         return render_target_initialized;
-    }
-
-    [[nodiscard]] bool HasRenderTargetPool() const noexcept {
-        return render_target_pool_initialized;
-    }
-
-    [[nodiscard]] const RenderTargetPoolStats& RenderTargetPoolStats() const noexcept {
-        return render_target_pool.Stats();
     }
 
     [[nodiscard]] bool HasSamplerHost() const noexcept {
@@ -1696,6 +1637,36 @@ private:
     }
 
     template<typename RecorderT>
+    static void RegisterOptionalDirectGraphImportedResources(
+        RecorderT& recorder_,
+        runtime::services::RenderGraphRuntimeService& render_graph_service_) {
+        if constexpr (RuntimeDirectGraphImportedResourceRecorder<RecorderT>) {
+            recorder_.RegisterGraphImportedResources(render_graph_service_);
+        }
+    }
+
+    template<typename RecorderT>
+    static void SetDirectGraphBuildCallback(
+        RecorderT& recorder_,
+        runtime::services::RenderGraphRuntimeService& render_graph_service_) {
+        render_graph_service_.SetDirectGraphBuildCallback(
+            [&recorder_, &render_graph_service_](render_graph::RenderGraphBuilder& builder_ref_,
+                                                 const render_graph::ResourceHandle present_target_ref_,
+                                                 const render_graph::Extent3D& reference_extent_ref_,
+                                                 render_graph::ResourceVersionHandle& present_ready_version_ref_,
+                                                 const runtime::services::RenderGraphRuntimeService::ImportedTextureRegisterFn& register_imported_texture_ref_) {
+                recorder_.BuildDirectRuntimeGraph(RuntimeDirectGraphBuildView{
+                    .builder = builder_ref_,
+                    .present_target = present_target_ref_,
+                    .reference_extent = reference_extent_ref_,
+                    .present_ready_version = present_ready_version_ref_,
+                    .register_imported_texture = register_imported_texture_ref_,
+                });
+                RegisterOptionalDirectGraphImportedResources(recorder_, render_graph_service_);
+            });
+    }
+
+    template<typename RecorderT>
     void DispatchPrepareFrame(RecorderT& recorder_, std::uint32_t frame_index_) {
         const FrameStaticContext frame = BuildFrameStaticContext(frame_index_);
         const FrameGpuProgressContext progress = BuildFrameGpuProgressContext();
@@ -1926,21 +1897,6 @@ private:
                     });
             }
         } else if constexpr (requires(RecorderT& recorder_ref_,
-                                      const RenderTargetBloomRendererPrepareView& prepare_view_) {
-                                 recorder_ref_.PrepareFrame(prepare_view_);
-                             }) {
-            recorder_.PrepareFrame(RenderTargetBloomRendererPrepareView{
-                .device = device,
-                .descriptor = descriptor_host,
-                .pipeline = pipeline_host,
-                .render_target = render_target_host,
-                .render_target_pool = render_target_pool,
-                .sampler = sampler_host,
-                .bindless = bindless_resources_initialized ? &bindless_resource_system : nullptr,
-                .frame = frame,
-                .progress = progress,
-            });
-        } else if constexpr (requires(RecorderT& recorder_ref_,
                                       const RenderTargetCompositeRendererPrepareView& prepare_view_) {
                                  recorder_ref_.PrepareFrame(prepare_view_);
                              }) {
@@ -1954,10 +1910,8 @@ private:
                 .frame = frame,
                 .progress = progress,
             });
-        } else if constexpr (requires(RecorderT& recorder_ref_,
-                                      const TextRenderer2DPrepareView& prepare_view_) {
-                                 recorder_ref_.PrepareFrame(prepare_view_);
-                             }) {
+        } else if constexpr (RuntimeDirectGraphDescriptorRecorder<RecorderT,
+                                                                 TextRenderer2DPrepareView>) {
             recorder_.PrepareFrame(TextRenderer2DPrepareView{
                 .device = device,
                 .gpu_memory = gpu_memory_host,
@@ -1968,13 +1922,15 @@ private:
                 .freetype = freetype_host,
                 .glyph_atlas = glyph_atlas_host,
                 .glyph_upload = glyph_upload_host,
+                .render_graph_upload_active = true,
                 .frame = frame,
                 .progress = progress,
             });
-        } else if constexpr (requires(RecorderT& recorder_ref_,
-                                      const TextRenderer3DPrepareView& prepare_view_) {
-                                 recorder_ref_.PrepareFrame(prepare_view_);
-                             }) {
+            auto& render_graph_service =
+                services_ref.template Get<runtime::services::RenderGraphRuntimeService>();
+            SetDirectGraphBuildCallback(recorder_, render_graph_service);
+        } else if constexpr (RuntimeDirectGraphDescriptorRecorder<RecorderT,
+                                                                 TextRenderer3DPrepareView>) {
             recorder_.PrepareFrame(TextRenderer3DPrepareView{
                 .device = device,
                 .gpu_memory = gpu_memory_host,
@@ -1985,13 +1941,15 @@ private:
                 .freetype = freetype_host,
                 .glyph_atlas = glyph_atlas_host,
                 .glyph_upload = glyph_upload_host,
+                .render_graph_upload_active = true,
                 .frame = frame,
                 .progress = progress,
             });
-        } else if constexpr (requires(RecorderT& recorder_ref_,
-                                      const GeometryRenderer2DPrepareView& prepare_view_) {
-                                 recorder_ref_.PrepareFrame(prepare_view_);
-                             }) {
+            auto& render_graph_service =
+                services_ref.template Get<runtime::services::RenderGraphRuntimeService>();
+            SetDirectGraphBuildCallback(recorder_, render_graph_service);
+        } else if constexpr (RuntimeDirectGraphRecorder<RecorderT,
+                                                       GeometryRenderer2DPrepareView>) {
             recorder_.PrepareFrame(GeometryRenderer2DPrepareView{
                 .device = device,
                 .upload = upload_host,
@@ -1999,10 +1957,11 @@ private:
                 .frame = frame,
                 .progress = progress,
             });
-        } else if constexpr (requires(RecorderT& recorder_ref_,
-                                      const GeometryRenderer3DPrepareView& prepare_view_) {
-                                 recorder_ref_.PrepareFrame(prepare_view_);
-                             }) {
+            auto& render_graph_service =
+                services_ref.template Get<runtime::services::RenderGraphRuntimeService>();
+            SetDirectGraphBuildCallback(recorder_, render_graph_service);
+        } else if constexpr (RuntimeDirectGraphDescriptorRecorder<RecorderT,
+                                                                 GeometryRenderer3DPrepareView>) {
             recorder_.PrepareFrame(GeometryRenderer3DPrepareView{
                 .device = device,
                 .upload = upload_host,
@@ -2017,10 +1976,11 @@ private:
                 .frame = frame,
                 .progress = progress,
             });
-        } else if constexpr (requires(RecorderT& recorder_ref_,
-                                      const SurfaceRenderer2DPrepareView& prepare_view_) {
-                                 recorder_ref_.PrepareFrame(prepare_view_);
-                             }) {
+            auto& render_graph_service =
+                services_ref.template Get<runtime::services::RenderGraphRuntimeService>();
+            SetDirectGraphBuildCallback(recorder_, render_graph_service);
+        } else if constexpr (RuntimeDirectGraphDescriptorRecorder<RecorderT,
+                                                                 SurfaceRenderer2DPrepareView>) {
             recorder_.PrepareFrame(SurfaceRenderer2DPrepareView{
                 .device = device,
                 .gpu_memory = gpu_memory_host,
@@ -2032,10 +1992,11 @@ private:
                 .frame = frame,
                 .progress = progress,
             });
-        } else if constexpr (requires(RecorderT& recorder_ref_,
-                                      const SurfaceRenderer3DPrepareView& prepare_view_) {
-                                 recorder_ref_.PrepareFrame(prepare_view_);
-                             }) {
+            auto& render_graph_service =
+                services_ref.template Get<runtime::services::RenderGraphRuntimeService>();
+            SetDirectGraphBuildCallback(recorder_, render_graph_service);
+        } else if constexpr (RuntimeDirectGraphDescriptorRecorder<RecorderT,
+                                                                 SurfaceRenderer3DPrepareView>) {
             recorder_.PrepareFrame(SurfaceRenderer3DPrepareView{
                 .device = device,
                 .upload = upload_host,
@@ -2050,10 +2011,11 @@ private:
                 .frame = frame,
                 .progress = progress,
             });
-        } else if constexpr (requires(RecorderT& recorder_ref_,
-                                      const ParticleRenderer2DPrepareView& prepare_view_) {
-                                 recorder_ref_.PrepareFrame(prepare_view_);
-                             }) {
+            auto& render_graph_service =
+                services_ref.template Get<runtime::services::RenderGraphRuntimeService>();
+            SetDirectGraphBuildCallback(recorder_, render_graph_service);
+        } else if constexpr (RuntimeDirectGraphDescriptorRecorder<RecorderT,
+                                                                 ParticleRenderer2DPrepareView>) {
             recorder_.PrepareFrame(ParticleRenderer2DPrepareView{
                 .device = device,
                 .gpu_memory = gpu_memory_host,
@@ -2066,13 +2028,15 @@ private:
                 .particle_upload = particle_upload_initialized ? &particle_upload_host : nullptr,
                 .particle_simulation = particle_simulation_initialized ? &particle_simulation_host : nullptr,
                 .render_target = render_target_initialized ? &render_target_host : nullptr,
+                .render_graph_compute_active = true,
                 .frame = frame,
                 .progress = progress,
             });
-        } else if constexpr (requires(RecorderT& recorder_ref_,
-                                      const ParticleRenderer3DPrepareView& prepare_view_) {
-                                 recorder_ref_.PrepareFrame(prepare_view_);
-                             }) {
+            auto& render_graph_service =
+                services_ref.template Get<runtime::services::RenderGraphRuntimeService>();
+            SetDirectGraphBuildCallback(recorder_, render_graph_service);
+        } else if constexpr (RuntimeDirectGraphDescriptorRecorder<RecorderT,
+                                                                 ParticleRenderer3DPrepareView>) {
             recorder_.PrepareFrame(ParticleRenderer3DPrepareView{
                 .device = device,
                 .gpu_memory = gpu_memory_host,
@@ -2085,9 +2049,13 @@ private:
                 .particle_upload = particle_upload_initialized ? &particle_upload_host : nullptr,
                 .particle_simulation = particle_simulation_initialized ? &particle_simulation_host : nullptr,
                 .render_target = render_target_initialized ? &render_target_host : nullptr,
+                .render_graph_compute_active = true,
                 .frame = frame,
                 .progress = progress,
             });
+            auto& render_graph_service =
+                services_ref.template Get<runtime::services::RenderGraphRuntimeService>();
+            SetDirectGraphBuildCallback(recorder_, render_graph_service);
         } else if constexpr (requires(RecorderT& recorder_ref_,
                                       const ShadowRenderer2DPrepareView& prepare_view_) {
                                  recorder_ref_.PrepareFrame(prepare_view_);
@@ -2187,12 +2155,6 @@ private:
                                   std::uint64_t last_submitted_value_,
                                   std::uint64_t completed_submit_value_) {
             runtime.InvalidateSwapchainTargets(last_submitted_value_, completed_submit_value_);
-            if (runtime.render_target_pool_initialized && runtime.render_target_initialized) {
-                runtime.render_target_pool.InvalidateAll(runtime.platform_host.Context(),
-                                                        runtime.render_target_host,
-                                                        last_submitted_value_,
-                                                        completed_submit_value_);
-            }
             if (runtime.frame_composer_initialized && runtime.render_target_initialized) {
                 (void)runtime.frame_composer_host.OnSwapchainRecreated(
                     runtime.platform_host.Context(),
@@ -2450,11 +2412,6 @@ private:
         if (render_target_initialized) {
             diagnostics.render_target = render_target_host.Stats();
         }
-        if (render_target_pool_initialized) {
-            diagnostics.render_target_pool = render_target_pool.Stats();
-            diagnostics.allocations.render_target_transient_acquired_count =
-                static_cast<std::uint32_t>(diagnostics.render_target_pool.acquire_count);
-        }
         diagnostics.render_graph = render_graph_runtime_service_ref.LastDiagnostics();
         if (glyph_atlas_initialized) {
             diagnostics.glyph_atlas = glyph_atlas_host.Stats();
@@ -2518,7 +2475,6 @@ private:
     BindlessResourceSystem bindless_resource_system{};
     PipelineHost pipeline_host{};
     RenderTargetHost render_target_host{};
-    RenderTargetPool render_target_pool{};
     resource::SamplerHost sampler_host{};
     text::FreeTypeHost freetype_host{};
     text::GlyphAtlasHost glyph_atlas_host{};
@@ -2562,7 +2518,6 @@ private:
     bool bindless_resources_initialized = false;
     bool pipeline_initialized = false;
     bool render_target_initialized = false;
-    bool render_target_pool_initialized = false;
     bool sampler_initialized = false;
     bool freetype_initialized = false;
     bool glyph_atlas_initialized = false;
@@ -2578,4 +2533,12 @@ private:
 };
 
 } // namespace vr::render
+
+namespace vr::runtime::detail {
+
+template<typename BackendTagT = vr::platform::ActiveBackendTag,
+         std::uint32_t frames_in_flight_v = 2U>
+using RuntimeHost = vr::render::RenderRuntimeHost<BackendTagT, frames_in_flight_v>;
+
+} // namespace vr::runtime::detail
 

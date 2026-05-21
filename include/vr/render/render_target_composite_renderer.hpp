@@ -44,14 +44,7 @@ public:
     void Initialize(const RenderTargetCompositeRendererCreateInfo& create_info_ = {});
     void Shutdown(VulkanContext& context_);
 
-    void SetSourceTarget(RenderTargetHandle source_target_,
-                         RenderTargetStateKind expected_source_state_ = RenderTargetStateKind::shader_read) noexcept;
-    void ClearSourceTarget() noexcept;
-    void SetOutputTargetConfig(const RenderTargetColorOutputConfig& output_target_config_) noexcept;
-    void ResetOutputTargetConfig() noexcept;
-
     void PrepareFrame(const RenderTargetCompositeRendererPrepareView& prepare_view_);
-    void Record(const FrameRecordContext& record_context_);
     void DescribeGraphDescriptorBindings(render_graph::RenderGraphBuilder& builder_,
                                          render_graph::PassHandle pass_) const;
     [[nodiscard]] render_graph::RasterColorAttachmentDesc BuildGraphColorAttachmentDesc(
@@ -106,12 +99,6 @@ private:
     ShaderModuleId shader_fragment_id{};
     GraphicsPipelineId pipeline_id{};
     VkFormat pipeline_color_format = VK_FORMAT_UNDEFINED;
-
-    RenderTargetHandle source_target{};
-    RenderTargetStateKind source_expected_state = RenderTargetStateKind::shader_read;
-    RenderTargetColorOutputConfig output_target_config{};
-    BindlessSlot source_texture_slot{};
-    BindlessSlot sampler_slot{};
 
     VkExtent2D swapchain_extent{};
     VkFormat swapchain_format = VK_FORMAT_UNDEFINED;

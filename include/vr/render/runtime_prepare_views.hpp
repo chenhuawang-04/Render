@@ -1,7 +1,10 @@
 ﻿#pragma once
 
+#include "vr/render/render_target_types.hpp"
+#include "vr/render_graph/render_graph_types.hpp"
 #include "vr/vulkan_context.hpp"
 
+#include <functional>
 #include <stdexcept>
 #include <string_view>
 
@@ -14,7 +17,6 @@ class IblHost;
 class IblBakeHost;
 class PipelineHost;
 class RenderTargetHost;
-class RenderTargetPool;
 } // namespace vr::render
 
 namespace vr::asset {
@@ -41,6 +43,10 @@ namespace vr::render {
 class SkyEnvironmentGpuHost;
 }
 
+namespace vr::render_graph {
+class RenderGraphBuilder;
+}
+
 namespace vr::render {
 
 struct FrameStaticContext final {
@@ -52,6 +58,18 @@ struct FrameStaticContext final {
 struct FrameGpuProgressContext final {
     std::uint64_t last_submitted_value = 0U;
     std::uint64_t completed_submit_value = 0U;
+};
+
+using DirectGraphImportedTextureRegisterFn = std::function<void(
+    render_graph::ResourceHandle,
+    RenderTargetHandle)>;
+
+struct RuntimeDirectGraphBuildView final {
+    render_graph::RenderGraphBuilder& builder;
+    render_graph::ResourceHandle present_target = render_graph::invalid_resource_handle;
+    const render_graph::Extent3D& reference_extent;
+    render_graph::ResourceVersionHandle& present_ready_version;
+    const DirectGraphImportedTextureRegisterFn& register_imported_texture;
 };
 
 struct FrameComposerPrepareView final {
@@ -83,8 +101,8 @@ struct SceneRecorder2DPrepareView final {
     text::GlyphUploadHost* glyph_upload = nullptr;
     particle::ParticleUploadHost* particle_upload = nullptr;
     particle::ParticleSimulationHost* particle_simulation = nullptr;
-    bool prefer_render_graph_upload_path = false;
-    bool prefer_render_graph_compute_path = false;
+    bool render_graph_upload_active = false;
+    bool render_graph_compute_active = false;
     FrameStaticContext frame{};
     FrameGpuProgressContext progress{};
 };
@@ -110,8 +128,8 @@ struct SceneRecorder3DPrepareView final {
     particle::ParticleSimulationHost* particle_simulation = nullptr;
     std::uint32_t ibl_environment_id = 0U;
     std::uint32_t ibl_brdf_lut_texture_id = 0U;
-    bool prefer_render_graph_upload_path = false;
-    bool prefer_render_graph_compute_path = false;
+    bool render_graph_upload_active = false;
+    bool render_graph_compute_active = false;
     FrameStaticContext frame{};
     FrameGpuProgressContext progress{};
 };
@@ -153,7 +171,7 @@ struct TextRenderer2DPrepareView final {
     text::FreeTypeHost& freetype;
     text::GlyphAtlasHost& glyph_atlas;
     text::GlyphUploadHost& glyph_upload;
-    bool prefer_render_graph_upload_path = false;
+    bool render_graph_upload_active = false;
     FrameStaticContext frame{};
     FrameGpuProgressContext progress{};
 };
@@ -168,7 +186,7 @@ struct TextRenderer3DPrepareView final {
     text::FreeTypeHost& freetype;
     text::GlyphAtlasHost& glyph_atlas;
     text::GlyphUploadHost& glyph_upload;
-    bool prefer_render_graph_upload_path = false;
+    bool render_graph_upload_active = false;
     FrameStaticContext frame{};
     FrameGpuProgressContext progress{};
 };
@@ -247,18 +265,6 @@ struct ShadowRenderer2DPrepareView final {
     FrameGpuProgressContext progress{};
 };
 
-struct RenderTargetBloomRendererPrepareView final {
-    VulkanContext& device;
-    DescriptorHost& descriptor;
-    PipelineHost& pipeline;
-    RenderTargetHost& render_target;
-    RenderTargetPool& render_target_pool;
-    resource::SamplerHost& sampler;
-    BindlessResourceSystem* bindless = nullptr;
-    FrameStaticContext frame{};
-    FrameGpuProgressContext progress{};
-};
-
 struct GeometryRenderer3DPrepareView final {
     VulkanContext& device;
     UploadHost& upload;
@@ -314,7 +320,7 @@ struct ParticleRenderer2DPrepareView final {
     particle::ParticleUploadHost* particle_upload = nullptr;
     particle::ParticleSimulationHost* particle_simulation = nullptr;
     RenderTargetHost* render_target = nullptr;
-    bool prefer_render_graph_compute_path = false;
+    bool render_graph_compute_active = false;
     FrameStaticContext frame{};
     FrameGpuProgressContext progress{};
 };
@@ -331,7 +337,7 @@ struct ParticleRenderer3DPrepareView final {
     particle::ParticleUploadHost* particle_upload = nullptr;
     particle::ParticleSimulationHost* particle_simulation = nullptr;
     RenderTargetHost* render_target = nullptr;
-    bool prefer_render_graph_compute_path = false;
+    bool render_graph_compute_active = false;
     FrameStaticContext frame{};
     FrameGpuProgressContext progress{};
 };
@@ -603,7 +609,7 @@ template<typename T>
         .glyph_upload = detail::RequirePrepareService(prepare_view_.glyph_upload,
                                                       "glyph_upload",
                                                       "TextRenderer2DPrepareView"),
-        .prefer_render_graph_upload_path = prepare_view_.prefer_render_graph_upload_path,
+        .render_graph_upload_active = prepare_view_.render_graph_upload_active,
         .frame = prepare_view_.frame,
         .progress = prepare_view_.progress,
     };
@@ -633,7 +639,7 @@ template<typename T>
         .particle_upload = prepare_view_.particle_upload,
         .particle_simulation = prepare_view_.particle_simulation,
         .render_target = &prepare_view_.render_target,
-        .prefer_render_graph_compute_path = prepare_view_.prefer_render_graph_compute_path,
+        .render_graph_compute_active = prepare_view_.render_graph_compute_active,
         .frame = prepare_view_.frame,
         .progress = prepare_view_.progress,
     };
@@ -684,7 +690,7 @@ template<typename T>
         .glyph_upload = detail::RequirePrepareService(prepare_view_.glyph_upload,
                                                       "glyph_upload",
                                                       "TextRenderer2DPrepareView"),
-        .prefer_render_graph_upload_path = prepare_view_.prefer_render_graph_upload_path,
+        .render_graph_upload_active = prepare_view_.render_graph_upload_active,
         .frame = prepare_view_.frame,
         .progress = prepare_view_.progress,
     };
@@ -714,7 +720,7 @@ template<typename T>
         .particle_upload = prepare_view_.particle_upload,
         .particle_simulation = prepare_view_.particle_simulation,
         .render_target = &prepare_view_.render_target,
-        .prefer_render_graph_compute_path = prepare_view_.prefer_render_graph_compute_path,
+        .render_graph_compute_active = prepare_view_.render_graph_compute_active,
         .frame = prepare_view_.frame,
         .progress = prepare_view_.progress,
     };
@@ -762,7 +768,7 @@ template<typename T>
         .glyph_upload = detail::RequirePrepareService(prepare_view_.glyph_upload,
                                                       "glyph_upload",
                                                       "TextRenderer3DPrepareView"),
-        .prefer_render_graph_upload_path = prepare_view_.prefer_render_graph_upload_path,
+        .render_graph_upload_active = prepare_view_.render_graph_upload_active,
         .frame = prepare_view_.frame,
         .progress = prepare_view_.progress,
     };
@@ -901,7 +907,7 @@ template<typename T>
         .particle_upload = prepare_view_.particle_upload,
         .particle_simulation = prepare_view_.particle_simulation,
         .render_target = &prepare_view_.render_target,
-        .prefer_render_graph_compute_path = prepare_view_.prefer_render_graph_compute_path,
+        .render_graph_compute_active = prepare_view_.render_graph_compute_active,
         .frame = prepare_view_.frame,
         .progress = prepare_view_.progress,
     };

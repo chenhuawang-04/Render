@@ -235,13 +235,11 @@ public:
             .reserved0 = 0U,
             .submission_layer_mask = submission_layer_mask_,
             .prepare_fn = &PrepareRenderer<RendererT>,
-            .record_fn = &RecordSceneRenderer<RendererT>,
             .graph_record_fn = ResolveGraphSceneRecordFn<RendererT>(),
             .describe_graph_bindings_fn = ResolveGraphDescriptorBindingsFn<RendererT>(),
             .register_graph_imported_resources_fn =
                 ResolveGraphImportedResourcesFn<RendererT>(),
             .swapchain_recreated_fn = &OnSwapchainRecreatedRenderer<RendererT>,
-            .configure_direct_scene_fn = &ConfigureDirectSceneRendererBinding<RendererT>,
             .configure_lighting_fn = &ConfigureSceneLightingBinding<RendererT>,
             .configure_animation_fn = &ConfigureSceneAnimationBinding<RendererT>,
         };
@@ -264,22 +262,17 @@ public:
 
     template<typename RendererT>
     void RegisterOverlayRenderer(RendererT& renderer_,
-                                 const RenderTargetColorOutputConfig& output_target_config_ =
-                                     MakePresentOverlayOutputConfig(),
                                  std::uint32_t submission_layer_mask_ = all_submission_layers) {
         EnsureInitialized("RegisterOverlayRenderer");
         const OverlayRendererEntry entry{
             .renderer = &renderer_,
-            .output_target_config = output_target_config_,
             .submission_layer_mask = submission_layer_mask_,
             .prepare_fn = &PrepareRenderer<RendererT>,
-            .record_fn = &RecordRenderer<RendererT>,
             .graph_record_fn = ResolveGraphOverlayRecordFn<RendererT>(),
             .describe_graph_bindings_fn = ResolveGraphDescriptorBindingsFn<RendererT>(),
             .register_graph_imported_resources_fn =
                 ResolveGraphImportedResourcesFn<RendererT>(),
             .swapchain_recreated_fn = &OptionalOnSwapchainRecreatedRenderer<RendererT>,
-            .set_output_target_fn = &SetOverlayOutputTarget<RendererT>,
         };
         UpsertOverlayRendererEntry(entry);
     }
@@ -312,8 +305,6 @@ public:
     [[nodiscard]] const SkyEnvironmentPass& EnvironmentPass() const noexcept;
     [[nodiscard]] const RenderTargetBloomRendererStats& BloomStats() const noexcept;
 
-    [[nodiscard]] static RenderTargetColorOutputConfig MakePresentOverlayOutputConfig() noexcept;
-
 private:
     static constexpr std::uint32_t all_submission_layers = 0xFFFF'FFFFU;
 
@@ -337,11 +328,6 @@ private:
                                           VkFormat,
                                           std::uint64_t,
                                           std::uint64_t);
-    using ConfigureDirectSceneFn = void (*)(void*,
-                                            SceneRenderPassRole,
-                                            const RenderTargetColorOutputConfig&,
-                                            const RenderTargetDepthOutputConfig*,
-                                            bool);
     using ConfigureLightingFn = void (*)(void*,
                                          render::LightFrameCoordinator<ecs::Dim3>*,
                                          render::LightShadowLinkCoordinator3D*,
@@ -352,7 +338,6 @@ private:
                                                render::AnimationFrameCoordinator<ecs::Dim3>*);
     using ConfigurePreSceneAnimationFn = void (*)(void*,
                                                   render::AnimationFrameCoordinator<ecs::Dim3>*);
-    using SetOverlayOutputFn = void (*)(void*, const RenderTargetColorOutputConfig&);
     using GraphOverlayRecordFn = void (*)(void*,
                                           render_graph::GraphCommandContext&,
                                           render_graph::ResourceHandle);
@@ -386,27 +371,22 @@ private:
         std::uint16_t reserved0 = 0U;
         std::uint32_t submission_layer_mask = all_submission_layers;
         PrepareFn prepare_fn = nullptr;
-        SceneRecordFn record_fn = nullptr;
         GraphSceneRecordFn graph_record_fn = nullptr;
         DescribeGraphBindingsFn describe_graph_bindings_fn = nullptr;
         RegisterGraphImportedResourcesFn register_graph_imported_resources_fn = nullptr;
         SwapchainRecreatedFn swapchain_recreated_fn = nullptr;
-        ConfigureDirectSceneFn configure_direct_scene_fn = nullptr;
         ConfigureLightingFn configure_lighting_fn = nullptr;
         ConfigureSceneAnimationFn configure_animation_fn = nullptr;
     };
 
     struct OverlayRendererEntry final {
         void* renderer = nullptr;
-        RenderTargetColorOutputConfig output_target_config{};
         std::uint32_t submission_layer_mask = all_submission_layers;
         PrepareFn prepare_fn = nullptr;
-        RecordFn record_fn = nullptr;
         GraphOverlayRecordFn graph_record_fn = nullptr;
         DescribeGraphBindingsFn describe_graph_bindings_fn = nullptr;
         RegisterGraphImportedResourcesFn register_graph_imported_resources_fn = nullptr;
         SwapchainRecreatedFn swapchain_recreated_fn = nullptr;
-        SetOverlayOutputFn set_output_target_fn = nullptr;
     };
 
     template<typename RendererT>
@@ -418,11 +398,6 @@ private:
                           candidate_.PrepareFrame(renderer_prepare_view_);
                       }) {
             renderer_ref.PrepareFrame(MakeRenderTargetCompositeRendererPrepareView(prepare_view_));
-        } else if constexpr (requires(RendererT& candidate_,
-                                      const RenderTargetBloomRendererPrepareView& renderer_prepare_view_) {
-                                 candidate_.PrepareFrame(renderer_prepare_view_);
-                             }) {
-            renderer_ref.PrepareFrame(MakeRenderTargetBloomRendererPrepareView(prepare_view_));
         } else if constexpr (requires(RendererT& candidate_,
                                const TextRenderer2DPrepareView& renderer_prepare_view_) {
                           candidate_.PrepareFrame(renderer_prepare_view_);
@@ -488,19 +463,6 @@ private:
     static void RecordRenderer(void* renderer_,
                                const FrameRecordContext& record_context_) {
         static_cast<RendererT*>(renderer_)->Record(record_context_);
-    }
-
-    template<typename RendererT>
-    static void RecordSceneRenderer(void* renderer_,
-                                    const FrameRecordContext& record_context_,
-                                    SceneRecorder3DSceneStage stage_) {
-        if constexpr (requires(RendererT& renderer_ref_) {
-                          renderer_ref_.RecordSceneStage(record_context_, stage_);
-                      }) {
-            static_cast<RendererT*>(renderer_)->RecordSceneStage(record_context_, stage_);
-        } else {
-            static_cast<RendererT*>(renderer_)->Record(record_context_);
-        }
     }
 
     template<typename RendererT>
@@ -607,31 +569,6 @@ private:
     }
 
     template<typename RendererT>
-    static void ConfigureDirectSceneRendererBinding(
-        void* renderer_,
-        SceneRenderPassRole,
-        const RenderTargetColorOutputConfig& color_output_target_config_,
-        const RenderTargetDepthOutputConfig* depth_output_target_config_,
-        bool enable_depth_) {
-        RendererT& renderer_ref = *static_cast<RendererT*>(renderer_);
-        renderer_ref.SetOutputTargetConfig(color_output_target_config_);
-        if (!enable_depth_) {
-            return;
-        }
-        if constexpr (requires(RendererT& candidate_,
-                               const RenderTargetDepthOutputConfig& depth_output_target_config_ref_) {
-                          candidate_.SetDepthTargetConfig(depth_output_target_config_ref_);
-                      }) {
-            if (depth_output_target_config_ != nullptr) {
-                renderer_ref.SetDepthTargetConfig(*depth_output_target_config_);
-            }
-        } else {
-            throw std::runtime_error(
-                "SceneRecorder3D direct scene output requires depth target support");
-        }
-    }
-
-    template<typename RendererT>
     static void ConfigureSceneLightingBinding(void* renderer_,
                                               render::LightFrameCoordinator<ecs::Dim3>* light_frame_coordinator_,
                                               render::LightShadowLinkCoordinator3D* light_shadow_link_coordinator_,
@@ -726,12 +663,6 @@ private:
         }
     }
 
-    template<typename RendererT>
-    static void SetOverlayOutputTarget(void* renderer_,
-                                       const RenderTargetColorOutputConfig& output_target_config_) {
-        static_cast<RendererT*>(renderer_)->SetOutputTargetConfig(output_target_config_);
-    }
-
     template<typename Fn>
     void ForEachSceneRendererInStageOrder(Fn& fn_) const {
         for (const SceneRecorder3DSceneStage stage : scene_stage_record_order) {
@@ -751,18 +682,6 @@ private:
     void RefreshAnimationBindings() noexcept;
     void RefreshRendererCounts() noexcept;
     [[nodiscard]] bool HasSceneViewForSubmission() const noexcept;
-    [[nodiscard]] bool HasExplicitSceneTargetForSubmission() const noexcept;
-    [[nodiscard]] bool HasExplicitOverlayTargetForSubmission() const noexcept;
-    [[nodiscard]] RenderTargetColorOutputConfig BuildDirectSceneOutputConfig(
-        SceneRenderPassRole pass_role_) const noexcept;
-    [[nodiscard]] RenderTargetDepthOutputConfig BuildDirectDepthOutputConfig(
-        SceneRenderPassRole pass_role_) const noexcept;
-    [[nodiscard]] RenderTargetColorOutputConfig BuildExplicitSceneOutputConfig(
-        SceneRenderPassRole pass_role_) const noexcept;
-    [[nodiscard]] RenderTargetDepthOutputConfig BuildExplicitDepthOutputConfig(
-        SceneRenderPassRole pass_role_) const noexcept;
-    [[nodiscard]] RenderTargetColorOutputConfig BuildOverlayOutputConfig(
-        const RenderTargetColorOutputConfig& fallback_output_target_config_) const noexcept;
     [[nodiscard]] bool ShouldUseBloomChainForSubmission() const noexcept;
     [[nodiscard]] std::uint32_t EffectiveLayerMask() const noexcept;
     [[nodiscard]] std::uint32_t OverlayLayerMask() const noexcept;
@@ -782,9 +701,6 @@ private:
     [[nodiscard]] bool IsOverlayLayerVisibleForSubmission(std::uint32_t submission_layer_mask_) const noexcept;
     [[nodiscard]] bool IsFirstSceneRendererEntryForRenderer(
         const SceneRendererEntry& entry_) const noexcept;
-    void ConfigureSkyEnvironmentPassForTargets();
-    [[nodiscard]] RenderTargetColorOutputConfig BuildSkyEnvironmentOutputConfig() const noexcept;
-    [[nodiscard]] RenderTargetDepthOutputConfig BuildSkyEnvironmentDepthOutputConfig() const noexcept;
     void EnsureInitialized(const char* operation_) const;
     void EnsureRuntimeBinding(const char* operation_) const;
 

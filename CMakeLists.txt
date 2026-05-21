@@ -523,7 +523,6 @@ add_library(vulkan_init STATIC
     src/render/pipeline_host.cpp
     src/render/render_target_host.cpp
     src/render/render_target_pass.cpp
-    src/render/render_target_pool.cpp
     src/render/swapchain_target_set.cpp
     src/render/background_pass_2d.cpp
     src/render/render_target_composite_renderer.cpp

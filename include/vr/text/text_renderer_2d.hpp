@@ -18,6 +18,7 @@ class VulkanContext;
 
 namespace vr::render {
 struct TextRenderer2DPrepareView;
+struct RuntimeDirectGraphBuildView;
 struct FrameRecordContext;
 class UploadHost;
 }
@@ -76,13 +77,10 @@ public:
 
     void SetComponents(ecs::Text<ecs::Dim2>* components_,
                        std::uint32_t component_count_) noexcept;
-    void SetOutputTargetConfig(const render::RenderTargetColorOutputConfig& output_target_config_) noexcept;
-    void ResetOutputTargetConfig() noexcept;
-
     void PrepareFrame(const render::TextRenderer2DPrepareView& prepare_view_);
+    void BuildDirectRuntimeGraph(const render::RuntimeDirectGraphBuildView& graph_view_);
     void DescribeGraphDescriptorBindings(render_graph::RenderGraphBuilder& builder_,
                                          render_graph::PassHandle pass_) const;
-    void Record(const render::FrameRecordContext& record_context_);
     void RecordGraphOverlay(render_graph::GraphCommandContext& context_,
                             render_graph::ResourceHandle color_target_);
     void OnSwapchainRecreated(std::uint32_t image_count_,
@@ -174,7 +172,6 @@ private:
     TextRenderer2DMcVector<GpuTextInstance> gpu_instances{};
     TextRenderer2DMcVector<PerFrameState> frame_states{};
     TextRenderer2DMcVector<std::uint8_t> image_initialized{};
-    render::RenderTargetColorOutputConfig output_target_config{};
 
     render::PipelineLayoutId pipeline_layout_id{};
     render::ShaderModuleId shader_vertex_id{};

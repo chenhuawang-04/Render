@@ -2,12 +2,12 @@
 
 #include "vr/runtime/runtime_kernel.hpp"
 #include "vr/runtime/runtime_context.hpp"
-#include "vr/render/render_runtime_host.hpp"
 #include "vr/runtime/runtime_create_info.hpp"
 #include "vr/runtime/runtime_status.hpp"
 
 #include <array>
 #include <cstdint>
+#include <stdexcept>
 #include <vector>
 
 namespace vr::runtime {
@@ -17,16 +17,20 @@ template<typename BackendTagT = vr::platform::ActiveBackendTag,
 class Runtime final {
 public:
     using BackendTag = BackendTagT;
-    using HostType = vr::render::RenderRuntimeHost<BackendTag, frames_in_flight_v>;
     using CreateInfo = RuntimeCreateInfo<BackendTag, frames_in_flight_v>;
     using PipelineWarmupCreateInfo = RuntimePipelineWarmupCreateInfo<BackendTag, frames_in_flight_v>;
-    using RuntimeServicesType = typename HostType::RuntimeServicesType;
+    using DefaultProfile = profiles::Runtime3DProfile;
+    using RuntimeServicesType = RuntimeServices<DefaultProfile>;
     using KernelType = RuntimeKernel<BackendTag, frames_in_flight_v>;
     using RuntimeFrameType = typename KernelType::FrameType;
-    using FrameContext = RuntimeFrameContext<typename HostType::DefaultProfile,
-                                             BackendTag,
-                                             frames_in_flight_v>;
+    using FrameContext = RuntimeFrameContext<DefaultProfile, BackendTag, frames_in_flight_v>;
     using TickResult = RuntimeTickResult;
+    using RuntimeTickResult = TickResult;
+
+private:
+    using InternalRuntimeHost = detail::RuntimeHost<BackendTag, frames_in_flight_v>;
+
+public:
 
     Runtime() {
         kernel.Bind(host);
@@ -42,7 +46,7 @@ public:
         host.Initialize(create_info_);
         kernel.Bind(host);
         last_execution_trace = {};
-        auto init_context = RuntimeInitContext<typename HostType::DefaultProfile,
+        auto init_context = RuntimeInitContext<typename InternalRuntimeHost::DefaultProfile,
                                                BackendTag,
                                                frames_in_flight_v>{
             .services = host.Services(),
@@ -50,7 +54,7 @@ public:
             .device = host.IsInitialized() ? &host.Context() : nullptr,
         };
         host.Services().Initialize(init_context);
-        auto post_init_context = RuntimePostInitContext<typename HostType::DefaultProfile,
+        auto post_init_context = RuntimePostInitContext<typename InternalRuntimeHost::DefaultProfile,
                                                         BackendTag,
                                                         frames_in_flight_v>{
             .services = host.Services(),
@@ -62,7 +66,7 @@ public:
 
     void Shutdown() {
         if (host.IsInitialized()) {
-            auto shutdown_context = RuntimeShutdownContext<typename HostType::DefaultProfile,
+            auto shutdown_context = RuntimeShutdownContext<typename InternalRuntimeHost::DefaultProfile,
                                                           BackendTag,
                                                           frames_in_flight_v>{
                 .services = host.Services(),
@@ -78,7 +82,10 @@ public:
 
     template<typename RecorderT>
     [[nodiscard]] TickResult Tick(RecorderT& recorder_) {
-        typename HostType::RuntimeTickResult tick_state{};
+        if (!host.IsInitialized()) {
+            throw std::runtime_error("Runtime::Tick called before Initialize");
+        }
+        typename InternalRuntimeHost::RuntimeTickResult tick_state{};
         const auto prelude = kernel.BeginPrelude(host.Config().poll_events_each_tick);
         const std::uint64_t frame_id = prelude.frame_id;
         tick_state.frame_id = frame_id;
@@ -260,14 +267,6 @@ public:
         return host.Config();
     }
 
-    [[nodiscard]] HostType& Host() noexcept {
-        return host;
-    }
-
-    [[nodiscard]] const HostType& Host() const noexcept {
-        return host;
-    }
-
     [[nodiscard]] KernelType& Kernel() noexcept {
         return kernel;
     }
@@ -348,12 +347,12 @@ public:
         return last_execution_trace;
     }
 
-    [[nodiscard]] typename HostType::PlatformHostType& PlatformHost() noexcept {
-        return host.PlatformHost();
+    [[nodiscard]] typename InternalRuntimeHost::SwapchainType& Swapchain() noexcept {
+        return host.Swapchain();
     }
 
-    [[nodiscard]] const typename HostType::PlatformHostType& PlatformHost() const noexcept {
-        return host.PlatformHost();
+    [[nodiscard]] const typename InternalRuntimeHost::SwapchainType& Swapchain() const noexcept {
+        return host.Swapchain();
     }
 
     [[nodiscard]] VulkanContext& Context() noexcept {
@@ -362,6 +361,22 @@ public:
 
     [[nodiscard]] const VulkanContext& Context() const noexcept {
         return host.Context();
+    }
+
+    [[nodiscard]] resource::GpuMemoryHost& GpuMemory() {
+        return host.GpuMemory();
+    }
+
+    [[nodiscard]] const resource::GpuMemoryHost& GpuMemory() const noexcept {
+        return host.GpuMemory();
+    }
+
+    [[nodiscard]] vr::render::BindlessResourceSystem& BindlessResources() noexcept {
+        return host.BindlessResources();
+    }
+
+    [[nodiscard]] const vr::render::BindlessResourceSystem& BindlessResources() const noexcept {
+        return host.BindlessResources();
     }
 
     [[nodiscard]] asset::TextureHost& Texture() {
@@ -400,8 +415,22 @@ public:
         return host.RenderTarget();
     }
 
-    [[nodiscard]] const vr::render::RenderTargetPoolStats& RenderTargetPoolStats() const noexcept {
-        return host.RenderTargetPoolStats();
+    [[nodiscard]] resource::BufferResource CreateBuffer(
+        const resource::BufferCreateInfo& create_info_) {
+        return host.CreateBuffer(create_info_);
+    }
+
+    [[nodiscard]] resource::ImageResource CreateImage(
+        const resource::ImageCreateInfo& create_info_) {
+        return host.CreateImage(create_info_);
+    }
+
+    void DestroyBuffer(resource::BufferResource& resource_) noexcept {
+        host.DestroyBuffer(resource_);
+    }
+
+    void DestroyImage(resource::ImageResource& resource_) noexcept {
+        host.DestroyImage(resource_);
     }
 
     [[nodiscard]] resource::SamplerHost& Sampler() {
@@ -478,10 +507,6 @@ public:
 
     [[nodiscard]] bool HasRenderTargetHost() const noexcept {
         return host.HasRenderTargetHost();
-    }
-
-    [[nodiscard]] bool HasRenderTargetPool() const noexcept {
-        return host.HasRenderTargetPool();
     }
 
     [[nodiscard]] bool HasSamplerHost() const noexcept {
@@ -610,7 +635,7 @@ private:
         FrameContext& phase_frame_context;
     };
 
-    [[nodiscard]] static TickResult Convert(const typename HostType::RuntimeTickResult& legacy_) {
+    [[nodiscard]] static TickResult Convert(const typename InternalRuntimeHost::RuntimeTickResult& legacy_) {
         TickResult result{};
         result.code = ToRuntimeStatusCode(legacy_.render.code);
         result.frame_id = legacy_.frame_id;
@@ -650,7 +675,7 @@ private:
         frame_context_.swapchain_targets = host.HasRenderTargetHost() ? &host.SwapchainTargets() : nullptr;
     }
 
-    void CollectTickPostState(typename HostType::RuntimeTickResult& result_,
+    void CollectTickPostState(typename InternalRuntimeHost::RuntimeTickResult& result_,
                               const std::uint64_t frame_id_) {
         if (!host.HasPipelineHost()) {
             result_.pending_graphics_compile_count = 0U;
@@ -741,11 +766,6 @@ private:
         if (host.HasRenderTargetHost()) {
             diagnostics.render_target = host.RenderTarget().Stats();
         }
-        if (host.HasRenderTargetPool()) {
-            diagnostics.render_target_pool = host.RenderTargetPoolStats();
-            diagnostics.allocations.render_target_transient_acquired_count =
-                static_cast<std::uint32_t>(diagnostics.render_target_pool.acquire_count);
-        }
         if (const auto* render_graph_service =
                 host.Services().template TryGet<services::RenderGraphRuntimeService>();
             render_graph_service != nullptr) {
@@ -768,7 +788,7 @@ private:
         result_.running = kernel.IsRunning();
     }
 
-    HostType host{};
+    InternalRuntimeHost host{};
     KernelType kernel{};
     RuntimeExecutionTrace last_execution_trace{};
 };

@@ -67,11 +67,6 @@ struct RenderViewScissor final {
     std::uint32_t height = 0U;
 };
 
-struct RenderViewTargetRefs final {
-    RenderTargetHandle color_target = invalid_render_target_handle;
-    RenderTargetHandle depth_target = invalid_render_target_handle;
-};
-
 template<ecs::DimensionTag DimensionT>
 struct RenderViewBackgroundOverride;
 
@@ -108,7 +103,6 @@ struct RenderView final {
     std::uint16_t reserved3 = 0U;
     RenderViewViewport viewport{};
     RenderViewScissor scissor{};
-    RenderViewTargetRefs targets{};
     RenderViewBackgroundOverride<DimensionT> background_override{};
     const CameraType* camera = nullptr;
     const TransformType* camera_transform = nullptr;
@@ -153,10 +147,6 @@ template<ecs::DimensionTag DimensionT>
     RenderViewHashCombine(hash, static_cast<std::uint64_t>(static_cast<std::uint32_t>(view_.scissor.y)));
     RenderViewHashCombine(hash, static_cast<std::uint64_t>(view_.scissor.width));
     RenderViewHashCombine(hash, static_cast<std::uint64_t>(view_.scissor.height));
-    RenderViewHashCombine(hash, static_cast<std::uint64_t>(view_.targets.color_target.index));
-    RenderViewHashCombine(hash, static_cast<std::uint64_t>(view_.targets.color_target.generation));
-    RenderViewHashCombine(hash, static_cast<std::uint64_t>(view_.targets.depth_target.index));
-    RenderViewHashCombine(hash, static_cast<std::uint64_t>(view_.targets.depth_target.generation));
     RenderViewHashCombine(hash, static_cast<std::uint64_t>(view_.background_override.mode));
     if constexpr (std::is_same_v<DimensionT, ecs::Dim2>) {
         RenderViewHashCombine(hash,
@@ -256,7 +246,6 @@ void RefreshRenderViewSignature(RenderView<DimensionT>& view_) noexcept {
 
 static_assert(std::is_standard_layout_v<RenderViewViewport>);
 static_assert(std::is_standard_layout_v<RenderViewScissor>);
-static_assert(std::is_standard_layout_v<RenderViewTargetRefs>);
 static_assert(std::is_standard_layout_v<RenderViewBackgroundOverride<ecs::Dim2>>);
 static_assert(std::is_standard_layout_v<RenderViewBackgroundOverride<ecs::Dim3>>);
 static_assert(std::is_standard_layout_v<RenderView2D>);

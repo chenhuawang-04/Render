@@ -4,7 +4,7 @@
 #include "vr/particle/particle_renderer_2d.hpp"
 #include "vr/particle/particle_simulation_host.hpp"
 #include "vr/particle/particle_upload_host.hpp"
-#include "vr/render/render_runtime_host.hpp"
+#include "vr/runtime/runtime.hpp"
 #include "vr/render/render_view_submission_utils.hpp"
 #include "vr/runtime/crash_tracer_support.hpp"
 #include "vr/render/scene_recorder_2d.hpp"
@@ -21,7 +21,7 @@
 
 namespace {
 
-using Runtime = vr::render::RenderRuntimeHost<vr::platform::ActiveBackendTag, 2U>;
+using Runtime = vr::runtime::Runtime<vr::platform::ActiveBackendTag, 2U>;
 using Particle2D = vr::ecs::Particle<vr::ecs::Dim2>;
 using ParticleEmitter2D = vr::ecs::ParticleEmitter<vr::ecs::Dim2>;
 using Transform2D = vr::ecs::Transform<vr::ecs::Dim2>;

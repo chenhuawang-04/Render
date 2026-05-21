@@ -20,32 +20,6 @@ namespace {
     return 1.0F / gamma_;
 }
 
-[[nodiscard]] constexpr render_graph::AttachmentLoadOp ToGraphLoadOp(VkAttachmentLoadOp load_op_) noexcept {
-    switch (load_op_) {
-    case VK_ATTACHMENT_LOAD_OP_LOAD:
-        return render_graph::AttachmentLoadOp::load;
-    case VK_ATTACHMENT_LOAD_OP_CLEAR:
-        return render_graph::AttachmentLoadOp::clear;
-    case VK_ATTACHMENT_LOAD_OP_DONT_CARE:
-        return render_graph::AttachmentLoadOp::dont_care;
-    default:
-        break;
-    }
-    return render_graph::AttachmentLoadOp::load;
-}
-
-[[nodiscard]] constexpr render_graph::AttachmentStoreOp ToGraphStoreOp(VkAttachmentStoreOp store_op_) noexcept {
-    switch (store_op_) {
-    case VK_ATTACHMENT_STORE_OP_STORE:
-        return render_graph::AttachmentStoreOp::store;
-    case VK_ATTACHMENT_STORE_OP_DONT_CARE:
-        return render_graph::AttachmentStoreOp::dont_care;
-    default:
-        break;
-    }
-    return render_graph::AttachmentStoreOp::store;
-}
-
 [[nodiscard]] BindlessTableId ResolveSampledImageTableId(
     const BindlessResourceSystem* bindless_resources_) noexcept {
     if (bindless_resources_ != nullptr) {
@@ -102,11 +76,6 @@ void RenderTargetCompositeRenderer::Initialize(
     shader_fragment_id = {};
     pipeline_id = {};
     pipeline_color_format = VK_FORMAT_UNDEFINED;
-    source_target = {};
-    source_expected_state = RenderTargetStateKind::shader_read;
-    output_target_config = {};
-    source_texture_slot = {};
-    sampler_slot = {};
     swapchain_extent = {};
     swapchain_format = VK_FORMAT_UNDEFINED;
     initialized = true;
@@ -130,35 +99,9 @@ void RenderTargetCompositeRenderer::Shutdown(VulkanContext& context_) {
     shader_fragment_id = {};
     pipeline_id = {};
     pipeline_color_format = VK_FORMAT_UNDEFINED;
-    source_target = {};
-    source_expected_state = RenderTargetStateKind::shader_read;
-    output_target_config = {};
-    source_texture_slot = {};
-    sampler_slot = {};
     swapchain_extent = {};
     swapchain_format = VK_FORMAT_UNDEFINED;
     initialized = false;
-}
-
-void RenderTargetCompositeRenderer::SetSourceTarget(
-    RenderTargetHandle source_target_,
-    RenderTargetStateKind expected_source_state_) noexcept {
-    source_target = source_target_;
-    source_expected_state = expected_source_state_;
-}
-
-void RenderTargetCompositeRenderer::ClearSourceTarget() noexcept {
-    source_target = {};
-    source_expected_state = RenderTargetStateKind::shader_read;
-}
-
-void RenderTargetCompositeRenderer::SetOutputTargetConfig(
-    const RenderTargetColorOutputConfig& output_target_config_) noexcept {
-    output_target_config = output_target_config_;
-}
-
-void RenderTargetCompositeRenderer::ResetOutputTargetConfig() noexcept {
-    output_target_config = {};
 }
 
 void RenderTargetCompositeRenderer::PrepareFrame(
@@ -173,61 +116,7 @@ void RenderTargetCompositeRenderer::PrepareFrame(
     render_target_host = &prepare_view_.render_target;
     sampler_host = &prepare_view_.sampler;
     bindless_resources = prepare_view_.bindless;
-    source_texture_slot = {};
-    sampler_slot = {};
     stats = {};
-
-    if (!IsValidRenderTargetHandle(source_target) || !render_target_host->IsValid(source_target)) {
-        return;
-    }
-    if (bindless_resources == nullptr || !bindless_resources->IsInitialized()) {
-        return;
-    }
-
-    source_texture_slot = render_target_host->EnsureBindlessImageSlot(source_target);
-    sampler_slot = bindless_resources->DefaultSamplerSlot();
-}
-
-void RenderTargetCompositeRenderer::Record(const FrameRecordContext& record_context_) {
-    if (!initialized) {
-        throw std::runtime_error("RenderTargetCompositeRenderer::Record called before Initialize");
-    }
-    if (context == nullptr ||
-        descriptor_host == nullptr ||
-        pipeline_host == nullptr ||
-        render_target_host == nullptr) {
-        throw std::runtime_error("RenderTargetCompositeRenderer::Record called before PrepareFrame");
-    }
-    if (!IsValidRenderTargetHandle(source_target) || !render_target_host->IsValid(source_target)) {
-        ++stats.skipped_draw_count;
-        return;
-    }
-    if (IsValidRenderTargetHandle(output_target_config.color_target) &&
-        output_target_config.color_target.index == source_target.index &&
-        output_target_config.color_target.generation == source_target.generation) {
-        throw std::runtime_error("RenderTargetCompositeRenderer source target must differ from output target");
-    }
-
-    const ResolvedColorRenderPass color_pass = BuildColorRenderPass(record_context_,
-                                                                    output_target_config,
-                                                                    create_info_cache.clear_swapchain,
-                                                                    create_info_cache.clear_color,
-                                                                    false);
-    if (!source_texture_slot.IsValid() || !sampler_slot.IsValid()) {
-        ++stats.skipped_draw_count;
-        return;
-    }
-
-    vkCmdBeginRendering(record_context_.command_buffer, color_pass.rendering_info.VkInfoPtr());
-    const RenderTargetResolvedView source_view = render_target_host->ResolveView(source_target);
-    BindAndDrawFullscreen(record_context_.command_buffer,
-                          source_view,
-                          color_pass.target.format,
-                          color_pass.target.extent,
-                          source_texture_slot,
-                          sampler_slot);
-    vkCmdEndRendering(record_context_.command_buffer);
-    RecordEndColorPass(record_context_, output_target_config);
 }
 
 void RenderTargetCompositeRenderer::DescribeGraphDescriptorBindings(
@@ -257,25 +146,20 @@ void RenderTargetCompositeRenderer::DescribeGraphDescriptorBindings(
 render_graph::RasterColorAttachmentDesc RenderTargetCompositeRenderer::BuildGraphColorAttachmentDesc(
     render_graph::ResourceHandle output_target_,
     bool has_previous_content_) const noexcept {
-    const bool explicit_load = output_target_config.use_explicit_load_op;
-    const render_graph::AttachmentLoadOp load_op = explicit_load
-        ? ToGraphLoadOp(output_target_config.load_op)
-        : ((create_info_cache.clear_swapchain || !has_previous_content_)
+    const render_graph::AttachmentLoadOp load_op =
+        (create_info_cache.clear_swapchain || !has_previous_content_)
             ? render_graph::AttachmentLoadOp::clear
-            : render_graph::AttachmentLoadOp::load);
+            : render_graph::AttachmentLoadOp::load;
 
-    const auto clear_color = explicit_load
-        ? output_target_config.clear_color
-        : create_info_cache.clear_color;
     return render_graph::RasterColorAttachmentDesc{
         .target = output_target_,
         .load_op = load_op,
-        .store_op = ToGraphStoreOp(output_target_config.store_op),
+        .store_op = render_graph::AttachmentStoreOp::store,
         .clear_value = {
-            .red = clear_color.float32[0],
-            .green = clear_color.float32[1],
-            .blue = clear_color.float32[2],
-            .alpha = clear_color.float32[3],
+            .red = create_info_cache.clear_color.float32[0],
+            .green = create_info_cache.clear_color.float32[1],
+            .blue = create_info_cache.clear_color.float32[2],
+            .alpha = create_info_cache.clear_color.float32[3],
         },
     };
 }

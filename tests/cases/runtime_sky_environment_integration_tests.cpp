@@ -2,7 +2,7 @@
 #include "support/render_graph_test_utils.hpp"
 #include "vr/ecs/system/camera_system.hpp"
 #include "vr/ecs/system/transform_system.hpp"
-#include "vr/render/render_runtime_host.hpp"
+#include "vr/runtime/runtime.hpp"
 #include "vr/render/render_view_submission_utils.hpp"
 #include "vr/render/scene_recorder_3d.hpp"
 
@@ -17,7 +17,7 @@
 
 namespace {
 
-using Runtime = vr::render::RenderRuntimeHost<vr::platform::ActiveBackendTag, 2U>;
+using Runtime = vr::runtime::Runtime<vr::platform::ActiveBackendTag, 2U>;
 using Camera3D = vr::ecs::Camera<vr::ecs::Dim3>;
 using Transform3D = vr::ecs::Transform<vr::ecs::Dim3>;
 using CameraSystem3D = vr::ecs::CameraSystem<vr::ecs::Dim3>;

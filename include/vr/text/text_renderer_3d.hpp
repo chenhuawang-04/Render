@@ -23,6 +23,7 @@ class VulkanContext;
 
 namespace vr::render {
 struct TextRenderer3DPrepareView;
+struct RuntimeDirectGraphBuildView;
 struct FrameRecordContext;
 class UploadHost;
 }
@@ -105,17 +106,10 @@ public:
                       ecs::Camera<ecs::Dim3>* camera_component_,
                       ecs::Transform<ecs::Dim3>* camera_transform_,
                       ecs::Bounds<ecs::Dim3>* bounds_components_ = nullptr) noexcept;
-    void SetOutputTargetConfig(const render::RenderTargetColorOutputConfig& output_target_config_) noexcept;
-    void ResetOutputTargetConfig() noexcept;
-    void SetDepthTargetConfig(const render::RenderTargetDepthOutputConfig& depth_output_target_config_) noexcept;
-    void ResetDepthTargetConfig() noexcept;
-
     void PrepareFrame(const render::TextRenderer3DPrepareView& prepare_view_);
+    void BuildDirectRuntimeGraph(const render::RuntimeDirectGraphBuildView& graph_view_);
     void DescribeGraphDescriptorBindings(render_graph::RenderGraphBuilder& builder_,
                                          render_graph::PassHandle pass_) const;
-    void Record(const render::FrameRecordContext& record_context_);
-    void RecordSceneStage(const render::FrameRecordContext& record_context_,
-                          render::SceneRenderStage stage_);
     void RecordGraphSceneStage(render_graph::GraphCommandContext& context_,
                                render::SceneRenderStage stage_,
                                render_graph::ResourceHandle color_target_,
@@ -221,21 +215,11 @@ private:
     void EnsureDepthResources(VulkanContext& context_,
                               std::uint32_t image_count_,
                               VkExtent2D extent_);
-
-    void RecordImageTransitionToColorAttachment(const render::FrameRecordContext& record_context_,
-                                                bool has_previous_content_) const;
-    void RecordImageTransitionToPresent(const render::FrameRecordContext& record_context_) const;
-    void RecordDepthTransitionToAttachment(VkCommandBuffer command_buffer_,
-                                           const resource::ImageResource& depth_resource_,
-                                           bool initialized_) const;
     void RecordGraphInternal(render_graph::GraphCommandContext& context_,
                              std::uint32_t pass_bucket_,
                              bool filter_by_pass_bucket_,
                              render_graph::ResourceHandle color_target_,
                              render_graph::ResourceHandle depth_target_);
-    void RecordInternal(const render::FrameRecordContext& record_context_,
-                        std::uint32_t pass_bucket_,
-                        bool filter_by_pass_bucket_);
 
 private:
     TextRenderer3DCreateInfo create_info_cache{};
@@ -280,8 +264,6 @@ private:
     std::uint32_t active_frame_index = 0U;
     VkExtent2D swapchain_extent{};
     VkFormat swapchain_format = VK_FORMAT_UNDEFINED;
-    render::RenderTargetColorOutputConfig output_target_config{};
-    render::RenderTargetDepthOutputConfig depth_output_target_config{};
 
     ecs::TextRuntimeBuildStats cached_runtime_stats{};
     ecs::TextRender3DBuildStats cached_render_stats{};

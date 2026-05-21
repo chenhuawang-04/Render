@@ -166,7 +166,6 @@ void ParticleRenderer2D::Initialize(const ParticleRenderer2DCreateInfo& create_i
     pipeline_color_format = VK_FORMAT_UNDEFINED;
 
     image_initialized.clear();
-    output_target_config = {};
     last_runtime_build_stats = {};
     last_simulation_resources = {};
     last_gpu_build_result = {};
@@ -233,7 +232,6 @@ void ParticleRenderer2D::Shutdown(VulkanContext& context_) {
     pipeline_color_format = VK_FORMAT_UNDEFINED;
 
     image_initialized.clear();
-    output_target_config = {};
 
     runtime_scratch.instances.clear();
     runtime_scratch.draw_batches.clear();
@@ -286,15 +284,6 @@ void ParticleRenderer2D::SetSceneData(ecs::Particle<ecs::Dim2>* particle_compone
     particle_emitters = particle_emitters_;
     transforms = transforms_;
     component_count = component_count_;
-}
-
-void ParticleRenderer2D::SetOutputTargetConfig(
-    const render::RenderTargetColorOutputConfig& output_target_config_) noexcept {
-    output_target_config = output_target_config_;
-}
-
-void ParticleRenderer2D::ResetOutputTargetConfig() noexcept {
-    output_target_config = {};
 }
 
 void ParticleRenderer2D::PrepareFrame(const render::ParticleRenderer2DPrepareView& prepare_view_) {
@@ -423,7 +412,7 @@ void ParticleRenderer2D::PrepareFrame(const render::ParticleRenderer2DPrepareVie
                 *bindless_resources);
             gpu_build_active = last_gpu_build_result.used_gpu_build;
             graph_compute_pass_owned =
-                gpu_build_active && prepare_view_.prefer_render_graph_compute_path;
+                gpu_build_active && prepare_view_.render_graph_compute_active;
         }
     }
 
@@ -484,6 +473,47 @@ void ParticleRenderer2D::PrepareFrame(const render::ParticleRenderer2DPrepareVie
     stats.cache_reused = !last_upload_result.upload.uploaded &&
                          last_upload_result.runtime.emitted_instance_count > 0U;
     stats.skipped_upload = last_upload_result.skipped_upload;
+}
+
+void ParticleRenderer2D::BuildDirectRuntimeGraph(
+    const render::RuntimeDirectGraphBuildView& graph_view_) {
+    if (!initialized) {
+        throw std::runtime_error(
+            "ParticleRenderer2D::BuildDirectRuntimeGraph called before Initialize");
+    }
+
+    const auto pass = graph_view_.builder.AddPass("particle_renderer_2d_direct");
+    graph_view_.present_ready_version = graph_view_.builder.Write(
+        pass,
+        graph_view_.present_target,
+        render_graph::AccessDesc{
+            .access = render_graph::AccessKind::color_attachment_write,
+        });
+    graph_view_.builder.SetRasterPassDesc(
+        pass,
+        render_graph::RasterPassDesc{
+            .color_attachments = {
+                render_graph::RasterColorAttachmentDesc{
+                    .target = graph_view_.present_target,
+                    .load_op = create_info_cache.clear_swapchain
+                        ? render_graph::AttachmentLoadOp::clear
+                        : render_graph::AttachmentLoadOp::load,
+                    .store_op = render_graph::AttachmentStoreOp::store,
+                    .clear_value = {
+                        .red = create_info_cache.clear_color.float32[0],
+                        .green = create_info_cache.clear_color.float32[1],
+                        .blue = create_info_cache.clear_color.float32[2],
+                        .alpha = create_info_cache.clear_color.float32[3],
+                    },
+                },
+            },
+        });
+    DescribeGraphDescriptorBindings(graph_view_.builder, pass);
+    graph_view_.builder.SetExecuteCallback(
+        pass,
+        [this, color_target = graph_view_.present_target](render_graph::GraphCommandContext& context_) {
+            RecordGraphOverlay(context_, color_target);
+        });
 }
 
 void ParticleRenderer2D::DescribeGraphDescriptorBindings(render_graph::RenderGraphBuilder& builder_,
@@ -643,74 +673,6 @@ void ParticleRenderer2D::ScheduleGraphComputeBuild(render_graph::RenderGraphBuil
     append_overlay_reads(last_gpu_build_result.resources.draw_instances.size_bytes,
                          last_gpu_build_result.resources.indirect_commands.size_bytes);
     graph_compute_pass_scheduled = true;
-}
-
-void ParticleRenderer2D::Record(const render::FrameRecordContext& record_context_) {
-    if (!initialized) {
-        throw std::runtime_error("ParticleRenderer2D::Record called before Initialize");
-    }
-    if (context == nullptr || descriptor_host == nullptr || pipeline_host == nullptr) {
-        throw std::runtime_error("ParticleRenderer2D::Record called before PrepareFrame");
-    }
-    if (record_context_.command_buffer == VK_NULL_HANDLE ||
-        record_context_.image == VK_NULL_HANDLE ||
-        record_context_.image_view == VK_NULL_HANDLE) {
-        throw std::runtime_error("ParticleRenderer2D::Record requires valid frame context image handles");
-    }
-    if (record_context_.extent.width == 0U || record_context_.extent.height == 0U) {
-        throw std::runtime_error("ParticleRenderer2D::Record received zero-sized swapchain extent");
-    }
-
-    if (record_context_.image_index >= image_initialized.size()) {
-        const std::size_t previous_size = image_initialized.size();
-        image_initialized.resize(record_context_.image_index + 1U);
-        for (std::size_t index = previous_size; index < image_initialized.size(); ++index) {
-            image_initialized[index] = 0U;
-        }
-    }
-    const bool has_previous_content = image_initialized[record_context_.image_index] != 0U;
-
-    const render::ResolvedColorRenderPass color_pass = render::BuildColorRenderPass(
-        record_context_,
-        output_target_config,
-        create_info_cache.clear_swapchain,
-        create_info_cache.clear_color,
-        has_previous_content);
-    if (bindless_resources == nullptr || !bindless_resources->IsInitialized()) {
-        throw std::runtime_error("ParticleRenderer2D::Record missing initialized BindlessResourceSystem");
-    }
-    EnsurePipelineObjects(*context, *bindless_resources, *pipeline_host, color_pass.target.format);
-
-    if (gpu_build_active && particle_simulation_host != nullptr) {
-        particle_simulation_host->RecordBuild2D(*context,
-                                                *pipeline_host,
-                                                active_frame_index,
-                                                record_context_.command_buffer);
-    }
-
-    vkCmdBeginRendering(record_context_.command_buffer, color_pass.rendering_info.VkInfoPtr());
-
-    VkViewport viewport{};
-    viewport.x = 0.0F;
-    viewport.y = 0.0F;
-    viewport.width = static_cast<float>(color_pass.target.extent.width);
-    viewport.height = static_cast<float>(color_pass.target.extent.height);
-    viewport.minDepth = 0.0F;
-    viewport.maxDepth = 1.0F;
-    vkCmdSetViewport(record_context_.command_buffer, 0U, 1U, &viewport);
-
-    VkRect2D scissor{};
-    scissor.offset = VkOffset2D{0, 0};
-    scissor.extent = color_pass.target.extent;
-    vkCmdSetScissor(record_context_.command_buffer, 0U, 1U, &scissor);
-
-    RecordDrawBatches(record_context_.command_buffer,
-                      color_pass.target.extent,
-                      color_pass.target.format);
-
-    vkCmdEndRendering(record_context_.command_buffer);
-    render::RecordEndColorPass(record_context_, output_target_config);
-    image_initialized[record_context_.image_index] = 1U;
 }
 
 void ParticleRenderer2D::RecordGraphOverlay(render_graph::GraphCommandContext& context_,

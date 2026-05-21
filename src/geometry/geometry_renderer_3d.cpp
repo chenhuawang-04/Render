@@ -21,6 +21,7 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <cstdio>
 #include <cstring>
 #include <cstdint>
 #include <limits>
@@ -551,8 +552,6 @@ void GeometryRenderer3D::Initialize(const GeometryRenderer3DCreateInfo& create_i
 
     swapchain_extent = {};
     swapchain_format = VK_FORMAT_UNDEFINED;
-    output_target_config = {};
-    depth_output_target_config = {};
     active_frame_index = 0U;
     instance_range = {};
     bindless_revision_seen = 0U;
@@ -660,8 +659,6 @@ void GeometryRenderer3D::Shutdown(VulkanContext& context_) {
     pipeline_color_format = VK_FORMAT_UNDEFINED;
     pipeline_depth_format = VK_FORMAT_UNDEFINED;
     depth_format = VK_FORMAT_UNDEFINED;
-    output_target_config = {};
-    depth_output_target_config = {};
 
     geometry_components = nullptr;
     transforms = nullptr;
@@ -845,24 +842,6 @@ void GeometryRenderer3D::SetShadowAtlasHost(shadow::ShadowAtlasHost* shadow_atla
         }
     }
     shadow_atlas_host = shadow_atlas_host_;
-}
-
-void GeometryRenderer3D::SetOutputTargetConfig(
-    const render::RenderTargetColorOutputConfig& output_target_config_) noexcept {
-    output_target_config = output_target_config_;
-}
-
-void GeometryRenderer3D::ResetOutputTargetConfig() noexcept {
-    output_target_config = {};
-}
-
-void GeometryRenderer3D::SetDepthTargetConfig(
-    const render::RenderTargetDepthOutputConfig& depth_output_target_config_) noexcept {
-    depth_output_target_config = depth_output_target_config_;
-}
-
-void GeometryRenderer3D::ResetDepthTargetConfig() noexcept {
-    depth_output_target_config = {};
 }
 
 void GeometryRenderer3D::PrepareFrame(const render::GeometryRenderer3DPrepareView& prepare_view_) {
@@ -1081,22 +1060,11 @@ void GeometryRenderer3D::PrepareFrame(const render::GeometryRenderer3DPrepareVie
     }
 
     EnsureLightingResourcesForFrame(*context);
-
-    VkFormat active_color_format = swapchain_format;
-    if (prepare_view_.render_target != nullptr &&
-        prepare_view_.render_target->IsValid(output_target_config.color_target)) {
-        active_color_format = prepare_view_.render_target->ResolveView(output_target_config.color_target).format;
-    }
+    VkFormat active_color_format = prepare_view_.frame.swapchain_format;
 
     VkFormat active_depth_format = VK_FORMAT_UNDEFINED;
     if (create_info_cache.enable_depth) {
-        if (prepare_view_.render_target != nullptr &&
-            prepare_view_.render_target->IsValid(depth_output_target_config.depth_target)) {
-            active_depth_format =
-                prepare_view_.render_target->ResolveView(depth_output_target_config.depth_target).format;
-        } else {
-            active_depth_format = ResolveDepthFormat(*context, create_info_cache.preferred_depth_format);
-        }
+        active_depth_format = ResolveDepthFormat(*context, create_info_cache.preferred_depth_format);
     }
 
     if (active_color_format != VK_FORMAT_UNDEFINED) {
@@ -1113,6 +1081,158 @@ void GeometryRenderer3D::PrepareFrame(const render::GeometryRenderer3DPrepareVie
         }
     }
 
+}
+
+void GeometryRenderer3D::BuildDirectRuntimeGraph(
+    const render::RuntimeDirectGraphBuildView& graph_view_) {
+    if (!initialized) {
+        throw std::runtime_error(
+            "GeometryRenderer3D::BuildDirectRuntimeGraph called before Initialize");
+    }
+
+    render_graph::ResourceHandle depth_target = render_graph::invalid_resource_handle;
+    if (create_info_cache.enable_depth) {
+        const render_graph::Extent3D depth_extent{
+            .width = graph_view_.reference_extent.width != 0U ? graph_view_.reference_extent.width : 1U,
+            .height = graph_view_.reference_extent.height != 0U ? graph_view_.reference_extent.height : 1U,
+            .depth = graph_view_.reference_extent.depth != 0U ? graph_view_.reference_extent.depth : 1U,
+        };
+        render_graph::TextureDesc depth_desc{
+            .dimension = render_graph::TextureDimension::image_2d,
+            .format = render_graph::TextureFormat::d32_sfloat,
+            .extent = depth_extent,
+            .usage = render_graph::texture_usage_depth_stencil_attachment_flag,
+            .mip_level_count = 1U,
+            .array_layer_count = 1U,
+            .sample_count = render_graph::SampleCount::x1,
+            .prefer_lazy_memory = create_info_cache.clear_depth,
+        };
+        if (!create_info_cache.clear_depth &&
+            descriptor_host != nullptr &&
+            descriptor_host->FramesInFlight() > 1U) {
+            const std::uint32_t frames_in_flight =
+                (std::max)(descriptor_host->FramesInFlight(), 1U);
+            const std::uint32_t selected_frame_slot = active_frame_index % frames_in_flight;
+            for (std::uint32_t frame_slot = 0U; frame_slot < frames_in_flight; ++frame_slot) {
+                char debug_name[68]{};
+                std::snprintf(debug_name,
+                              sizeof(debug_name),
+                              "geometry_renderer_3d_depth_slot_%u",
+                              frame_slot);
+                const auto candidate = graph_view_.builder.CreateTexture(
+                    debug_name,
+                    depth_desc,
+                    render_graph::ResourceLifetime::persistent);
+                if (frame_slot == selected_frame_slot) {
+                    depth_target = candidate;
+                }
+            }
+        } else {
+            depth_target = graph_view_.builder.CreateTexture(
+                "geometry_renderer_3d_depth",
+                depth_desc,
+                create_info_cache.clear_depth
+                    ? render_graph::ResourceLifetime::transient
+                    : render_graph::ResourceLifetime::persistent);
+        }
+    }
+
+    render_graph::ResourceVersionHandle color_version =
+        render_graph::invalid_resource_version;
+    render_graph::ResourceVersionHandle depth_version =
+        render_graph::invalid_resource_version;
+    auto append_stage_pass = [&](const render::SceneRenderStage stage_,
+                                 const char* debug_name_,
+                                 const bool clear_color_,
+                                 const bool clear_depth_) {
+        const auto pass = graph_view_.builder.AddPass(debug_name_);
+        if (render_graph::IsValidResourceVersionHandle(color_version)) {
+            (void)graph_view_.builder.Read(
+                pass,
+                color_version,
+                render_graph::AccessDesc{
+                    .access = render_graph::AccessKind::color_attachment_read,
+                });
+        }
+        color_version = graph_view_.builder.Write(
+            pass,
+            graph_view_.present_target,
+            render_graph::AccessDesc{
+                .access = render_graph::AccessKind::color_attachment_write,
+            });
+
+        render_graph::RasterPassDesc raster_pass_desc{
+            .color_attachments = {
+                render_graph::RasterColorAttachmentDesc{
+                    .target = graph_view_.present_target,
+                    .load_op = clear_color_
+                        ? render_graph::AttachmentLoadOp::clear
+                        : render_graph::AttachmentLoadOp::load,
+                    .store_op = render_graph::AttachmentStoreOp::store,
+                    .clear_value = {
+                        .red = create_info_cache.clear_color.float32[0],
+                        .green = create_info_cache.clear_color.float32[1],
+                        .blue = create_info_cache.clear_color.float32[2],
+                        .alpha = create_info_cache.clear_color.float32[3],
+                    },
+                },
+            },
+        };
+
+        if (render_graph::IsValidResourceHandle(depth_target)) {
+            if (render_graph::IsValidResourceVersionHandle(depth_version)) {
+                (void)graph_view_.builder.Read(
+                    pass,
+                    depth_version,
+                    render_graph::AccessDesc{
+                        .access = render_graph::AccessKind::depth_stencil_read,
+                    });
+            }
+            depth_version = graph_view_.builder.Write(
+                pass,
+                depth_target,
+                render_graph::AccessDesc{
+                    .access = render_graph::AccessKind::depth_stencil_write,
+                });
+            raster_pass_desc.has_depth_attachment = true;
+            raster_pass_desc.depth_attachment = render_graph::RasterDepthAttachmentDesc{
+                .target = depth_target,
+                .load_op = clear_depth_
+                    ? render_graph::AttachmentLoadOp::clear
+                    : render_graph::AttachmentLoadOp::load,
+                .store_op = render_graph::AttachmentStoreOp::store,
+                .stencil_load_op = clear_depth_
+                    ? render_graph::AttachmentLoadOp::clear
+                    : render_graph::AttachmentLoadOp::load,
+                .stencil_store_op = render_graph::AttachmentStoreOp::store,
+                .clear_value = {
+                    .depth = create_info_cache.clear_depth_value,
+                    .stencil = create_info_cache.clear_stencil_value,
+                },
+            };
+        }
+
+        graph_view_.builder.SetRasterPassDesc(pass, raster_pass_desc);
+        DescribeGraphDescriptorBindings(graph_view_.builder, pass);
+        graph_view_.builder.SetExecuteCallback(
+            pass,
+            [this,
+             stage_,
+             color_target = graph_view_.present_target,
+             depth_target](render_graph::GraphCommandContext& context_) {
+                RecordGraphSceneStage(context_, stage_, color_target, depth_target);
+            });
+    };
+
+    append_stage_pass(render::SceneRenderStage::opaque,
+                      "geometry_renderer_3d_direct_opaque",
+                      create_info_cache.clear_swapchain,
+                      create_info_cache.clear_depth);
+    append_stage_pass(render::SceneRenderStage::transparent,
+                      "geometry_renderer_3d_direct_transparent",
+                      false,
+                      false);
+    graph_view_.present_ready_version = color_version;
 }
 
 void GeometryRenderer3D::DescribeGraphDescriptorBindings(render_graph::RenderGraphBuilder& builder_,
@@ -1260,15 +1380,6 @@ void GeometryRenderer3D::DescribeGraphDescriptorBindings(render_graph::RenderGra
     }
 }
 
-void GeometryRenderer3D::Record(const render::FrameRecordContext& record_context_) {
-    RecordInternal(record_context_, 0U, false);
-}
-
-void GeometryRenderer3D::RecordSceneStage(const render::FrameRecordContext& record_context_,
-                                          render::SceneRenderStage stage_) {
-    RecordInternal(record_context_, render::SceneRenderStagePassHintValue(stage_), true);
-}
-
 void GeometryRenderer3D::RecordGraphSceneStage(render_graph::GraphCommandContext& context_,
                                                render::SceneRenderStage stage_,
                                                render_graph::ResourceHandle color_target_,
@@ -1278,378 +1389,6 @@ void GeometryRenderer3D::RecordGraphSceneStage(render_graph::GraphCommandContext
                         true,
                         color_target_,
                         depth_target_);
-}
-
-void GeometryRenderer3D::RecordInternal(const render::FrameRecordContext& record_context_,
-                                        std::uint32_t pass_bucket_,
-                                        bool filter_by_pass_bucket_) {
-    if (!initialized) {
-        throw std::runtime_error("GeometryRenderer3D::Record called before Initialize");
-    }
-    if (context == nullptr || descriptor_host == nullptr || pipeline_host == nullptr || geometry_resource_host == nullptr) {
-        throw std::runtime_error("GeometryRenderer3D::Record called before PrepareFrame");
-    }
-    if (record_context_.command_buffer == VK_NULL_HANDLE) {
-        throw std::runtime_error("GeometryRenderer3D::Record requires valid command buffer");
-    }
-
-    if (record_context_.image_index >= image_initialized.size()) {
-        const std::size_t previous_size = image_initialized.size();
-        image_initialized.resize(record_context_.image_index + 1U);
-        for (std::size_t i = previous_size; i < image_initialized.size(); ++i) {
-            image_initialized[i] = 0U;
-        }
-    }
-    bool has_previous_content = image_initialized[record_context_.image_index] != 0U;
-    if (record_context_.render_target_host != nullptr) {
-        const render::ResolvedColorRenderTarget resolved_color_target =
-            render::ResolveColorRenderTarget(record_context_, output_target_config);
-        if (resolved_color_target.using_render_target_host &&
-            IsValidRenderTargetHandle(resolved_color_target.handle)) {
-            const render::RenderTargetResolvedView color_view =
-                record_context_.render_target_host->ResolveView(resolved_color_target.handle);
-            has_previous_content = color_view.state != render::RenderTargetStateKind::undefined;
-        }
-    }
-    const render::ResolvedColorRenderTarget resolved_color_target =
-        render::ResolveColorRenderTarget(record_context_, output_target_config);
-    const VkExtent2D render_extent = resolved_color_target.extent;
-    if (render_extent.width == 0U || render_extent.height == 0U) {
-        throw std::runtime_error("GeometryRenderer3D::Record resolved zero-sized render extent");
-    }
-
-    bool use_depth_attachment = false;
-    bool using_external_depth_target = false;
-    VkFormat active_depth_format = VK_FORMAT_UNDEFINED;
-    bool has_previous_depth_content = false;
-
-    if (create_info_cache.enable_depth &&
-        record_context_.render_target_host != nullptr &&
-        record_context_.render_target_host->IsValid(depth_output_target_config.depth_target)) {
-        const render::RenderTargetResolvedView depth_view =
-            record_context_.render_target_host->ResolveView(depth_output_target_config.depth_target);
-        if (depth_view.image_view == VK_NULL_HANDLE) {
-            throw std::runtime_error("GeometryRenderer3D::Record external depth target has null view");
-        }
-        has_previous_depth_content = depth_view.state != render::RenderTargetStateKind::undefined;
-    }
-
-    render::ResolvedColorRenderPass color_pass{};
-
-    if (create_info_cache.enable_depth &&
-        record_context_.render_target_host != nullptr &&
-        record_context_.render_target_host->IsValid(depth_output_target_config.depth_target)) {
-        render::RenderTargetDepthOutputConfig effective_depth_output_config = depth_output_target_config;
-        if (!effective_depth_output_config.use_explicit_load_op && create_info_cache.clear_depth) {
-            effective_depth_output_config.use_explicit_load_op = true;
-            effective_depth_output_config.load_op = VK_ATTACHMENT_LOAD_OP_CLEAR;
-        }
-
-        color_pass = render::BuildColorDepthRenderPass(record_context_,
-                                                       output_target_config,
-                                                       effective_depth_output_config,
-                                                       create_info_cache.clear_swapchain,
-                                                       create_info_cache.clear_color,
-                                                       has_previous_content,
-                                                       has_previous_depth_content);
-        use_depth_attachment = true;
-        using_external_depth_target = true;
-        active_depth_format = color_pass.depth_target.format;
-    } else if (create_info_cache.enable_depth) {
-        color_pass = render::BuildColorRenderPass(record_context_,
-                                                  output_target_config,
-                                                  create_info_cache.clear_swapchain,
-                                                  create_info_cache.clear_color,
-                                                  has_previous_content);
-        if (depth_format == VK_FORMAT_UNDEFINED) {
-            depth_format = ResolveDepthFormat(*context, create_info_cache.preferred_depth_format);
-        }
-        EnsureDepthResources(*context,
-                             static_cast<std::uint32_t>(image_initialized.size()),
-                             render_extent);
-        use_depth_attachment = record_context_.image_index < depth_images.size() &&
-                               depth_images[record_context_.image_index].default_view != VK_NULL_HANDLE;
-        active_depth_format = use_depth_attachment ? depth_format : VK_FORMAT_UNDEFINED;
-
-        if (use_depth_attachment) {
-            if (record_context_.image_index >= depth_image_initialized.size()) {
-                const std::size_t old_size = depth_image_initialized.size();
-                depth_image_initialized.resize(record_context_.image_index + 1U);
-                for (std::size_t i = old_size; i < depth_image_initialized.size(); ++i) {
-                    depth_image_initialized[i] = 0U;
-                }
-            }
-            const bool depth_initialized = depth_image_initialized[record_context_.image_index] != 0U;
-            RecordDepthTransitionToAttachment(record_context_.command_buffer,
-                                              depth_images[record_context_.image_index],
-                                              depth_initialized);
-            color_pass.rendering_info.depth_attachment = {};
-            color_pass.rendering_info.depth_attachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-            color_pass.rendering_info.depth_attachment.imageView =
-                depth_images[record_context_.image_index].default_view;
-            color_pass.rendering_info.depth_attachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
-            color_pass.rendering_info.depth_attachment.resolveMode = VK_RESOLVE_MODE_NONE;
-            color_pass.rendering_info.depth_attachment.resolveImageView = VK_NULL_HANDLE;
-            color_pass.rendering_info.depth_attachment.resolveImageLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-            color_pass.rendering_info.depth_attachment.loadOp =
-                (create_info_cache.clear_depth || !depth_initialized)
-                    ? VK_ATTACHMENT_LOAD_OP_CLEAR
-                    : VK_ATTACHMENT_LOAD_OP_LOAD;
-            color_pass.rendering_info.depth_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-            color_pass.rendering_info.depth_attachment.clearValue.depthStencil.depth =
-                create_info_cache.clear_depth_value;
-            color_pass.rendering_info.depth_attachment.clearValue.depthStencil.stencil =
-                create_info_cache.clear_stencil_value;
-            color_pass.rendering_info.has_depth_attachment = true;
-        }
-    } else {
-        color_pass = render::BuildColorRenderPass(record_context_,
-                                                  output_target_config,
-                                                  create_info_cache.clear_swapchain,
-                                                  create_info_cache.clear_color,
-                                                  has_previous_content);
-    }
-
-    EnsurePipelineObjects(*context,
-                          *pipeline_host,
-                          color_pass.target.format,
-                          use_depth_attachment ? active_depth_format : VK_FORMAT_UNDEFINED);
-    vkCmdBeginRendering(record_context_.command_buffer, color_pass.rendering_info.VkInfoPtr());
-
-    VkViewport viewport{};
-    viewport.x = 0.0F;
-    viewport.y = 0.0F;
-    viewport.width = static_cast<float>(render_extent.width);
-    viewport.height = static_cast<float>(render_extent.height);
-    viewport.minDepth = 0.0F;
-    viewport.maxDepth = 1.0F;
-    vkCmdSetViewport(record_context_.command_buffer, 0U, 1U, &viewport);
-
-    VkRect2D scissor{};
-    scissor.offset = VkOffset2D{0, 0};
-    scissor.extent = render_extent;
-    vkCmdSetScissor(record_context_.command_buffer, 0U, 1U, &scissor);
-
-    FramePushConstants frame_push_constants{};
-    if (camera_component != nullptr) {
-        frame_push_constants.view_projection = camera_component->runtime.view_projection_matrix;
-    } else {
-        frame_push_constants.view_projection = ecs::spatial_math::IdentityMatrix4x4();
-    }
-    frame_push_constants.directional_light_x = create_info_cache.directional_light_x;
-    frame_push_constants.directional_light_y = create_info_cache.directional_light_y;
-    frame_push_constants.directional_light_z = create_info_cache.directional_light_z;
-    frame_push_constants.directional_light_intensity = std::max(0.0F, create_info_cache.directional_light_intensity);
-
-    const VkPipelineLayout pipeline_layout = pipeline_layout_id.IsValid()
-        ? pipeline_host->GetPipelineLayout(pipeline_layout_id)
-        : VK_NULL_HANDLE;
-    if (pipeline_layout != VK_NULL_HANDLE) {
-        vkCmdPushConstants(record_context_.command_buffer,
-                           pipeline_layout,
-                           VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                           0U,
-                           sizeof(FramePushConstants),
-                           &frame_push_constants);
-    }
-
-    PrepareLightingDescriptorSetForFrame(active_frame_index);
-
-    render::GraphicsPipelineId active_pipeline_id{};
-    VkBuffer active_vertex_buffer = VK_NULL_HANDLE;
-    VkBuffer active_index_buffer = VK_NULL_HANDLE;
-    std::uint32_t active_effective_visual_resource_id =
-        std::numeric_limits<std::uint32_t>::max();
-    std::uint32_t cached_effective_visual_resource_id =
-        std::numeric_limits<std::uint32_t>::max();
-    AppearancePushConstants cached_sampling_push_constants{};
-    std::uint32_t cached_geometry_id = 0U;
-    const GeometryResourceHost::MeshRecord* cached_mesh = nullptr;
-    const VkDescriptorSet frame_lighting_descriptor_set =
-        (active_frame_index < frame_lighting_resources.size())
-            ? frame_lighting_resources[active_frame_index].descriptor_set
-            : VK_NULL_HANDLE;
-    const VkDescriptorSet frame_ibl_descriptor_set =
-        (ibl_host != nullptr) ? ibl_host->ActiveParamsDescriptorSet(active_frame_index) : VK_NULL_HANDLE;
-    const std::array<VkDescriptorSet, 4U> global_descriptor_sets{
-        bindless_resources != nullptr ? bindless_resources->SampledImageSet() : VK_NULL_HANDLE,
-        bindless_resources != nullptr ? bindless_resources->SamplerSet() : VK_NULL_HANDLE,
-        frame_lighting_descriptor_set,
-        frame_ibl_descriptor_set,
-    };
-    bool shared_state_bound = false;
-
-    if (instance_range.buffer != VK_NULL_HANDLE && !runtime_scratch.draw_batches.empty()) {
-        std::uint32_t stage_draw_call_count = 0U;
-        std::uint32_t stage_filtered_batch_count = 0U;
-        const VkBuffer instance_vertex_buffer = instance_range.buffer;
-        const VkDeviceSize instance_vertex_offset = instance_range.offset;
-        vkCmdBindVertexBuffers(record_context_.command_buffer,
-                               1U,
-                               1U,
-                               &instance_vertex_buffer,
-                               &instance_vertex_offset);
-
-        for (const ecs::Geometry3DDrawBatch& batch : runtime_scratch.draw_batches) {
-            if (filter_by_pass_bucket_ &&
-                ecs::GeometrySystem<ecs::Dim3>::ExtractPassBucket(batch.sort_key) != pass_bucket_) {
-                ++stage_filtered_batch_count;
-                continue;
-            }
-            if (batch.instance_count == 0U) {
-                continue;
-            }
-
-            const GeometryResourceHost::MeshRecord* mesh = nullptr;
-            if (cached_mesh != nullptr && cached_geometry_id == batch.geometry_id) {
-                mesh = cached_mesh;
-            } else {
-                mesh = geometry_resource_host->FindMesh(batch.geometry_id);
-                cached_mesh = mesh;
-                cached_geometry_id = batch.geometry_id;
-            }
-
-            if (mesh == nullptr || mesh->index_buffer.buffer == VK_NULL_HANDLE ||
-                mesh->vertex_buffer.buffer == VK_NULL_HANDLE || mesh->submeshes.empty()) {
-                ++stats.skipped_batch_count;
-                continue;
-            }
-
-            const std::uint32_t submesh_index = std::min(batch.submesh_index,
-                                                         static_cast<std::uint32_t>(mesh->submeshes.size() - 1U));
-            const GeometrySubmeshRange& submesh = mesh->submeshes[submesh_index];
-            if (submesh.index_count == 0U) {
-                ++stats.skipped_batch_count;
-                continue;
-            }
-
-            const BlendMode blend_mode = ResolveBlendMode(batch);
-            const PipelineMode mode = ResolvePipelineMode(batch, use_depth_attachment);
-            const TopologyMode topology_mode = ResolveTopologyMode(mesh->topology, batch);
-            const CullMode cull_mode = ResolveCullMode(batch);
-            const render::GraphicsPipelineId pipeline_id = EnsurePipelineForMode(*context,
-                                                                                  *pipeline_host,
-                                                                                  color_pass.target.format,
-                                                                                  use_depth_attachment ? active_depth_format : VK_FORMAT_UNDEFINED,
-                                                                                  blend_mode,
-                                                                                  mode,
-                                                                                  topology_mode,
-                                                                                  cull_mode);
-            if (!pipeline_id.IsValid()) {
-                ++stats.skipped_batch_count;
-                continue;
-            }
-
-            AppearancePushConstants sampling_push_constants{};
-            if (batch.effective_visual_resource_id == cached_effective_visual_resource_id) {
-                sampling_push_constants = cached_sampling_push_constants;
-            } else if (!ResolveAppearancePushConstants(batch.effective_visual_resource_id,
-                                                       sampling_push_constants)) {
-                ++stats.skipped_batch_count;
-                continue;
-            } else {
-                cached_effective_visual_resource_id = batch.effective_visual_resource_id;
-                cached_sampling_push_constants = sampling_push_constants;
-            }
-
-            if (active_pipeline_id.value != pipeline_id.value) {
-                vkCmdBindPipeline(record_context_.command_buffer,
-                                  VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                  pipeline_host->GetGraphicsPipeline(pipeline_id));
-                active_pipeline_id = pipeline_id;
-            }
-
-            if (!shared_state_bound) {
-                if (pipeline_layout == VK_NULL_HANDLE) {
-                    throw std::runtime_error("GeometryRenderer3D::Record requires valid pipeline layout");
-                }
-                for (const VkDescriptorSet descriptor_set : global_descriptor_sets) {
-                    if (descriptor_set == VK_NULL_HANDLE) {
-                        throw std::runtime_error("GeometryRenderer3D::Record requires valid bindless, lighting, and IBL descriptor sets");
-                    }
-                }
-                vkCmdBindDescriptorSets(record_context_.command_buffer,
-                                        VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                        pipeline_layout,
-                                        0U,
-                                        static_cast<std::uint32_t>(global_descriptor_sets.size()),
-                                        global_descriptor_sets.data(),
-                                        0U,
-                                        nullptr);
-                shared_state_bound = true;
-                ++stats.descriptor_set_bind_count;
-                ++stats.light_descriptor_set_bind_count;
-                ++stats.ibl_descriptor_set_bind_count;
-            }
-
-            if (pipeline_layout != VK_NULL_HANDLE &&
-                active_effective_visual_resource_id != batch.effective_visual_resource_id) {
-                vkCmdPushConstants(record_context_.command_buffer,
-                                   pipeline_layout,
-                                   VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                                   static_cast<std::uint32_t>(offsetof(PushConstants, appearance)),
-                                   sizeof(AppearancePushConstants),
-                                   &sampling_push_constants);
-                active_effective_visual_resource_id = batch.effective_visual_resource_id;
-                ++stats.appearance_push_constant_update_count;
-            }
-
-            if (active_vertex_buffer != mesh->vertex_buffer.buffer) {
-                const VkBuffer vertex_buffer = mesh->vertex_buffer.buffer;
-                const VkDeviceSize vertex_offset = 0U;
-                vkCmdBindVertexBuffers(record_context_.command_buffer,
-                                       0U,
-                                       1U,
-                                       &vertex_buffer,
-                                       &vertex_offset);
-                active_vertex_buffer = mesh->vertex_buffer.buffer;
-            }
-
-            if (active_index_buffer != mesh->index_buffer.buffer) {
-                vkCmdBindIndexBuffer(record_context_.command_buffer,
-                                     mesh->index_buffer.buffer,
-                                     0U,
-                                     VK_INDEX_TYPE_UINT32);
-                active_index_buffer = mesh->index_buffer.buffer;
-            }
-
-            vkCmdDrawIndexed(record_context_.command_buffer,
-                             submesh.index_count,
-                             batch.instance_count,
-                             submesh.first_index,
-                             submesh.vertex_offset,
-                             batch.instance_begin);
-            ++stats.draw_call_count;
-            ++stage_draw_call_count;
-        }
-
-        if (filter_by_pass_bucket_) {
-            stats.stage_filtered_batch_count += stage_filtered_batch_count;
-            if (stage_draw_call_count == 0U) {
-                ++stats.empty_stage_pass_count;
-            }
-            if (pass_bucket_ == static_cast<std::uint32_t>(ecs::GeometryRenderPassHint::opaque)) {
-                stats.opaque_draw_call_count += stage_draw_call_count;
-            } else if (pass_bucket_ == static_cast<std::uint32_t>(ecs::GeometryRenderPassHint::transparent)) {
-                stats.transparent_draw_call_count += stage_draw_call_count;
-            }
-        }
-    }
-
-    stats.appearance_resolve_cache_entry_count = static_cast<std::uint32_t>(resolved_appearances.size());
-
-    vkCmdEndRendering(record_context_.command_buffer);
-    if (using_external_depth_target) {
-        render::RecordEndColorDepthPass(record_context_, output_target_config, depth_output_target_config);
-    } else {
-        render::RecordEndColorPass(record_context_, output_target_config);
-    }
-    image_initialized[record_context_.image_index] = 1U;
-    if (use_depth_attachment &&
-        !using_external_depth_target &&
-        record_context_.image_index < depth_image_initialized.size()) {
-        depth_image_initialized[record_context_.image_index] = 1U;
-    }
 }
 
 void GeometryRenderer3D::RecordGraphInternal(render_graph::GraphCommandContext& context_,
@@ -3226,105 +2965,5 @@ void GeometryRenderer3D::DestroyRetiredDepthResources(VulkanContext& context_) {
     retired_depth_images.clear();
 }
 
-void GeometryRenderer3D::RecordImageTransitionToColorAttachment(const render::FrameRecordContext& record_context_,
-                                                                bool has_previous_content_) const {
-    VkImageMemoryBarrier barrier{};
-    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    barrier.srcAccessMask = has_previous_content_ ? VK_ACCESS_MEMORY_READ_BIT : 0U;
-    barrier.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-    barrier.oldLayout = has_previous_content_ ? VK_IMAGE_LAYOUT_PRESENT_SRC_KHR : VK_IMAGE_LAYOUT_UNDEFINED;
-    barrier.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.image = record_context_.image;
-    barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    barrier.subresourceRange.baseMipLevel = 0U;
-    barrier.subresourceRange.levelCount = 1U;
-    barrier.subresourceRange.baseArrayLayer = 0U;
-    barrier.subresourceRange.layerCount = 1U;
-
-    vkCmdPipelineBarrier(record_context_.command_buffer,
-                         has_previous_content_
-                             ? VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT
-                             : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                         VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-                         0U,
-                         0U,
-                         nullptr,
-                         0U,
-                         nullptr,
-                         1U,
-                         &barrier);
-}
-
-void GeometryRenderer3D::RecordImageTransitionToPresent(const render::FrameRecordContext& record_context_) const {
-    VkImageMemoryBarrier barrier{};
-    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    barrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-    barrier.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT;
-    barrier.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    barrier.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.image = record_context_.image;
-    barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    barrier.subresourceRange.baseMipLevel = 0U;
-    barrier.subresourceRange.levelCount = 1U;
-    barrier.subresourceRange.baseArrayLayer = 0U;
-    barrier.subresourceRange.layerCount = 1U;
-
-    vkCmdPipelineBarrier(record_context_.command_buffer,
-                         VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-                         VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
-                         0U,
-                         0U,
-                         nullptr,
-                         0U,
-                         nullptr,
-                         1U,
-                         &barrier);
-}
-
-void GeometryRenderer3D::RecordDepthTransitionToAttachment(VkCommandBuffer command_buffer_,
-                                                           const resource::ImageResource& depth_resource_,
-                                                           bool initialized_) const {
-    if (command_buffer_ == VK_NULL_HANDLE || depth_resource_.image == VK_NULL_HANDLE) {
-        return;
-    }
-
-    VkImageMemoryBarrier barrier{};
-    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    barrier.srcAccessMask = initialized_
-        ? (VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT)
-        : 0U;
-    barrier.dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
-                            VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-    barrier.oldLayout = initialized_
-        ? VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL
-        : VK_IMAGE_LAYOUT_UNDEFINED;
-    barrier.newLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
-    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.image = depth_resource_.image;
-    barrier.subresourceRange.aspectMask = DepthImageAspectMask(depth_format);
-    barrier.subresourceRange.baseMipLevel = 0U;
-    barrier.subresourceRange.levelCount = 1U;
-    barrier.subresourceRange.baseArrayLayer = 0U;
-    barrier.subresourceRange.layerCount = 1U;
-
-    vkCmdPipelineBarrier(command_buffer_,
-                         initialized_
-                             ? VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT
-                             : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                         VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
-                             VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
-                         0U,
-                         0U,
-                         nullptr,
-                         0U,
-                         nullptr,
-                         1U,
-                         &barrier);
-}
 
 } // namespace vr::geometry

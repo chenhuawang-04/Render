@@ -1,6 +1,6 @@
 ﻿#include "support/bench_framework.hpp"
 #include "vr/ecs/system/text_system.hpp"
-#include "vr/render/render_runtime_host.hpp"
+#include "vr/runtime/runtime.hpp"
 #include "vr/render/render_view_submission_utils.hpp"
 #include "vr/render/scene_recorder_2d.hpp"
 #include "vr/runtime/services/render_graph_runtime_service.hpp"
@@ -16,7 +16,7 @@
 
 namespace {
 
-using Runtime = vr::render::RenderRuntimeHost<vr::platform::ActiveBackendTag, 2U>;
+using Runtime = vr::runtime::Runtime<vr::platform::ActiveBackendTag, 2U>;
 using Text2D = vr::ecs::Text<vr::ecs::Dim2>;
 using TextSystem2D = vr::ecs::TextSystem<vr::ecs::Dim2>;
 
@@ -552,9 +552,7 @@ VR_BENCHMARK_CASE(RuntimeDiagnostics_steady_state_scene_recorder_2d_text_graph_a
         recorder.Initialize({});
         recorder_initialized = true;
         recorder.BindRuntime(runtime);
-        recorder.RegisterOverlayRenderer(text_renderer,
-                                         vr::render::SceneRecorder2D::MakePresentOverlayOutputConfig(),
-                                         0x1U);
+        recorder.RegisterOverlayRenderer(text_renderer, 0x1U);
 
         std::array<vr::render::RenderView2D, 2U> views{};
         vr::render::RenderScenePacket2D packet{};

@@ -18,7 +18,7 @@
 #include "vr/geometry/geometry_upload_host.hpp"
 #include "vr/render/animation_frame_coordinator.hpp"
 #include "vr/render/light_frame_coordinator.hpp"
-#include "vr/render/render_runtime_host.hpp"
+#include "vr/runtime/runtime.hpp"
 #include "vr/render/render_view_submission_utils.hpp"
 #include "vr/runtime/crash_tracer_support.hpp"
 #include "vr/render/scene_recorder_3d.hpp"
@@ -47,7 +47,7 @@
 
 namespace {
 
-using Runtime = vr::render::RenderRuntimeHost<vr::platform::ActiveBackendTag, 2U>;
+using Runtime = vr::runtime::Runtime<vr::platform::ActiveBackendTag, 2U>;
 using Geometry3D = vr::ecs::Geometry<vr::ecs::Dim3>;
 using Appearance3D = vr::ecs::Appearance<vr::ecs::Dim3>;
 using Light3D = vr::ecs::Light<vr::ecs::Dim3>;
@@ -1063,9 +1063,8 @@ int main(int argc_,
                 const auto environment_stats = recorder.EnvironmentPass().Stats();
                 const auto surface_stats = surface_renderer.Stats();
                 const auto text_stats = text_renderer.Stats();
-                const auto bloom_stats = recorder.PostStack().Stats();
+                const auto bloom_stats = recorder.BloomStats();
                 const auto shadow_stats = shadow_renderer.Stats();
-                const auto pool_stats = runtime.TargetPool().Stats();
                 std::cout << "FPS:" << fps
                           << " Frame:" << frame_index
                           << " | Env Draw:" << environment_stats.draw_call_count
@@ -1083,8 +1082,6 @@ int main(int argc_,
                           << " B:" << bloom_stats.blur_draw_call_count
                           << " C:" << bloom_stats.combine_draw_call_count
                           << " DSU:" << bloom_stats.descriptor_set_update_count
-                          << " | Pool Acquire:" << pool_stats.acquire_count
-                          << " Reuse:" << pool_stats.reuse_hit_count
                           << '\n';
                 fps_window_begin_ticks = now_ticks;
                 fps_window_frame_count = 0U;

@@ -6,7 +6,7 @@
 #include "vr/ecs/system/surface_system.hpp"
 #include "vr/ecs/system/transform_system.hpp"
 #include "vr/render/light_frame_coordinator.hpp"
-#include "vr/render/render_runtime_host.hpp"
+#include "vr/runtime/runtime.hpp"
 #include "vr/render/render_view_submission_utils.hpp"
 #include "vr/runtime/crash_tracer_support.hpp"
 #include "vr/render/scene_recorder_2d.hpp"
@@ -30,7 +30,7 @@
 
 namespace {
 
-using Runtime = vr::render::RenderRuntimeHost<vr::platform::ActiveBackendTag, 2U>;
+using Runtime = vr::runtime::Runtime<vr::platform::ActiveBackendTag, 2U>;
 
 using Appearance2D = vr::ecs::Appearance<vr::ecs::Dim2>;
 using Surface2D = vr::ecs::Surface<vr::ecs::Dim2>;

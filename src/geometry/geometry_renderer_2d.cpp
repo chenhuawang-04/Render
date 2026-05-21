@@ -4,6 +4,7 @@
 #include "vr/geometry/generated/geometry_2d_vert_spv.hpp"
 #include "vr/ecs/system/transparency_render_policy.hpp"
 #include "vr/render/color_blend_state.hpp"
+#include "vr/render_graph/render_graph_builder.hpp"
 #include "vr/render/render_loop_host.hpp"
 #include "vr/render/render_target_pass.hpp"
 #include "vr/render/runtime_prepare_views.hpp"
@@ -53,7 +54,6 @@ void GeometryRenderer2D::Initialize(const GeometryRenderer2DCreateInfo& create_i
     pipeline_color_format = VK_FORMAT_UNDEFINED;
     image_initialized.clear();
     primitive_range = {};
-    output_target_config = {};
     runtime_stats = {};
     appearance_runtime_stats = {};
     appearance_link_stats = {};
@@ -90,7 +90,6 @@ void GeometryRenderer2D::Shutdown(VulkanContext& context_) {
 
     image_initialized.clear();
     primitive_range = {};
-    output_target_config = {};
     runtime_scratch.primitives.clear();
     runtime_scratch.draw_batches.clear();
     runtime_scratch.batch_scratch.visible_items.clear();
@@ -139,15 +138,6 @@ void GeometryRenderer2D::SetAppearanceCoordinator(
     render::AppearanceFrameCoordinator<ecs::Dim2>* appearance_frame_coordinator_) noexcept {
     appearance_prepare_bridge.SetCoordinator(appearance_frame_coordinator_);
     appearance_prepare_bridge.Reserve(appearance_component_count);
-}
-
-void GeometryRenderer2D::SetOutputTargetConfig(
-    const render::RenderTargetColorOutputConfig& output_target_config_) noexcept {
-    output_target_config = output_target_config_;
-}
-
-void GeometryRenderer2D::ResetOutputTargetConfig() noexcept {
-    output_target_config = {};
 }
 
 void GeometryRenderer2D::PrepareFrame(const render::GeometryRenderer2DPrepareView& prepare_view_) {
@@ -222,62 +212,44 @@ void GeometryRenderer2D::PrepareFrame(const render::GeometryRenderer2DPrepareVie
     }
 }
 
-void GeometryRenderer2D::Record(const render::FrameRecordContext& record_context_) {
+void GeometryRenderer2D::BuildDirectRuntimeGraph(
+    const render::RuntimeDirectGraphBuildView& graph_view_) {
     if (!initialized) {
-        throw std::runtime_error("GeometryRenderer2D::Record called before Initialize");
-    }
-    if (context == nullptr || pipeline_host == nullptr) {
-        throw std::runtime_error("GeometryRenderer2D::Record called before PrepareFrame");
-    }
-    if (record_context_.command_buffer == VK_NULL_HANDLE ||
-        record_context_.image == VK_NULL_HANDLE ||
-        record_context_.image_view == VK_NULL_HANDLE) {
-        throw std::runtime_error("GeometryRenderer2D::Record requires valid frame context image handles");
-    }
-    if (record_context_.extent.width == 0U || record_context_.extent.height == 0U) {
-        throw std::runtime_error("GeometryRenderer2D::Record received zero-sized swapchain extent");
+        throw std::runtime_error(
+            "GeometryRenderer2D::BuildDirectRuntimeGraph called before Initialize");
     }
 
-    if (record_context_.image_index >= image_initialized.size()) {
-        const std::size_t previous_size = image_initialized.size();
-        image_initialized.resize(record_context_.image_index + 1U);
-        for (std::size_t i = previous_size; i < image_initialized.size(); ++i) {
-            image_initialized[i] = 0U;
-        }
-    }
-    const bool has_previous_content = image_initialized[record_context_.image_index] != 0U;
-
-    const render::ResolvedColorRenderPass color_pass = render::BuildColorRenderPass(
-        record_context_,
-        output_target_config,
-        create_info_cache.clear_swapchain,
-        create_info_cache.clear_color,
-        has_previous_content);
-    EnsurePipelineObjects(*context, *pipeline_host, color_pass.target.format);
-
-    vkCmdBeginRendering(record_context_.command_buffer, color_pass.rendering_info.VkInfoPtr());
-
-    VkViewport viewport{};
-    viewport.x = 0.0F;
-    viewport.y = 0.0F;
-    viewport.width = static_cast<float>(color_pass.target.extent.width);
-    viewport.height = static_cast<float>(color_pass.target.extent.height);
-    viewport.minDepth = 0.0F;
-    viewport.maxDepth = 1.0F;
-    vkCmdSetViewport(record_context_.command_buffer, 0U, 1U, &viewport);
-
-    VkRect2D scissor{};
-    scissor.offset = VkOffset2D{0, 0};
-    scissor.extent = color_pass.target.extent;
-    vkCmdSetScissor(record_context_.command_buffer, 0U, 1U, &scissor);
-
-    RecordDrawBatches(record_context_.command_buffer,
-                      color_pass.target.extent,
-                      color_pass.target.format);
-
-    vkCmdEndRendering(record_context_.command_buffer);
-    render::RecordEndColorPass(record_context_, output_target_config);
-    image_initialized[record_context_.image_index] = 1U;
+    const auto pass = graph_view_.builder.AddPass("geometry_renderer_2d_direct");
+    graph_view_.present_ready_version = graph_view_.builder.Write(
+        pass,
+        graph_view_.present_target,
+        render_graph::AccessDesc{
+            .access = render_graph::AccessKind::color_attachment_write,
+        });
+    graph_view_.builder.SetRasterPassDesc(
+        pass,
+        render_graph::RasterPassDesc{
+            .color_attachments = {
+                render_graph::RasterColorAttachmentDesc{
+                    .target = graph_view_.present_target,
+                    .load_op = create_info_cache.clear_swapchain
+                        ? render_graph::AttachmentLoadOp::clear
+                        : render_graph::AttachmentLoadOp::load,
+                    .store_op = render_graph::AttachmentStoreOp::store,
+                    .clear_value = {
+                        .red = create_info_cache.clear_color.float32[0],
+                        .green = create_info_cache.clear_color.float32[1],
+                        .blue = create_info_cache.clear_color.float32[2],
+                        .alpha = create_info_cache.clear_color.float32[3],
+                    },
+                },
+            },
+        });
+    graph_view_.builder.SetExecuteCallback(
+        pass,
+        [this, color_target = graph_view_.present_target](render_graph::GraphCommandContext& context_) {
+            RecordGraphColorPass(context_, color_target);
+        });
 }
 
 void GeometryRenderer2D::RecordGraphColorPass(render_graph::GraphCommandContext& context_,

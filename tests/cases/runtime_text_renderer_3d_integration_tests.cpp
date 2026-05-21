@@ -1,12 +1,11 @@
 #include "support/render_graph_test_utils.hpp"
 #include "support/test_framework.hpp"
-#include "support/render_graph_test_utils.hpp"
 #include "vr/ecs/system/bounds_system.hpp"
 #include "vr/ecs/system/camera_system.hpp"
 #include "vr/ecs/system/text_system.hpp"
 #include "vr/ecs/system/transform_system.hpp"
 #include "vr/render/render_target_format_utils.hpp"
-#include "vr/render/render_runtime_host.hpp"
+#include "vr/runtime/runtime.hpp"
 #include "vr/render/render_view_submission_utils.hpp"
 #include "vr/render/scene_recorder_3d.hpp"
 #include "vr/text/text_renderer_3d.hpp"
@@ -24,7 +23,7 @@
 
 namespace {
 
-using Runtime = vr::render::RenderRuntimeHost<vr::platform::ActiveBackendTag, 2U>;
+using Runtime = vr::runtime::Runtime<vr::platform::ActiveBackendTag, 2U>;
 using Text3D = vr::ecs::Text<vr::ecs::Dim3>;
 using TextSystem3D = vr::ecs::TextSystem<vr::ecs::Dim3>;
 using Transform3D = vr::ecs::Transform<vr::ecs::Dim3>;
@@ -311,33 +310,11 @@ VR_TEST_CASE(RuntimeIntegration_text_renderer_3d_end_to_end_smoke, "integration;
         text_renderer_create_info.reserve_glyph_count = 8192U;
         text_renderer_create_info.initial_vertex_buffer_bytes = 2U * 1024U * 1024U;
         text_renderer_create_info.clear_swapchain = true;
+        text_renderer_create_info.clear_depth = true;
+        text_renderer_create_info.clear_depth_value = 0.64F;
+        text_renderer_create_info.clear_color = VkClearColorValue{{0.18F, 0.29F, 0.47F, 1.0F}};
         text_renderer.Initialize(text_renderer_create_info);
         renderer_initialized = true;
-        const VkFormat external_depth_format = ResolveDepthTargetFormat(runtime.Context());
-        vr::render::RenderTargetDesc external_depth_desc{};
-        external_depth_desc.debug_name = "RuntimeText3DExternalDepth";
-        external_depth_desc.dimension = vr::render::RenderTargetDimension::image_2d;
-        external_depth_desc.lifetime = vr::render::RenderTargetLifetime::persistent;
-        external_depth_desc.scale_mode = vr::render::RenderTargetScaleMode::absolute;
-        external_depth_desc.width = runtime.Swapchain().Extent().width;
-        external_depth_desc.height = runtime.Swapchain().Extent().height;
-        external_depth_desc.depth = 1U;
-        external_depth_desc.format = external_depth_format;
-        external_depth_desc.samples = VK_SAMPLE_COUNT_1_BIT;
-        external_depth_desc.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
-        external_depth_desc.aspect = vr::render::DepthStencilAspectMask(external_depth_format);
-        const vr::render::RenderTargetHandle external_depth_target =
-            runtime.RenderTarget().CreatePersistentTarget(runtime.Context(),
-                                                          external_depth_desc,
-                                                          runtime.Swapchain().Extent());
-        vr::render::RenderTargetDepthOutputConfig depth_output_config{};
-        depth_output_config.depth_target = external_depth_target;
-        depth_output_config.final_state = vr::render::RenderTargetStateKind::depth_attachment;
-        depth_output_config.use_explicit_load_op = true;
-        depth_output_config.load_op = VK_ATTACHMENT_LOAD_OP_CLEAR;
-        depth_output_config.store_op = VK_ATTACHMENT_STORE_OP_STORE;
-        depth_output_config.clear_depth_stencil = VkClearDepthStencilValue{1.0F, 0U};
-        text_renderer.SetDepthTargetConfig(depth_output_config);
         text_renderer.SetSceneData(text_components.data(),
                                    text_transforms.data(),
                                    static_cast<std::uint32_t>(text_components.size()),
@@ -355,6 +332,12 @@ VR_TEST_CASE(RuntimeIntegration_text_renderer_3d_end_to_end_smoke, "integration;
         std::uint32_t max_culling_input_count = 0U;
         std::uint32_t max_culling_visible_count = 0U;
         bool observed_bounds_culling = false;
+        bool opaque_pass_seen = false;
+        bool transparent_pass_seen = false;
+        bool opaque_pass_policy_seen = false;
+        bool transparent_pass_policy_seen = false;
+        bool opaque_descriptor_bindings_seen = false;
+        bool transparent_descriptor_bindings_seen = false;
 
         constexpr std::uint32_t max_ticks = 18U;
         for (std::uint32_t tick_index = 0U;
@@ -391,7 +374,68 @@ VR_TEST_CASE(RuntimeIntegration_text_renderer_3d_end_to_end_smoke, "integration;
             max_culling_visible_count = std::max(max_culling_visible_count, stats.culling_visible_count);
             observed_bounds_culling = observed_bounds_culling || stats.used_bounds_culling;
             VR_CHECK(stats.descriptor_set_update_count <= stats.draw_batch_count);
-            VR_CHECK(stats.descriptor_set_bind_count <= stats.draw_call_count);
+            VR_CHECK(stats.descriptor_set_bind_count <= 4U);
+
+            const auto& graph_service =
+                runtime.Services().Get<vr::runtime::services::RenderGraphRuntimeService>();
+            if (const auto* compiled_graph = graph_service.TryGetCompiledGraph();
+                compiled_graph != nullptr) {
+                if (const auto* opaque_pass =
+                        vr::test::FindCompiledPassByName(*compiled_graph,
+                                                         "text_renderer_3d_direct_opaque");
+                    opaque_pass != nullptr &&
+                    opaque_pass->executable &&
+                    opaque_pass->raster_pass.has_value() &&
+                    !opaque_pass->raster_pass->color_attachments.empty() &&
+                    opaque_pass->raster_pass->has_depth_attachment) {
+                    opaque_pass_seen = true;
+                    const auto& color_attachment =
+                        opaque_pass->raster_pass->color_attachments.front();
+                    const auto& depth_attachment = opaque_pass->raster_pass->depth_attachment;
+                    opaque_pass_policy_seen =
+                        opaque_pass_policy_seen ||
+                        (color_attachment.load_op ==
+                             vr::render_graph::AttachmentLoadOp::clear &&
+                         depth_attachment.load_op ==
+                             vr::render_graph::AttachmentLoadOp::clear &&
+                         depth_attachment.clear_value.depth ==
+                             text_renderer_create_info.clear_depth_value &&
+                         color_attachment.clear_value.red ==
+                             text_renderer_create_info.clear_color.float32[0] &&
+                         color_attachment.clear_value.green ==
+                             text_renderer_create_info.clear_color.float32[1] &&
+                         color_attachment.clear_value.blue ==
+                             text_renderer_create_info.clear_color.float32[2] &&
+                         color_attachment.clear_value.alpha ==
+                             text_renderer_create_info.clear_color.float32[3]);
+                    opaque_descriptor_bindings_seen =
+                        opaque_descriptor_bindings_seen ||
+                        !opaque_pass->descriptor_bindings.empty();
+                }
+                if (const auto* transparent_pass =
+                        vr::test::FindCompiledPassByName(*compiled_graph,
+                                                         "text_renderer_3d_direct_transparent");
+                    transparent_pass != nullptr &&
+                    transparent_pass->executable &&
+                    transparent_pass->raster_pass.has_value() &&
+                    !transparent_pass->raster_pass->color_attachments.empty() &&
+                    transparent_pass->raster_pass->has_depth_attachment) {
+                    transparent_pass_seen = true;
+                    const auto& color_attachment =
+                        transparent_pass->raster_pass->color_attachments.front();
+                    const auto& depth_attachment =
+                        transparent_pass->raster_pass->depth_attachment;
+                    transparent_pass_policy_seen =
+                        transparent_pass_policy_seen ||
+                        (color_attachment.load_op ==
+                             vr::render_graph::AttachmentLoadOp::load &&
+                         depth_attachment.load_op ==
+                             vr::render_graph::AttachmentLoadOp::load);
+                    transparent_descriptor_bindings_seen =
+                        transparent_descriptor_bindings_seen ||
+                        !transparent_pass->descriptor_bindings.empty();
+                }
+            }
 
             SDL_Delay(1U);
         }
@@ -406,9 +450,13 @@ VR_TEST_CASE(RuntimeIntegration_text_renderer_3d_end_to_end_smoke, "integration;
         VR_CHECK(observed_bounds_culling);
         VR_CHECK(max_culling_input_count == static_cast<std::uint32_t>(text_components.size()));
         VR_CHECK(max_culling_visible_count > 0U);
+        VR_CHECK(opaque_pass_seen);
+        VR_CHECK(transparent_pass_seen);
+        VR_CHECK(opaque_pass_policy_seen);
+        VR_CHECK(transparent_pass_policy_seen);
+        VR_CHECK(opaque_descriptor_bindings_seen);
+        VR_CHECK(transparent_descriptor_bindings_seen);
         VR_CHECK(runtime.GlyphUpload().Stats().uploaded_rect_count > 0U);
-        VR_CHECK(runtime.RenderTarget().ResolveView(external_depth_target).format == external_depth_format);
-
         text_renderer.Shutdown(runtime.Context());
         renderer_initialized = false;
         runtime.Shutdown();
@@ -640,7 +688,7 @@ VR_TEST_CASE(RuntimeIntegration_text_renderer_3d_bloom_post_stack_smoke,
                                                     bloom_stats.descriptor_set_update_count);
             observed_bounds_culling = observed_bounds_culling || text_stats.used_bounds_culling;
             VR_CHECK(text_stats.descriptor_set_update_count <= text_stats.draw_batch_count);
-            VR_CHECK(text_stats.descriptor_set_bind_count <= text_stats.draw_call_count);
+            VR_CHECK(text_stats.descriptor_set_bind_count <= 4U);
 
             SDL_Delay(1U);
         }
@@ -667,8 +715,6 @@ VR_TEST_CASE(RuntimeIntegration_text_renderer_3d_bloom_post_stack_smoke,
         VR_CHECK(recorder.ActiveView() == &main_view);
         VR_CHECK(recorder.ActiveView() != nullptr);
         VR_CHECK(recorder.ActiveView()->camera == &camera);
-        VR_CHECK(runtime.RenderTargetPoolStats().acquire_count == 0U);
-        VR_CHECK(runtime.RenderTargetPoolStats().reuse_hit_count == 0U);
 
         recorder.Shutdown(runtime.Context());
         text_renderer.Shutdown(runtime.Context());

@@ -7,7 +7,6 @@
 #include "vr/render/pipeline_host.hpp"
 #include "vr/render/render_target_host.hpp"
 #include "vr/render/render_target_pass.hpp"
-#include "vr/render/render_target_pool.hpp"
 #include "vr/render/runtime_prepare_views.hpp"
 #include "vr/resource/sampler_host.hpp"
 
@@ -58,15 +57,7 @@ public:
     void Initialize(const RenderTargetBloomRendererCreateInfo& create_info_ = {});
     void Shutdown(VulkanContext& context_);
 
-    void SetSceneSourceTarget(RenderTargetHandle source_target_,
-                              RenderTargetStateKind expected_source_state_ = RenderTargetStateKind::shader_read) noexcept;
-    void ClearSceneSourceTarget() noexcept;
-    void SetOutputTargetConfig(const RenderTargetColorOutputConfig& output_target_config_) noexcept;
-    void ResetOutputTargetConfig() noexcept;
-
-    void PrepareFrame(const RenderTargetBloomRendererPrepareView& prepare_view_);
     void PrepareGraphFrame(const SceneRecorder3DPrepareView& prepare_view_);
-    void Record(const FrameRecordContext& record_context_);
     void DescribeGraphSingleSourceBindings(render_graph::RenderGraphBuilder& builder_,
                                            render_graph::PassHandle pass_) const;
     void DescribeGraphDualSourceBindings(render_graph::RenderGraphBuilder& builder_,
@@ -133,8 +124,6 @@ private:
                                PipelineHost& pipeline_host_,
                                VkFormat intermediate_format_,
                                VkFormat final_color_format_);
-    [[nodiscard]] RenderTargetDesc BuildIntermediateTargetDesc(
-        const RenderTargetResolvedView& source_view_) const;
     [[nodiscard]] static VkFormat ResolveIntermediateFormat(VulkanContext& context_,
                                                             VkFormat requested_format_,
                                                             VkFormat source_format_);
@@ -148,7 +137,6 @@ private:
     DescriptorHost* descriptor_host = nullptr;
     PipelineHost* pipeline_host = nullptr;
     RenderTargetHost* render_target_host = nullptr;
-    RenderTargetPool* render_target_pool = nullptr;
     resource::SamplerHost* sampler_host = nullptr;
     BindlessResourceSystem* bindless_resources = nullptr;
 
@@ -163,17 +151,6 @@ private:
     GraphicsPipelineId combine_pipeline_id{};
     VkFormat intermediate_pipeline_format = VK_FORMAT_UNDEFINED;
     VkFormat final_pipeline_color_format = VK_FORMAT_UNDEFINED;
-    RenderTargetHandle scene_source_target{};
-    RenderTargetStateKind scene_source_expected_state = RenderTargetStateKind::shader_read;
-    RenderTargetColorOutputConfig output_target_config{};
-    RenderTargetHandle bloom_target_a{};
-    RenderTargetHandle bloom_target_b{};
-    BindlessSlot scene_texture_slot{};
-    BindlessSlot bloom_texture_slot_a{};
-    BindlessSlot bloom_texture_slot_b{};
-    BindlessSlot sampler_slot{};
-    VkFormat active_intermediate_format = VK_FORMAT_UNDEFINED;
-    bool frame_ready = false;
     bool initialized = false;
 };
 

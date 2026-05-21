@@ -108,7 +108,6 @@ struct FrameViewSnapshot final {
     std::uint16_t reserved2 = 0U;
     render::RenderViewViewport viewport{};
     render::RenderViewScissor scissor{};
-    render::RenderViewTargetRefs targets{};
     render::RenderViewBackgroundOverride<DimensionT> background_override{};
     FrameViewCameraData camera{};
     std::uint32_t camera_transform_world_revision = 0U;
@@ -208,10 +207,6 @@ template<ecs::DimensionTag DimensionT>
         hash, static_cast<std::uint64_t>(static_cast<std::uint32_t>(view_.scissor.y)));
     detail::FrameSnapshotHashCombine(hash, static_cast<std::uint64_t>(view_.scissor.width));
     detail::FrameSnapshotHashCombine(hash, static_cast<std::uint64_t>(view_.scissor.height));
-    detail::FrameSnapshotHashCombine(hash, static_cast<std::uint64_t>(view_.targets.color_target.index));
-    detail::FrameSnapshotHashCombine(hash, static_cast<std::uint64_t>(view_.targets.color_target.generation));
-    detail::FrameSnapshotHashCombine(hash, static_cast<std::uint64_t>(view_.targets.depth_target.index));
-    detail::FrameSnapshotHashCombine(hash, static_cast<std::uint64_t>(view_.targets.depth_target.generation));
     detail::FrameSnapshotHashCombine(hash, static_cast<std::uint64_t>(view_.background_override.mode));
     if constexpr (std::is_same_v<DimensionT, ecs::Dim2>) {
         detail::FrameSnapshotHashCombine(
@@ -303,7 +298,6 @@ template<ecs::DimensionTag DimensionT>
     snapshot.postprocess_policy = view_.postprocess_policy;
     snapshot.viewport = view_.viewport;
     snapshot.scissor = view_.scissor;
-    snapshot.targets = view_.targets;
     snapshot.background_override = view_.background_override;
     if (view_.camera != nullptr) {
         snapshot.camera.runtime = view_.camera->runtime;

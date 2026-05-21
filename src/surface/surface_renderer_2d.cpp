@@ -225,7 +225,6 @@ void SurfaceRenderer2D::Initialize(const SurfaceRenderer2DCreateInfo& create_inf
     shadow_sampler_id = {};
 
     image_initialized.clear();
-    output_target_config = {};
     appearance_runtime_stats = {};
     appearance_link_stats = {};
     appearance_prepare_bridge.Reset();
@@ -318,7 +317,6 @@ void SurfaceRenderer2D::Shutdown(VulkanContext& context_) {
     descriptor_buffer_write_scratch.clear();
     descriptor_texel_write_scratch.clear();
     image_initialized.clear();
-    output_target_config = {};
 
     runtime_scratch.instances.clear();
     runtime_scratch.draw_batches.clear();
@@ -445,15 +443,6 @@ void SurfaceRenderer2D::SetShadowAtlasHost(shadow::ShadowAtlasHost* shadow_atlas
         }
     }
     shadow_atlas_host = shadow_atlas_host_;
-}
-
-void SurfaceRenderer2D::SetOutputTargetConfig(
-    const render::RenderTargetColorOutputConfig& output_target_config_) noexcept {
-    output_target_config = output_target_config_;
-}
-
-void SurfaceRenderer2D::ResetOutputTargetConfig() noexcept {
-    output_target_config = {};
 }
 
 void SurfaceRenderer2D::PrepareFrame(const render::SurfaceRenderer2DPrepareView& prepare_view_) {
@@ -651,6 +640,47 @@ void SurfaceRenderer2D::PrepareFrame(const render::SurfaceRenderer2DPrepareView&
     pending_dirty_component_count = 0U;
 }
 
+void SurfaceRenderer2D::BuildDirectRuntimeGraph(
+    const render::RuntimeDirectGraphBuildView& graph_view_) {
+    if (!initialized) {
+        throw std::runtime_error(
+            "SurfaceRenderer2D::BuildDirectRuntimeGraph called before Initialize");
+    }
+
+    const auto pass = graph_view_.builder.AddPass("surface_renderer_2d_direct");
+    graph_view_.present_ready_version = graph_view_.builder.Write(
+        pass,
+        graph_view_.present_target,
+        render_graph::AccessDesc{
+            .access = render_graph::AccessKind::color_attachment_write,
+        });
+    graph_view_.builder.SetRasterPassDesc(
+        pass,
+        render_graph::RasterPassDesc{
+            .color_attachments = {
+                render_graph::RasterColorAttachmentDesc{
+                    .target = graph_view_.present_target,
+                    .load_op = create_info_cache.clear_swapchain
+                        ? render_graph::AttachmentLoadOp::clear
+                        : render_graph::AttachmentLoadOp::load,
+                    .store_op = render_graph::AttachmentStoreOp::store,
+                    .clear_value = {
+                        .red = create_info_cache.clear_color.float32[0],
+                        .green = create_info_cache.clear_color.float32[1],
+                        .blue = create_info_cache.clear_color.float32[2],
+                        .alpha = create_info_cache.clear_color.float32[3],
+                    },
+                },
+            },
+        });
+    DescribeGraphDescriptorBindings(graph_view_.builder, pass);
+    graph_view_.builder.SetExecuteCallback(
+        pass,
+        [this, color_target = graph_view_.present_target](render_graph::GraphCommandContext& context_) {
+            RecordGraphOverlay(context_, color_target);
+        });
+}
+
 void SurfaceRenderer2D::DescribeGraphDescriptorBindings(render_graph::RenderGraphBuilder& builder_,
                                                         const render_graph::PassHandle pass_) const {
     if (!initialized) {
@@ -768,67 +798,6 @@ void SurfaceRenderer2D::DescribeGraphDescriptorBindings(render_graph::RenderGrap
                                       render_graph::DescriptorBindingKind::uniform_buffer,
                                       lighting_uniform_resolver_id,
                                       render_graph::shader_stage_fragment_flag);
-}
-
-void SurfaceRenderer2D::Record(const render::FrameRecordContext& record_context_) {
-    if (!initialized) {
-        throw std::runtime_error("SurfaceRenderer2D::Record called before Initialize");
-    }
-    if (context == nullptr || descriptor_host == nullptr || pipeline_host == nullptr) {
-        throw std::runtime_error("SurfaceRenderer2D::Record called before PrepareFrame");
-    }
-    if (bindless_resources == nullptr || !bindless_resources->IsInitialized()) {
-        throw std::runtime_error("SurfaceRenderer2D::Record requires initialized BindlessResourceSystem");
-    }
-    if (record_context_.command_buffer == VK_NULL_HANDLE ||
-        record_context_.image == VK_NULL_HANDLE ||
-        record_context_.image_view == VK_NULL_HANDLE) {
-        throw std::runtime_error("SurfaceRenderer2D::Record requires valid frame context image handles");
-    }
-    if (record_context_.extent.width == 0U || record_context_.extent.height == 0U) {
-        throw std::runtime_error("SurfaceRenderer2D::Record received zero-sized swapchain extent");
-    }
-
-    if (record_context_.image_index >= image_initialized.size()) {
-        const std::size_t previous_size = image_initialized.size();
-        image_initialized.resize(record_context_.image_index + 1U);
-        for (std::size_t i = previous_size; i < image_initialized.size(); ++i) {
-            image_initialized[i] = 0U;
-        }
-    }
-    const bool has_previous_content = image_initialized[record_context_.image_index] != 0U;
-
-    const render::ResolvedColorRenderPass color_pass = render::BuildColorRenderPass(
-        record_context_,
-        output_target_config,
-        create_info_cache.clear_swapchain,
-        create_info_cache.clear_color,
-        has_previous_content);
-    EnsurePipelineObjects(*context, *descriptor_host, *pipeline_host, color_pass.target.format);
-
-    vkCmdBeginRendering(record_context_.command_buffer, color_pass.rendering_info.VkInfoPtr());
-
-    VkViewport viewport{};
-    viewport.x = 0.0F;
-    viewport.y = 0.0F;
-    viewport.width = static_cast<float>(color_pass.target.extent.width);
-    viewport.height = static_cast<float>(color_pass.target.extent.height);
-    viewport.minDepth = 0.0F;
-    viewport.maxDepth = 1.0F;
-    vkCmdSetViewport(record_context_.command_buffer, 0U, 1U, &viewport);
-
-    VkRect2D scissor{};
-    scissor.offset = VkOffset2D{0, 0};
-    scissor.extent = color_pass.target.extent;
-    vkCmdSetScissor(record_context_.command_buffer, 0U, 1U, &scissor);
-
-    RecordDrawBatches(record_context_.command_buffer,
-                      color_pass.target.extent,
-                      color_pass.target.format);
-
-    vkCmdEndRendering(record_context_.command_buffer);
-    render::RecordEndColorPass(record_context_, output_target_config);
-    image_initialized[record_context_.image_index] = 1U;
 }
 
 void SurfaceRenderer2D::RecordGraphOverlay(render_graph::GraphCommandContext& context_,

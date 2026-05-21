@@ -18,6 +18,7 @@ class VulkanContext;
 
 namespace vr::render {
 struct GeometryRenderer2DPrepareView;
+struct RuntimeDirectGraphBuildView;
 struct FrameRecordContext;
 }
 
@@ -76,11 +77,8 @@ public:
     void SetAppearanceDirtyHint(const std::uint32_t* dirty_component_indices_,
                                 std::uint32_t dirty_component_count_) noexcept;
     void SetAppearanceCoordinator(render::AppearanceFrameCoordinator<ecs::Dim2>* appearance_frame_coordinator_) noexcept;
-    void SetOutputTargetConfig(const render::RenderTargetColorOutputConfig& output_target_config_) noexcept;
-    void ResetOutputTargetConfig() noexcept;
-
     void PrepareFrame(const render::GeometryRenderer2DPrepareView& prepare_view_);
-    void Record(const render::FrameRecordContext& record_context_);
+    void BuildDirectRuntimeGraph(const render::RuntimeDirectGraphBuildView& graph_view_);
     void RecordGraphColorPass(render_graph::GraphCommandContext& context_,
                               render_graph::ResourceHandle color_target_);
     void OnSwapchainRecreated(std::uint32_t image_count_,
@@ -159,7 +157,6 @@ private:
 
     GeometryRenderer2DMcVector<std::uint8_t> image_initialized{};
     GeometryUploadRange primitive_range{};
-    render::RenderTargetColorOutputConfig output_target_config{};
 
     std::uint32_t active_frame_index = 0U;
     VkExtent2D swapchain_extent{};

@@ -657,7 +657,7 @@ VR_TEST_CASE(RenderGraphRuntimeService_tracks_dimensioned_snapshots,
 
 VR_TEST_CASE(RenderGraphRuntimeService_captures_snapshot_during_prepare_tick_frame,
              "unit;core;render_graph;runtime") {
-    using Host = vr::render::RenderRuntimeHost<vr::platform::ActiveBackendTag, 2U>;
+    using Host = vr::runtime::detail::RuntimeHost<vr::platform::ActiveBackendTag, 2U>;
 
     struct FakeRecorder final {
         const vr::render::RenderScenePacket3D* frame_packet = nullptr;

@@ -73,7 +73,6 @@ bool FrameComposerHost::PrepareFrame(const FrameComposerPrepareView& prepare_vie
         throw std::runtime_error("FrameComposerHost::PrepareFrame called before Initialize");
     }
 
-    tonemap_renderer.ResetOutputTargetConfig();
     tonemap_renderer.PrepareFrame(MakeRenderTargetCompositeRendererPrepareView(prepare_view_));
 
     if (prepare_view_.frame.frame_index + 1U > prepared_frame_slot_count) {
@@ -99,7 +98,6 @@ bool FrameComposerHost::OnSwapchainRecreated(VulkanContext&,
         throw std::runtime_error("FrameComposerHost::OnSwapchainRecreated called before Initialize");
     }
 
-    tonemap_renderer.ResetOutputTargetConfig();
     tonemap_renderer.OnSwapchainRecreated(prepared_frame_slot_count,
                                           swapchain_extent_,
                                           VK_FORMAT_UNDEFINED);

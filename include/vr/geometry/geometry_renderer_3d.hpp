@@ -41,6 +41,7 @@ class TextureHost;
 
 namespace vr::render {
 struct GeometryRenderer3DPrepareView;
+struct RuntimeDirectGraphBuildView;
 struct FrameRecordContext;
 class IblHost;
 class BindlessResourceSystem;
@@ -193,17 +194,10 @@ public:
     void SetShadowAtlasBindingCoordinator(render::ShadowAtlasBindingCoordinator* shadow_atlas_binding_coordinator_) noexcept;
     void SetShadowFrameCoordinator(render::ShadowFrameCoordinator<ecs::Dim3>* shadow_frame_coordinator_) noexcept;
     void SetShadowAtlasHost(shadow::ShadowAtlasHost* shadow_atlas_host_) noexcept;
-    void SetOutputTargetConfig(const render::RenderTargetColorOutputConfig& output_target_config_) noexcept;
-    void ResetOutputTargetConfig() noexcept;
-    void SetDepthTargetConfig(const render::RenderTargetDepthOutputConfig& depth_output_target_config_) noexcept;
-    void ResetDepthTargetConfig() noexcept;
-
     void PrepareFrame(const render::GeometryRenderer3DPrepareView& prepare_view_);
+    void BuildDirectRuntimeGraph(const render::RuntimeDirectGraphBuildView& graph_view_);
     void DescribeGraphDescriptorBindings(render_graph::RenderGraphBuilder& builder_,
                                          render_graph::PassHandle pass_) const;
-    void Record(const render::FrameRecordContext& record_context_);
-    void RecordSceneStage(const render::FrameRecordContext& record_context_,
-                          render::SceneRenderStage stage_);
     void RecordGraphSceneStage(render_graph::GraphCommandContext& context_,
                                render::SceneRenderStage stage_,
                                render_graph::ResourceHandle color_target_,
@@ -425,20 +419,11 @@ private:
                                       std::uint64_t completed_value_);
     void DestroyDepthResources(VulkanContext& context_);
     void DestroyRetiredDepthResources(VulkanContext& context_);
-    void RecordImageTransitionToColorAttachment(const render::FrameRecordContext& record_context_,
-                                                bool has_previous_content_) const;
-    void RecordImageTransitionToPresent(const render::FrameRecordContext& record_context_) const;
-    void RecordDepthTransitionToAttachment(VkCommandBuffer command_buffer_,
-                                           const resource::ImageResource& depth_resource_,
-                                           bool initialized_) const;
     void RecordGraphInternal(render_graph::GraphCommandContext& context_,
                              std::uint32_t pass_bucket_,
                              bool filter_by_pass_bucket_,
                              render_graph::ResourceHandle color_target_,
                              render_graph::ResourceHandle depth_target_);
-    void RecordInternal(const render::FrameRecordContext& record_context_,
-                        std::uint32_t pass_bucket_,
-                        bool filter_by_pass_bucket_);
 
 private:
     GeometryRenderer3DCreateInfo create_info_cache{};
@@ -513,8 +498,6 @@ private:
     std::uint32_t active_frame_index = 0U;
     VkExtent2D swapchain_extent{};
     VkFormat swapchain_format = VK_FORMAT_UNDEFINED;
-    render::RenderTargetColorOutputConfig output_target_config{};
-    render::RenderTargetDepthOutputConfig depth_output_target_config{};
     GeometryUploadRange instance_range{};
 
     std::uint64_t last_submitted_value_seen = 0U;

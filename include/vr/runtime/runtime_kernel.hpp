@@ -1,7 +1,7 @@
 ﻿#pragma once
 
 #include "vr/platform/render_host.hpp"
-#include "vr/render/render_runtime_host.hpp"
+#include "vr/runtime/detail/render_runtime_host.hpp"
 #include "vr/runtime/command_service.hpp"
 #include "vr/runtime/frame_retire_service.hpp"
 #include "vr/runtime/frame_scheduler.hpp"
@@ -69,21 +69,25 @@ template<typename BackendTagT = vr::platform::ActiveBackendTag,
 class RuntimeKernel final {
 public:
     using BackendTag = BackendTagT;
-    using HostType = vr::render::RenderRuntimeHost<BackendTag, frames_in_flight_v>;
-    using PlatformHostType = typename HostType::PlatformHostType;
-    using WindowSurfaceType = typename HostType::WindowSurfaceType;
-    using SwapchainType = typename HostType::SwapchainType;
-    using LoopType = typename HostType::LoopType;
+    using PlatformHostType = vr::platform::RenderHost<BackendTag>;
+    using WindowSurfaceType = typename PlatformHostType::WindowSurfaceType;
+    using SwapchainType = vr::render::SwapchainHost<WindowSurfaceType>;
+    using LoopType = vr::render::RenderLoopHost<WindowSurfaceType, SwapchainType, frames_in_flight_v>;
     using SchedulerType = FrameScheduler<frames_in_flight_v>;
     using FrameType = RuntimeFrame;
 
+private:
+    using InternalRuntimeHost = detail::RuntimeHost<BackendTag, frames_in_flight_v>;
+
+public:
+
     RuntimeKernel() = default;
 
-    explicit RuntimeKernel(HostType& host_) noexcept {
+    explicit RuntimeKernel(InternalRuntimeHost& host_) noexcept {
         Bind(host_);
     }
 
-    void Bind(HostType& host_) noexcept {
+    void Bind(InternalRuntimeHost& host_) noexcept {
         host = &host_;
         scheduler.Bind(host_.Loop().Sync());
         commands.Bind(host_.Context(), host_.Loop().Commands());
@@ -432,7 +436,7 @@ public:
     }
 
 private:
-    HostType* host = nullptr;
+    InternalRuntimeHost* host = nullptr;
     SchedulerType scheduler{};
     CommandService commands{};
     FrameRetireService retire{};

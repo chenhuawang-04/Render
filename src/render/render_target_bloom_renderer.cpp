@@ -91,7 +91,6 @@ void RenderTargetBloomRenderer::Initialize(const RenderTargetBloomRendererCreate
     descriptor_host = nullptr;
     pipeline_host = nullptr;
     render_target_host = nullptr;
-    render_target_pool = nullptr;
     sampler_host = nullptr;
     bindless_resources = nullptr;
     single_source_pipeline_layout_id = {};
@@ -105,17 +104,6 @@ void RenderTargetBloomRenderer::Initialize(const RenderTargetBloomRendererCreate
     combine_pipeline_id = {};
     intermediate_pipeline_format = VK_FORMAT_UNDEFINED;
     final_pipeline_color_format = VK_FORMAT_UNDEFINED;
-    scene_source_target = {};
-    scene_source_expected_state = RenderTargetStateKind::shader_read;
-    output_target_config = {};
-    bloom_target_a = {};
-    bloom_target_b = {};
-    scene_texture_slot = {};
-    bloom_texture_slot_a = {};
-    bloom_texture_slot_b = {};
-    sampler_slot = {};
-    active_intermediate_format = VK_FORMAT_UNDEFINED;
-    frame_ready = false;
     initialized = true;
 }
 
@@ -130,7 +118,6 @@ void RenderTargetBloomRenderer::Shutdown(VulkanContext& context_) {
     descriptor_host = nullptr;
     pipeline_host = nullptr;
     render_target_host = nullptr;
-    render_target_pool = nullptr;
     sampler_host = nullptr;
     bindless_resources = nullptr;
     single_source_pipeline_layout_id = {};
@@ -144,51 +131,11 @@ void RenderTargetBloomRenderer::Shutdown(VulkanContext& context_) {
     combine_pipeline_id = {};
     intermediate_pipeline_format = VK_FORMAT_UNDEFINED;
     final_pipeline_color_format = VK_FORMAT_UNDEFINED;
-    scene_source_target = {};
-    scene_source_expected_state = RenderTargetStateKind::shader_read;
-    output_target_config = {};
-    bloom_target_a = {};
-    bloom_target_b = {};
-    scene_texture_slot = {};
-    bloom_texture_slot_a = {};
-    bloom_texture_slot_b = {};
-    sampler_slot = {};
-    active_intermediate_format = VK_FORMAT_UNDEFINED;
-    frame_ready = false;
     initialized = false;
-}
-
-void RenderTargetBloomRenderer::SetSceneSourceTarget(
-    RenderTargetHandle source_target_,
-    RenderTargetStateKind expected_source_state_) noexcept {
-    scene_source_target = source_target_;
-    scene_source_expected_state = expected_source_state_;
-}
-
-void RenderTargetBloomRenderer::ClearSceneSourceTarget() noexcept {
-    scene_source_target = {};
-    scene_source_expected_state = RenderTargetStateKind::shader_read;
-}
-
-void RenderTargetBloomRenderer::SetOutputTargetConfig(
-    const RenderTargetColorOutputConfig& output_target_config_) noexcept {
-    output_target_config = output_target_config_;
-}
-
-void RenderTargetBloomRenderer::ResetOutputTargetConfig() noexcept {
-    output_target_config = {};
 }
 
 void RenderTargetBloomRenderer::ResetPreparedFrameState() noexcept {
     stats = {};
-    bloom_target_a = {};
-    bloom_target_b = {};
-    scene_texture_slot = {};
-    bloom_texture_slot_a = {};
-    bloom_texture_slot_b = {};
-    sampler_slot = {};
-    active_intermediate_format = VK_FORMAT_UNDEFINED;
-    frame_ready = false;
 }
 
 void RenderTargetBloomRenderer::BindPreparedFrameServices(
@@ -204,70 +151,6 @@ void RenderTargetBloomRenderer::BindPreparedFrameServices(
     render_target_host = &render_target_host_;
     sampler_host = &sampler_host_;
     bindless_resources = bindless_;
-}
-
-void RenderTargetBloomRenderer::PrepareFrame(const RenderTargetBloomRendererPrepareView& prepare_view_) {
-    if (!initialized) {
-        throw std::runtime_error("RenderTargetBloomRenderer::PrepareFrame called before Initialize");
-    }
-
-    BindPreparedFrameServices(prepare_view_.device,
-                              prepare_view_.descriptor,
-                              prepare_view_.pipeline,
-                              prepare_view_.render_target,
-                              prepare_view_.sampler,
-                              prepare_view_.bindless);
-    render_target_pool = &prepare_view_.render_target_pool;
-    ResetPreparedFrameState();
-
-    if (!IsValidRenderTargetHandle(scene_source_target) ||
-        !render_target_host->IsValid(scene_source_target)) {
-        return;
-    }
-
-    const RenderTargetResolvedView source_view = render_target_host->ResolveView(scene_source_target);
-    if (source_view.image_view == VK_NULL_HANDLE ||
-        source_view.extent.width == 0U ||
-        source_view.extent.height == 0U) {
-        return;
-    }
-
-    active_intermediate_format = ResolveIntermediateFormat(*context,
-                                                           create_info_cache.intermediate_format,
-                                                           source_view.format);
-    const RenderTargetDesc bloom_target_desc = BuildIntermediateTargetDesc(source_view);
-
-    const auto bloom_a_result = render_target_pool->AcquireTransientTarget(
-        *context,
-        *render_target_host,
-        bloom_target_desc);
-    const auto bloom_b_result = render_target_pool->AcquireTransientTarget(
-        *context,
-        *render_target_host,
-        bloom_target_desc);
-
-    bloom_target_a = bloom_a_result.handle;
-    bloom_target_b = bloom_b_result.handle;
-    stats.transient_target_count = 2U;
-    stats.transient_reuse_count =
-        static_cast<std::uint32_t>(bloom_a_result.reused) +
-        static_cast<std::uint32_t>(bloom_b_result.reused);
-
-    if (bindless_resources == nullptr || !bindless_resources->IsInitialized()) {
-        return;
-    }
-
-    scene_texture_slot = render_target_host->EnsureBindlessImageSlot(scene_source_target);
-    bloom_texture_slot_a = render_target_host->EnsureBindlessImageSlot(bloom_target_a);
-    bloom_texture_slot_b = render_target_host->EnsureBindlessImageSlot(bloom_target_b);
-    sampler_slot = bindless_resources->DefaultSamplerSlot();
-
-    frame_ready = IsValidRenderTargetHandle(bloom_target_a) &&
-                  IsValidRenderTargetHandle(bloom_target_b) &&
-                  scene_texture_slot.IsValid() &&
-                  bloom_texture_slot_a.IsValid() &&
-                  bloom_texture_slot_b.IsValid() &&
-                  sampler_slot.IsValid();
 }
 
 void RenderTargetBloomRenderer::PrepareGraphFrame(const SceneRecorder3DPrepareView& prepare_view_) {
@@ -287,271 +170,7 @@ void RenderTargetBloomRenderer::PrepareGraphFrame(const SceneRecorder3DPrepareVi
                               prepare_view_.render_target,
                               *prepare_view_.sampler,
                               prepare_view_.bindless);
-    render_target_pool = nullptr;
     ResetPreparedFrameState();
-}
-
-void RenderTargetBloomRenderer::Record(const FrameRecordContext& record_context_) {
-    if (!initialized) {
-        throw std::runtime_error("RenderTargetBloomRenderer::Record called before Initialize");
-    }
-    if (context == nullptr ||
-        descriptor_host == nullptr ||
-        pipeline_host == nullptr ||
-        render_target_host == nullptr) {
-        throw std::runtime_error("RenderTargetBloomRenderer::Record called before PrepareFrame");
-    }
-
-    const auto record_fallback_output_pass = [&]() {
-        const ResolvedColorRenderPass fallback_pass = BuildColorRenderPass(record_context_,
-                                                                           output_target_config,
-                                                                           create_info_cache.clear_swapchain,
-                                                                           create_info_cache.clear_color,
-                                                                           false);
-        vkCmdBeginRendering(record_context_.command_buffer, fallback_pass.rendering_info.VkInfoPtr());
-        BindFullscreenViewportAndScissor(record_context_.command_buffer, fallback_pass.target.extent);
-        vkCmdEndRendering(record_context_.command_buffer);
-        RecordEndColorPass(record_context_, output_target_config);
-        ++stats.pass_count;
-    };
-
-    if (!frame_ready ||
-        !IsValidRenderTargetHandle(scene_source_target) ||
-        !render_target_host->IsValid(scene_source_target) ||
-        !IsValidRenderTargetHandle(bloom_target_a) ||
-        !render_target_host->IsValid(bloom_target_a) ||
-        !IsValidRenderTargetHandle(bloom_target_b) ||
-        !render_target_host->IsValid(bloom_target_b)) {
-        ++stats.skipped_draw_count;
-        record_fallback_output_pass();
-        return;
-    }
-    if (IsValidRenderTargetHandle(output_target_config.color_target) &&
-        ((output_target_config.color_target.index == scene_source_target.index &&
-          output_target_config.color_target.generation == scene_source_target.generation) ||
-         (output_target_config.color_target.index == bloom_target_a.index &&
-          output_target_config.color_target.generation == bloom_target_a.generation) ||
-         (output_target_config.color_target.index == bloom_target_b.index &&
-          output_target_config.color_target.generation == bloom_target_b.generation))) {
-        throw std::runtime_error(
-            "RenderTargetBloomRenderer output target must differ from source/intermediate targets");
-    }
-
-    const RenderTargetResolvedView bloom_view_a = render_target_host->ResolveView(bloom_target_a);
-    const ResolvedColorRenderTarget final_target = ResolveColorRenderTarget(record_context_,
-                                                                            output_target_config);
-    EnsurePipelineObjects(*context,
-                          *descriptor_host,
-                          *pipeline_host,
-                          bloom_view_a.format,
-                          final_target.format);
-
-    const VkDescriptorSet bindless_sets[] = {
-        bindless_resources->SampledImageSet(),
-        bindless_resources->SamplerSet(),
-    };
-    const auto bind_bindless_sets = [&](PipelineLayoutId pipeline_layout_id_) {
-        vkCmdBindDescriptorSets(record_context_.command_buffer,
-                                VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                pipeline_host->GetPipelineLayout(pipeline_layout_id_),
-                                0U,
-                                2U,
-                                bindless_sets,
-                                0U,
-                                nullptr);
-        stats.descriptor_set_bind_count += 2U;
-    };
-
-    const std::uint32_t blur_pass_pair_count = std::max<std::uint32_t>(
-        1U,
-        create_info_cache.blur_pass_pair_count);
-
-    const auto build_intermediate_output = [](RenderTargetHandle target_handle_) {
-        RenderTargetColorOutputConfig output{};
-        output.color_target = target_handle_;
-        output.final_state = RenderTargetStateKind::shader_read;
-        output.use_explicit_load_op = true;
-        output.load_op = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-        output.store_op = VK_ATTACHMENT_STORE_OP_STORE;
-        return output;
-    };
-
-    const RenderTargetColorOutputConfig bloom_output_a = build_intermediate_output(bloom_target_a);
-    const RenderTargetColorOutputConfig bloom_output_b = build_intermediate_output(bloom_target_b);
-
-    {
-        render_target_host->RecordTransition(record_context_.command_buffer,
-                                             scene_source_target,
-                                             scene_source_expected_state);
-        const ResolvedColorRenderPass prefilter_pass = BuildColorRenderPass(record_context_,
-                                                                            bloom_output_a,
-                                                                            false,
-                                                                            {},
-                                                                            false);
-
-        vkCmdBeginRendering(record_context_.command_buffer, prefilter_pass.rendering_info.VkInfoPtr());
-        BindFullscreenViewportAndScissor(record_context_.command_buffer, prefilter_pass.target.extent);
-        vkCmdBindPipeline(record_context_.command_buffer,
-                          VK_PIPELINE_BIND_POINT_GRAPHICS,
-                          pipeline_host->GetGraphicsPipeline(prefilter_pipeline_id));
-        bind_bindless_sets(single_source_pipeline_layout_id);
-
-        const PrefilterPushConstants push_constants{
-            .threshold = std::max(create_info_cache.bloom_threshold, 0.0F),
-            .knee = std::max(create_info_cache.bloom_knee, 0.0001F),
-            .texture_slot = scene_texture_slot.index,
-            .sampler_slot = sampler_slot.index,
-            .reserved0 = 0.0F,
-            .reserved1 = 0U,
-        };
-        vkCmdPushConstants(record_context_.command_buffer,
-                           pipeline_host->GetPipelineLayout(single_source_pipeline_layout_id),
-                           VK_SHADER_STAGE_FRAGMENT_BIT,
-                           0U,
-                           sizeof(PrefilterPushConstants),
-                           &push_constants);
-        vkCmdDraw(record_context_.command_buffer, 3U, 1U, 0U, 0U);
-        vkCmdEndRendering(record_context_.command_buffer);
-        RecordEndColorPass(record_context_, bloom_output_a);
-        ++stats.prefilter_draw_call_count;
-        ++stats.pass_count;
-    }
-
-    for (std::uint32_t pass_pair_index = 0U;
-         pass_pair_index < blur_pass_pair_count;
-         ++pass_pair_index) {
-        const RenderTargetResolvedView input_view_horizontal = render_target_host->ResolveView(bloom_target_a);
-        const RenderTargetResolvedView input_view_vertical = render_target_host->ResolveView(bloom_target_b);
-
-        {
-            render_target_host->RecordTransition(record_context_.command_buffer,
-                                                 bloom_target_a,
-                                                 RenderTargetStateKind::shader_read);
-            const ResolvedColorRenderPass blur_horizontal_pass = BuildColorRenderPass(record_context_,
-                                                                                      bloom_output_b,
-                                                                                      false,
-                                                                                      {},
-                                                                                      false);
-
-            vkCmdBeginRendering(record_context_.command_buffer,
-                                blur_horizontal_pass.rendering_info.VkInfoPtr());
-            BindFullscreenViewportAndScissor(record_context_.command_buffer,
-                                             blur_horizontal_pass.target.extent);
-            vkCmdBindPipeline(record_context_.command_buffer,
-                              VK_PIPELINE_BIND_POINT_GRAPHICS,
-                              pipeline_host->GetGraphicsPipeline(blur_pipeline_id));
-            bind_bindless_sets(single_source_pipeline_layout_id);
-
-            const BlurPushConstants push_constants{
-                .texel_offset_x = (input_view_horizontal.extent.width > 0U)
-                    ? (1.0F / static_cast<float>(input_view_horizontal.extent.width))
-                    : 0.0F,
-                .texel_offset_y = 0.0F,
-                .filter_scale = std::max(create_info_cache.blur_filter_scale, 0.0F),
-                .texture_slot = bloom_texture_slot_a.index,
-                .sampler_slot = sampler_slot.index,
-                .reserved0 = 0U,
-            };
-            vkCmdPushConstants(record_context_.command_buffer,
-                               pipeline_host->GetPipelineLayout(single_source_pipeline_layout_id),
-                               VK_SHADER_STAGE_FRAGMENT_BIT,
-                               0U,
-                               sizeof(BlurPushConstants),
-                               &push_constants);
-            vkCmdDraw(record_context_.command_buffer, 3U, 1U, 0U, 0U);
-            vkCmdEndRendering(record_context_.command_buffer);
-            RecordEndColorPass(record_context_, bloom_output_b);
-            ++stats.blur_draw_call_count;
-            ++stats.pass_count;
-        }
-
-        {
-            render_target_host->RecordTransition(record_context_.command_buffer,
-                                                 bloom_target_b,
-                                                 RenderTargetStateKind::shader_read);
-            const ResolvedColorRenderPass blur_vertical_pass = BuildColorRenderPass(record_context_,
-                                                                                    bloom_output_a,
-                                                                                    false,
-                                                                                    {},
-                                                                                    false);
-
-            vkCmdBeginRendering(record_context_.command_buffer,
-                                blur_vertical_pass.rendering_info.VkInfoPtr());
-            BindFullscreenViewportAndScissor(record_context_.command_buffer,
-                                             blur_vertical_pass.target.extent);
-            vkCmdBindPipeline(record_context_.command_buffer,
-                              VK_PIPELINE_BIND_POINT_GRAPHICS,
-                              pipeline_host->GetGraphicsPipeline(blur_pipeline_id));
-            bind_bindless_sets(single_source_pipeline_layout_id);
-
-            const BlurPushConstants push_constants{
-                .texel_offset_x = 0.0F,
-                .texel_offset_y = (input_view_vertical.extent.height > 0U)
-                    ? (1.0F / static_cast<float>(input_view_vertical.extent.height))
-                    : 0.0F,
-                .filter_scale = std::max(create_info_cache.blur_filter_scale, 0.0F),
-                .texture_slot = bloom_texture_slot_b.index,
-                .sampler_slot = sampler_slot.index,
-                .reserved0 = 0U,
-            };
-            vkCmdPushConstants(record_context_.command_buffer,
-                               pipeline_host->GetPipelineLayout(single_source_pipeline_layout_id),
-                               VK_SHADER_STAGE_FRAGMENT_BIT,
-                               0U,
-                               sizeof(BlurPushConstants),
-                               &push_constants);
-            vkCmdDraw(record_context_.command_buffer, 3U, 1U, 0U, 0U);
-            vkCmdEndRendering(record_context_.command_buffer);
-            RecordEndColorPass(record_context_, bloom_output_a);
-            ++stats.blur_draw_call_count;
-            ++stats.pass_count;
-        }
-    }
-
-    render_target_host->RecordTransition(record_context_.command_buffer,
-                                         scene_source_target,
-                                         scene_source_expected_state);
-    render_target_host->RecordTransition(record_context_.command_buffer,
-                                         bloom_target_a,
-                                         RenderTargetStateKind::shader_read);
-
-    const ResolvedColorRenderPass final_pass = BuildColorRenderPass(record_context_,
-                                                                    output_target_config,
-                                                                    create_info_cache.clear_swapchain,
-                                                                    create_info_cache.clear_color,
-                                                                    false);
-    vkCmdBeginRendering(record_context_.command_buffer, final_pass.rendering_info.VkInfoPtr());
-    BindFullscreenViewportAndScissor(record_context_.command_buffer, final_pass.target.extent);
-    vkCmdBindPipeline(record_context_.command_buffer,
-                      VK_PIPELINE_BIND_POINT_GRAPHICS,
-                      pipeline_host->GetGraphicsPipeline(combine_pipeline_id));
-    bind_bindless_sets(dual_source_pipeline_layout_id);
-
-    const RenderTargetResolvedView scene_view = render_target_host->ResolveView(scene_source_target);
-    const RenderTargetResolvedView bloom_view = render_target_host->ResolveView(bloom_target_a);
-    CombinePushConstants combine_push_constants{};
-    combine_push_constants.exposure = std::max(create_info_cache.exposure, 0.0F);
-    combine_push_constants.inv_gamma = SafeInvGamma(create_info_cache.output_gamma);
-    combine_push_constants.bloom_intensity = std::max(create_info_cache.bloom_intensity, 0.0F);
-    combine_push_constants.flags = 0U;
-    combine_push_constants.flags |= create_info_cache.enable_reinhard_tonemap ? 0x1U : 0U;
-    combine_push_constants.flags |= create_info_cache.apply_manual_gamma ? 0x2U : 0U;
-    combine_push_constants.flags |= (scene_view.color_encoding == RenderTargetColorEncoding::srgb) ? 0x4U : 0U;
-    combine_push_constants.flags |= (bloom_view.color_encoding == RenderTargetColorEncoding::srgb) ? 0x8U : 0U;
-    combine_push_constants.scene_texture_slot = scene_texture_slot.index;
-    combine_push_constants.bloom_texture_slot = bloom_texture_slot_a.index;
-    combine_push_constants.sampler_slot = sampler_slot.index;
-    vkCmdPushConstants(record_context_.command_buffer,
-                       pipeline_host->GetPipelineLayout(dual_source_pipeline_layout_id),
-                       VK_SHADER_STAGE_FRAGMENT_BIT,
-                       0U,
-                       sizeof(CombinePushConstants),
-                       &combine_push_constants);
-    vkCmdDraw(record_context_.command_buffer, 3U, 1U, 0U, 0U);
-    vkCmdEndRendering(record_context_.command_buffer);
-    RecordEndColorPass(record_context_, output_target_config);
-    ++stats.combine_draw_call_count;
-    ++stats.pass_count;
 }
 
 void RenderTargetBloomRenderer::DescribeGraphSingleSourceBindings(
@@ -898,26 +517,6 @@ void RenderTargetBloomRenderer::EnsurePipelineObjects(VulkanContext& context_,
 
     intermediate_pipeline_format = intermediate_format_;
     final_pipeline_color_format = final_color_format_;
-}
-
-RenderTargetDesc RenderTargetBloomRenderer::BuildIntermediateTargetDesc(
-    const RenderTargetResolvedView& source_view_) const {
-    RenderTargetDesc desc{};
-    desc.debug_name = "BloomIntermediate";
-    desc.dimension = RenderTargetDimension::image_2d;
-    desc.lifetime = RenderTargetLifetime::transient;
-    desc.scale_mode = RenderTargetScaleMode::absolute;
-    const VkExtent2D bloom_extent = ResolveDownsampleExtent(source_view_.extent,
-                                                            create_info_cache.downsample_scale);
-    desc.width = bloom_extent.width;
-    desc.height = bloom_extent.height;
-    desc.depth = 1U;
-    desc.format = active_intermediate_format;
-    desc.samples = VK_SAMPLE_COUNT_1_BIT;
-    desc.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
-    desc.aspect = VK_IMAGE_ASPECT_COLOR_BIT;
-    desc.color_encoding = create_info_cache.intermediate_color_encoding;
-    return desc;
 }
 
 VkFormat RenderTargetBloomRenderer::ResolveIntermediateFormat(VulkanContext& context_,

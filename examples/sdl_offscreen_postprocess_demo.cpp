@@ -6,7 +6,7 @@
 #include "vr/ecs/system/transform_system.hpp"
 #include "vr/geometry/geometry_renderer_2d.hpp"
 #include "vr/geometry/geometry_upload_host.hpp"
-#include "vr/render/render_runtime_host.hpp"
+#include "vr/runtime/runtime.hpp"
 #include "vr/render/render_view_submission_utils.hpp"
 #include "vr/runtime/crash_tracer_support.hpp"
 #include "vr/render/scene_recorder_2d.hpp"
@@ -30,7 +30,7 @@
 
 namespace {
 
-using Runtime = vr::render::RenderRuntimeHost<vr::platform::ActiveBackendTag, 2U>;
+using Runtime = vr::runtime::Runtime<vr::platform::ActiveBackendTag, 2U>;
 using Appearance2D = vr::ecs::Appearance<vr::ecs::Dim2>;
 using Geometry2D = vr::ecs::Geometry<vr::ecs::Dim2>;
 using Surface2D = vr::ecs::Surface<vr::ecs::Dim2>;
@@ -418,8 +418,7 @@ int main(int argc_, char** argv_) {
         recorder.RegisterSceneRenderer(geometry_renderer, vr::render::SceneRenderPassRole::first);
         recorder.RegisterSceneRenderer(surface_renderer, vr::render::SceneRenderPassRole::middle);
         recorder.RegisterSceneRenderer(text_renderer, vr::render::SceneRenderPassRole::last);
-        recorder.RegisterSceneConsumer(composite_renderer,
-                                      vr::render::SceneRecorder2D::MakePresentOverlayOutputConfig());
+        recorder.RegisterSceneConsumer(composite_renderer);
 
         vr::render::RenderView2D main_view{};
         vr::render::RenderScenePacket2D main_scene_packet{};

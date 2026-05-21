@@ -1,4 +1,4 @@
-﻿#include "vr/render/scene_recorder_2d.hpp"
+#include "vr/render/scene_recorder_2d.hpp"
 
 #include "vr/runtime/services/render_graph_runtime_service.hpp"
 
@@ -24,11 +24,6 @@ namespace {
         .sample_count = render_graph::SampleCount::x1,
         .allow_alias = true,
     };
-}
-
-[[noreturn]] void ThrowUnsupportedGraphOnlyMode(std::string_view mode_) {
-    throw std::runtime_error("SceneRecorder2D graph-only mainline does not support " +
-                             std::string(mode_));
 }
 
 [[nodiscard]] constexpr bool IsTerminalScenePass(const SceneRenderPassRole pass_role_) noexcept {
@@ -188,30 +183,17 @@ void SceneRecorder2D::PrepareFrame(const SceneRecorder2DPrepareView& prepare_vie
         ++stats.frame_packet_prepare_count;
     }
 
-    const bool use_explicit_scene_target = HasExplicitSceneTargetForSubmission();
-    const bool use_scene_consumer_chain = !use_explicit_scene_target &&
-                                          HasSceneConsumer() &&
-                                          IsPostProcessEnabledForSubmission();
+    const bool use_scene_consumer_chain =
+        HasSceneConsumer() && IsPostProcessEnabledForSubmission();
     const bool overlay_enabled = IsOverlayEnabledForSubmission();
     const bool shadow_enabled = IsShadowEnabledForSubmission();
-    const bool graph_managed_scene_output =
-        (context != nullptr) ? UsesGraphManagedSceneOutput()
-                             : SupportsGraphExecution(prepare_view_.device);
     SceneRecorder2DPrepareView resolved_prepare_view = prepare_view_;
-    resolved_prepare_view.prefer_render_graph_upload_path = graph_managed_scene_output;
-    resolved_prepare_view.prefer_render_graph_compute_path = graph_managed_scene_output;
-    if (use_scene_consumer_chain && !graph_managed_scene_output) {
-        ThrowUnsupportedGraphOnlyMode("command-style scene target ownership");
-    }
-    if (!graph_managed_scene_output) {
-        ConfigureBackgroundPassForTargets();
-        ConfigureSceneRenderersForTargets();
-    } else {
-        background_pass.ResetOutputTargetConfig();
-    }
+    resolved_prepare_view.render_graph_upload_active = true;
+    resolved_prepare_view.render_graph_compute_active = true;
+    background_pass.ResetOutputTargetConfig();
 
     if (HasBackgroundPassForSubmission()) {
-        background_pass.PrepareFrame(MakeBackgroundPass2DPrepareView(prepare_view_));
+        background_pass.PrepareFrame(MakeBackgroundPass2DPrepareView(resolved_prepare_view));
         ++stats.background_prepare_count;
     }
 
@@ -236,26 +218,16 @@ void SceneRecorder2D::PrepareFrame(const SceneRecorder2DPrepareView& prepare_vie
         }
     }
 
-    if (use_scene_consumer_chain && scene_consumer_entry.renderer != nullptr &&
-        IsLayerVisibleForSubmission(scene_consumer_entry.submission_layer_mask)) {
-        if (!graph_managed_scene_output &&
-            scene_consumer_entry.set_output_target_fn != nullptr) {
-            scene_consumer_entry.set_output_target_fn(scene_consumer_entry.renderer,
-                                                      BuildOverlayOutputConfig(scene_consumer_entry.output_target_config));
-        }
-        if (scene_consumer_entry.prepare_fn != nullptr) {
-            scene_consumer_entry.prepare_fn(scene_consumer_entry.renderer, resolved_prepare_view);
-        }
+    if (use_scene_consumer_chain &&
+        scene_consumer_entry.renderer != nullptr &&
+        IsLayerVisibleForSubmission(scene_consumer_entry.submission_layer_mask) &&
+        scene_consumer_entry.prepare_fn != nullptr) {
+        scene_consumer_entry.prepare_fn(scene_consumer_entry.renderer, resolved_prepare_view);
     }
 
     for (const OverlayRendererEntry& entry : overlay_renderer_entries) {
         if (!overlay_enabled || !IsOverlayLayerVisibleForSubmission(entry.submission_layer_mask)) {
             continue;
-        }
-        if (!graph_managed_scene_output &&
-            entry.renderer != nullptr &&
-            entry.set_output_target_fn != nullptr) {
-            entry.set_output_target_fn(entry.renderer, BuildOverlayOutputConfig(entry.output_target_config));
         }
         if (entry.prepare_fn != nullptr && entry.renderer != nullptr) {
             entry.prepare_fn(entry.renderer, resolved_prepare_view);
@@ -280,14 +252,9 @@ void SceneRecorder2D::BuildRenderGraph(
         return;
     }
 
-    if (HasExplicitSceneTargetForSubmission()) {
-        ThrowUnsupportedGraphOnlyMode("explicit scene targets");
-    }
-    if (HasExplicitOverlayTargetForSubmission()) {
-        ThrowUnsupportedGraphOnlyMode("explicit overlay targets");
-    }
-
     const bool shadow_enabled = IsShadowEnabledForSubmission();
+    std::vector<const PreSceneRendererEntry*> visible_pre_scene_entries{};
+    visible_pre_scene_entries.reserve(pre_scene_renderer_entries.size());
     for (const PreSceneRendererEntry& entry : pre_scene_renderer_entries) {
         if (!IsLayerVisibleForSubmission(entry.submission_layer_mask)) {
             continue;
@@ -295,23 +262,21 @@ void SceneRecorder2D::BuildRenderGraph(
         if (entry.kind == PreSceneRendererKind::shadow && !shadow_enabled) {
             continue;
         }
-        if (entry.renderer != nullptr) {
-            ThrowUnsupportedGraphOnlyMode("pre-scene renderers");
+        if (entry.renderer == nullptr || entry.record_fn == nullptr) {
+            continue;
         }
+        visible_pre_scene_entries.push_back(&entry);
     }
 
     const bool scene_consumer_enabled =
         scene_consumer_entry.renderer != nullptr &&
         IsLayerVisibleForSubmission(scene_consumer_entry.submission_layer_mask) &&
         IsPostProcessEnabledForSubmission();
-    if (scene_consumer_enabled) {
-        if (IsValidRenderTargetHandle(scene_consumer_entry.output_target_config.color_target)) {
-            ThrowUnsupportedGraphOnlyMode("explicit scene-consumer output targets");
-        }
-        if (scene_consumer_entry.graph_record_fn == nullptr ||
-            scene_consumer_entry.build_graph_color_attachment_fn == nullptr) {
-            ThrowUnsupportedGraphOnlyMode("scene consumers without graph record support");
-        }
+    if (scene_consumer_enabled &&
+        (scene_consumer_entry.graph_record_fn == nullptr ||
+         scene_consumer_entry.build_graph_color_attachment_fn == nullptr)) {
+        throw std::runtime_error(
+            "SceneRecorder2D::BuildRenderGraph requires graph-capable scene consumer registration");
     }
 
     std::vector<const SceneRendererEntry*> visible_scene_entries{};
@@ -322,7 +287,7 @@ void SceneRecorder2D::BuildRenderGraph(
             continue;
         }
         if (entry.graph_record_fn == nullptr) {
-            ThrowUnsupportedGraphOnlyMode("scene renderers without graph record support");
+            throw std::runtime_error("SceneRecorder2D::BuildRenderGraph requires graph-capable scene renderer registration");
         }
         visible_scene_entries.push_back(&entry);
     }
@@ -394,6 +359,24 @@ void SceneRecorder2D::BuildRenderGraph(
         }
     }
 
+    for (const auto* entry : visible_pre_scene_entries) {
+        const auto pre_scene_pass = builder_.AddPass(
+            entry->kind == PreSceneRendererKind::shadow ? "shadow_prepass" : "pre_scene_pass",
+            true);
+        if (IsValidPassHandle(build_result_.scene_pass)) {
+            builder_.AddDependency(build_result_.scene_pass, pre_scene_pass);
+        }
+        builder_.SetExecuteCallback(
+            pre_scene_pass,
+            [entry](render_graph::GraphCommandContext& context_) {
+                FrameRecordContext record_context{};
+                record_context.frame_index = context_.FrameIndex();
+                record_context.command_buffer = context_.CommandBuffer();
+                record_context.render_target_host = &context_.RenderTargets();
+                entry->record_fn(entry->renderer, record_context);
+            });
+    }
+
     const bool graph_overlay_present = IsValidPassHandle(build_result_.overlay_pass) &&
                                        IsValidResourceHandle(build_result_.scene_color);
     if (scene_consumer_enabled) {
@@ -402,11 +385,6 @@ void SceneRecorder2D::BuildRenderGraph(
             !IsValidResourceVersionHandle(color_chain_)) {
             throw std::runtime_error(
                 "SceneRecorder2D::BuildRenderGraph requires a valid scene color chain and present target for scene consumers");
-        }
-        if (scene_consumer_entry.set_output_target_fn != nullptr) {
-            scene_consumer_entry.set_output_target_fn(
-                scene_consumer_entry.renderer,
-                BuildOverlayOutputConfig(scene_consumer_entry.output_target_config));
         }
 
         const auto scene_consumer_output = graph_overlay_present
@@ -476,7 +454,7 @@ void SceneRecorder2D::BuildRenderGraph(
             continue;
         }
         if (entry.graph_record_fn == nullptr) {
-            ThrowUnsupportedGraphOnlyMode("overlay renderers without graph record support");
+            throw std::runtime_error("SceneRecorder2D::BuildRenderGraph requires graph-capable overlay renderer registration");
         }
         visible_overlay_entries.push_back(&entry);
     }
@@ -519,13 +497,10 @@ void SceneRecorder2D::OnSwapchainRecreated(std::uint32_t image_count_,
                                            std::uint64_t completed_submit_value_) {
     EnsureInitialized("OnSwapchainRecreated");
 
-    const bool use_explicit_scene_target = HasExplicitSceneTargetForSubmission();
-    const bool use_scene_consumer_chain = !use_explicit_scene_target &&
-                                          HasSceneConsumer() &&
-                                          IsPostProcessEnabledForSubmission();
+    const bool use_scene_consumer_chain =
+        HasSceneConsumer() && IsPostProcessEnabledForSubmission();
     const bool overlay_enabled = IsOverlayEnabledForSubmission();
     const bool shadow_enabled = IsShadowEnabledForSubmission();
-    const bool graph_managed_scene_output = UsesGraphManagedSceneOutput();
 
     background_pass.OnSwapchainRecreated(image_count_,
                                          extent_,
@@ -590,15 +565,7 @@ void SceneRecorder2D::OnSwapchainRecreated(std::uint32_t image_count_,
         }
     }
 
-    if (use_scene_consumer_chain && !graph_managed_scene_output) {
-        ThrowUnsupportedGraphOnlyMode("command-style scene target ownership");
-    }
-    if (!graph_managed_scene_output) {
-        ConfigureSceneRenderersForTargets();
-    } else {
-        background_pass.ResetOutputTargetConfig();
-    }
-
+    background_pass.ResetOutputTargetConfig();
     stats.swapchain_recreate_count += 1U;
 }
 
@@ -628,15 +595,6 @@ const RenderScenePacket2D* SceneRecorder2D::FramePacket() const noexcept {
 
 const RenderView2D* SceneRecorder2D::ActiveView() const noexcept {
     return active_view;
-}
-
-RenderTargetColorOutputConfig SceneRecorder2D::MakePresentOverlayOutputConfig() noexcept {
-    RenderTargetColorOutputConfig output{};
-    output.final_state = RenderTargetStateKind::present_src;
-    output.use_explicit_load_op = true;
-    output.load_op = VK_ATTACHMENT_LOAD_OP_LOAD;
-    output.store_op = VK_ATTACHMENT_STORE_OP_STORE;
-    return output;
 }
 
 void SceneRecorder2D::UpsertPreSceneRendererEntry(const PreSceneRendererEntry& entry_) {
@@ -741,16 +699,6 @@ void SceneRecorder2D::RefreshRendererCounts() noexcept {
     stats.overlay_renderer_count = static_cast<std::uint32_t>(overlay_renderer_entries.size());
 }
 
-bool SceneRecorder2D::HasExplicitSceneTargetForSubmission() const noexcept {
-    return scene_view != nullptr &&
-           IsValidRenderTargetHandle(scene_view->targets.color_target);
-}
-
-bool SceneRecorder2D::HasExplicitOverlayTargetForSubmission() const noexcept {
-    return overlay_view != nullptr &&
-           IsValidRenderTargetHandle(overlay_view->targets.color_target);
-}
-
 std::uint32_t SceneRecorder2D::EffectiveLayerMask() const noexcept {
     if (frame_packet == nullptr) {
         return all_submission_layers;
@@ -831,175 +779,6 @@ bool SceneRecorder2D::SupportsGraphExecution(const VulkanContext& device_) const
 
 bool SceneRecorder2D::UsesGraphManagedSceneOutput() const noexcept {
     return context != nullptr && SupportsGraphExecution(*context);
-}
-
-void SceneRecorder2D::ConfigureBackgroundPassForTargets() {
-    if (!HasBackgroundPassForSubmission()) {
-        background_pass.ResetOutputTargetConfig();
-        return;
-    }
-    background_pass.SetOutputTargetConfig(BuildBackgroundOutputConfig());
-}
-
-void SceneRecorder2D::ConfigureSceneRenderersForTargets() {
-    const bool use_scene_consumer_chain = HasSceneConsumer() && IsPostProcessEnabledForSubmission();
-    const bool use_explicit_scene_target = HasExplicitSceneTargetForSubmission();
-    const bool has_background_pass = HasBackgroundPassForSubmission();
-    const bool explicit_depth_target =
-        scene_view != nullptr && IsValidRenderTargetHandle(scene_view->targets.depth_target);
-    for (const SceneRendererEntry& entry : scene_renderer_entries) {
-        if (entry.renderer == nullptr) {
-            continue;
-        }
-        if (!IsLayerVisibleForSubmission(entry.submission_layer_mask)) {
-            continue;
-        }
-        if (use_explicit_scene_target) {
-            if (entry.configure_direct_scene_fn != nullptr) {
-                const RenderTargetDepthOutputConfig explicit_depth_output =
-                    BuildExplicitDepthOutputConfig(entry.pass_role);
-                entry.configure_direct_scene_fn(entry.renderer,
-                                                entry.pass_role,
-                                                BuildExplicitSceneOutputConfig(entry.pass_role),
-                                                explicit_depth_target ? &explicit_depth_output : nullptr,
-                                                explicit_depth_target);
-            } else if (entry.set_output_target_fn != nullptr) {
-                entry.set_output_target_fn(entry.renderer,
-                                           BuildExplicitSceneOutputConfig(entry.pass_role));
-            }
-        } else if (use_scene_consumer_chain) {
-            ThrowUnsupportedGraphOnlyMode("scene-consumer target ownership");
-        } else if (entry.configure_direct_scene_fn != nullptr) {
-            const RenderTargetDepthOutputConfig direct_depth_output =
-                BuildDirectDepthOutputConfig(entry.pass_role);
-            entry.configure_direct_scene_fn(entry.renderer,
-                                            entry.pass_role,
-                                            BuildDirectSceneOutputConfig(entry.pass_role),
-                                            create_info_cache.scene_target.enable_depth ? &direct_depth_output : nullptr,
-                                            false);
-        } else if (entry.set_output_target_fn != nullptr) {
-            entry.set_output_target_fn(entry.renderer,
-                                       BuildDirectSceneOutputConfig(entry.pass_role));
-        }
-        if (entry.configure_lighting_fn != nullptr) {
-            entry.configure_lighting_fn(entry.renderer,
-                                        light_frame_coordinator,
-                                        &light_shadow_link_coordinator,
-                                        &shadow_atlas_binding_coordinator,
-                                        shadow_frame_coordinator,
-                                        shadow_atlas_host);
-        }
-    }
-}
-
-RenderTargetColorOutputConfig SceneRecorder2D::BuildBackgroundOutputConfig() const noexcept {
-    const bool use_scene_consumer_chain = HasSceneConsumer() && IsPostProcessEnabledForSubmission();
-    const bool use_explicit_scene_target = HasExplicitSceneTargetForSubmission();
-
-    const bool overlay_enabled = IsOverlayEnabledForSubmission();
-    bool has_visible_scene_renderer = false;
-    for (const SceneRendererEntry& entry : scene_renderer_entries) {
-        if (entry.renderer != nullptr && IsLayerVisibleForSubmission(entry.submission_layer_mask)) {
-            has_visible_scene_renderer = true;
-            break;
-        }
-    }
-    const bool final_pass = !has_visible_scene_renderer && !overlay_enabled && !use_scene_consumer_chain;
-
-    RenderTargetColorOutputConfig output{};
-    output.use_explicit_load_op = true;
-    output.load_op = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    output.store_op = VK_ATTACHMENT_STORE_OP_STORE;
-    output.clear_color = create_info_cache.scene_target.clear_color;
-    output.final_state = final_pass ? RenderTargetStateKind::present_src
-                                    : RenderTargetStateKind::color_attachment;
-    if (use_explicit_scene_target && scene_view != nullptr) {
-        output.color_target = scene_view->targets.color_target;
-        output.final_state = ResolveExplicitColorTerminalState(final_pass);
-    }
-    return output;
-}
-
-RenderTargetColorOutputConfig SceneRecorder2D::BuildDirectSceneOutputConfig(
-    SceneRenderPassRole pass_role_) const noexcept {
-    RenderTargetColorOutputConfig output{};
-    output.final_state = (pass_role_ == SceneRenderPassRole::single ||
-                          pass_role_ == SceneRenderPassRole::last)
-        ? RenderTargetStateKind::present_src
-        : RenderTargetStateKind::color_attachment;
-    output.use_explicit_load_op = true;
-    output.store_op = VK_ATTACHMENT_STORE_OP_STORE;
-    output.clear_color = create_info_cache.scene_target.clear_color;
-
-    switch (pass_role_) {
-    case SceneRenderPassRole::single:
-    case SceneRenderPassRole::first:
-        output.load_op = HasBackgroundPassForSubmission()
-            ? VK_ATTACHMENT_LOAD_OP_LOAD
-            : VK_ATTACHMENT_LOAD_OP_CLEAR;
-        break;
-    case SceneRenderPassRole::middle:
-    case SceneRenderPassRole::last:
-    default:
-        output.load_op = VK_ATTACHMENT_LOAD_OP_LOAD;
-        break;
-    }
-    return output;
-}
-
-RenderTargetColorOutputConfig SceneRecorder2D::BuildExplicitSceneOutputConfig(
-    SceneRenderPassRole pass_role_) const noexcept {
-    RenderTargetColorOutputConfig output = BuildDirectSceneOutputConfig(pass_role_);
-    if (HasExplicitSceneTargetForSubmission()) {
-        output.color_target = scene_view->targets.color_target;
-        output.final_state = ResolveExplicitColorTerminalState(IsTerminalScenePass(pass_role_));
-    }
-    return output;
-}
-
-RenderTargetDepthOutputConfig SceneRecorder2D::BuildDirectDepthOutputConfig(
-    SceneRenderPassRole pass_role_) const noexcept {
-    RenderTargetDepthOutputConfig output{};
-    output.final_state = RenderTargetStateKind::depth_attachment;
-    output.use_explicit_load_op = true;
-    output.store_op = VK_ATTACHMENT_STORE_OP_STORE;
-    output.clear_depth_stencil.depth = create_info_cache.scene_target.clear_depth_value;
-    output.clear_depth_stencil.stencil = create_info_cache.scene_target.clear_stencil_value;
-
-    switch (pass_role_) {
-    case SceneRenderPassRole::single:
-    case SceneRenderPassRole::first:
-        output.load_op = VK_ATTACHMENT_LOAD_OP_CLEAR;
-        break;
-    case SceneRenderPassRole::middle:
-    case SceneRenderPassRole::last:
-    default:
-        output.load_op = VK_ATTACHMENT_LOAD_OP_LOAD;
-        break;
-    }
-    return output;
-}
-
-RenderTargetDepthOutputConfig SceneRecorder2D::BuildExplicitDepthOutputConfig(
-    SceneRenderPassRole pass_role_) const noexcept {
-    RenderTargetDepthOutputConfig output = BuildDirectDepthOutputConfig(pass_role_);
-    if (scene_view != nullptr && IsValidRenderTargetHandle(scene_view->targets.depth_target)) {
-        output.depth_target = scene_view->targets.depth_target;
-        output.final_state = ResolveExplicitDepthTerminalState(IsTerminalScenePass(pass_role_));
-    }
-    return output;
-}
-
-RenderTargetColorOutputConfig SceneRecorder2D::BuildOverlayOutputConfig(
-    const RenderTargetColorOutputConfig& fallback_output_target_config_) const noexcept {
-    if (!HasExplicitOverlayTargetForSubmission()) {
-        return fallback_output_target_config_;
-    }
-
-    RenderTargetColorOutputConfig output = fallback_output_target_config_;
-    output.color_target = overlay_view->targets.color_target;
-    output.final_state = ResolveExplicitColorTerminalState(true);
-    return output;
 }
 
 void SceneRecorder2D::EnsureInitialized(const char* operation_) const {

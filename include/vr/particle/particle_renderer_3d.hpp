@@ -29,6 +29,7 @@ class VulkanContext;
 
 namespace vr::render {
 struct ParticleRenderer3DPrepareView;
+struct RuntimeDirectGraphBuildView;
 struct FrameRecordContext;
 class UploadHost;
 }
@@ -124,19 +125,12 @@ public:
                       ecs::Camera<ecs::Dim3>* camera_component_,
                       ecs::Transform<ecs::Dim3>* camera_transform_,
                       ecs::Bounds<ecs::Dim3>* bounds_components_ = nullptr) noexcept;
-    void SetOutputTargetConfig(const render::RenderTargetColorOutputConfig& output_target_config_) noexcept;
-    void ResetOutputTargetConfig() noexcept;
-    void SetDepthTargetConfig(const render::RenderTargetDepthOutputConfig& depth_output_target_config_) noexcept;
-    void ResetDepthTargetConfig() noexcept;
-
     void PrepareFrame(const render::ParticleRenderer3DPrepareView& prepare_view_);
+    void BuildDirectRuntimeGraph(const render::RuntimeDirectGraphBuildView& graph_view_);
     void DescribeGraphDescriptorBindings(render_graph::RenderGraphBuilder& builder_,
                                          render_graph::PassHandle pass_) const;
     void RegisterGraphImportedResources(
         runtime::services::RenderGraphRuntimeService& graph_runtime_service_) const;
-    void Record(const render::FrameRecordContext& record_context_);
-    void RecordSceneStage(const render::FrameRecordContext& record_context_,
-                          render::SceneRenderStage stage_);
     void RecordGraphSceneStage(render_graph::GraphCommandContext& context_,
                                render::SceneRenderStage stage_,
                                render_graph::ResourceHandle color_target_,
@@ -257,9 +251,6 @@ private:
                              bool filter_by_pass_bucket_,
                              render_graph::ResourceHandle color_target_,
                              render_graph::ResourceHandle depth_target_);
-    void RecordInternal(const render::FrameRecordContext& record_context_,
-                        std::uint32_t pass_bucket_,
-                        bool filter_by_pass_bucket_);
 
 private:
     ParticleRenderer3DCreateInfo create_info_cache{};
@@ -319,8 +310,6 @@ private:
     std::uint32_t active_frame_index = 0U;
     VkExtent2D swapchain_extent{};
     VkFormat swapchain_format = VK_FORMAT_UNDEFINED;
-    render::RenderTargetColorOutputConfig output_target_config{};
-    render::RenderTargetDepthOutputConfig depth_output_target_config{};
     std::uint64_t last_submitted_value_seen = 0U;
     std::uint64_t completed_submit_value_seen = 0U;
     bool active_camera_reverse_z = false;

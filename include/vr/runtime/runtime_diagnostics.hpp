@@ -10,7 +10,6 @@
 #include "vr/render/ibl_host.hpp"
 #include "vr/render/pipeline_host.hpp"
 #include "vr/render/render_target_host.hpp"
-#include "vr/render/render_target_pool.hpp"
 #include "vr/render/upload_host.hpp"
 #include "vr/text/glyph_atlas_host.hpp"
 #include "vr/text/glyph_upload_host.hpp"
@@ -92,7 +91,6 @@ struct AllocationStats final {
     std::uint64_t upload_capacity_bytes = 0U;
     std::uint32_t upload_staging_page_growth_count = 0U;
     std::uint32_t descriptor_total_pool_count = 0U;
-    std::uint32_t render_target_transient_acquired_count = 0U;
 };
 
 struct RenderGraphLazyMemoryResourceDiagnostics final {
@@ -498,7 +496,6 @@ struct RuntimeFrameDiagnosticsV2 final {
     BindlessStats bindless{};
     vr::render::PipelineHostStats pipeline{};
     vr::render::RenderTargetHostStats render_target{};
-    vr::render::RenderTargetPoolStats render_target_pool{};
 
     vr::asset::TextureHostStats texture{};
     vr::render::FrameComposerHostStats frame_composer{};

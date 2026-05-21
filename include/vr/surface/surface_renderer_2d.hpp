@@ -30,6 +30,7 @@ class VulkanContext;
 
 namespace vr::render {
 struct SurfaceRenderer2DPrepareView;
+struct RuntimeDirectGraphBuildView;
 struct FrameRecordContext;
 class UploadHost;
 class BindlessResourceSystem;
@@ -137,13 +138,10 @@ public:
     void SetShadowAtlasBindingCoordinator(render::ShadowAtlasBindingCoordinator* shadow_atlas_binding_coordinator_) noexcept;
     void SetShadowFrameCoordinator(render::ShadowFrameCoordinator<ecs::Dim2>* shadow_frame_coordinator_) noexcept;
     void SetShadowAtlasHost(shadow::ShadowAtlasHost* shadow_atlas_host_) noexcept;
-    void SetOutputTargetConfig(const render::RenderTargetColorOutputConfig& output_target_config_) noexcept;
-    void ResetOutputTargetConfig() noexcept;
-
     void PrepareFrame(const render::SurfaceRenderer2DPrepareView& prepare_view_);
+    void BuildDirectRuntimeGraph(const render::RuntimeDirectGraphBuildView& graph_view_);
     void DescribeGraphDescriptorBindings(render_graph::RenderGraphBuilder& builder_,
                                          render_graph::PassHandle pass_) const;
-    void Record(const render::FrameRecordContext& record_context_);
     void RecordGraphOverlay(render_graph::GraphCommandContext& context_,
                             render_graph::ResourceHandle color_target_);
     void OnSwapchainRecreated(std::uint32_t image_count_,
@@ -310,7 +308,6 @@ private:
     resource::SamplerId shadow_sampler_id{};
 
     SurfaceRenderer2DMcVector<std::uint8_t> image_initialized{};
-    render::RenderTargetColorOutputConfig output_target_config{};
 
     std::uint32_t active_frame_index = 0U;
     VkExtent2D swapchain_extent{};

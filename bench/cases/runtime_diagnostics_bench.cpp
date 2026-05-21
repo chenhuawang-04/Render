@@ -1,5 +1,5 @@
 ﻿#include "support/bench_framework.hpp"
-#include "vr/render/render_runtime_host.hpp"
+#include "vr/runtime/runtime.hpp"
 #include "vr/runtime/runtime_diagnostics.hpp"
 #include "vr/runtime/services/frame_composer_service.hpp"
 #include "vr/runtime/services/particle_render_service.hpp"
@@ -11,7 +11,7 @@
 
 namespace {
 
-using Runtime = vr::render::RenderRuntimeHost<vr::platform::ActiveBackendTag, 2U>;
+using Runtime = vr::runtime::Runtime<vr::platform::ActiveBackendTag, 2U>;
 
 [[nodiscard]] vr::runtime::RenderGraphRuntimeDiagnostics MakeGraphicsFallbackQueueTimelineDiagnostics() {
     vr::runtime::RenderGraphRuntimeDiagnostics diagnostics{};

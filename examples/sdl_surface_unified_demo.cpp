@@ -3,7 +3,7 @@
 #include "vr/ecs/system/camera_system.hpp"
 #include "vr/ecs/system/surface_system.hpp"
 #include "vr/ecs/system/transform_system.hpp"
-#include "vr/render/render_runtime_host.hpp"
+#include "vr/runtime/runtime.hpp"
 #include "vr/render/render_view_submission_utils.hpp"
 #include "vr/runtime/crash_tracer_support.hpp"
 #include "vr/render/scene_recorder_3d.hpp"
@@ -23,7 +23,7 @@
 
 namespace {
 
-using Runtime = vr::render::RenderRuntimeHost<vr::platform::ActiveBackendTag, 2U>;
+using Runtime = vr::runtime::Runtime<vr::platform::ActiveBackendTag, 2U>;
 
 using Appearance2D = vr::ecs::Appearance<vr::ecs::Dim2>;
 using Surface2D = vr::ecs::Surface<vr::ecs::Dim2>;
@@ -478,8 +478,7 @@ int main(int argc_,
         renderer_2d.SetSceneData(surface_2d_components.data(),
                                  surface_2d_transforms.data(),
                                  static_cast<std::uint32_t>(surface_2d_components.size()));
-        recorder.RegisterOverlayRenderer(renderer_2d,
-                                         vr::render::SceneRecorder3D::MakePresentOverlayOutputConfig());
+        recorder.RegisterOverlayRenderer(renderer_2d);
 
         vr::render::RenderView3D main_view{};
         vr::render::RenderScenePacket3D main_scene_packet{};
@@ -542,16 +541,17 @@ int main(int argc_,
                     : 0.0F;
                 const vr::surface::SurfaceRenderer3DStats stats_3d = renderer_3d.Stats();
                 const vr::surface::SurfaceRenderer2DStats stats_2d = renderer_2d.Stats();
+                const auto bloom_stats = recorder.BloomStats();
                 std::cout << "FPS:" << fps
                           << " Frame:" << frame_index
                           << " | 3D Draw:" << stats_3d.draw_call_count
                           << " Batch:" << stats_3d.draw_batch_count
                           << " DSB:" << stats_3d.descriptor_set_bind_count
                           << " DSU:" << stats_3d.descriptor_set_update_count
-                          << " | Bloom P:" << recorder.PostStack().Stats().prefilter_draw_call_count
-                          << " B:" << recorder.PostStack().Stats().blur_draw_call_count
-                          << " C:" << recorder.PostStack().Stats().combine_draw_call_count
-                          << " DSU:" << recorder.PostStack().Stats().descriptor_set_update_count
+                          << " | Bloom P:" << bloom_stats.prefilter_draw_call_count
+                          << " B:" << bloom_stats.blur_draw_call_count
+                          << " C:" << bloom_stats.combine_draw_call_count
+                          << " DSU:" << bloom_stats.descriptor_set_update_count
                           << " | 2D Draw:" << stats_2d.draw_call_count
                           << " Batch:" << stats_2d.draw_batch_count
                           << " DSB:" << stats_2d.descriptor_set_bind_count

@@ -4,7 +4,7 @@
 #include "vr/ecs/system/geometry_path_system.hpp"
 #include "vr/ecs/system/geometry_system.hpp"
 #include "vr/geometry/geometry_renderer_2d.hpp"
-#include "vr/render/render_runtime_host.hpp"
+#include "vr/runtime/runtime.hpp"
 #include "vr/render/render_target_composite_renderer.hpp"
 #include "vr/render/render_view_submission_utils.hpp"
 #include "vr/render/scene_recorder_2d.hpp"
@@ -20,7 +20,7 @@
 
 namespace {
 
-using Runtime = vr::render::RenderRuntimeHost<vr::platform::ActiveBackendTag, 2U>;
+using Runtime = vr::runtime::Runtime<vr::platform::ActiveBackendTag, 2U>;
 using Appearance2D = vr::ecs::Appearance<vr::ecs::Dim2>;
 using AppearanceSystem2D = vr::ecs::AppearanceSystem<vr::ecs::Dim2>;
 using Geometry2D = vr::ecs::Geometry<vr::ecs::Dim2>;
@@ -460,9 +460,7 @@ VR_TEST_CASE(RuntimeIntegration_scene_recorder_2d_scene_consumer_composite_smoke
         recorder.Initialize({});
         recorder.BindRuntime(runtime);
         recorder.RegisterSceneRenderer(geometry_renderer, vr::render::SceneRenderPassRole::single, 0x1U);
-        recorder.RegisterSceneConsumer(composite_renderer,
-                                      vr::render::SceneRecorder2D::MakePresentOverlayOutputConfig(),
-                                      0x1U);
+        recorder.RegisterSceneConsumer(composite_renderer, 0x1U);
 
         vr::render::RenderView2D main_view{};
         vr::render::RenderScenePacket2D main_scene_packet{};
@@ -511,8 +509,6 @@ VR_TEST_CASE(RuntimeIntegration_scene_recorder_2d_scene_consumer_composite_smoke
         VR_CHECK(recorder.Stats().frame_packet_record_count == 0U);
         VR_CHECK(recorder.Stats().postprocess_enabled == 1U);
         VR_CHECK(recorder.Stats().frame_view_count == 1U);
-        VR_CHECK(runtime.RenderTargetPoolStats().acquire_count == 0U);
-        VR_CHECK(runtime.RenderTargetPoolStats().reuse_hit_count == 0U);
 
         recorder.Shutdown(runtime.Context());
         composite_renderer.Shutdown(runtime.Context());

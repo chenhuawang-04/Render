@@ -2,7 +2,7 @@
 #include "vr/render/render_target_desc.hpp"
 #include "vr/render/render_target_format_utils.hpp"
 #include "vr/render/render_target_pass.hpp"
-#include "vr/render/render_runtime_host.hpp"
+#include "vr/runtime/runtime.hpp"
 #include "vr/render/runtime_prepare_views.hpp"
 
 #include <SDL3/SDL.h>
@@ -17,7 +17,7 @@
 
 namespace {
 
-using Runtime = vr::render::RenderRuntimeHost<vr::platform::ActiveBackendTag, 2U>;
+using Runtime = vr::runtime::Runtime<vr::platform::ActiveBackendTag, 2U>;
 
 [[nodiscard]] std::string ToLower(std::string_view value_) {
     std::string lowered{};
@@ -440,71 +440,6 @@ VR_TEST_CASE(RuntimeIntegration_initialize_tick_shutdown_smoke, "integration;gpu
     runtime.Shutdown();
     VR_CHECK(!runtime.IsInitialized());
     VR_CHECK(submitted_frames > 0U);
-}
-
-VR_TEST_CASE(RuntimeIntegration_render_target_pool_reuses_transient_targets, "integration;gpu;sdl;runtime;render_target") {
-    Runtime runtime{};
-    Runtime::CreateInfo create_info{};
-    create_info.platform.window.title = "vr_tests_runtime_transient_pool";
-    create_info.platform.window.width = 320;
-    create_info.platform.window.height = 240;
-    create_info.platform.window.resizable = false;
-    create_info.platform.window.high_pixel_density = false;
-    create_info.platform.instance.enable_validation = false;
-    create_info.render_loop.swapchain.enable_vsync = false;
-    create_info.render_loop.swapchain.preferred_image_count = 2U;
-    create_info.poll_events_each_tick = true;
-
-    try {
-        runtime.Initialize(create_info);
-    } catch (const std::exception& exception_) {
-        if (IsEnvironmentSkipError(exception_.what())) {
-            VR_SKIP(exception_.what());
-        }
-        throw;
-    }
-
-    VR_REQUIRE(runtime.HasRenderTargetHost());
-    const VkFormat selected_format = SelectTransientColorFormat(runtime.Context());
-    VR_REQUIRE(selected_format != VK_FORMAT_UNDEFINED);
-
-    vr::render::RenderTargetDesc desc{};
-    desc.debug_name = "RuntimeIntegrationTransientPoolColor";
-    desc.dimension = vr::render::RenderTargetDimension::image_2d;
-    desc.lifetime = vr::render::RenderTargetLifetime::transient;
-    desc.scale_mode = vr::render::RenderTargetScaleMode::absolute;
-    desc.width = 96U;
-    desc.height = 64U;
-    desc.depth = 1U;
-    desc.format = selected_format;
-    desc.samples = VK_SAMPLE_COUNT_1_BIT;
-    desc.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
-    desc.aspect = VK_IMAGE_ASPECT_COLOR_BIT;
-    desc.color_encoding = vr::render::RenderTargetColorEncoding::linear;
-
-    vr::render::RenderTargetPool pool{};
-    pool.Initialize({});
-    pool.BeginFrame(0U, 0U);
-    const auto first_acquire = pool.AcquireTransientTarget(runtime.Context(),
-                                                           runtime.RenderTarget(),
-                                                           desc);
-    pool.EndFrame(0U, 1U);
-    pool.BeginFrame(1U, 1U);
-    const auto second_acquire = pool.AcquireTransientTarget(runtime.Context(),
-                                                            runtime.RenderTarget(),
-                                                            desc);
-    const auto pool_stats = pool.Stats();
-    pool.EndFrame(1U, 2U);
-    pool.InvalidateAll(runtime.Context(), runtime.RenderTarget(), 2U, 2U);
-    pool.Shutdown();
-    runtime.Shutdown();
-
-    VR_CHECK(first_acquire.created);
-    VR_CHECK(!first_acquire.reused);
-    VR_CHECK(second_acquire.reused);
-    VR_CHECK(pool_stats.acquire_count >= 2U);
-    VR_CHECK(pool_stats.reuse_hit_count >= 1U);
-    VR_CHECK(pool_stats.bucket_count >= 1U);
 }
 
 VR_TEST_CASE(RuntimeIntegration_render_target_pass_end_color_depth_transitions_apply_final_states,
