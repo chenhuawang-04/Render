@@ -320,7 +320,8 @@ VR_TEST_CASE(RuntimeConfig_unavailable_modules_throw_before_initialize, "unit;co
     VR_CHECK(ThrowsAnyException([&]() { (void)runtime.Descriptor(); }));
     VR_CHECK(ThrowsAnyException([&]() { (void)runtime.Pipeline(); }));
     VR_CHECK(ThrowsAnyException([&]() { (void)runtime.RenderTarget(); }));
-    VR_CHECK(ThrowsAnyException([&]() { (void)runtime.TargetPool(); }));
+    VR_CHECK(runtime.RenderTargetPoolStats().acquire_count == 0U);
+    VR_CHECK(runtime.RenderTargetPoolStats().reuse_hit_count == 0U);
     VR_CHECK(ThrowsAnyException([&]() { (void)runtime.Sampler(); }));
     VR_CHECK(ThrowsAnyException([&]() { (void)runtime.FreeType(); }));
     VR_CHECK(ThrowsAnyException([&]() { (void)runtime.GlyphAtlas(); }));
@@ -343,8 +344,9 @@ VR_TEST_CASE(RuntimeConfig_particle_service_dependency_contract_matches_runtime_
     static_assert(service_depends_on_v<TextureService, GpuMemoryService>);
     static_assert(service_depends_on_v<TextureService, UploadService>);
     static_assert(service_depends_on_v<RenderTargetService, GpuMemoryService>);
-    static_assert(service_depends_on_v<RenderTargetPoolService, RenderTargetService>);
-    static_assert(service_depends_on_v<FrameComposerService, RenderTargetPoolService>);
+    static_assert(service_depends_on_v<FrameComposerService, RenderTargetService>);
+    static_assert(!profile_contains_v<Runtime2DProfile, services::RenderTargetPoolService>);
+    static_assert(!profile_contains_v<Runtime3DProfile, services::RenderTargetPoolService>);
     static_assert(service_depends_on_v<IblService, TextureService>);
     static_assert(service_depends_on_v<SkyEnvironmentService, TextureService>);
     static_assert(service_depends_on_v<SkyEnvironmentService, DescriptorService>);

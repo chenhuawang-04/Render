@@ -42,9 +42,24 @@ VR_TEST_CASE(Runtime_graph_only_mainline_source_removes_long_lived_dual_track_ga
     const std::string runtime_host =
         ReadUtf8TextFile(SourceRoot() / "include" / "vr" / "render" /
                          "render_runtime_host.hpp");
+    const std::string runtime_public =
+        ReadUtf8TextFile(SourceRoot() / "include" / "vr" / "runtime" /
+                         "runtime.hpp");
     const std::string prepare_views =
         ReadUtf8TextFile(SourceRoot() / "include" / "vr" / "render" /
                          "runtime_prepare_views.hpp");
+    const std::string runtime_views =
+        ReadUtf8TextFile(SourceRoot() / "include" / "vr" / "runtime" /
+                         "runtime_views.hpp");
+    const std::string runtime_2d_profile =
+        ReadUtf8TextFile(SourceRoot() / "include" / "vr" / "runtime" / "profiles" /
+                         "runtime_2d_profile.hpp");
+    const std::string runtime_3d_profile =
+        ReadUtf8TextFile(SourceRoot() / "include" / "vr" / "runtime" / "profiles" /
+                         "runtime_3d_profile.hpp");
+    const std::string frame_composer_service =
+        ReadUtf8TextFile(SourceRoot() / "include" / "vr" / "runtime" / "services" /
+                         "frame_composer_service.hpp");
 
     VR_CHECK(Contains(runtime_service, "SupportsGraphExecution("));
     VR_CHECK(Contains(runtime_service, "HasGraphRecordWorkSource("));
@@ -59,8 +74,21 @@ VR_TEST_CASE(Runtime_graph_only_mainline_source_removes_long_lived_dual_track_ga
     VR_CHECK(!Contains(runtime_host, "RequireStrictGraphOnlyRecord("));
     VR_CHECK(!Contains(runtime_host, "StrictGraphOnlyRecordRequired("));
     VR_CHECK(!Contains(runtime_host, "SupportsGraphOnlyRecord("));
+    VR_CHECK(!Contains(runtime_host, " TargetPool("));
+    VR_CHECK(!Contains(runtime_public, " TargetPool("));
+    VR_CHECK(!Contains(runtime_2d_profile, "RenderTargetPoolService"));
+    VR_CHECK(!Contains(runtime_3d_profile, "RenderTargetPoolService"));
+    VR_CHECK(!Contains(frame_composer_service, "RenderTargetPoolService"));
+    VR_CHECK(!Contains(runtime_host, "SceneRenderTargetSetPrepareView"));
+    VR_CHECK(!Contains(runtime_host, "SceneBloomPostStackPrepareView"));
 
     VR_CHECK(Contains(prepare_views, "prefer_render_graph_upload_path"));
     VR_CHECK(Contains(prepare_views, "prefer_render_graph_compute_path"));
     VR_CHECK(!Contains(prepare_views, "prefer_graph_only_runtime_path"));
+    VR_CHECK(!Contains(prepare_views, "SceneRenderTargetSetPrepareView"));
+    VR_CHECK(!Contains(prepare_views, "SceneBloomPostStackPrepareView"));
+    VR_CHECK(!Contains(runtime_views, "SceneRenderTargetSetPrepareView"));
+    VR_CHECK(!Contains(runtime_views, "SceneBloomPostStackPrepareView"));
+    VR_CHECK(!Contains(runtime_views, "MakeSceneRenderTargetSetPrepareView"));
+    VR_CHECK(!Contains(runtime_views, "MakeSceneBloomPostStackPrepareView"));
 }

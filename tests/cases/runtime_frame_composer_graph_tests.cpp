@@ -59,9 +59,6 @@ class FrameComposerRecorder final {
 public:
     void PrepareFrame(const vr::render::FrameComposerPrepareView& prepare_view_) {
         prepared = composer->PrepareFrame(prepare_view_);
-        if (prepared) {
-            captured_targets = composer->Targets(prepare_view_.frame.frame_index);
-        }
         ++prepare_count;
     }
 
@@ -82,22 +79,12 @@ public:
                                    register_imported_texture_);
     }
 
-    void Record(const vr::render::FrameRecordContext& record_context_) {
-        if (composer == nullptr) {
-            throw std::runtime_error("FrameComposerRecorder::Record called before binding composer");
-        }
-        composer->RecordTonemapPass(record_context_);
-        ++record_count;
-    }
-
     void Bind(vr::render::FrameComposerHost& composer_) noexcept {
         composer = &composer_;
     }
 
     vr::render::FrameComposerHost* composer = nullptr;
-    vr::render::FrameComposerTargets captured_targets{};
     std::uint32_t prepare_count = 0U;
-    std::uint32_t record_count = 0U;
     bool prepared = false;
 };
 
@@ -131,10 +118,6 @@ VR_TEST_CASE(RuntimeIntegration_frame_composer_prepare_and_tonemap_smoke,
         VR_CHECK(first_tick.running);
         VR_CHECK(recorder.prepared);
         VR_CHECK(recorder.prepare_count == 1U);
-        VR_CHECK(recorder.record_count == 0U);
-        VR_CHECK(recorder.captured_targets.ready);
-        VR_CHECK(vr::render::IsValidRenderTargetHandle(recorder.captured_targets.hdr_color_target));
-        VR_CHECK(vr::render::IsValidRenderTargetHandle(recorder.captured_targets.depth_target));
         VR_CHECK(first_tick.diagnostics.collected);
         VR_CHECK(first_tick.diagnostics.frame_composer.prepared_frame_count >= 1U);
         VR_CHECK(first_tick.diagnostics.frame_composer.tonemap_record_count >= 1U);
@@ -151,7 +134,6 @@ VR_TEST_CASE(RuntimeIntegration_frame_composer_prepare_and_tonemap_smoke,
         VR_CHECK(second_tick.diagnostics.frame_composer.tonemap_record_count >= 2U);
         VR_CHECK(second_tick.diagnostics.render_target_pool.acquire_count == 0U);
         VR_CHECK(graph_service.LastRecordStats().pass_count >= 1U);
-        VR_CHECK(recorder.record_count == 0U);
 
         runtime.Shutdown();
         runtime_initialized = false;

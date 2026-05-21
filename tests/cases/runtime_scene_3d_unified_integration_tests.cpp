@@ -1142,7 +1142,7 @@ VR_TEST_CASE(RuntimeIntegration_unified_scene_3d_bloom_post_stack_smoke,
             const auto geometry_stats = geometry_renderer.Stats();
             const auto surface_stats = surface_renderer.Stats();
             const auto text_stats = text_renderer.Stats();
-            const auto bloom_stats = recorder.PostStack().Stats();
+            const auto bloom_stats = recorder.BloomStats();
             const auto shadow_stats = shadow_renderer.Stats();
 
             max_environment_draw_calls =
@@ -1225,15 +1225,13 @@ VR_TEST_CASE(RuntimeIntegration_unified_scene_3d_bloom_post_stack_smoke,
         VR_CHECK(recorder.Stats().animation_binding_refresh_count > 0U);
         VR_CHECK(recorder.Stats().frame_packet_bind_count >= 1U);
         VR_CHECK(recorder.Stats().frame_packet_prepare_count > 0U);
-        VR_CHECK(graph_only_record_active
-                     ? (recorder.Stats().frame_packet_record_count == 0U)
-                     : (recorder.Stats().frame_packet_record_count > 0U));
+        VR_CHECK(recorder.Stats().frame_packet_record_count == 0U);
         VR_CHECK(recorder.FramePacket() == &main_scene_packet);
         VR_CHECK(recorder.ActiveView() == &main_view);
         VR_CHECK(recorder.ActiveView() != nullptr);
         VR_CHECK(recorder.ActiveView()->camera == &camera);
-        VR_CHECK(runtime.TargetPool().Stats().acquire_count == 0U);
-        VR_CHECK(runtime.TargetPool().Stats().reuse_hit_count == 0U);
+        VR_CHECK(runtime.RenderTargetPoolStats().acquire_count == 0U);
+        VR_CHECK(runtime.RenderTargetPoolStats().reuse_hit_count == 0U);
         VR_CHECK(runtime.Ibl().Stats().prepared_frame_count > 0U);
         VR_CHECK(runtime.Ibl().Stats().environment_count >= 1U);
         VR_CHECK(runtime.Ibl().Stats().descriptor_update_count <= submitted_frames + 2U);

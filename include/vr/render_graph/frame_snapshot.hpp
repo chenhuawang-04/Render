@@ -212,8 +212,6 @@ template<ecs::DimensionTag DimensionT>
     detail::FrameSnapshotHashCombine(hash, static_cast<std::uint64_t>(view_.targets.color_target.generation));
     detail::FrameSnapshotHashCombine(hash, static_cast<std::uint64_t>(view_.targets.depth_target.index));
     detail::FrameSnapshotHashCombine(hash, static_cast<std::uint64_t>(view_.targets.depth_target.generation));
-    detail::FrameSnapshotHashCombine(hash, static_cast<std::uint64_t>(view_.targets.color_final_state));
-    detail::FrameSnapshotHashCombine(hash, static_cast<std::uint64_t>(view_.targets.depth_final_state));
     detail::FrameSnapshotHashCombine(hash, static_cast<std::uint64_t>(view_.background_override.mode));
     if constexpr (std::is_same_v<DimensionT, ecs::Dim2>) {
         detail::FrameSnapshotHashCombine(

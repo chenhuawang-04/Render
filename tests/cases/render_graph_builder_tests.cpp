@@ -463,7 +463,6 @@ VR_TEST_CASE(FrameSnapshot3D_copies_packet_metadata_and_stable_view_state,
         3U);
     view.layer_mask = 0x00FF00FFU;
     view.debug_flags = vr::render::render_view_debug_wireframe_flag;
-    view.targets.color_final_state = vr::render::RenderTargetStateKind::present_src;
     view.background_override.mode = vr::render::BackgroundOverrideMode::override_state;
     view.background_override.state.revision = 42U;
     view.background_override.gpu.index = 9U;
@@ -503,7 +502,6 @@ VR_TEST_CASE(FrameSnapshot3D_copies_packet_metadata_and_stable_view_state,
     VR_CHECK(active_view->camera.runtime.culling_mask == 0x1234U);
     VR_CHECK(active_view->camera.runtime.revision == 7U);
     VR_CHECK(active_view->camera_transform_world_revision == 11U);
-    VR_CHECK(active_view->targets.color_final_state == vr::render::RenderTargetStateKind::present_src);
     VR_CHECK(active_view->background_override.gpu.index == 9U);
 }
 

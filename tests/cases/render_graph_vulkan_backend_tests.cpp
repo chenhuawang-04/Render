@@ -2155,9 +2155,9 @@ VR_TEST_CASE(RenderGraphRuntimeService_builds_bloom_chain_from_scene_recorder_3d
     host.PrepareTickFrame(graph_recorder, 0U);
     VR_CHECK(recorder.Stats().frame_packet_record_count == 0U);
     VR_CHECK(!host.HasRenderTargetPool() ||
-             host.TargetPool().Stats().acquire_count == 0U);
+             host.RenderTargetPoolStats().acquire_count == 0U);
     VR_CHECK(!host.HasRenderTargetPool() ||
-             host.TargetPool().Stats().reuse_hit_count == 0U);
+             host.RenderTargetPoolStats().reuse_hit_count == 0U);
 
     struct MockPhaseContext final {
         struct FrameContext final {
@@ -2193,9 +2193,9 @@ VR_TEST_CASE(RenderGraphRuntimeService_builds_bloom_chain_from_scene_recorder_3d
     VR_REQUIRE(compiled != nullptr);
     VR_CHECK(recorder.Stats().frame_packet_record_count == 0U);
     VR_CHECK(!host.HasRenderTargetPool() ||
-             host.TargetPool().Stats().acquire_count == 0U);
+             host.RenderTargetPoolStats().acquire_count == 0U);
     VR_CHECK(!host.HasRenderTargetPool() ||
-             host.TargetPool().Stats().reuse_hit_count == 0U);
+             host.RenderTargetPoolStats().reuse_hit_count == 0U);
     VR_CHECK(!compiled->Passes().empty());
     VR_CHECK(compiled->HasExecutablePasses());
     VR_CHECK(compiled->TransientAllocations().timeline.saved_bytes > 0U);

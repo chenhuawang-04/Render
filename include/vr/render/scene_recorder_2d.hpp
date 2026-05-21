@@ -121,14 +121,11 @@ public:
     void Shutdown(VulkanContext& context_) noexcept;
 
     void BindRuntimeResources(VulkanContext& context_,
-                              RenderTargetHost& render_target_host_,
-                              RenderTargetPool* render_target_pool_) noexcept;
+                              RenderTargetHost& render_target_host_) noexcept;
 
     template<typename RuntimeT>
     void BindRuntime(RuntimeT& runtime_) noexcept {
-        BindRuntimeResources(runtime_.Context(),
-                             runtime_.RenderTarget(),
-                             runtime_.HasRenderTargetPool() ? &runtime_.TargetPool() : nullptr);
+        BindRuntimeResources(runtime_.Context(), runtime_.RenderTarget());
         if constexpr (requires(RuntimeT& runtime_ref_) {
                           runtime_ref_.Services();
                       }) {
@@ -200,7 +197,6 @@ public:
             .register_graph_imported_resources_fn =
                 ResolveGraphImportedResourcesFn<RendererT>(),
             .swapchain_recreated_fn = &OnSwapchainRecreatedRenderer<RendererT>,
-            .configure_scene_fn = &ConfigureSceneRendererBinding<RendererT>,
             .configure_direct_scene_fn = &ConfigureDirectSceneRendererBinding<RendererT>,
             .configure_lighting_fn = &ConfigureSceneLightingBinding<RendererT>,
             .set_output_target_fn = &SetOverlayOutputTarget<RendererT>,
@@ -226,7 +222,6 @@ public:
             .register_graph_imported_resources_fn =
                 ResolveGraphImportedResourcesFn<RendererT>(),
             .swapchain_recreated_fn = &OnSwapchainRecreatedRenderer<RendererT>,
-            .configure_scene_consumer_fn = &ConfigureSceneConsumerBinding<RendererT>,
             .set_output_target_fn = &SetOverlayOutputTarget<RendererT>,
         };
         SetSceneConsumerEntry(entry);
@@ -267,9 +262,6 @@ public:
                           const render_graph::FrameSnapshot2D& snapshot_,
                           const render_graph::MinimalFrameGraphBuildResult<ecs::Dim2>& build_result_,
                           render_graph::ResourceVersionHandle& color_chain_);
-    void Record(const FrameRecordContext& record_context_);
-    void Record(const FrameRecordContext& record_context_,
-                const RenderScenePacket2D& frame_packet_);
     void OnSwapchainRecreated(std::uint32_t image_count_,
                               VkExtent2D extent_,
                               VkFormat format_,
@@ -283,8 +275,6 @@ public:
     [[nodiscard]] const SceneRecorder2DStats& Stats() const noexcept;
     [[nodiscard]] const RenderScenePacket2D* FramePacket() const noexcept;
     [[nodiscard]] const RenderView2D* ActiveView() const noexcept;
-    [[nodiscard]] SceneRenderTargetSet& SceneTargets() noexcept;
-    [[nodiscard]] const SceneRenderTargetSet& SceneTargets() const noexcept;
 
     [[nodiscard]] static RenderTargetColorOutputConfig MakePresentOverlayOutputConfig() noexcept;
 
@@ -316,13 +306,11 @@ private:
                                           VkFormat,
                                           std::uint64_t,
                                           std::uint64_t);
-    using ConfigureSceneFn = bool (*)(void*, const SceneRenderTargetSet&, SceneRenderPassRole);
     using ConfigureDirectSceneFn = void (*)(void*,
                                             SceneRenderPassRole,
                                             const RenderTargetColorOutputConfig&,
                                             const RenderTargetDepthOutputConfig*,
                                             bool);
-    using ConfigureSceneConsumerFn = bool (*)(void*, const SceneRenderTargetSet&);
     using ConfigureLightingFn = void (*)(void*,
                                          render::LightFrameCoordinator<ecs::Dim2>*,
                                          render::LightShadowLinkCoordinator2D*,
@@ -357,7 +345,6 @@ private:
         DescribeGraphBindingsFn describe_graph_bindings_fn = nullptr;
         RegisterGraphImportedResourcesFn register_graph_imported_resources_fn = nullptr;
         SwapchainRecreatedFn swapchain_recreated_fn = nullptr;
-        ConfigureSceneFn configure_scene_fn = nullptr;
         ConfigureDirectSceneFn configure_direct_scene_fn = nullptr;
         ConfigureLightingFn configure_lighting_fn = nullptr;
         SetOverlayOutputFn set_output_target_fn = nullptr;
@@ -374,7 +361,6 @@ private:
         DescribeGraphBindingsFn describe_graph_bindings_fn = nullptr;
         RegisterGraphImportedResourcesFn register_graph_imported_resources_fn = nullptr;
         SwapchainRecreatedFn swapchain_recreated_fn = nullptr;
-        ConfigureSceneConsumerFn configure_scene_consumer_fn = nullptr;
         SetOverlayOutputFn set_output_target_fn = nullptr;
     };
 
@@ -592,13 +578,6 @@ private:
     }
 
     template<typename RendererT>
-    static bool ConfigureSceneRendererBinding(void* renderer_,
-                                              const SceneRenderTargetSet& target_set_,
-                                              SceneRenderPassRole pass_role_) {
-        return target_set_.ConfigureSceneRenderer(*static_cast<RendererT*>(renderer_), pass_role_);
-    }
-
-    template<typename RendererT>
     static void ConfigureDirectSceneRendererBinding(
         void* renderer_,
         SceneRenderPassRole,
@@ -619,12 +598,6 @@ private:
             throw std::runtime_error(
                 "SceneRecorder2D direct scene output requires depth target support");
         }
-    }
-
-    template<typename ConsumerT>
-    static bool ConfigureSceneConsumerBinding(void* renderer_,
-                                              const SceneRenderTargetSet& target_set_) {
-        return target_set_.ConfigureSceneConsumer(*static_cast<ConsumerT*>(renderer_));
     }
 
     template<typename RendererT>
@@ -692,10 +665,9 @@ private:
     [[nodiscard]] bool IsLayerVisibleForSubmission(std::uint32_t submission_layer_mask_) const noexcept;
     [[nodiscard]] bool IsOverlayLayerVisibleForSubmission(std::uint32_t submission_layer_mask_) const noexcept;
     [[nodiscard]] bool SupportsGraphExecution(const VulkanContext& device_) const noexcept;
-    [[nodiscard]] bool UsesGraphManagedSceneTargets() const noexcept;
+    [[nodiscard]] bool UsesGraphManagedSceneOutput() const noexcept;
     void ConfigureBackgroundPassForTargets();
     void ConfigureSceneRenderersForTargets();
-    void ConfigureSceneConsumerForTargets();
     [[nodiscard]] RenderTargetColorOutputConfig BuildBackgroundOutputConfig() const noexcept;
     [[nodiscard]] RenderTargetColorOutputConfig BuildDirectSceneOutputConfig(
         SceneRenderPassRole pass_role_) const noexcept;
@@ -714,14 +686,12 @@ private:
     SceneRecorder2DCreateInfo create_info_cache{};
     SceneRecorder2DStats stats{};
     BackgroundPass2D background_pass{};
-    SceneRenderTargetSet scene_targets{};
     SceneRecorder2DMcVector<PreSceneRendererEntry> pre_scene_renderer_entries{};
     SceneRecorder2DMcVector<SceneRendererEntry> scene_renderer_entries{};
     SceneConsumerEntry scene_consumer_entry{};
     SceneRecorder2DMcVector<OverlayRendererEntry> overlay_renderer_entries{};
     VulkanContext* context = nullptr;
     RenderTargetHost* render_target_host = nullptr;
-    RenderTargetPool* render_target_pool = nullptr;
     runtime::services::RenderGraphRuntimeService* graph_runtime_service = nullptr;
     render::LightFrameCoordinator<ecs::Dim2>* light_frame_coordinator = nullptr;
     render::ShadowFrameCoordinator<ecs::Dim2>* shadow_frame_coordinator = nullptr;

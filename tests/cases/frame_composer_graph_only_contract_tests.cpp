@@ -36,14 +36,25 @@ namespace {
 
 VR_TEST_CASE(FrameComposer_graph_only_mainline_source_avoids_scene_level_transition_and_transient_acquire_calls,
              "unit;contract;frame_composer;render_graph") {
+    const std::string host_header =
+        ReadUtf8TextFile(SourceRoot() / "include" / "vr" / "render" /
+                         "frame_composer_host.hpp");
     const std::string host_source =
         ReadUtf8TextFile(SourceRoot() / "src" / "render" / "frame_composer_host.cpp");
     const std::string composite_source =
         ReadUtf8TextFile(SourceRoot() / "src" / "render" / "render_target_composite_renderer.cpp");
 
-    VR_CHECK(Contains(host_source, "PrepareGraphManagedSceneTargets("));
+    VR_CHECK(Contains(host_source, "frame_composer_hdr_color"));
+    VR_CHECK(!Contains(host_header, "FrameComposerTargets"));
+    VR_CHECK(!Contains(host_header, "SceneRenderTargetSet"));
+    VR_CHECK(!Contains(host_header, "ConfigureSceneRenderer("));
+    VR_CHECK(!Contains(host_header, "ResetSceneRenderer("));
+    VR_CHECK(!Contains(host_header, "RecordTonemapPass("));
+    VR_CHECK(!Contains(host_source, "FrameComposerHost::RecordTonemapPass("));
     VR_CHECK(!Contains(host_source, "PrepareFrameAndConfigure("));
     VR_CHECK(!Contains(host_source, "OnSwapchainRecreatedAndConfigure("));
+    VR_CHECK(!Contains(host_source, "scene_targets"));
+    VR_CHECK(!Contains(host_source, "scene_targets.ColorTarget()"));
     VR_CHECK(!Contains(host_source, "AcquireTransientTarget("));
     VR_CHECK(!Contains(host_source, "CreateTransientTarget("));
     VR_CHECK(!Contains(composite_source, "RecordTransition("));

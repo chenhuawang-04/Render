@@ -6,7 +6,6 @@
 #include "vr/runtime/services/bound_host_service.hpp"
 #include "vr/runtime/services/descriptor_service.hpp"
 #include "vr/runtime/services/pipeline_service.hpp"
-#include "vr/runtime/services/render_target_pool_service.hpp"
 #include "vr/runtime/services/render_target_service.hpp"
 
 #include <string_view>
@@ -19,8 +18,7 @@ public:
     using Dependencies = vr::runtime::DependsOn<
         DescriptorService,
         PipelineService,
-        RenderTargetService,
-        RenderTargetPoolService>;
+        RenderTargetService>;
     static constexpr std::string_view Name = "FrameComposerService";
 
     [[nodiscard]] vr::render::FrameComposerHost& Host() {

@@ -26,7 +26,6 @@
 #include "vr/runtime/services/particle_upload_service.hpp"
 #include "vr/runtime/services/pipeline_service.hpp"
 #include "vr/runtime/services/render_graph_runtime_service.hpp"
-#include "vr/runtime/services/render_target_pool_service.hpp"
 #include "vr/runtime/services/render_target_service.hpp"
 #include "vr/runtime/services/sampler_service.hpp"
 #include "vr/runtime/services/sky_environment_service.hpp"
@@ -80,6 +79,30 @@ struct RuntimeModulesCreateInfo {
 
 using RuntimeDiagnosticsCreateInfo = vr::runtime::RuntimeDiagnosticsCreateInfo;
 using RuntimeFrameDiagnostics = vr::runtime::RuntimeFrameDiagnosticsV2;
+
+template<typename RecorderT>
+concept RuntimeTickRecorder = FrameRecorder<RecorderT> ||
+                              FrameContextRecorder<RecorderT> ||
+                              requires(RecorderT& recorder_,
+                                       const SceneRecorder2DPrepareView& prepare_view_) {
+                                  recorder_.PrepareFrame(prepare_view_);
+                              } ||
+                              requires(RecorderT& recorder_,
+                                       const SceneRecorder3DPrepareView& prepare_view_) {
+                                  recorder_.PrepareFrame(prepare_view_);
+                              } ||
+                              requires(RecorderT& recorder_,
+                                       const FrameComposerPrepareView& prepare_view_) {
+                                  recorder_.PrepareFrame(prepare_view_);
+                              } ||
+                              requires(RecorderT& recorder_,
+                                       const RenderTargetBloomRendererPrepareView& prepare_view_) {
+                                  recorder_.PrepareFrame(prepare_view_);
+                              } ||
+                              requires(RecorderT& recorder_,
+                                       const RenderTargetCompositeRendererPrepareView& prepare_view_) {
+                                  recorder_.PrepareFrame(prepare_view_);
+                              };
 
 template<typename BackendTagT = platform::ActiveBackendTag,
          uint32_t frames_in_flight_v = 2U>
@@ -776,7 +799,7 @@ public:
     }
 
     template<typename RecorderT>
-    requires (FrameRecorder<RecorderT> || FrameContextRecorder<RecorderT>)
+    requires RuntimeTickRecorder<RecorderT>
     void PrepareTickFrame(RecorderT& recorder_, const std::uint32_t frame_index_) {
         DispatchPrepareFrame(recorder_, frame_index_);
     }
@@ -811,7 +834,7 @@ public:
     }
 
     template<typename RecorderT>
-    requires (FrameRecorder<RecorderT> || FrameContextRecorder<RecorderT>)
+    requires RuntimeTickRecorder<RecorderT>
     [[nodiscard]] AcquiredFrame AcquireTickFrame(RecorderT& recorder_,
                                                  const std::uint64_t frame_id_,
                                                  const TickUploadFlushResult& upload_flush_) {
@@ -825,7 +848,7 @@ public:
     }
 
     template<typename RecorderT>
-    requires (FrameRecorder<RecorderT> || FrameContextRecorder<RecorderT>)
+    requires RuntimeTickRecorder<RecorderT>
     void RecordTickFrame(RecorderT& recorder_,
                          const AcquiredFrame& acquired_frame_,
                          const VkCommandBuffer command_buffer_) {
@@ -882,14 +905,14 @@ public:
     }
 
     template<typename RecorderT>
-    requires (FrameRecorder<RecorderT> || FrameContextRecorder<RecorderT>)
+    requires RuntimeTickRecorder<RecorderT>
     [[nodiscard]] RuntimeTickResult Tick(RecorderT& recorder_) {
         DefaultPhaseDriver phase_driver{*this};
         return TickWithPhaseDriver(recorder_, phase_driver);
     }
 
     template<typename RecorderT, typename PhaseDriverT>
-    requires (FrameRecorder<RecorderT> || FrameContextRecorder<RecorderT>)
+    requires RuntimeTickRecorder<RecorderT>
     [[nodiscard]] RuntimeTickResult TickWithPhaseDriver(RecorderT& recorder_,
                                                         PhaseDriverT& phase_driver_) {
         auto begin = BeginTickFrame();
@@ -1037,6 +1060,10 @@ public:
 
     [[nodiscard]] bool HasRenderTargetPool() const noexcept {
         return render_target_pool_initialized;
+    }
+
+    [[nodiscard]] const RenderTargetPoolStats& RenderTargetPoolStats() const noexcept {
+        return render_target_pool.Stats();
     }
 
     [[nodiscard]] bool HasSamplerHost() const noexcept {
@@ -1251,13 +1278,6 @@ public:
             throw std::runtime_error("RenderRuntimeHost::RenderTarget requested but host is not initialized");
         }
         return render_target_host;
-    }
-
-    [[nodiscard]] RenderTargetPool& TargetPool() {
-        if (!render_target_pool_initialized) {
-            throw std::runtime_error("RenderRuntimeHost::RenderTargetPool requested but pool is not initialized");
-        }
-        return render_target_pool;
     }
 
     [[nodiscard]] resource::SamplerHost& Sampler() {
@@ -1575,12 +1595,6 @@ private:
             render_target_service_ref.Reset();
         }
 
-        if (render_target_pool_initialized) {
-            render_target_pool_service_ref.Bind(render_target_pool);
-        } else {
-            render_target_pool_service_ref.Reset();
-        }
-
         if (sampler_initialized) {
             sampler_service_ref.Bind(sampler_host);
         } else {
@@ -1654,7 +1668,6 @@ private:
                           texture_service_ref,
                           render_target_service_ref,
                           render_graph_runtime_service_ref,
-                          render_target_pool_service_ref,
                           frame_composer_service_ref,
                           ibl_service_ref,
                           sky_environment_service_ref,
@@ -1738,7 +1751,6 @@ private:
                 .sky_environment = sky_environment_initialized ? &sky_environment_gpu_host : nullptr,
                 .pipeline = pipeline_initialized ? &pipeline_host : nullptr,
                 .render_target = render_target_host,
-                .render_target_pool = render_target_pool_initialized ? &render_target_pool : nullptr,
                 .sampler = sampler_initialized ? &sampler_host : nullptr,
                 .freetype = freetype_initialized ? &freetype_host : nullptr,
                 .glyph_atlas = glyph_atlas_initialized ? &glyph_atlas_host : nullptr,
@@ -1830,7 +1842,6 @@ private:
                 .ibl_bake = ibl_bake_initialized ? &ibl_bake_host : nullptr,
                 .pipeline = pipeline_initialized ? &pipeline_host : nullptr,
                 .render_target = render_target_host,
-                .render_target_pool = render_target_pool_initialized ? &render_target_pool : nullptr,
                 .sampler = sampler_initialized ? &sampler_host : nullptr,
                 .freetype = freetype_initialized ? &freetype_host : nullptr,
                 .glyph_atlas = glyph_atlas_initialized ? &glyph_atlas_host : nullptr,
@@ -1884,7 +1895,6 @@ private:
                 .sampler = sampler_host,
                 .render_target = render_target_host,
                 .bindless = bindless_resources_initialized ? &bindless_resource_system : nullptr,
-                .render_target_pool = render_target_pool_initialized ? &render_target_pool : nullptr,
                 .frame = frame,
                 .progress = progress,
             });
@@ -1911,36 +1921,10 @@ private:
                         recorder_.BuildRenderGraph(builder_ref_,
                                                    present_target_ref_,
                                                    reference_extent_ref_,
-                                                   present_ready_version_ref_,
+                                                  present_ready_version_ref_,
                                                    register_imported_texture_ref_);
                     });
             }
-        } else if constexpr (requires(RecorderT& recorder_ref_,
-                                      const SceneRenderTargetSetPrepareView& prepare_view_) {
-                                 recorder_ref_.PrepareFrame(prepare_view_);
-                             }) {
-            recorder_.PrepareFrame(SceneRenderTargetSetPrepareView{
-                .device = device,
-                .render_target = render_target_host,
-                .render_target_pool = render_target_pool_initialized ? &render_target_pool : nullptr,
-                .frame = frame,
-                .progress = progress,
-            });
-        } else if constexpr (requires(RecorderT& recorder_ref_,
-                                      const SceneBloomPostStackPrepareView& prepare_view_) {
-                                 recorder_ref_.PrepareFrame(prepare_view_);
-                             }) {
-            recorder_.PrepareFrame(SceneBloomPostStackPrepareView{
-                .device = device,
-                .descriptor = descriptor_host,
-                .pipeline = pipeline_host,
-                .render_target = render_target_host,
-                .render_target_pool = render_target_pool_initialized ? &render_target_pool : nullptr,
-                .sampler = sampler_host,
-                .bindless = bindless_resources_initialized ? &bindless_resource_system : nullptr,
-                .frame = frame,
-                .progress = progress,
-            });
         } else if constexpr (requires(RecorderT& recorder_ref_,
                                       const RenderTargetBloomRendererPrepareView& prepare_view_) {
                                  recorder_ref_.PrepareFrame(prepare_view_);
@@ -2183,7 +2167,7 @@ private:
 
             if constexpr (FrameContextRecorder<RecorderT>) {
                 recorder.Record(augmented);
-            } else {
+            } else if constexpr (FrameRecorder<RecorderT>) {
                 recorder.Record(augmented.command_buffer,
                                 augmented.frame_index,
                                 augmented.image_index,
@@ -2191,6 +2175,9 @@ private:
                                 augmented.format,
                                 augmented.image,
                                 augmented.image_view);
+            } else {
+                throw std::runtime_error(
+                    "RenderRuntimeHost requires graph work source when recorder omits legacy Record entry points");
             }
         }
 
@@ -2210,9 +2197,6 @@ private:
                 (void)runtime.frame_composer_host.OnSwapchainRecreated(
                     runtime.platform_host.Context(),
                     runtime.render_target_host,
-                    runtime.render_target_pool_initialized
-                        ? &runtime.render_target_pool
-                        : nullptr,
                     extent_,
                     last_submitted_value_,
                     completed_submit_value_);
@@ -2550,7 +2534,6 @@ private:
     runtime::services::DescriptorService descriptor_service_ref{};
     runtime::services::PipelineService pipeline_service_ref{};
     runtime::services::RenderTargetService render_target_service_ref{};
-    runtime::services::RenderTargetPoolService render_target_pool_service_ref{};
     runtime::services::SamplerService sampler_service_ref{};
     runtime::services::FrameComposerService frame_composer_service_ref{};
     runtime::services::IblService ibl_service_ref{};

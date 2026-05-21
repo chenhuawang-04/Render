@@ -207,7 +207,6 @@ public:
     }
 
     template<typename RecorderT>
-    requires (FrameRecorder<RecorderT> || FrameContextRecorder<RecorderT>)
     [[nodiscard]] AcquiredFrame AcquireFrame(VulkanContext& context_,
                                              const WindowSurfaceT& window_surface_,
                                              SwapchainHostT& swapchain_,

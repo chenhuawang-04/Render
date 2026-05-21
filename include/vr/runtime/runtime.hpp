@@ -400,8 +400,8 @@ public:
         return host.RenderTarget();
     }
 
-    [[nodiscard]] vr::render::RenderTargetPool& TargetPool() {
-        return host.TargetPool();
+    [[nodiscard]] const vr::render::RenderTargetPoolStats& RenderTargetPoolStats() const noexcept {
+        return host.RenderTargetPoolStats();
     }
 
     [[nodiscard]] resource::SamplerHost& Sampler() {
@@ -742,7 +742,7 @@ private:
             diagnostics.render_target = host.RenderTarget().Stats();
         }
         if (host.HasRenderTargetPool()) {
-            diagnostics.render_target_pool = host.TargetPool().Stats();
+            diagnostics.render_target_pool = host.RenderTargetPoolStats();
             diagnostics.allocations.render_target_transient_acquired_count =
                 static_cast<std::uint32_t>(diagnostics.render_target_pool.acquire_count);
         }

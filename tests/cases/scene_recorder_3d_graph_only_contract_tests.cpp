@@ -36,10 +36,19 @@ namespace {
 
 VR_TEST_CASE(SceneRecorder3D_graph_only_mainline_source_avoids_scene_level_transition_and_transient_acquire_calls,
              "unit;contract;scene3d;render_graph") {
+    const std::string header =
+        ReadUtf8TextFile(SourceRoot() / "include" / "vr" / "render" /
+                         "scene_recorder_3d.hpp");
     const std::string source =
         ReadUtf8TextFile(SourceRoot() / "src" / "render" / "scene_recorder_3d.cpp");
 
-    VR_CHECK(Contains(source, "UsesGraphManagedPostStack("));
+    VR_CHECK(Contains(source, "UsesGraphManagedBloomChain("));
+    VR_CHECK(!Contains(header, "SceneBloomPostStack& PostStack("));
+    VR_CHECK(!Contains(header, "const SceneBloomPostStack& PostStack("));
+    VR_CHECK(!Contains(header, "SceneBloomPostStack post_stack"));
+    VR_CHECK(!Contains(source, "SceneRecorder3D::Record("));
+    VR_CHECK(!Contains(source, "color_final_state"));
+    VR_CHECK(!Contains(source, "depth_final_state"));
     VR_CHECK(!Contains(source, "PreferGraphOnlyRuntimePath("));
     VR_CHECK(!Contains(source, "RecordTransition("));
     VR_CHECK(!Contains(source, "AcquireTransientTarget("));

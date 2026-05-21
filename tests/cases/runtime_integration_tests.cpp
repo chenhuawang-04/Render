@@ -193,67 +193,6 @@ private:
     return vr::render::ResolveFirstSupportedDepthStencilFormat(context_, candidates);
 }
 
-class TransientPoolRecorder final {
-public:
-    void PrepareFrame(const vr::render::SceneRecorder2DPrepareView& prepare_view_) {
-        if (prepare_view_.render_target_pool == nullptr) {
-            return;
-        }
-
-        if (selected_format == VK_FORMAT_UNDEFINED) {
-            selected_format = SelectTransientColorFormat(prepare_view_.device);
-            if (selected_format == VK_FORMAT_UNDEFINED) {
-                return;
-            }
-        }
-
-        vr::render::RenderTargetDesc desc{};
-        desc.debug_name = "TransientPoolRecorderColor";
-        desc.dimension = vr::render::RenderTargetDimension::image_2d;
-        desc.lifetime = vr::render::RenderTargetLifetime::transient;
-        desc.scale_mode = vr::render::RenderTargetScaleMode::absolute;
-        desc.width = 96U;
-        desc.height = 64U;
-        desc.depth = 1U;
-        desc.format = selected_format;
-        desc.samples = VK_SAMPLE_COUNT_1_BIT;
-        desc.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
-        desc.aspect = VK_IMAGE_ASPECT_COLOR_BIT;
-        desc.color_encoding = vr::render::RenderTargetColorEncoding::linear;
-
-        const auto acquire_result = prepare_view_.render_target_pool->AcquireTransientTarget(
-            prepare_view_.device,
-            prepare_view_.render_target,
-            desc);
-        acquired_handles.push_back(acquire_result.handle);
-        reused_count += acquire_result.reused ? 1U : 0U;
-        created_count += acquire_result.created ? 1U : 0U;
-    }
-
-    void Record(const vr::render::FrameRecordContext& record_context_) {
-        clear_recorder.Record(record_context_);
-    }
-
-    [[nodiscard]] std::uint32_t ReusedCount() const noexcept {
-        return reused_count;
-    }
-
-    [[nodiscard]] std::uint32_t CreatedCount() const noexcept {
-        return created_count;
-    }
-
-    [[nodiscard]] std::uint32_t AcquiredCount() const noexcept {
-        return static_cast<std::uint32_t>(acquired_handles.size());
-    }
-
-private:
-    ClearToPresentRecorder clear_recorder{};
-    vr::McVector<vr::render::RenderTargetHandle> acquired_handles{};
-    VkFormat selected_format = VK_FORMAT_UNDEFINED;
-    std::uint32_t reused_count = 0U;
-    std::uint32_t created_count = 0U;
-};
-
 class SwapchainLifecycleRecorder final {
 public:
     void OnSwapchainRecreated(std::uint32_t image_count_,
@@ -516,7 +455,6 @@ VR_TEST_CASE(RuntimeIntegration_render_target_pool_reuses_transient_targets, "in
     create_info.render_loop.swapchain.preferred_image_count = 2U;
     create_info.poll_events_each_tick = true;
 
-    TransientPoolRecorder recorder{};
     try {
         runtime.Initialize(create_info);
     } catch (const std::exception& exception_) {
@@ -527,28 +465,45 @@ VR_TEST_CASE(RuntimeIntegration_render_target_pool_reuses_transient_targets, "in
     }
 
     VR_REQUIRE(runtime.HasRenderTargetHost());
-    VR_REQUIRE(runtime.HasRenderTargetPool());
+    const VkFormat selected_format = SelectTransientColorFormat(runtime.Context());
+    VR_REQUIRE(selected_format != VK_FORMAT_UNDEFINED);
 
-    std::uint32_t submitted_frames = 0U;
-    constexpr std::uint32_t max_ticks = 10U;
-    for (std::uint32_t tick_index = 0U;
-         tick_index < max_ticks && runtime.IsRunning();
-         ++tick_index) {
-        const Runtime::RuntimeTickResult tick_result = runtime.Tick(recorder);
-        if (tick_result.render.code == vr::render::TickCode::Submitted ||
-            tick_result.render.code == vr::render::TickCode::RecreateRequested) {
-            ++submitted_frames;
-        }
-        SDL_Delay(1U);
-    }
+    vr::render::RenderTargetDesc desc{};
+    desc.debug_name = "RuntimeIntegrationTransientPoolColor";
+    desc.dimension = vr::render::RenderTargetDimension::image_2d;
+    desc.lifetime = vr::render::RenderTargetLifetime::transient;
+    desc.scale_mode = vr::render::RenderTargetScaleMode::absolute;
+    desc.width = 96U;
+    desc.height = 64U;
+    desc.depth = 1U;
+    desc.format = selected_format;
+    desc.samples = VK_SAMPLE_COUNT_1_BIT;
+    desc.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    desc.aspect = VK_IMAGE_ASPECT_COLOR_BIT;
+    desc.color_encoding = vr::render::RenderTargetColorEncoding::linear;
 
-    const auto pool_stats = runtime.TargetPool().Stats();
+    vr::render::RenderTargetPool pool{};
+    pool.Initialize({});
+    pool.BeginFrame(0U, 0U);
+    const auto first_acquire = pool.AcquireTransientTarget(runtime.Context(),
+                                                           runtime.RenderTarget(),
+                                                           desc);
+    pool.EndFrame(0U, 1U);
+    pool.BeginFrame(1U, 1U);
+    const auto second_acquire = pool.AcquireTransientTarget(runtime.Context(),
+                                                            runtime.RenderTarget(),
+                                                            desc);
+    const auto pool_stats = pool.Stats();
+    pool.EndFrame(1U, 2U);
+    pool.InvalidateAll(runtime.Context(), runtime.RenderTarget(), 2U, 2U);
+    pool.Shutdown();
     runtime.Shutdown();
 
-    VR_CHECK(submitted_frames > 0U);
-    VR_CHECK(recorder.AcquiredCount() > 0U);
-    VR_CHECK(recorder.CreatedCount() > 0U);
-    VR_CHECK(recorder.ReusedCount() > 0U);
+    VR_CHECK(first_acquire.created);
+    VR_CHECK(!first_acquire.reused);
+    VR_CHECK(second_acquire.reused);
+    VR_CHECK(pool_stats.acquire_count >= 2U);
+    VR_CHECK(pool_stats.reuse_hit_count >= 1U);
     VR_CHECK(pool_stats.bucket_count >= 1U);
 }
 

@@ -54,14 +54,6 @@ struct FrameGpuProgressContext final {
     std::uint64_t completed_submit_value = 0U;
 };
 
-struct SceneRenderTargetSetPrepareView final {
-    VulkanContext& device;
-    RenderTargetHost& render_target;
-    RenderTargetPool* render_target_pool = nullptr;
-    FrameStaticContext frame{};
-    FrameGpuProgressContext progress{};
-};
-
 struct FrameComposerPrepareView final {
     VulkanContext& device;
     DescriptorHost& descriptor;
@@ -69,7 +61,6 @@ struct FrameComposerPrepareView final {
     resource::SamplerHost& sampler;
     RenderTargetHost& render_target;
     BindlessResourceSystem* bindless = nullptr;
-    RenderTargetPool* render_target_pool = nullptr;
     FrameStaticContext frame{};
     FrameGpuProgressContext progress{};
 };
@@ -86,7 +77,6 @@ struct SceneRecorder2DPrepareView final {
     IblBakeHost* ibl_bake = nullptr;
     PipelineHost* pipeline = nullptr;
     RenderTargetHost& render_target;
-    RenderTargetPool* render_target_pool = nullptr;
     resource::SamplerHost* sampler = nullptr;
     text::FreeTypeHost* freetype = nullptr;
     text::GlyphAtlasHost* glyph_atlas = nullptr;
@@ -112,7 +102,6 @@ struct SceneRecorder3DPrepareView final {
     SkyEnvironmentGpuHost* sky_environment = nullptr;
     PipelineHost* pipeline = nullptr;
     RenderTargetHost& render_target;
-    RenderTargetPool* render_target_pool = nullptr;
     resource::SamplerHost* sampler = nullptr;
     text::FreeTypeHost* freetype = nullptr;
     text::GlyphAtlasHost* glyph_atlas = nullptr;
@@ -270,18 +259,6 @@ struct RenderTargetBloomRendererPrepareView final {
     FrameGpuProgressContext progress{};
 };
 
-struct SceneBloomPostStackPrepareView final {
-    VulkanContext& device;
-    DescriptorHost& descriptor;
-    PipelineHost& pipeline;
-    RenderTargetHost& render_target;
-    RenderTargetPool* render_target_pool = nullptr;
-    resource::SamplerHost& sampler;
-    BindlessResourceSystem* bindless = nullptr;
-    FrameStaticContext frame{};
-    FrameGpuProgressContext progress{};
-};
-
 struct GeometryRenderer3DPrepareView final {
     VulkanContext& device;
     UploadHost& upload;
@@ -375,17 +352,6 @@ template<typename T>
 
 } // namespace detail
 
-[[nodiscard]] inline SceneRenderTargetSetPrepareView MakeSceneRenderTargetSetPrepareView(
-    const FrameComposerPrepareView& prepare_view_) noexcept {
-    return {
-        .device = prepare_view_.device,
-        .render_target = prepare_view_.render_target,
-        .render_target_pool = prepare_view_.render_target_pool,
-        .frame = prepare_view_.frame,
-        .progress = prepare_view_.progress,
-    };
-}
-
 [[nodiscard]] inline RenderTargetCompositeRendererPrepareView MakeRenderTargetCompositeRendererPrepareView(
     const FrameComposerPrepareView& prepare_view_) noexcept {
     return {
@@ -434,52 +400,6 @@ template<typename T>
         .sampler = detail::RequirePrepareService(prepare_view_.sampler,
                                                  "sampler",
                                                  "RenderTargetCompositeRendererPrepareView"),
-        .bindless = prepare_view_.bindless,
-        .frame = prepare_view_.frame,
-        .progress = prepare_view_.progress,
-    };
-}
-
-[[nodiscard]] inline RenderTargetBloomRendererPrepareView MakeRenderTargetBloomRendererPrepareView(
-    const SceneRecorder2DPrepareView& prepare_view_) {
-    return {
-        .device = prepare_view_.device,
-        .descriptor = detail::RequirePrepareService(prepare_view_.descriptor,
-                                                    "descriptor",
-                                                    "RenderTargetBloomRendererPrepareView"),
-        .pipeline = detail::RequirePrepareService(prepare_view_.pipeline,
-                                                  "pipeline",
-                                                  "RenderTargetBloomRendererPrepareView"),
-        .render_target = prepare_view_.render_target,
-        .render_target_pool = detail::RequirePrepareService(prepare_view_.render_target_pool,
-                                                            "render_target_pool",
-                                                            "RenderTargetBloomRendererPrepareView"),
-        .sampler = detail::RequirePrepareService(prepare_view_.sampler,
-                                                 "sampler",
-                                                 "RenderTargetBloomRendererPrepareView"),
-        .bindless = prepare_view_.bindless,
-        .frame = prepare_view_.frame,
-        .progress = prepare_view_.progress,
-    };
-}
-
-[[nodiscard]] inline RenderTargetBloomRendererPrepareView MakeRenderTargetBloomRendererPrepareView(
-    const SceneRecorder3DPrepareView& prepare_view_) {
-    return {
-        .device = prepare_view_.device,
-        .descriptor = detail::RequirePrepareService(prepare_view_.descriptor,
-                                                    "descriptor",
-                                                    "RenderTargetBloomRendererPrepareView"),
-        .pipeline = detail::RequirePrepareService(prepare_view_.pipeline,
-                                                  "pipeline",
-                                                  "RenderTargetBloomRendererPrepareView"),
-        .render_target = prepare_view_.render_target,
-        .render_target_pool = detail::RequirePrepareService(prepare_view_.render_target_pool,
-                                                            "render_target_pool",
-                                                            "RenderTargetBloomRendererPrepareView"),
-        .sampler = detail::RequirePrepareService(prepare_view_.sampler,
-                                                 "sampler",
-                                                 "RenderTargetBloomRendererPrepareView"),
         .bindless = prepare_view_.bindless,
         .frame = prepare_view_.frame,
         .progress = prepare_view_.progress,
@@ -800,27 +720,6 @@ template<typename T>
     };
 }
 
-[[nodiscard]] inline SceneBloomPostStackPrepareView MakeSceneBloomPostStackPrepareView(
-    const SceneRecorder3DPrepareView& prepare_view_) {
-    return {
-        .device = prepare_view_.device,
-        .descriptor = detail::RequirePrepareService(prepare_view_.descriptor,
-                                                    "descriptor",
-                                                    "SceneBloomPostStackPrepareView"),
-        .pipeline = detail::RequirePrepareService(prepare_view_.pipeline,
-                                                  "pipeline",
-                                                  "SceneBloomPostStackPrepareView"),
-        .render_target = prepare_view_.render_target,
-        .render_target_pool = prepare_view_.render_target_pool,
-        .sampler = detail::RequirePrepareService(prepare_view_.sampler,
-                                                 "sampler",
-                                                 "SceneBloomPostStackPrepareView"),
-        .bindless = prepare_view_.bindless,
-        .frame = prepare_view_.frame,
-        .progress = prepare_view_.progress,
-    };
-}
-
 [[nodiscard]] inline ShadowRenderer3DPrepareView MakeShadowRenderer3DPrepareView(
     const SceneRecorder3DPrepareView& prepare_view_) {
     return {
@@ -864,23 +763,6 @@ template<typename T>
                                                       "glyph_upload",
                                                       "TextRenderer3DPrepareView"),
         .prefer_render_graph_upload_path = prepare_view_.prefer_render_graph_upload_path,
-        .frame = prepare_view_.frame,
-        .progress = prepare_view_.progress,
-    };
-}
-
-[[nodiscard]] inline RenderTargetBloomRendererPrepareView MakeRenderTargetBloomRendererPrepareView(
-    const SceneBloomPostStackPrepareView& prepare_view_) {
-    return {
-        .device = prepare_view_.device,
-        .descriptor = prepare_view_.descriptor,
-        .pipeline = prepare_view_.pipeline,
-        .render_target = prepare_view_.render_target,
-        .render_target_pool = detail::RequirePrepareService(prepare_view_.render_target_pool,
-                                                            "render_target_pool",
-                                                            "RenderTargetBloomRendererPrepareView"),
-        .sampler = prepare_view_.sampler,
-        .bindless = prepare_view_.bindless,
         .frame = prepare_view_.frame,
         .progress = prepare_view_.progress,
     };

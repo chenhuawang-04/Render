@@ -195,10 +195,6 @@ public:
         recorder.PrepareFrame(prepare_view_, packet);
     }
 
-    void Record(const vr::render::FrameRecordContext& record_context_) {
-        recorder.Record(record_context_);
-    }
-
     void OnSwapchainRecreated(std::uint32_t image_count_,
                               VkExtent2D extent_,
                               VkFormat format_,

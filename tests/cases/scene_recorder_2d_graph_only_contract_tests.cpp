@@ -36,10 +36,19 @@ namespace {
 
 VR_TEST_CASE(SceneRecorder2D_graph_only_mainline_source_avoids_scene_level_transition_and_transient_acquire_calls,
              "unit;contract;scene2d;render_graph") {
+    const std::string header =
+        ReadUtf8TextFile(SourceRoot() / "include" / "vr" / "render" /
+                         "scene_recorder_2d.hpp");
     const std::string source =
         ReadUtf8TextFile(SourceRoot() / "src" / "render" / "scene_recorder_2d.cpp");
 
-    VR_CHECK(Contains(source, "UsesGraphManagedSceneTargets("));
+    VR_CHECK(Contains(source, "UsesGraphManagedSceneOutput("));
+    VR_CHECK(!Contains(header, "SceneRenderTargetSet& SceneTargets("));
+    VR_CHECK(!Contains(header, "const SceneRenderTargetSet& SceneTargets("));
+    VR_CHECK(!Contains(header, "SceneRenderTargetSet scene_targets"));
+    VR_CHECK(!Contains(source, "SceneRecorder2D::Record("));
+    VR_CHECK(!Contains(source, "color_final_state"));
+    VR_CHECK(!Contains(source, "depth_final_state"));
     VR_CHECK(!Contains(source, "PreferGraphOnlyRuntimePath("));
     VR_CHECK(!Contains(source, "RecordTransition("));
     VR_CHECK(!Contains(source, "AcquireTransientTarget("));

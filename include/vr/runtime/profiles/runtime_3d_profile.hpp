@@ -15,7 +15,6 @@
 #include "vr/runtime/services/particle_upload_service.hpp"
 #include "vr/runtime/services/pipeline_service.hpp"
 #include "vr/runtime/services/render_graph_runtime_service.hpp"
-#include "vr/runtime/services/render_target_pool_service.hpp"
 #include "vr/runtime/services/render_target_service.hpp"
 #include "vr/runtime/services/sampler_service.hpp"
 #include "vr/runtime/services/sky_environment_service.hpp"
@@ -34,7 +33,6 @@ using Runtime3DProfile = vr::runtime::RuntimeProfile<
     services::TextureService,
     services::RenderTargetService,
     services::RenderGraphRuntimeService,
-    services::RenderTargetPoolService,
     services::FrameComposerService,
     services::IblService,
     services::SkyEnvironmentService,

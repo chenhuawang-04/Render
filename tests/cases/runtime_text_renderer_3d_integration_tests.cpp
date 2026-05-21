@@ -621,7 +621,7 @@ VR_TEST_CASE(RuntimeIntegration_text_renderer_3d_bloom_post_stack_smoke,
 
             const vr::text::TextRenderer3DStats& text_stats = text_renderer.Stats();
             const vr::render::RenderTargetBloomRendererStats& bloom_stats =
-                recorder.PostStack().Stats();
+                recorder.BloomStats();
             max_instance_count = std::max(max_instance_count, text_stats.instance_count);
             max_draw_batches = std::max(max_draw_batches, text_stats.draw_batch_count);
             max_draw_calls = std::max(max_draw_calls, text_stats.draw_call_count);
@@ -663,25 +663,12 @@ VR_TEST_CASE(RuntimeIntegration_text_renderer_3d_bloom_post_stack_smoke,
         VR_CHECK(graph_only_record_active);
         VR_CHECK(runtime.GlyphUpload().Stats().uploaded_rect_count > 0U);
         VR_CHECK(recorder.Stats().frame_packet_prepare_count > 0U);
-        VR_CHECK(graph_only_record_active
-                     ? (recorder.Stats().frame_packet_record_count == 0U)
-                     : (recorder.Stats().frame_packet_record_count > 0U));
+        VR_CHECK(recorder.Stats().frame_packet_record_count == 0U);
         VR_CHECK(recorder.ActiveView() == &main_view);
         VR_CHECK(recorder.ActiveView() != nullptr);
         VR_CHECK(recorder.ActiveView()->camera == &camera);
-        if (graph_only_record_active) {
-            VR_CHECK(runtime.TargetPool().Stats().acquire_count == 0U);
-            VR_CHECK(runtime.TargetPool().Stats().reuse_hit_count == 0U);
-        } else {
-            VR_CHECK(runtime.TargetPool().Stats().acquire_count > 0U);
-            VR_CHECK(runtime.TargetPool().Stats().reuse_hit_count > 0U);
-        }
-        if (!graph_only_record_active) {
-            VR_CHECK(runtime.RenderTarget().ResolveView(recorder.PostStack().Targets().ColorTarget()).state ==
-                     vr::render::RenderTargetStateKind::shader_read);
-            VR_CHECK(runtime.RenderTarget().ResolveView(recorder.PostStack().Targets().DepthTarget()).state ==
-                     vr::render::RenderTargetStateKind::depth_attachment);
-        }
+        VR_CHECK(runtime.RenderTargetPoolStats().acquire_count == 0U);
+        VR_CHECK(runtime.RenderTargetPoolStats().reuse_hit_count == 0U);
 
         recorder.Shutdown(runtime.Context());
         text_renderer.Shutdown(runtime.Context());

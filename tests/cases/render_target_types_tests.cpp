@@ -590,42 +590,6 @@ VR_TEST_CASE(RenderScenePacket_resolved_selection_ui_only_has_overlay_without_sc
     VR_CHECK(selection.overlay_view_index == 0U);
 }
 
-VR_TEST_CASE(SceneRenderTargetSet_defaults_match_render_target_v1_contract, "unit;core;render_target") {
-    vr::render::SceneRenderTargetSetCreateInfo create_info{};
-    VR_CHECK(create_info.enable_depth);
-    VR_CHECK(create_info.scale_mode == vr::render::RenderTargetScaleMode::swapchain_relative);
-    VR_CHECK(create_info.color_final_state == vr::render::RenderTargetStateKind::shader_read);
-    VR_CHECK(create_info.depth_final_state == vr::render::RenderTargetStateKind::depth_attachment);
-    VR_CHECK(create_info.samples == VK_SAMPLE_COUNT_1_BIT);
-
-    vr::render::SceneRenderTargetSet target_set{};
-    target_set.Initialize(create_info);
-    VR_CHECK(!target_set.IsReady());
-    VR_CHECK(!target_set.HasDepthTarget());
-    VR_CHECK(target_set.ColorFormat() == VK_FORMAT_UNDEFINED);
-    VR_CHECK(target_set.DepthFormat() == VK_FORMAT_UNDEFINED);
-    VR_CHECK(target_set.CreateInfo().enable_depth);
-
-    target_set.Reset();
-    VR_CHECK(!target_set.IsReady());
-}
-
-VR_TEST_CASE(SceneRenderTargetSet_not_ready_configuration_resets_renderer_bindings,
-             "unit;core;render_target") {
-    vr::render::SceneRenderTargetSet target_set{};
-    target_set.Initialize({});
-
-    FakeDepthRenderer renderer{};
-    const bool configured =
-        target_set.ConfigureSceneRenderer(renderer, vr::render::SceneRenderPassRole::single);
-
-    VR_CHECK(!configured);
-    VR_CHECK(!renderer.color_set);
-    VR_CHECK(!renderer.depth_set);
-    VR_CHECK(renderer.color_reset);
-    VR_CHECK(renderer.depth_reset);
-}
-
 VR_TEST_CASE(SceneRenderTargetSet_bind_scene_renderer_preserves_role,
              "unit;core;render_target") {
     FakeColorRenderer renderer{};
@@ -633,20 +597,6 @@ VR_TEST_CASE(SceneRenderTargetSet_bind_scene_renderer_preserves_role,
         vr::render::BindSceneRenderer(renderer, vr::render::SceneRenderPassRole::middle);
     VR_CHECK(binding.renderer == &renderer);
     VR_CHECK(binding.pass_role == vr::render::SceneRenderPassRole::middle);
-}
-
-VR_TEST_CASE(SceneRenderTargetSet_not_ready_scene_consumer_resets_source_binding,
-             "unit;core;render_target") {
-    vr::render::SceneRenderTargetSet target_set{};
-    target_set.Initialize({});
-
-    FakeSceneConsumer consumer{};
-    const bool configured = target_set.ConfigureSceneConsumer(consumer);
-
-    VR_CHECK(!configured);
-    VR_CHECK(!consumer.source_set);
-    VR_CHECK(consumer.source_cleared);
-    VR_CHECK(consumer.output_reset);
 }
 
 VR_TEST_CASE(SceneRecorder3D_overlay_output_defaults_match_present_overlay_contract,
@@ -722,10 +672,6 @@ VR_TEST_CASE(SceneRecorder2D_frame_packet_is_runtime_submission_not_ecs_state,
              static_cast<std::uint8_t>(vr::render::RenderViewKind::world));
     VR_CHECK(recorder.Stats().has_active_view == 1U);
 
-    vr::render::FrameRecordContext record_context{};
-    recorder.Record(record_context);
-    VR_CHECK(recorder.Stats().frame_packet_record_count == 1U);
-
     recorder.ClearFramePacket();
     VR_CHECK(recorder.FramePacket() == nullptr);
     VR_CHECK(recorder.ActiveView() == nullptr);
@@ -757,14 +703,10 @@ VR_TEST_CASE(SceneRecorder2D_submission_flags_and_layers_filter_recorders,
     recorder.SetFramePacket(&packet);
 
     const auto prepare_view = MakeSceneRecorder2DPrepareViewForTests();
-    vr::render::FrameRecordContext record_context{};
     recorder.PrepareFrame(prepare_view);
-    recorder.Record(record_context);
 
     VR_CHECK(world_renderer.prepare_count == 1U);
-    VR_CHECK(world_renderer.record_count == 1U);
     VR_CHECK(overlay_renderer.prepare_count == 0U);
-    VR_CHECK(overlay_renderer.record_count == 0U);
     VR_CHECK(recorder.Stats().effective_layer_mask == 0x1U);
     VR_CHECK(recorder.Stats().overlay_enabled == 0U);
 }
@@ -835,14 +777,10 @@ VR_TEST_CASE(SceneRecorder2D_mixed_packet_routes_scene_and_overlay_from_distinct
     recorder.SetFramePacket(&packet);
 
     const auto prepare_view = MakeSceneRecorder2DPrepareViewForTests();
-    vr::render::FrameRecordContext record_context{};
     recorder.PrepareFrame(prepare_view);
-    recorder.Record(record_context);
 
     VR_CHECK(world_renderer.prepare_count == 1U);
-    VR_CHECK(world_renderer.record_count == 1U);
     VR_CHECK(overlay_renderer.prepare_count == 1U);
-    VR_CHECK(overlay_renderer.record_count == 1U);
     VR_CHECK(recorder.Stats().active_view_index == 0U);
     VR_CHECK(recorder.Stats().scene_view_index == 0U);
     VR_CHECK(recorder.Stats().overlay_view_index == 1U);
@@ -879,14 +817,10 @@ VR_TEST_CASE(SceneRecorder2D_ui_only_packet_skips_scene_and_runs_overlay,
     recorder.SetFramePacket(&packet);
 
     const auto prepare_view = MakeSceneRecorder2DPrepareViewForTests();
-    vr::render::FrameRecordContext record_context{};
     recorder.PrepareFrame(prepare_view);
-    recorder.Record(record_context);
 
     VR_CHECK(world_renderer.prepare_count == 0U);
-    VR_CHECK(world_renderer.record_count == 0U);
     VR_CHECK(overlay_renderer.prepare_count == 1U);
-    VR_CHECK(overlay_renderer.record_count == 1U);
     VR_CHECK(recorder.Stats().scene_view_index == vr::render::invalid_scene_view_index);
     VR_CHECK(recorder.Stats().overlay_view_index == 0U);
     VR_CHECK_MSG(recorder.Stats().effective_layer_mask == 0U,
@@ -909,7 +843,6 @@ VR_TEST_CASE(SceneRecorder2D_explicit_scene_target_bypasses_scene_consumer_route
     view.flags = vr::render::render_view_postprocess_enabled_flag;
     view.layer_mask = 0x1U;
     view.targets.color_target = vr::render::RenderTargetHandle{11U, 1U};
-    view.targets.color_final_state = vr::render::RenderTargetStateKind::shader_read;
     vr::render::RefreshRenderViewSignature(view);
 
     vr::render::RenderScenePacket2D packet =
@@ -923,23 +856,6 @@ VR_TEST_CASE(SceneRecorder2D_explicit_scene_target_bypasses_scene_consumer_route
     VR_CHECK(world_renderer.color_output.final_state == vr::render::RenderTargetStateKind::shader_read);
     VR_CHECK(consumer.prepare_count == 0U);
     VR_CHECK(consumer.source_set == false);
-}
-
-VR_TEST_CASE(FrameComposerHost_graph_only_mainline_rejects_transient_scene_targets,
-             "unit;core;frame_composer;render_graph") {
-    vr::render::FrameComposerHost host{};
-    vr::render::FrameComposerHostCreateInfo create_info{};
-    create_info.color_lifetime = vr::render::RenderTargetLifetime::transient;
-    host.Initialize(create_info);
-
-    bool threw = false;
-    try {
-        (void)host.PrepareFrame(MakeFrameComposerPrepareViewForTests());
-    } catch (const std::runtime_error& error_) {
-        threw = std::string_view(error_.what()).find("transient scene targets") != std::string_view::npos;
-    }
-
-    VR_CHECK(threw);
 }
 
 VR_TEST_CASE(SceneRecorder2D_direct_depth_output_routes_to_depth_capable_renderer,
@@ -993,9 +909,7 @@ VR_TEST_CASE(SceneRecorder2D_explicit_scene_depth_target_routes_to_depth_capable
     view.flags = vr::render::render_view_postprocess_enabled_flag;
     view.layer_mask = 0x1U;
     view.targets.color_target = vr::render::RenderTargetHandle{21U, 1U};
-    view.targets.color_final_state = vr::render::RenderTargetStateKind::shader_read;
     view.targets.depth_target = vr::render::RenderTargetHandle{22U, 5U};
-    view.targets.depth_final_state = vr::render::RenderTargetStateKind::depth_read_only;
     vr::render::RefreshRenderViewSignature(view);
 
     vr::render::RenderScenePacket2D packet =
@@ -1007,6 +921,7 @@ VR_TEST_CASE(SceneRecorder2D_explicit_scene_depth_target_routes_to_depth_capable
     VR_CHECK(world_renderer.color_set);
     VR_CHECK(world_renderer.depth_set);
     VR_CHECK(world_renderer.color_output.color_target.index == 21U);
+    VR_CHECK(world_renderer.color_output.final_state == vr::render::RenderTargetStateKind::shader_read);
     VR_CHECK(world_renderer.depth_output.depth_target.index == 22U);
     VR_CHECK(world_renderer.depth_output.final_state == vr::render::RenderTargetStateKind::depth_read_only);
 }
@@ -1104,29 +1019,35 @@ VR_TEST_CASE(AnimationFrameCoordinator_dim3_applies_outputs_to_geometry_and_shad
     VR_CHECK(coordinator.Stats().apply_shadow_call_count == 1U);
 }
 
-VR_TEST_CASE(SceneRecorder3D_records_opaque_stage_before_transparent_stage,
+VR_TEST_CASE(SceneRecorder3D_prepares_opaque_and_transparent_stages_when_both_are_registered,
              "unit;core;render_target") {
     vr::render::SceneRecorder3D recorder{};
     recorder.Initialize({});
 
     FakeSceneRecorderRenderer opaque_renderer{};
     FakeSceneRecorderRenderer transparent_renderer{};
-    std::uint32_t order_cursor = 1U;
-    opaque_renderer.order_cursor = &order_cursor;
-    transparent_renderer.order_cursor = &order_cursor;
-
     recorder.RegisterTransparentSceneRenderer(transparent_renderer, vr::render::SceneRenderPassRole::single);
     recorder.RegisterOpaqueSceneRenderer(opaque_renderer, vr::render::SceneRenderPassRole::single);
 
-    vr::render::FrameRecordContext record_context{};
-    recorder.Record(record_context);
+    vr::ecs::Camera<vr::ecs::Dim3> camera{};
+    camera.style.viewport = vr::ecs::CameraViewport{.origin_x = 0.0F,
+                                                    .origin_y = 0.0F,
+                                                    .width = 320.0F,
+                                                    .height = 180.0F};
+    vr::render::RenderView3D view = vr::render::MakeRenderViewFromCamera(camera);
+    view.layer_mask = 0x1U;
+    vr::render::RefreshRenderViewSignature(view);
+    vr::render::RenderScenePacket3D packet =
+        vr::render::MakeSingleViewScenePacket(view, 70U);
+    recorder.SetFramePacket(&packet);
+    recorder.PrepareFrame(MakeSceneRecorder3DPrepareViewForTests());
 
-    VR_CHECK(opaque_renderer.record_count == 1U);
-    VR_CHECK(transparent_renderer.record_count == 1U);
-    VR_CHECK(opaque_renderer.opaque_record_count == 1U);
-    VR_CHECK(transparent_renderer.transparent_record_count == 1U);
-    VR_CHECK(opaque_renderer.stage_order == 1U);
-    VR_CHECK(transparent_renderer.stage_order == 2U);
+    const vr::render::SceneRecorder3DStats stats = recorder.Stats();
+    VR_CHECK(stats.scene_renderer_count == 2U);
+    VR_CHECK(stats.opaque_scene_renderer_count == 1U);
+    VR_CHECK(stats.transparent_scene_renderer_count == 1U);
+    VR_CHECK(opaque_renderer.prepare_count == 1U);
+    VR_CHECK(transparent_renderer.prepare_count == 1U);
 }
 
 VR_TEST_CASE(SceneRecorder3D_allows_same_renderer_in_opaque_and_transparent_stages,
@@ -1138,17 +1059,24 @@ VR_TEST_CASE(SceneRecorder3D_allows_same_renderer_in_opaque_and_transparent_stag
     recorder.RegisterOpaqueSceneRenderer(renderer, vr::render::SceneRenderPassRole::first);
     recorder.RegisterTransparentSceneRenderer(renderer, vr::render::SceneRenderPassRole::last);
 
-    vr::render::FrameRecordContext record_context{};
-    recorder.Record(record_context);
+    vr::ecs::Camera<vr::ecs::Dim3> camera{};
+    camera.style.viewport = vr::ecs::CameraViewport{.origin_x = 0.0F,
+                                                    .origin_y = 0.0F,
+                                                    .width = 320.0F,
+                                                    .height = 180.0F};
+    vr::render::RenderView3D view = vr::render::MakeRenderViewFromCamera(camera);
+    view.layer_mask = 0x1U;
+    vr::render::RefreshRenderViewSignature(view);
+    vr::render::RenderScenePacket3D packet =
+        vr::render::MakeSingleViewScenePacket(view, 71U);
+    recorder.SetFramePacket(&packet);
+    recorder.PrepareFrame(MakeSceneRecorder3DPrepareViewForTests());
 
     const vr::render::SceneRecorder3DStats stats = recorder.Stats();
     VR_CHECK(stats.scene_renderer_count == 2U);
     VR_CHECK(stats.opaque_scene_renderer_count == 1U);
     VR_CHECK(stats.transparent_scene_renderer_count == 1U);
-    VR_CHECK(renderer.prepare_count == 0U);
-    VR_CHECK(renderer.record_count == 2U);
-    VR_CHECK(renderer.opaque_record_count == 1U);
-    VR_CHECK(renderer.transparent_record_count == 1U);
+    VR_CHECK(renderer.prepare_count == 2U);
 }
 
 VR_TEST_CASE(SceneRecorder3D_frame_packet_is_runtime_submission_not_ecs_state,
@@ -1176,10 +1104,6 @@ VR_TEST_CASE(SceneRecorder3D_frame_packet_is_runtime_submission_not_ecs_state,
     VR_CHECK(recorder.Stats().active_view_kind ==
              static_cast<std::uint8_t>(vr::render::RenderViewKind::world));
     VR_CHECK(recorder.Stats().has_active_view == 1U);
-
-    vr::render::FrameRecordContext record_context{};
-    recorder.Record(record_context);
-    VR_CHECK(recorder.Stats().frame_packet_record_count == 1U);
 
     recorder.ClearFramePacket();
     VR_CHECK(recorder.FramePacket() == nullptr);
@@ -1299,16 +1223,11 @@ VR_TEST_CASE(SceneRecorder3D_submission_flags_and_layers_filter_renderers,
     recorder.SetFramePacket(&packet);
 
     const auto prepare_view = MakeSceneRecorder3DPrepareViewForTests();
-    vr::render::FrameRecordContext record_context{};
     recorder.PrepareFrame(prepare_view);
-    recorder.Record(record_context);
 
     VR_CHECK(shadow_renderer.prepare_count == 0U);
-    VR_CHECK(shadow_renderer.record_count == 0U);
     VR_CHECK(scene_renderer.prepare_count == 1U);
-    VR_CHECK(scene_renderer.record_count == 1U);
     VR_CHECK(overlay_renderer.prepare_count == 0U);
-    VR_CHECK(overlay_renderer.record_count == 0U);
     VR_CHECK(recorder.Stats().effective_layer_mask == 0x1U);
     VR_CHECK(recorder.Stats().shadow_enabled == 1U);
     VR_CHECK(recorder.Stats().overlay_enabled == 0U);
@@ -1366,9 +1285,7 @@ VR_TEST_CASE(SceneRecorder3D_sky_before_opaque_loads_scene_first_pass_color,
     vr::render::RenderView3D view = vr::render::MakeRenderViewFromCamera(camera);
     view.layer_mask = 0x1U;
     view.targets.color_target = vr::render::RenderTargetHandle{41U, 1U};
-    view.targets.color_final_state = vr::render::RenderTargetStateKind::shader_read;
     view.targets.depth_target = vr::render::RenderTargetHandle{42U, 1U};
-    view.targets.depth_final_state = vr::render::RenderTargetStateKind::depth_read_only;
     vr::render::RefreshRenderViewSignature(view);
 
     vr::render::RenderScenePacket3D packet =
@@ -1408,9 +1325,7 @@ VR_TEST_CASE(SceneRecorder3D_sky_after_opaque_keeps_scene_first_pass_clear,
     vr::render::RenderView3D view = vr::render::MakeRenderViewFromCamera(camera);
     view.layer_mask = 0x1U;
     view.targets.color_target = vr::render::RenderTargetHandle{51U, 1U};
-    view.targets.color_final_state = vr::render::RenderTargetStateKind::shader_read;
     view.targets.depth_target = vr::render::RenderTargetHandle{52U, 1U};
-    view.targets.depth_final_state = vr::render::RenderTargetStateKind::depth_read_only;
     vr::render::RefreshRenderViewSignature(view);
 
     vr::render::RenderScenePacket3D packet =
@@ -1499,14 +1414,10 @@ VR_TEST_CASE(SceneRecorder3D_mixed_packet_routes_scene_and_overlay_from_distinct
     recorder.SetFramePacket(&packet);
 
     const auto prepare_view = MakeSceneRecorder3DPrepareViewForTests();
-    vr::render::FrameRecordContext record_context{};
     recorder.PrepareFrame(prepare_view);
-    recorder.Record(record_context);
 
     VR_CHECK(world_renderer.prepare_count == 1U);
-    VR_CHECK(world_renderer.record_count == 1U);
     VR_CHECK(overlay_renderer.prepare_count == 1U);
-    VR_CHECK(overlay_renderer.record_count == 1U);
     VR_CHECK(recorder.Stats().active_view_index == 0U);
     VR_CHECK(recorder.Stats().scene_view_index == 0U);
     VR_CHECK(recorder.Stats().overlay_view_index == 1U);
@@ -1543,14 +1454,10 @@ VR_TEST_CASE(SceneRecorder3D_ui_only_packet_skips_scene_and_runs_overlay,
     recorder.SetFramePacket(&packet);
 
     const auto prepare_view = MakeSceneRecorder3DPrepareViewForTests();
-    vr::render::FrameRecordContext record_context{};
     recorder.PrepareFrame(prepare_view);
-    recorder.Record(record_context);
 
     VR_CHECK(world_renderer.prepare_count == 0U);
-    VR_CHECK(world_renderer.record_count == 0U);
     VR_CHECK(overlay_renderer.prepare_count == 1U);
-    VR_CHECK(overlay_renderer.record_count == 1U);
     VR_CHECK(recorder.Stats().scene_view_index == vr::render::invalid_scene_view_index);
     VR_CHECK(recorder.Stats().overlay_view_index == 0U);
     VR_CHECK_MSG(recorder.Stats().effective_layer_mask == 0U,
@@ -1572,8 +1479,6 @@ VR_TEST_CASE(SceneRecorder3D_reflection_view_explicit_targets_override_scene_rou
     reflection_view.layer_mask = 0x8U;
     reflection_view.targets.color_target = vr::render::RenderTargetHandle{21U, 1U};
     reflection_view.targets.depth_target = vr::render::RenderTargetHandle{22U, 1U};
-    reflection_view.targets.color_final_state = vr::render::RenderTargetStateKind::shader_read;
-    reflection_view.targets.depth_final_state = vr::render::RenderTargetStateKind::depth_attachment;
     vr::render::RefreshRenderViewSignature(reflection_view);
 
     vr::render::RenderScenePacket3D packet =
@@ -1587,7 +1492,7 @@ VR_TEST_CASE(SceneRecorder3D_reflection_view_explicit_targets_override_scene_rou
     VR_CHECK(scene_renderer.color_output.color_target.index == 21U);
     VR_CHECK(scene_renderer.color_output.final_state == vr::render::RenderTargetStateKind::shader_read);
     VR_CHECK(scene_renderer.depth_output.depth_target.index == 22U);
-    VR_CHECK(scene_renderer.depth_output.final_state == vr::render::RenderTargetStateKind::depth_attachment);
+    VR_CHECK(scene_renderer.depth_output.final_state == vr::render::RenderTargetStateKind::depth_read_only);
     VR_CHECK(recorder.Stats().scene_view_index == 0U);
 }
 

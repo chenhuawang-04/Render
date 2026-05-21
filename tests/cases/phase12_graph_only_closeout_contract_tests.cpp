@@ -162,6 +162,91 @@ VR_TEST_CASE(Phase12_graph_only_closeout_source_contract_removes_dual_track_gate
     }
 }
 
+VR_TEST_CASE(Phase12_graph_only_closeout_source_contract_removes_supported_scene_ownership_entrypoints,
+             "unit;contract;phase12;render_graph") {
+    const std::string scene_targets_header =
+        ReadUtf8TextFile(SourceRoot() / "include" / "vr" / "render" /
+                         "scene_render_target_set.hpp");
+    const std::string bloom_stack_header =
+        ReadUtf8TextFile(SourceRoot() / "include" / "vr" / "render" /
+                         "scene_bloom_post_stack.hpp");
+    const std::string frame_composer_header =
+        ReadUtf8TextFile(SourceRoot() / "include" / "vr" / "render" /
+                         "frame_composer_host.hpp");
+    const std::string render_view_header =
+        ReadUtf8TextFile(SourceRoot() / "include" / "vr" / "render" /
+                         "render_view.hpp");
+    const std::string prepare_views_header =
+        ReadUtf8TextFile(SourceRoot() / "include" / "vr" / "render" /
+                         "runtime_prepare_views.hpp");
+    const std::string runtime_views_header =
+        ReadUtf8TextFile(SourceRoot() / "include" / "vr" / "runtime" /
+                         "runtime_views.hpp");
+    const std::string runtime_host_header =
+        ReadUtf8TextFile(SourceRoot() / "include" / "vr" / "render" /
+                         "render_runtime_host.hpp");
+    const std::string recorder_2d_header =
+        ReadUtf8TextFile(SourceRoot() / "include" / "vr" / "render" /
+                         "scene_recorder_2d.hpp");
+    const std::string recorder_3d_header =
+        ReadUtf8TextFile(SourceRoot() / "include" / "vr" / "render" /
+                         "scene_recorder_3d.hpp");
+    const std::string frame_composer_source =
+        ReadUtf8TextFile(SourceRoot() / "src" / "render" / "frame_composer_host.cpp");
+    const std::string recorder_2d_source =
+        ReadUtf8TextFile(SourceRoot() / "src" / "render" / "scene_recorder_2d.cpp");
+    const std::string recorder_3d_source =
+        ReadUtf8TextFile(SourceRoot() / "src" / "render" / "scene_recorder_3d.cpp");
+
+    VR_CHECK(!Contains(scene_targets_header, "class SceneRenderTargetSet"));
+    VR_CHECK(!Contains(scene_targets_header, "Initialize("));
+    VR_CHECK(!Contains(scene_targets_header, "PrepareFrame("));
+    VR_CHECK(!Contains(scene_targets_header, "EnsureForSwapchain("));
+    VR_CHECK(!Contains(scene_targets_header, "OnSwapchainRecreated("));
+    VR_CHECK(!Contains(scene_targets_header, "ColorTarget("));
+    VR_CHECK(!Contains(scene_targets_header, "DepthTarget("));
+    VR_CHECK(!Contains(scene_targets_header, "ConfigureSceneRenderer("));
+    VR_CHECK(!Contains(scene_targets_header, "ConfigureSceneConsumer("));
+    VR_CHECK(!Contains(scene_targets_header, "color_final_state"));
+    VR_CHECK(!Contains(scene_targets_header, "depth_final_state"));
+    VR_CHECK(!Contains(scene_targets_header, "AcquireTransientTargets("));
+    VR_CHECK(!Contains(bloom_stack_header, "class SceneBloomPostStack"));
+    VR_CHECK(!Contains(bloom_stack_header, "PrepareFrame("));
+    VR_CHECK(!Contains(bloom_stack_header, "Record("));
+    VR_CHECK(!Contains(bloom_stack_header, "OnSwapchainRecreated("));
+    VR_CHECK(!Contains(bloom_stack_header, "Targets("));
+    VR_CHECK(!Contains(bloom_stack_header, "Bloom("));
+    VR_CHECK(!Contains(frame_composer_header, "FrameComposerTargets"));
+    VR_CHECK(!Contains(frame_composer_header, "SceneRenderTargetSet"));
+    VR_CHECK(!Contains(frame_composer_header, "scene_targets"));
+    VR_CHECK(!Contains(frame_composer_header, "ConfigureSceneRenderer("));
+    VR_CHECK(!Contains(frame_composer_header, "ResetSceneRenderer("));
+    VR_CHECK(!Contains(frame_composer_header, "RecordTonemapPass("));
+    VR_CHECK(!Contains(render_view_header, "color_final_state"));
+    VR_CHECK(!Contains(render_view_header, "depth_final_state"));
+    VR_CHECK(!Contains(recorder_2d_header, "SceneRenderTargetSet& SceneTargets("));
+    VR_CHECK(!Contains(recorder_2d_header, "const SceneRenderTargetSet& SceneTargets("));
+    VR_CHECK(!Contains(recorder_3d_header, "SceneBloomPostStack& PostStack("));
+    VR_CHECK(!Contains(recorder_3d_header, "const SceneBloomPostStack& PostStack("));
+    VR_CHECK(!Contains(runtime_host_header, "SceneRenderTargetSetPrepareView"));
+    VR_CHECK(!Contains(runtime_host_header, "SceneBloomPostStackPrepareView"));
+    VR_CHECK(!Contains(prepare_views_header, "SceneRenderTargetSetPrepareView"));
+    VR_CHECK(!Contains(prepare_views_header, "SceneBloomPostStackPrepareView"));
+    VR_CHECK(!Contains(runtime_views_header, "SceneRenderTargetSetPrepareView"));
+    VR_CHECK(!Contains(runtime_views_header, "SceneBloomPostStackPrepareView"));
+    VR_CHECK(!Contains(runtime_views_header, "MakeSceneRenderTargetSetPrepareView"));
+    VR_CHECK(!Contains(runtime_views_header, "MakeSceneBloomPostStackPrepareView"));
+    VR_CHECK(!Contains(recorder_2d_source, "SceneRecorder2D::Record("));
+    VR_CHECK(!Contains(recorder_3d_source, "SceneRecorder3D::Record("));
+    VR_CHECK(!Contains(recorder_2d_source, "color_final_state"));
+    VR_CHECK(!Contains(recorder_2d_source, "depth_final_state"));
+    VR_CHECK(!Contains(recorder_3d_source, "color_final_state"));
+    VR_CHECK(!Contains(recorder_3d_source, "depth_final_state"));
+    VR_CHECK(!Contains(frame_composer_source, "scene_targets"));
+    VR_CHECK(!Contains(frame_composer_source, "scene_targets.ColorTarget()"));
+    VR_CHECK(!Contains(frame_composer_source, "FrameComposerHost::RecordTonemapPass("));
+}
+
 VR_TEST_CASE(Phase12_graph_only_closeout_source_contract_isolates_transition_and_transient_tokens_to_low_level_helpers,
              "unit;contract;phase12;render_graph") {
     const std::array<TokenAllowlist, 3U> allowlists{{
@@ -180,7 +265,6 @@ VR_TEST_CASE(Phase12_graph_only_closeout_source_contract_isolates_transition_and
                 "include/vr/render/render_target_pool.hpp",
                 "src/render/render_target_bloom_renderer.cpp",
                 "src/render/render_target_pool.cpp",
-                "src/render/scene_render_target_set.cpp",
             },
         },
         TokenAllowlist{

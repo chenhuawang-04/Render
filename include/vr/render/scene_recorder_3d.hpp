@@ -3,12 +3,13 @@
 #include "Center/Memory/Container/Vector/McVector.hpp"
 #include "vr/render/animation_frame_coordinator.hpp"
 #include "vr/render/environment/sky_environment_pass.hpp"
+#include "vr/render/render_target_bloom_renderer.hpp"
 #include "vr/render_graph/frame_graph_build.hpp"
 #include "vr/render/light_frame_coordinator.hpp"
 #include "vr/render/light_shadow_link_coordinator.hpp"
-#include "vr/render/scene_bloom_post_stack.hpp"
 #include "vr/render/scene_render_stage.hpp"
 #include "vr/render/scene_submission.hpp"
+#include "vr/render/scene_render_target_set.hpp"
 #include "vr/render/shadow_atlas_binding_coordinator.hpp"
 #include "vr/render/shadow_frame_coordinator.hpp"
 #include "vr/render_graph/graph_command_context.hpp"
@@ -157,14 +158,11 @@ public:
     void Shutdown(VulkanContext& context_) noexcept;
 
     void BindRuntimeResources(VulkanContext& context_,
-                              RenderTargetHost& render_target_host_,
-                              RenderTargetPool* render_target_pool_) noexcept;
+                              RenderTargetHost& render_target_host_) noexcept;
 
     template<typename RuntimeT>
     void BindRuntime(RuntimeT& runtime_) noexcept {
-        BindRuntimeResources(runtime_.Context(),
-                             runtime_.RenderTarget(),
-                             runtime_.HasRenderTargetPool() ? &runtime_.TargetPool() : nullptr);
+        BindRuntimeResources(runtime_.Context(), runtime_.RenderTarget());
         if constexpr (requires(RuntimeT& runtime_ref_) {
                           runtime_ref_.Services();
                       }) {
@@ -243,7 +241,6 @@ public:
             .register_graph_imported_resources_fn =
                 ResolveGraphImportedResourcesFn<RendererT>(),
             .swapchain_recreated_fn = &OnSwapchainRecreatedRenderer<RendererT>,
-            .configure_scene_fn = &ConfigureSceneRendererBinding<RendererT>,
             .configure_direct_scene_fn = &ConfigureDirectSceneRendererBinding<RendererT>,
             .configure_lighting_fn = &ConfigureSceneLightingBinding<RendererT>,
             .configure_animation_fn = &ConfigureSceneAnimationBinding<RendererT>,
@@ -299,9 +296,6 @@ public:
                           const render_graph::FrameSnapshot3D& snapshot_,
                           const render_graph::MinimalFrameGraphBuildResult<ecs::Dim3>& build_result_,
                           render_graph::ResourceVersionHandle& color_chain_);
-    void Record(const FrameRecordContext& record_context_);
-    void Record(const FrameRecordContext& record_context_,
-                const RenderScenePacket3D& frame_packet_);
     void OnSwapchainRecreated(std::uint32_t image_count_,
                               VkExtent2D extent_,
                               VkFormat format_,
@@ -316,8 +310,7 @@ public:
     [[nodiscard]] const RenderView3D* ActiveView() const noexcept;
     [[nodiscard]] SkyEnvironmentPass& EnvironmentPass() noexcept;
     [[nodiscard]] const SkyEnvironmentPass& EnvironmentPass() const noexcept;
-    [[nodiscard]] SceneBloomPostStack& PostStack() noexcept;
-    [[nodiscard]] const SceneBloomPostStack& PostStack() const noexcept;
+    [[nodiscard]] const RenderTargetBloomRendererStats& BloomStats() const noexcept;
 
     [[nodiscard]] static RenderTargetColorOutputConfig MakePresentOverlayOutputConfig() noexcept;
 
@@ -344,7 +337,6 @@ private:
                                           VkFormat,
                                           std::uint64_t,
                                           std::uint64_t);
-    using ConfigureSceneFn = bool (*)(void*, const SceneRenderTargetSet&, SceneRenderPassRole);
     using ConfigureDirectSceneFn = void (*)(void*,
                                             SceneRenderPassRole,
                                             const RenderTargetColorOutputConfig&,
@@ -399,7 +391,6 @@ private:
         DescribeGraphBindingsFn describe_graph_bindings_fn = nullptr;
         RegisterGraphImportedResourcesFn register_graph_imported_resources_fn = nullptr;
         SwapchainRecreatedFn swapchain_recreated_fn = nullptr;
-        ConfigureSceneFn configure_scene_fn = nullptr;
         ConfigureDirectSceneFn configure_direct_scene_fn = nullptr;
         ConfigureLightingFn configure_lighting_fn = nullptr;
         ConfigureSceneAnimationFn configure_animation_fn = nullptr;
@@ -616,13 +607,6 @@ private:
     }
 
     template<typename RendererT>
-    static bool ConfigureSceneRendererBinding(void* renderer_,
-                                              const SceneRenderTargetSet& target_set_,
-                                              SceneRenderPassRole pass_role_) {
-        return target_set_.ConfigureSceneRenderer(*static_cast<RendererT*>(renderer_), pass_role_);
-    }
-
-    template<typename RendererT>
     static void ConfigureDirectSceneRendererBinding(
         void* renderer_,
         SceneRenderPassRole,
@@ -779,14 +763,14 @@ private:
         SceneRenderPassRole pass_role_) const noexcept;
     [[nodiscard]] RenderTargetColorOutputConfig BuildOverlayOutputConfig(
         const RenderTargetColorOutputConfig& fallback_output_target_config_) const noexcept;
-    [[nodiscard]] bool ShouldUsePostStackForSubmission() const noexcept;
+    [[nodiscard]] bool ShouldUseBloomChainForSubmission() const noexcept;
     [[nodiscard]] std::uint32_t EffectiveLayerMask() const noexcept;
     [[nodiscard]] std::uint32_t OverlayLayerMask() const noexcept;
     [[nodiscard]] bool IsShadowEnabledForSubmission() const noexcept;
     [[nodiscard]] bool IsOverlayEnabledForSubmission() const noexcept;
     [[nodiscard]] bool IsPostProcessEnabledForSubmission() const noexcept;
     [[nodiscard]] bool SupportsGraphExecution(const VulkanContext& device_) const noexcept;
-    [[nodiscard]] bool UsesGraphManagedPostStack() const noexcept;
+    [[nodiscard]] bool UsesGraphManagedBloomChain() const noexcept;
     [[nodiscard]] bool HasSkyEnvironmentPassForSubmission() const noexcept;
     [[nodiscard]] bool HasVisibleSceneRendererForSubmission() const noexcept;
     [[nodiscard]] bool HasVisibleOpaqueSceneRendererForSubmission() const noexcept;
@@ -808,13 +792,12 @@ private:
     SceneRecorder3DCreateInfo create_info_cache{};
     SceneRecorder3DStats stats{};
     SkyEnvironmentPass sky_environment_pass{};
-    SceneBloomPostStack post_stack{};
+    RenderTargetBloomRenderer bloom_renderer{};
     SceneRecorder3DMcVector<PreSceneRendererEntry> pre_scene_renderer_entries{};
     SceneRecorder3DMcVector<SceneRendererEntry> scene_renderer_entries{};
     SceneRecorder3DMcVector<OverlayRendererEntry> overlay_renderer_entries{};
     VulkanContext* context = nullptr;
     RenderTargetHost* render_target_host = nullptr;
-    RenderTargetPool* render_target_pool = nullptr;
     runtime::services::RenderGraphRuntimeService* graph_runtime_service = nullptr;
     render::LightFrameCoordinator<ecs::Dim3>* light_frame_coordinator = nullptr;
     render::AnimationFrameCoordinator<ecs::Dim3>* animation_frame_coordinator = nullptr;

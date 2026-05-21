@@ -920,10 +920,6 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_graph_only_record_path_smok
                               vr::render_graph::ResourceVersionHandle& color_chain_) {
             inner.BuildRenderGraph(builder_, snapshot_, build_result_, color_chain_);
         }
-        void Record(const vr::render::FrameRecordContext& record_context_) {
-            legacy_record_count += 1U;
-            inner.Record(record_context_);
-        }
         [[nodiscard]] const vr::render::RenderScenePacket3D* FramePacket() const noexcept {
             return inner.FramePacket();
         }
@@ -1480,7 +1476,7 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_bloom_post_stack_smoke,
             }
 
             const vr::geometry::GeometryRenderer3DStats renderer_stats = geometry_renderer.Stats();
-            const auto bloom_stats = recorder.PostStack().Stats();
+            const auto bloom_stats = recorder.BloomStats();
             max_draw_calls = std::max(max_draw_calls, renderer_stats.draw_call_count);
             max_draw_batches = std::max(max_draw_batches, renderer_stats.draw_batch_count);
             max_instances = std::max(max_instances, renderer_stats.instance_count);
@@ -1558,26 +1554,13 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_bloom_post_stack_smoke,
         }
         VR_CHECK(recorder.Stats().pre_scene_renderer_count == 1U);
         VR_CHECK(recorder.Stats().frame_packet_prepare_count > 0U);
-        VR_CHECK(graph_only_record_active
-                     ? (recorder.Stats().frame_packet_record_count == 0U)
-                     : (recorder.Stats().frame_packet_record_count > 0U));
+        VR_CHECK(recorder.Stats().frame_packet_record_count == 0U);
         VR_CHECK(recorder.ActiveView() == &main_view);
         VR_CHECK(recorder.ActiveView() != nullptr);
         VR_CHECK(recorder.ActiveView()->camera == &camera);
-        if (graph_only_record_active) {
-            VR_CHECK(runtime.TargetPool().Stats().acquire_count == 0U);
-            VR_CHECK(runtime.TargetPool().Stats().reuse_hit_count == 0U);
-        } else {
-            VR_CHECK(runtime.TargetPool().Stats().acquire_count > 0U);
-            VR_CHECK(runtime.TargetPool().Stats().reuse_hit_count > 0U);
-        }
+        VR_CHECK(runtime.RenderTargetPoolStats().acquire_count == 0U);
+        VR_CHECK(runtime.RenderTargetPoolStats().reuse_hit_count == 0U);
         VR_CHECK(runtime.Ibl().Stats().prepared_frame_count > 0U);
-        if (!graph_only_record_active) {
-            VR_CHECK(runtime.RenderTarget().ResolveView(recorder.PostStack().Targets().ColorTarget()).state ==
-                     vr::render::RenderTargetStateKind::shader_read);
-            VR_CHECK(runtime.RenderTarget().ResolveView(recorder.PostStack().Targets().DepthTarget()).state ==
-                     vr::render::RenderTargetStateKind::depth_attachment);
-        }
 
         recorder.Shutdown(runtime.Context());
         shadow_renderer.Shutdown(runtime.Context());

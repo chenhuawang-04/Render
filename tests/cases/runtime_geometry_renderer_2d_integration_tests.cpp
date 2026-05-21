@@ -511,7 +511,8 @@ VR_TEST_CASE(RuntimeIntegration_scene_recorder_2d_scene_consumer_composite_smoke
         VR_CHECK(recorder.Stats().frame_packet_record_count == 0U);
         VR_CHECK(recorder.Stats().postprocess_enabled == 1U);
         VR_CHECK(recorder.Stats().frame_view_count == 1U);
-        VR_CHECK(!recorder.SceneTargets().IsReady());
+        VR_CHECK(runtime.RenderTargetPoolStats().acquire_count == 0U);
+        VR_CHECK(runtime.RenderTargetPoolStats().reuse_hit_count == 0U);
 
         recorder.Shutdown(runtime.Context());
         composite_renderer.Shutdown(runtime.Context());

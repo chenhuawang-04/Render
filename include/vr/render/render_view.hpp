@@ -70,8 +70,6 @@ struct RenderViewScissor final {
 struct RenderViewTargetRefs final {
     RenderTargetHandle color_target = invalid_render_target_handle;
     RenderTargetHandle depth_target = invalid_render_target_handle;
-    RenderTargetStateKind color_final_state = RenderTargetStateKind::shader_read;
-    RenderTargetStateKind depth_final_state = RenderTargetStateKind::depth_attachment;
 };
 
 template<ecs::DimensionTag DimensionT>
@@ -159,8 +157,6 @@ template<ecs::DimensionTag DimensionT>
     RenderViewHashCombine(hash, static_cast<std::uint64_t>(view_.targets.color_target.generation));
     RenderViewHashCombine(hash, static_cast<std::uint64_t>(view_.targets.depth_target.index));
     RenderViewHashCombine(hash, static_cast<std::uint64_t>(view_.targets.depth_target.generation));
-    RenderViewHashCombine(hash, static_cast<std::uint64_t>(view_.targets.color_final_state));
-    RenderViewHashCombine(hash, static_cast<std::uint64_t>(view_.targets.depth_final_state));
     RenderViewHashCombine(hash, static_cast<std::uint64_t>(view_.background_override.mode));
     if constexpr (std::is_same_v<DimensionT, ecs::Dim2>) {
         RenderViewHashCombine(hash,
