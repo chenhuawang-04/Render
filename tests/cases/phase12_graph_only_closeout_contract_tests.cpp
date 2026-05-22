@@ -41,7 +41,7 @@ namespace {
 
 [[nodiscard]] bool HasTrackedSourceExtension(const std::filesystem::path& path_) {
     const auto extension = path_.extension().generic_string();
-    return extension == ".cpp" || extension == ".hpp";
+    return extension == ".cpp" || extension == ".hpp" || extension == ".ipp";
 }
 
 [[nodiscard]] std::vector<std::string> CollectTrackedSourceFiles(
@@ -245,6 +245,76 @@ VR_TEST_CASE(Phase12_graph_only_closeout_source_contract_removes_supported_scene
     VR_CHECK(!Contains(frame_composer_source, "scene_targets"));
     VR_CHECK(!Contains(frame_composer_source, "scene_targets.ColorTarget()"));
     VR_CHECK(!Contains(frame_composer_source, "FrameComposerHost::RecordTonemapPass("));
+}
+
+VR_TEST_CASE(Phase12_graph_only_closeout_source_contract_splits_prepare_view_contract_by_semantic_header,
+             "unit;contract;phase12;render_graph") {
+    const std::string umbrella_header =
+        ReadUtf8TextFile(SourceRoot() / "include" / "vr" / "render" /
+                         "runtime_prepare_views.hpp");
+    const std::string frame_prepare_header =
+        ReadUtf8TextFile(SourceRoot() / "include" / "vr" / "runtime" /
+                         "frame_prepare_context.hpp");
+    const std::string scene_prepare_header =
+        ReadUtf8TextFile(SourceRoot() / "include" / "vr" / "render" /
+                         "scene_prepare_views.hpp");
+    const std::string renderer_prepare_header_2d =
+        ReadUtf8TextFile(SourceRoot() / "include" / "vr" / "render" /
+                         "renderer_prepare_views_2d.hpp");
+    const std::string renderer_prepare_header_3d =
+        ReadUtf8TextFile(SourceRoot() / "include" / "vr" / "render" /
+                         "renderer_prepare_views_3d.hpp");
+    const std::string text_renderer_2d_source =
+        ReadUtf8TextFile(SourceRoot() / "src" / "text" / "text_renderer_2d.cpp");
+    const std::string text_renderer_3d_source =
+        ReadUtf8TextFile(SourceRoot() / "src" / "text" / "text_renderer_3d.cpp");
+    const std::string geometry_renderer_2d_source =
+        ReadUtf8TextFile(SourceRoot() / "src" / "geometry" / "geometry_renderer_2d.cpp");
+    const std::string geometry_renderer_3d_source =
+        ReadUtf8TextFile(SourceRoot() / "src" / "geometry" / "geometry_renderer_3d.cpp");
+    const std::string shadow_renderer_2d_header =
+        ReadUtf8TextFile(SourceRoot() / "include" / "vr" / "shadow" /
+                         "shadow_renderer_2d.hpp");
+    const std::string shadow_renderer_3d_header =
+        ReadUtf8TextFile(SourceRoot() / "include" / "vr" / "shadow" /
+                         "shadow_renderer_3d.hpp");
+    const std::string background_header =
+        ReadUtf8TextFile(SourceRoot() / "include" / "vr" / "render" / "environment" /
+                         "background_pass_2d.hpp");
+
+    VR_CHECK(Contains(umbrella_header, "#include \"vr/runtime/frame_prepare_context.hpp\""));
+    VR_CHECK(Contains(umbrella_header, "#include \"vr/render/scene_prepare_views.hpp\""));
+    VR_CHECK(Contains(umbrella_header, "#include \"vr/render/renderer_prepare_views_2d.hpp\""));
+    VR_CHECK(Contains(umbrella_header, "#include \"vr/render/renderer_prepare_views_3d.hpp\""));
+    VR_CHECK(!Contains(umbrella_header, "struct SceneRecorder2DPrepareView final"));
+    VR_CHECK(!Contains(umbrella_header, "struct GeometryRenderer2DPrepareView final"));
+    VR_CHECK(!Contains(umbrella_header, "struct GeometryRenderer3DPrepareView final"));
+
+    VR_CHECK(Contains(frame_prepare_header, "struct RuntimeDirectGraphBuildView final"));
+    VR_CHECK(!Contains(frame_prepare_header, "struct SceneRecorder2DPrepareView final"));
+    VR_CHECK(Contains(scene_prepare_header, "struct SceneRecorder2DPrepareView final"));
+    VR_CHECK(Contains(scene_prepare_header, "struct SceneRecorder3DPrepareView final"));
+    VR_CHECK(!Contains(scene_prepare_header, "struct GeometryRenderer2DPrepareView final"));
+    VR_CHECK(!Contains(scene_prepare_header, "struct GeometryRenderer3DPrepareView final"));
+    VR_CHECK(Contains(renderer_prepare_header_2d, "struct GeometryRenderer2DPrepareView final"));
+    VR_CHECK(!Contains(renderer_prepare_header_2d, "struct GeometryRenderer3DPrepareView final"));
+    VR_CHECK(Contains(renderer_prepare_header_3d, "struct GeometryRenderer3DPrepareView final"));
+    VR_CHECK(!Contains(renderer_prepare_header_3d, "struct GeometryRenderer2DPrepareView final"));
+
+    VR_CHECK(Contains(text_renderer_2d_source, "#include \"vr/render/renderer_prepare_views_2d.hpp\""));
+    VR_CHECK(!Contains(text_renderer_2d_source, "#include \"vr/render/runtime_prepare_views.hpp\""));
+    VR_CHECK(Contains(text_renderer_3d_source, "#include \"vr/render/renderer_prepare_views_3d.hpp\""));
+    VR_CHECK(!Contains(text_renderer_3d_source, "#include \"vr/render/runtime_prepare_views.hpp\""));
+    VR_CHECK(Contains(geometry_renderer_2d_source, "#include \"vr/render/renderer_prepare_views_2d.hpp\""));
+    VR_CHECK(!Contains(geometry_renderer_2d_source, "#include \"vr/render/runtime_prepare_views.hpp\""));
+    VR_CHECK(Contains(geometry_renderer_3d_source, "#include \"vr/render/renderer_prepare_views_3d.hpp\""));
+    VR_CHECK(!Contains(geometry_renderer_3d_source, "#include \"vr/render/runtime_prepare_views.hpp\""));
+    VR_CHECK(Contains(shadow_renderer_2d_header, "#include \"vr/render/renderer_prepare_views_2d.hpp\""));
+    VR_CHECK(!Contains(shadow_renderer_2d_header, "#include \"vr/render/runtime_prepare_views.hpp\""));
+    VR_CHECK(Contains(shadow_renderer_3d_header, "#include \"vr/render/renderer_prepare_views_3d.hpp\""));
+    VR_CHECK(!Contains(shadow_renderer_3d_header, "#include \"vr/render/runtime_prepare_views.hpp\""));
+    VR_CHECK(Contains(background_header, "#include \"vr/render/scene_prepare_views.hpp\""));
+    VR_CHECK(!Contains(background_header, "#include \"vr/render/runtime_prepare_views.hpp\""));
 }
 
 VR_TEST_CASE(Phase12_graph_only_closeout_source_contract_isolates_transition_and_transient_tokens_to_low_level_helpers,

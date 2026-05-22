@@ -2,6 +2,7 @@
 #include "support/test_framework.hpp"
 #include "vr/ecs/system/text_system.hpp"
 #include "vr/runtime/runtime.hpp"
+#include "vr/runtime/services/render_graph_runtime_service.hpp"
 #include "vr/text/text_renderer_2d.hpp"
 
 #include <SDL3/SDL.h>
@@ -14,6 +15,7 @@
 #include <filesystem>
 #include <string>
 #include <string_view>
+#include <utility>
 
 namespace {
 
@@ -86,6 +88,42 @@ using TextSystem2D = vr::ecs::TextSystem<vr::ecs::Dim2>;
         }
     }
     return false;
+}
+
+template<typename RuntimeT>
+[[nodiscard]] std::pair<std::uint64_t, std::uint64_t> ResolveExpectedTransferProgress(
+    RuntimeT& runtime_) {
+    std::uint64_t submitted = 0U;
+    std::uint64_t completed = 0U;
+    if (runtime_.Upload().UsesCrossQueueSubmit()) {
+        submitted = runtime_.Upload().LastSubmittedValue();
+        completed = runtime_.Upload().CompletedSubmitValue();
+    }
+    if (const auto* graph_service =
+            runtime_.Services().template TryGet<vr::runtime::services::RenderGraphRuntimeService>();
+        graph_service != nullptr && graph_service->HasTransferQueueProgress()) {
+        submitted = (std::max)(submitted, graph_service->TransferSubmittedValue());
+        completed = (std::max)(completed, graph_service->CompletedTransferValue());
+    }
+    return {submitted, completed};
+}
+
+template<typename RuntimeT>
+[[nodiscard]] std::pair<std::uint64_t, std::uint64_t> ResolveExpectedComputeProgress(
+    RuntimeT& runtime_) {
+    std::uint64_t submitted = 0U;
+    std::uint64_t completed = 0U;
+    if (runtime_.ParticleSimulationService().HasComputeTimelineProgress()) {
+        submitted = runtime_.ParticleSimulationService().LastSubmittedValue();
+        completed = runtime_.ParticleSimulationService().CompletedSubmitValue();
+    }
+    if (const auto* graph_service =
+            runtime_.Services().template TryGet<vr::runtime::services::RenderGraphRuntimeService>();
+        graph_service != nullptr && graph_service->HasComputeQueueProgress()) {
+        submitted = (std::max)(submitted, graph_service->ComputeSubmittedValue());
+        completed = (std::max)(completed, graph_service->CompletedComputeValue());
+    }
+    return {submitted, completed};
 }
 
 void InitializeTextComponent(Text2D& component_,
@@ -321,22 +359,19 @@ VR_TEST_CASE(RuntimeIntegration_runtime_root_text_renderer_2d_smoke,
                  vr::runtime::RuntimeExecutionStage::Diagnostics);
 
         const RuntimeRoot::FrameContext frame_context = runtime.BuildFrameContext();
-        const bool has_cross_queue_upload_timeline =
-            runtime.Upload().UsesCrossQueueSubmit() && tick_result.upload_cross_queue_wait;
+        const auto [expected_transfer_submitted, expected_transfer_completed] =
+            ResolveExpectedTransferProgress(runtime);
+        const auto [expected_compute_submitted, expected_compute_completed] =
+            ResolveExpectedComputeProgress(runtime);
         VR_CHECK(frame_context.frame.frame_id == tick_result.frame_id);
         VR_CHECK(frame_context.frame.frame_index == tick_result.frame_index);
         VR_CHECK(frame_context.frame.image_index == tick_result.image_index);
         VR_CHECK(frame_context.progress.graphics_submitted == runtime.Frames().LastSubmittedValue());
         VR_CHECK(frame_context.progress.graphics_completed == runtime.Frames().CompletedSubmitValue());
-        if (has_cross_queue_upload_timeline) {
-            VR_CHECK(frame_context.progress.transfer_submitted == runtime.Upload().LastSubmittedValue());
-            VR_CHECK(frame_context.progress.transfer_completed == runtime.Upload().CompletedSubmitValue());
-        } else {
-            VR_CHECK(frame_context.progress.transfer_submitted == 0U);
-            VR_CHECK(frame_context.progress.transfer_completed == 0U);
-        }
-        VR_CHECK(frame_context.progress.compute_submitted == 0U);
-        VR_CHECK(frame_context.progress.compute_completed == 0U);
+        VR_CHECK(frame_context.progress.transfer_submitted == expected_transfer_submitted);
+        VR_CHECK(frame_context.progress.transfer_completed == expected_transfer_completed);
+        VR_CHECK(frame_context.progress.compute_submitted == expected_compute_submitted);
+        VR_CHECK(frame_context.progress.compute_completed == expected_compute_completed);
         VR_CHECK(frame_context.timelines.graphics.IsAvailable());
         VR_CHECK(frame_context.timelines.graphics.submitted_value ==
                  frame_context.progress.graphics_submitted);
@@ -344,16 +379,17 @@ VR_TEST_CASE(RuntimeIntegration_runtime_root_text_renderer_2d_smoke,
                  frame_context.progress.graphics_completed);
         VR_CHECK(frame_context.timelines.Get(vr::runtime::QueueKind::graphics).submitted_value ==
                  frame_context.progress.graphics_submitted);
-        if (has_cross_queue_upload_timeline) {
+        if (expected_transfer_submitted > 0U || expected_transfer_completed > 0U) {
             VR_CHECK(frame_context.timelines.transfer.IsAvailable());
-            VR_CHECK(frame_context.timelines.transfer.submitted_value ==
-                     frame_context.progress.transfer_submitted);
-            VR_CHECK(frame_context.timelines.transfer.completed_value ==
-                     frame_context.progress.transfer_completed);
-        } else {
-            VR_CHECK(frame_context.timelines.Get(vr::runtime::QueueKind::transfer).submitted_value == 0U);
         }
-        VR_CHECK(frame_context.timelines.Get(vr::runtime::QueueKind::compute).submitted_value == 0U);
+        VR_CHECK(frame_context.timelines.transfer.submitted_value ==
+                 frame_context.progress.transfer_submitted);
+        VR_CHECK(frame_context.timelines.transfer.completed_value ==
+                 frame_context.progress.transfer_completed);
+        VR_CHECK(frame_context.timelines.compute.submitted_value ==
+                 frame_context.progress.compute_submitted);
+        VR_CHECK(frame_context.timelines.compute.completed_value ==
+                 frame_context.progress.compute_completed);
         VR_CHECK(!runtime.ParticleSimulationService().HasComputeTimelineProgress());
         VR_CHECK(runtime.ParticleSimulationService().LastSubmittedValue() == 0U);
         VR_CHECK(runtime.ParticleSimulationService().CompletedSubmitValue() == 0U);
@@ -362,14 +398,10 @@ VR_TEST_CASE(RuntimeIntegration_runtime_root_text_renderer_2d_smoke,
         VR_CHECK(graphics_dependency.value == frame_context.timelines.graphics.submitted_value);
         const auto transfer_dependency = runtime.Kernel().BuildTransferDependency();
         VR_CHECK(transfer_dependency.source_queue == vr::runtime::QueueKind::transfer);
-        if (has_cross_queue_upload_timeline) {
-            VR_CHECK(transfer_dependency.value == frame_context.timelines.transfer.submitted_value);
-        } else {
-            VR_CHECK(transfer_dependency.value == 0U);
-        }
+        VR_CHECK(transfer_dependency.value == frame_context.timelines.transfer.submitted_value);
         const auto compute_dependency = runtime.Kernel().BuildComputeDependency();
         VR_CHECK(compute_dependency.source_queue == vr::runtime::QueueKind::compute);
-        VR_CHECK(compute_dependency.value == 0U);
+        VR_CHECK(compute_dependency.value == frame_context.timelines.compute.submitted_value);
         VR_CHECK(&frame_context.services == &runtime.Services());
         VR_CHECK(&frame_context.kernel == &runtime.Kernel());
         VR_CHECK(&frame_context.commands == &runtime.Commands());

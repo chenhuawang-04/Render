@@ -69,6 +69,26 @@ static_assert(!vr::render::RuntimeTickRecorder<Particle3DMissingDescriptorWrappe
                        std::istreambuf_iterator<char>());
 }
 
+[[nodiscard]] std::string ReadConcatenatedUtf8TextFiles(
+    const std::initializer_list<std::filesystem::path> paths_) {
+    std::string combined{};
+    for (const auto& path : paths_) {
+        combined += ReadUtf8TextFile(path);
+        combined.push_back('\n');
+    }
+    return combined;
+}
+
+[[nodiscard]] std::string ReadRuntimeHostCompositeSource() {
+    return ReadConcatenatedUtf8TextFiles({
+        SourceRoot() / "include" / "vr" / "runtime" / "detail" / "render_runtime_host.hpp",
+        SourceRoot() / "include" / "vr" / "runtime" / "detail" / "render_runtime_host_lifecycle.ipp",
+        SourceRoot() / "include" / "vr" / "runtime" / "detail" / "render_runtime_host_tick.ipp",
+        SourceRoot() / "include" / "vr" / "runtime" / "detail" / "render_runtime_host_resources.ipp",
+        SourceRoot() / "include" / "vr" / "runtime" / "detail" / "render_runtime_host_graph_bridge.ipp",
+    });
+}
+
 [[nodiscard]] bool Contains(std::string_view haystack_,
                             std::string_view needle_) noexcept {
     return haystack_.find(needle_) != std::string_view::npos;
@@ -111,8 +131,9 @@ VR_TEST_CASE(Runtime_graph_only_mainline_source_removes_long_lived_dual_track_ga
     const std::string runtime_service =
         ReadUtf8TextFile(SourceRoot() / "include" / "vr" / "runtime" / "services" /
                          "render_graph_runtime_service.hpp");
-    const std::string runtime_host =
+    const std::string runtime_host_root =
         ReadUtf8TextFile(internal_runtime_host_path);
+    const std::string runtime_host = ReadRuntimeHostCompositeSource();
     const std::string runtime_public =
         ReadUtf8TextFile(SourceRoot() / "include" / "vr" / "runtime" /
                          "runtime.hpp");
@@ -125,6 +146,18 @@ VR_TEST_CASE(Runtime_graph_only_mainline_source_removes_long_lived_dual_track_ga
     const std::string prepare_views =
         ReadUtf8TextFile(SourceRoot() / "include" / "vr" / "render" /
                          "runtime_prepare_views.hpp");
+    const std::string frame_prepare_context =
+        ReadUtf8TextFile(SourceRoot() / "include" / "vr" / "runtime" /
+                         "frame_prepare_context.hpp");
+    const std::string scene_prepare_views =
+        ReadUtf8TextFile(SourceRoot() / "include" / "vr" / "render" /
+                         "scene_prepare_views.hpp");
+    const std::string renderer_prepare_views_2d =
+        ReadUtf8TextFile(SourceRoot() / "include" / "vr" / "render" /
+                         "renderer_prepare_views_2d.hpp");
+    const std::string renderer_prepare_views_3d =
+        ReadUtf8TextFile(SourceRoot() / "include" / "vr" / "render" /
+                         "renderer_prepare_views_3d.hpp");
     const std::string runtime_views =
         ReadUtf8TextFile(SourceRoot() / "include" / "vr" / "runtime" /
                          "runtime_views.hpp");
@@ -158,6 +191,20 @@ VR_TEST_CASE(Runtime_graph_only_mainline_source_removes_long_lived_dual_track_ga
     VR_CHECK(!Contains(runtime_host, "StrictGraphOnlyRecordRequired("));
     VR_CHECK(!Contains(runtime_host, "SupportsGraphOnlyRecord("));
     VR_CHECK(!Contains(runtime_host, "render_target_pool"));
+    VR_CHECK(Contains(runtime_host_root,
+                       "#include \"vr/runtime/detail/render_runtime_host_lifecycle.ipp\""));
+    VR_CHECK(Contains(runtime_host_root,
+                       "#include \"vr/runtime/detail/render_runtime_host_tick.ipp\""));
+    VR_CHECK(Contains(runtime_host_root,
+                       "#include \"vr/runtime/detail/render_runtime_host_resources.ipp\""));
+    VR_CHECK(Contains(runtime_host_root,
+                       "#include \"vr/runtime/detail/render_runtime_host_graph_bridge.ipp\""));
+    VR_CHECK(Contains(runtime_public,
+                       "#include \"vr/runtime/detail/runtime_facade_lifecycle.ipp\""));
+    VR_CHECK(Contains(runtime_public,
+                       "#include \"vr/runtime/detail/runtime_facade_accessors.ipp\""));
+    VR_CHECK(Contains(runtime_public,
+                       "#include \"vr/runtime/detail/runtime_facade_tick_detail.ipp\""));
     VR_CHECK(!Contains(runtime_public, " TargetPool("));
     VR_CHECK(!Contains(runtime_public, "HostType"));
     VR_CHECK(!Contains(runtime_public, " Host("));
@@ -170,6 +217,8 @@ VR_TEST_CASE(Runtime_graph_only_mainline_source_removes_long_lived_dual_track_ga
                        "detail::RuntimeHost<BackendTag, frames_in_flight_v>::RuntimeServicesType"));
     VR_CHECK(!Contains(runtime_public,
                        "RuntimeFrameContext<typename detail::RuntimeHost"));
+    VR_CHECK(!Contains(runtime_public, "class ExecutionPhaseDriver final"));
+    VR_CHECK(!Contains(runtime_public, "void CollectTickPostState("));
     VR_CHECK(!Contains(runtime_kernel,
                        "detail::RuntimeHost<BackendTag, frames_in_flight_v>::PlatformHostType"));
     VR_CHECK(!Contains(runtime_kernel,
@@ -184,11 +233,38 @@ VR_TEST_CASE(Runtime_graph_only_mainline_source_removes_long_lived_dual_track_ga
     VR_CHECK(!Contains(runtime_host, "SceneRenderTargetSetPrepareView"));
     VR_CHECK(!Contains(runtime_host, "SceneBloomPostStackPrepareView"));
 
-    VR_CHECK(Contains(prepare_views, "render_graph_upload_active"));
-    VR_CHECK(Contains(prepare_views, "render_graph_compute_active"));
+    VR_CHECK(Contains(prepare_views, "#include \"vr/runtime/frame_prepare_context.hpp\""));
+    VR_CHECK(Contains(prepare_views, "#include \"vr/render/scene_prepare_views.hpp\""));
+    VR_CHECK(Contains(prepare_views, "#include \"vr/render/renderer_prepare_views_2d.hpp\""));
+    VR_CHECK(Contains(prepare_views, "#include \"vr/render/renderer_prepare_views_3d.hpp\""));
+    VR_CHECK(!Contains(prepare_views, "render_graph_upload_active"));
+    VR_CHECK(!Contains(prepare_views, "render_graph_compute_active"));
     VR_CHECK(!Contains(prepare_views, "prefer_graph_only_runtime_path"));
     VR_CHECK(!Contains(prepare_views, "SceneRenderTargetSetPrepareView"));
     VR_CHECK(!Contains(prepare_views, "SceneBloomPostStackPrepareView"));
+    VR_CHECK(Contains(frame_prepare_context, "struct FrameStaticContext final"));
+    VR_CHECK(Contains(frame_prepare_context, "struct FrameGpuProgressContext final"));
+    VR_CHECK(Contains(frame_prepare_context, "struct RuntimeDirectGraphBuildView final"));
+    VR_CHECK(!Contains(frame_prepare_context, "struct SceneRecorder2DPrepareView final"));
+    VR_CHECK(Contains(scene_prepare_views, "struct SceneRecorder2DPrepareView final"));
+    VR_CHECK(Contains(scene_prepare_views, "struct SceneRecorder3DPrepareView final"));
+    VR_CHECK(Contains(scene_prepare_views, "struct FrameComposerPrepareView final"));
+    VR_CHECK(!Contains(scene_prepare_views, "struct GeometryRenderer2DPrepareView final"));
+    VR_CHECK(!Contains(scene_prepare_views, "struct GeometryRenderer3DPrepareView final"));
+    VR_CHECK(Contains(scene_prepare_views, "render_graph_upload_active"));
+    VR_CHECK(Contains(scene_prepare_views, "render_graph_compute_active"));
+    VR_CHECK(Contains(renderer_prepare_views_2d, "struct GeometryRenderer2DPrepareView final"));
+    VR_CHECK(Contains(renderer_prepare_views_2d, "struct TextRenderer2DPrepareView final"));
+    VR_CHECK(Contains(renderer_prepare_views_2d, "struct ParticleRenderer2DPrepareView final"));
+    VR_CHECK(!Contains(renderer_prepare_views_2d, "struct GeometryRenderer3DPrepareView final"));
+    VR_CHECK(Contains(renderer_prepare_views_2d, "render_graph_upload_active"));
+    VR_CHECK(Contains(renderer_prepare_views_2d, "render_graph_compute_active"));
+    VR_CHECK(Contains(renderer_prepare_views_3d, "struct GeometryRenderer3DPrepareView final"));
+    VR_CHECK(Contains(renderer_prepare_views_3d, "struct TextRenderer3DPrepareView final"));
+    VR_CHECK(Contains(renderer_prepare_views_3d, "struct ParticleRenderer3DPrepareView final"));
+    VR_CHECK(!Contains(renderer_prepare_views_3d, "struct GeometryRenderer2DPrepareView final"));
+    VR_CHECK(Contains(renderer_prepare_views_3d, "render_graph_upload_active"));
+    VR_CHECK(Contains(renderer_prepare_views_3d, "render_graph_compute_active"));
     VR_CHECK(!Contains(runtime_views, "SceneRenderTargetSetPrepareView"));
     VR_CHECK(!Contains(runtime_views, "SceneBloomPostStackPrepareView"));
     VR_CHECK(!Contains(runtime_views, "MakeSceneRenderTargetSetPrepareView"));
@@ -304,9 +380,7 @@ VR_TEST_CASE(Runtime_graph_supported_renderer_source_prunes_legacy_target_and_re
 
 VR_TEST_CASE(Runtime_graph_only_direct_runtime_host_delegates_graph_policy_to_renderers,
              "unit;contract;runtime;render_graph") {
-    const std::string runtime_host =
-        ReadUtf8TextFile(SourceRoot() / "include" / "vr" / "runtime" / "detail" /
-                         "render_runtime_host.hpp");
+    const std::string runtime_host = ReadRuntimeHostCompositeSource();
 
     VR_CHECK(Contains(runtime_host, "RuntimeDirectGraphDescriptorRecorder<"));
     VR_CHECK(Contains(runtime_host, "recorder_.BuildDirectRuntimeGraph(RuntimeDirectGraphBuildView{"));
@@ -339,13 +413,87 @@ VR_TEST_CASE(Runtime_graph_only_direct_runtime_renderer_sources_define_explicit_
         VR_CHECK(Contains(source, "BuildDirectRuntimeGraph("));
     }
 
-    constexpr std::array<std::string_view, 4U> staged_renderer_sources{
-        "src/geometry/geometry_renderer_3d.cpp",
-        "src/surface/surface_renderer_3d.cpp",
-        "src/text/text_renderer_3d.cpp",
-        "src/particle/particle_renderer_3d.cpp",
+    struct SplitRenderer3DSourceContract final {
+        std::string_view root_source;
+        std::string_view prepare_source;
+        std::string_view graph_source;
+        std::string_view resource_source;
+        std::string_view extra_source;
+        std::string_view extra_token;
     };
-    for (const auto relative_path : staged_renderer_sources) {
+
+    constexpr std::array<SplitRenderer3DSourceContract, 4U> split_renderer_sources{{
+        {
+            "src/geometry/geometry_renderer_3d.cpp",
+            "src/geometry/geometry_renderer_3d_prepare.cpp",
+            "src/geometry/geometry_renderer_3d_graph.cpp",
+            "src/geometry/geometry_renderer_3d_pipeline_resources.cpp",
+            "src/geometry/geometry_renderer_3d_lighting.cpp",
+            "EnsureLightingDescriptorObjects(",
+        },
+        {
+            "src/surface/surface_renderer_3d.cpp",
+            "src/surface/surface_renderer_3d_prepare.cpp",
+            "src/surface/surface_renderer_3d_graph.cpp",
+            "src/surface/surface_renderer_3d_pipeline_resources.cpp",
+            "",
+            "",
+        },
+        {
+            "src/text/text_renderer_3d.cpp",
+            "src/text/text_renderer_3d_prepare.cpp",
+            "src/text/text_renderer_3d_graph.cpp",
+            "src/text/text_renderer_3d_pipeline_resources.cpp",
+            "src/text/text_renderer_3d_upload.cpp",
+            "ScheduleGraphInstanceUpload(",
+        },
+        {
+            "src/particle/particle_renderer_3d.cpp",
+            "src/particle/particle_renderer_3d_prepare.cpp",
+            "src/particle/particle_renderer_3d_graph.cpp",
+            "src/particle/particle_renderer_3d_pipeline_resources.cpp",
+            "",
+            "ScheduleGraphComputeBuild(",
+        },
+    }};
+    for (const auto& contract : split_renderer_sources) {
+        const std::string root_source =
+            ReadUtf8TextFile(SourceRoot() / std::filesystem::path{contract.root_source});
+        const std::string prepare_source =
+            ReadUtf8TextFile(SourceRoot() / std::filesystem::path{contract.prepare_source});
+        const std::string graph_source =
+            ReadUtf8TextFile(SourceRoot() / std::filesystem::path{contract.graph_source});
+        const std::string resource_source =
+            ReadUtf8TextFile(SourceRoot() / std::filesystem::path{contract.resource_source});
+
+        VR_CHECK(!Contains(root_source, "BuildDirectRuntimeGraph("));
+        VR_CHECK(!Contains(root_source, "RecordGraphSceneStage("));
+        VR_CHECK(Contains(prepare_source, "PrepareFrame("));
+        VR_CHECK(Contains(graph_source, "BuildDirectRuntimeGraph("));
+        VR_CHECK(Contains(graph_source, "_direct_opaque"));
+        VR_CHECK(Contains(graph_source, "_direct_transparent"));
+        VR_CHECK(Contains(graph_source, "DescribeGraphDescriptorBindings(graph_view_.builder, pass);"));
+        VR_CHECK(Contains(graph_source, "create_info_cache.clear_swapchain"));
+        VR_CHECK(Contains(graph_source, "create_info_cache.clear_depth"));
+        VR_CHECK(Contains(graph_source, "create_info_cache.clear_depth_value"));
+        VR_CHECK(Contains(resource_source, "EnsurePipelineObjects("));
+
+        if (!contract.extra_source.empty()) {
+            const std::string extra_source =
+                ReadUtf8TextFile(SourceRoot() / std::filesystem::path{contract.extra_source});
+            VR_CHECK(Contains(extra_source, contract.extra_token));
+        } else if (!contract.extra_token.empty()) {
+            VR_CHECK(Contains(graph_source, contract.extra_token));
+        }
+    }
+
+    constexpr std::array<std::string_view, 4U> direct_renderer_3d_sources{
+        "src/geometry/geometry_renderer_3d_graph.cpp",
+        "src/surface/surface_renderer_3d_graph.cpp",
+        "src/text/text_renderer_3d_graph.cpp",
+        "src/particle/particle_renderer_3d_graph.cpp",
+    };
+    for (const auto relative_path : direct_renderer_3d_sources) {
         const std::string source =
             ReadUtf8TextFile(SourceRoot() / std::filesystem::path{relative_path});
         VR_CHECK(Contains(source, "BuildDirectRuntimeGraph("));
@@ -357,27 +505,112 @@ VR_TEST_CASE(Runtime_graph_only_direct_runtime_renderer_sources_define_explicit_
         VR_CHECK(Contains(source, "create_info_cache.clear_depth_value"));
     }
 
-    constexpr std::array<std::string_view, 4U> direct_renderer_2d_sources{
-        "src/geometry/geometry_renderer_2d.cpp",
-        "src/surface/surface_renderer_2d.cpp",
-        "src/text/text_renderer_2d.cpp",
-        "src/particle/particle_renderer_2d.cpp",
-    };
-    for (const auto relative_path : direct_renderer_2d_sources) {
-        const std::string source =
-            ReadUtf8TextFile(SourceRoot() / std::filesystem::path{relative_path});
-        VR_CHECK(Contains(source, "BuildDirectRuntimeGraph("));
-        VR_CHECK(Contains(source, "create_info_cache.clear_swapchain"));
+    {
+        const std::string geometry_2d_source =
+            ReadUtf8TextFile(SourceRoot() / std::filesystem::path{"src/geometry/geometry_renderer_2d.cpp"});
+        VR_CHECK(Contains(geometry_2d_source, "BuildDirectRuntimeGraph("));
+        VR_CHECK(Contains(geometry_2d_source, "create_info_cache.clear_swapchain"));
     }
 
-    constexpr std::array<std::string_view, 3U> descriptor_aware_2d_sources{
-        "src/surface/surface_renderer_2d.cpp",
-        "src/text/text_renderer_2d.cpp",
-        "src/particle/particle_renderer_2d.cpp",
+    struct SplitRenderer2DSourceContract final {
+        std::string_view root_source;
+        std::string_view prepare_source;
+        std::string_view graph_source;
+        std::string_view resource_source;
+        std::string_view extra_source;
+        std::string_view extra_token;
     };
-    for (const auto relative_path : descriptor_aware_2d_sources) {
-        const std::string source =
-            ReadUtf8TextFile(SourceRoot() / std::filesystem::path{relative_path});
-        VR_CHECK(Contains(source, "DescribeGraphDescriptorBindings(graph_view_.builder, pass);"));
+
+    constexpr std::array<SplitRenderer2DSourceContract, 3U> split_renderer_sources_2d{{
+        {
+            "src/surface/surface_renderer_2d.cpp",
+            "src/surface/surface_renderer_2d_prepare.cpp",
+            "src/surface/surface_renderer_2d_graph_overlay.cpp",
+            "src/surface/surface_renderer_2d_pipeline_resources.cpp",
+            "",
+            "EnsureLightingDescriptorObjects(",
+        },
+        {
+            "src/text/text_renderer_2d.cpp",
+            "src/text/text_renderer_2d_prepare.cpp",
+            "src/text/text_renderer_2d_graph_overlay.cpp",
+            "src/text/text_renderer_2d_resource.cpp",
+            "",
+            "ScheduleGraphInstanceUpload(",
+        },
+        {
+            "src/particle/particle_renderer_2d.cpp",
+            "src/particle/particle_renderer_2d_prepare.cpp",
+            "src/particle/particle_renderer_2d_graph_overlay.cpp",
+            "src/particle/particle_renderer_2d_resource.cpp",
+            "src/particle/particle_renderer_2d_graph_overlay.cpp",
+            "ScheduleGraphComputeBuild(",
+        },
+    }};
+    for (const auto& contract : split_renderer_sources_2d) {
+        const std::string root_source =
+            ReadUtf8TextFile(SourceRoot() / std::filesystem::path{contract.root_source});
+        const std::string prepare_source =
+            ReadUtf8TextFile(SourceRoot() / std::filesystem::path{contract.prepare_source});
+        const std::string graph_source =
+            ReadUtf8TextFile(SourceRoot() / std::filesystem::path{contract.graph_source});
+        const std::string resource_source =
+            ReadUtf8TextFile(SourceRoot() / std::filesystem::path{contract.resource_source});
+
+        VR_CHECK(!Contains(root_source, "BuildDirectRuntimeGraph("));
+        VR_CHECK(!Contains(root_source, "RecordGraphOverlay("));
+        VR_CHECK(Contains(prepare_source, "PrepareFrame("));
+        VR_CHECK(Contains(graph_source, "BuildDirectRuntimeGraph("));
+        VR_CHECK(Contains(graph_source, "DescribeGraphDescriptorBindings(graph_view_.builder, pass);"));
+        VR_CHECK(Contains(graph_source, "create_info_cache.clear_swapchain"));
+        VR_CHECK(Contains(graph_source, "_direct"));
+        VR_CHECK(Contains(resource_source, "EnsurePipelineObjects("));
+        if (!contract.extra_source.empty()) {
+            const std::string extra_source =
+                ReadUtf8TextFile(SourceRoot() / std::filesystem::path{contract.extra_source});
+            VR_CHECK(Contains(extra_source, contract.extra_token));
+        } else {
+            VR_CHECK(Contains(resource_source, contract.extra_token));
+        }
     }
+}
+
+VR_TEST_CASE(Runtime_graph_only_graph_core_split_keeps_builder_and_native_pass_public_roots_thin,
+             "unit;contract;runtime;render_graph") {
+    const std::string builder_root =
+        ReadUtf8TextFile(SourceRoot() / std::filesystem::path{"src/render_graph/render_graph_builder.cpp"});
+    const std::string builder_compile =
+        ReadUtf8TextFile(SourceRoot() / std::filesystem::path{"src/render_graph/render_graph_builder_compile.cpp"});
+    const std::string builder_mutation =
+        ReadUtf8TextFile(SourceRoot() / std::filesystem::path{"src/render_graph/render_graph_builder_mutation.cpp"});
+    const std::string builder_debug =
+        ReadUtf8TextFile(SourceRoot() / std::filesystem::path{"src/render_graph/compiled_render_graph_debug.cpp"});
+    const std::string native_root =
+        ReadUtf8TextFile(SourceRoot() / std::filesystem::path{"src/render_graph/native_pass_plan.cpp"});
+    const std::string native_attachments =
+        ReadUtf8TextFile(SourceRoot() / std::filesystem::path{"src/render_graph/native_pass_plan_attachments.cpp"});
+    const std::string native_boundaries =
+        ReadUtf8TextFile(SourceRoot() / std::filesystem::path{"src/render_graph/native_pass_plan_boundaries.cpp"});
+    const std::string native_debug =
+        ReadUtf8TextFile(SourceRoot() / std::filesystem::path{"src/render_graph/native_pass_plan_debug.cpp"});
+
+    VR_CHECK(!Contains(builder_root, "CompiledRenderGraph::BuildDebugString("));
+    VR_CHECK(!Contains(builder_root, "CompiledRenderGraph::BuildDotGraph("));
+    VR_CHECK(!Contains(builder_root, "CompiledRenderGraph::BuildJson("));
+    VR_CHECK(!Contains(builder_root, "RenderGraphBuilder::Compile() const"));
+    VR_CHECK(Contains(builder_compile, "RenderGraphBuilder::Compile() const"));
+    VR_CHECK(Contains(builder_mutation, "RenderGraphBuilder::CreateTexture("));
+    VR_CHECK(Contains(builder_mutation, "RenderGraphBuilder::SetExecuteCallback("));
+    VR_CHECK(Contains(builder_debug, "CompiledRenderGraph::BuildDebugString() const"));
+    VR_CHECK(Contains(builder_debug, "CompiledRenderGraph::BuildDotGraph() const"));
+    VR_CHECK(Contains(builder_debug, "CompiledRenderGraph::BuildJson() const"));
+
+    VR_CHECK(!Contains(native_root, "BuildNativePassPlan("));
+    VR_CHECK(!Contains(native_root, "BuildNativePassPlanDebugString("));
+    VR_CHECK(!Contains(native_root, "BuildNativePassPlanJson("));
+    VR_CHECK(Contains(native_attachments, "PopulateAttachmentDecisions("));
+    VR_CHECK(Contains(native_boundaries, "BuildNativePassPlan("));
+    VR_CHECK(Contains(native_boundaries, "EvaluateBoundary("));
+    VR_CHECK(Contains(native_debug, "BuildNativePassPlanDebugString("));
+    VR_CHECK(Contains(native_debug, "BuildNativePassPlanJson("));
 }

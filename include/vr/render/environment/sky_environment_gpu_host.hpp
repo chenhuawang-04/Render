@@ -4,7 +4,7 @@
 #include "vr/asset/texture_host.hpp"
 #include "vr/render/descriptor_host.hpp"
 #include "vr/render/ibl_host.hpp"
-#include "vr/render/runtime_prepare_views.hpp"
+#include "vr/render/scene_prepare_views.hpp"
 #include "vr/resource/sampler_host.hpp"
 #include "vr/scene/background/sky_environment.hpp"
 #include "vr/vulkan_context.hpp"

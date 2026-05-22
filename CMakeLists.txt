@@ -507,10 +507,20 @@ add_library(vulkan_init STATIC
     src/render_graph/alias_allocator.cpp
     src/render_graph/barrier_plan.cpp
     src/render_graph/native_pass_plan.cpp
+    src/render_graph/native_pass_plan_attachments.cpp
+    src/render_graph/native_pass_plan_boundaries.cpp
+    src/render_graph/native_pass_plan_debug.cpp
     src/render_graph/render_graph_builder.cpp
+    src/render_graph/render_graph_builder_compile.cpp
+    src/render_graph/render_graph_builder_mutation.cpp
+    src/render_graph/compiled_render_graph_debug.cpp
     src/render_graph/render_graph_executor.cpp
     src/render_graph/vulkan_barrier_plan.cpp
     src/render_graph/vulkan_resource_table.cpp
+    src/runtime/services/render_graph_runtime_service_frame.cpp
+    src/runtime/services/render_graph_runtime_service_imports.cpp
+    src/runtime/services/render_graph_runtime_service_submission.cpp
+    src/runtime/services/render_graph_runtime_service_diagnostics.cpp
     src/render/frame_command_host.cpp
     src/render/frame_composer_host.cpp
     src/render/ibl_bake_host.cpp
@@ -528,28 +538,57 @@ add_library(vulkan_init STATIC
     src/render/render_target_composite_renderer.cpp
     src/render/render_target_bloom_renderer.cpp
     src/render/scene_recorder_2d.cpp
+    src/render/scene_recorder_2d_registration.cpp
+    src/render/scene_recorder_2d_prepare.cpp
+    src/render/scene_recorder_2d_graph.cpp
     src/render/scene_recorder_3d.cpp
+    src/render/scene_recorder_3d_registration.cpp
+    src/render/scene_recorder_3d_prepare.cpp
+    src/render/scene_recorder_3d_graph.cpp
     src/render/scene_bloom_post_stack.cpp
     src/render/scene_render_target_set.cpp
     src/text/freetype_host.cpp
     src/text/glyph_atlas_host.cpp
     src/text/glyph_upload_host.cpp
     src/text/text_renderer_2d.cpp
+    src/text/text_renderer_2d_prepare.cpp
+    src/text/text_renderer_2d_graph_overlay.cpp
+    src/text/text_renderer_2d_resource.cpp
     src/text/text_renderer_3d.cpp
+    src/text/text_renderer_3d_prepare.cpp
+    src/text/text_renderer_3d_graph.cpp
+    src/text/text_renderer_3d_upload.cpp
+    src/text/text_renderer_3d_pipeline_resources.cpp
     src/geometry/geometry_resource_host.cpp
     src/geometry/geometry_appearance_host.cpp
     src/geometry/geometry_image_host.cpp
     src/geometry/geometry_upload_host.cpp
     src/geometry/geometry_renderer_2d.cpp
     src/geometry/geometry_renderer_3d.cpp
+    src/geometry/geometry_renderer_3d_prepare.cpp
+    src/geometry/geometry_renderer_3d_graph.cpp
+    src/geometry/geometry_renderer_3d_lighting.cpp
+    src/geometry/geometry_renderer_3d_pipeline_resources.cpp
     src/particle/particle_simulation_host.cpp
     src/particle/particle_upload_host.cpp
     src/particle/particle_renderer_2d.cpp
+    src/particle/particle_renderer_2d_prepare.cpp
+    src/particle/particle_renderer_2d_graph_overlay.cpp
+    src/particle/particle_renderer_2d_resource.cpp
     src/particle/particle_renderer_3d.cpp
+    src/particle/particle_renderer_3d_prepare.cpp
+    src/particle/particle_renderer_3d_graph.cpp
+    src/particle/particle_renderer_3d_pipeline_resources.cpp
     src/surface/surface_image_host.cpp
     src/surface/surface_upload_host.cpp
     src/surface/surface_renderer_2d.cpp
+    src/surface/surface_renderer_2d_prepare.cpp
+    src/surface/surface_renderer_2d_graph_overlay.cpp
+    src/surface/surface_renderer_2d_pipeline_resources.cpp
     src/surface/surface_renderer_3d.cpp
+    src/surface/surface_renderer_3d_prepare.cpp
+    src/surface/surface_renderer_3d_graph.cpp
+    src/surface/surface_renderer_3d_pipeline_resources.cpp
     src/light/light_shadow_upload_host.cpp
     src/shadow/shadow_atlas_host.cpp
     src/shadow/shadow_renderer_2d.cpp

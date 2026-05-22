@@ -7,7 +7,7 @@
 #include "vr/ecs/component/transform_component.hpp"
 #include "vr/render/pipeline_host.hpp"
 #include "vr/render/render_loop_host.hpp"
-#include "vr/render/runtime_prepare_views.hpp"
+#include "vr/render/renderer_prepare_views_2d.hpp"
 #include "vr/render/shadow_frame_coordinator.hpp"
 #include "vr/shadow/shadow_atlas_host.hpp"
 

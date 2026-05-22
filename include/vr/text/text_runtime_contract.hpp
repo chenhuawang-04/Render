@@ -1,6 +1,7 @@
 ﻿#pragma once
 
-#include "vr/render/runtime_prepare_views.hpp"
+#include "vr/render/renderer_prepare_views_2d.hpp"
+#include "vr/render/renderer_prepare_views_3d.hpp"
 #include "vr/vulkan_context.hpp"
 
 #include <concepts>

@@ -4,7 +4,7 @@
 #include "vr/asset/texture_host.hpp"
 #include "vr/ecs/component/spatial_types.hpp"
 #include "vr/render/ibl_host.hpp"
-#include "vr/render/runtime_prepare_views.hpp"
+#include "vr/render/scene_prepare_views.hpp"
 
 #include <array>
 #include <cstdint>

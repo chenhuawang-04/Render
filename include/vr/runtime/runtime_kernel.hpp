@@ -269,47 +269,14 @@ public:
     }
 
     [[nodiscard]] FrameGpuProgressContext BuildFrameGpuProgressContext() const noexcept {
-        std::uint64_t transfer_submitted = 0U;
-        std::uint64_t transfer_completed = 0U;
-        std::uint64_t compute_submitted = 0U;
-        std::uint64_t compute_completed = 0U;
-        if (host != nullptr &&
-            host->HasUploadHost() &&
-            host->Upload().UsesCrossQueueSubmit()) {
-            transfer_submitted = host->Upload().LastSubmittedValue();
-            transfer_completed = host->Upload().CompletedSubmitValue();
-        }
-        if (host != nullptr &&
-            host->HasParticleSimulationHost() &&
-            host->ParticleSimulationService().HasComputeTimelineProgress()) {
-            compute_submitted = host->ParticleSimulationService().LastSubmittedValue();
-            compute_completed = host->ParticleSimulationService().CompletedSubmitValue();
-        }
-        if (host != nullptr) {
-            if (const auto* graph_service =
-                    host->Services().template TryGet<services::RenderGraphRuntimeService>();
-                graph_service != nullptr) {
-                if (graph_service->HasTransferQueueProgress()) {
-                    transfer_submitted =
-                        (std::max)(transfer_submitted, graph_service->TransferSubmittedValue());
-                    transfer_completed =
-                        (std::max)(transfer_completed, graph_service->CompletedTransferValue());
-                }
-                if (graph_service->HasComputeQueueProgress()) {
-                    compute_submitted =
-                        (std::max)(compute_submitted, graph_service->ComputeSubmittedValue());
-                    compute_completed =
-                        (std::max)(compute_completed, graph_service->CompletedComputeValue());
-                }
-            }
-        }
+        const QueueTimelineSet timelines = BuildQueueTimelines();
         return {
-            .graphics_submitted = scheduler.LastSubmittedValue(),
-            .graphics_completed = scheduler.CompletedSubmitValue(),
-            .transfer_submitted = transfer_submitted,
-            .transfer_completed = transfer_completed,
-            .compute_submitted = compute_submitted,
-            .compute_completed = compute_completed,
+            .graphics_submitted = timelines.graphics.submitted_value,
+            .graphics_completed = timelines.graphics.completed_value,
+            .transfer_submitted = timelines.transfer.submitted_value,
+            .transfer_completed = timelines.transfer.completed_value,
+            .compute_submitted = timelines.compute.submitted_value,
+            .compute_completed = timelines.compute.completed_value,
         };
     }
 

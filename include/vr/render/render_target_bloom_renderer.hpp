@@ -7,7 +7,7 @@
 #include "vr/render/pipeline_host.hpp"
 #include "vr/render/render_target_host.hpp"
 #include "vr/render/render_target_pass.hpp"
-#include "vr/render/runtime_prepare_views.hpp"
+#include "vr/render/scene_prepare_views.hpp"
 #include "vr/resource/sampler_host.hpp"
 
 #include <cstdint>

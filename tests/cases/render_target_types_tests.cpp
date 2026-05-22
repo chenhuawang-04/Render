@@ -926,7 +926,9 @@ VR_TEST_CASE(SceneRecorder3D_allows_same_renderer_in_opaque_and_transparent_stag
     VR_CHECK(stats.scene_renderer_count == 2U);
     VR_CHECK(stats.opaque_scene_renderer_count == 1U);
     VR_CHECK(stats.transparent_scene_renderer_count == 1U);
-    VR_CHECK(renderer.prepare_count == 2U);
+    // PrepareFrame de-duplicates scene renderers by renderer instance even when
+    // the same renderer is registered for both opaque and transparent stages.
+    VR_CHECK(renderer.prepare_count == 1U);
 }
 
 VR_TEST_CASE(SceneRecorder3D_frame_packet_is_runtime_submission_not_ecs_state,

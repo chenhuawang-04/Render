@@ -7,7 +7,7 @@
 #include "vr/render_graph/render_graph_builder.hpp"
 #include "vr/render/render_loop_host.hpp"
 #include "vr/render/render_target_pass.hpp"
-#include "vr/render/runtime_prepare_views.hpp"
+#include "vr/render/renderer_prepare_views_2d.hpp"
 #include "vr/render/upload_host.hpp"
 #include "vr/vulkan_context.hpp"
 

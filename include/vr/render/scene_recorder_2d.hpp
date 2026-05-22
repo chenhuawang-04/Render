@@ -6,6 +6,7 @@
 #include "vr/render_graph/graph_command_context.hpp"
 #include "vr/render/light_frame_coordinator.hpp"
 #include "vr/render/light_shadow_link_coordinator.hpp"
+#include "vr/render/scene_prepare_views.hpp"
 #include "vr/render/scene_submission.hpp"
 #include "vr/render/scene_render_target_set.hpp"
 #include "vr/render/shadow_atlas_binding_coordinator.hpp"
@@ -148,93 +149,23 @@ public:
 
     template<typename RendererT>
     void RegisterPreSceneRenderer(RendererT& renderer_,
-                                 std::uint32_t submission_layer_mask_ = all_submission_layers) {
-        EnsureInitialized("RegisterPreSceneRenderer");
-        const PreSceneRendererEntry entry{
-            .renderer = &renderer_,
-            .kind = PreSceneRendererKind::generic,
-            .reserved0 = 0U,
-            .reserved1 = 0U,
-            .submission_layer_mask = submission_layer_mask_,
-            .prepare_fn = &PrepareRenderer<RendererT>,
-            .record_fn = &RecordRenderer<RendererT>,
-            .swapchain_recreated_fn = &OptionalOnSwapchainRecreatedRenderer<RendererT>,
-        };
-        UpsertPreSceneRendererEntry(entry);
-    }
+                                  std::uint32_t submission_layer_mask_ = all_submission_layers);
 
     void RegisterShadowRenderer(shadow::ShadowRenderer2D& shadow_renderer_,
-                               std::uint32_t submission_layer_mask_ = all_submission_layers) {
-        EnsureInitialized("RegisterShadowRenderer");
-        const PreSceneRendererEntry entry{
-            .renderer = &shadow_renderer_,
-            .kind = PreSceneRendererKind::shadow,
-            .reserved0 = 0U,
-            .reserved1 = 0U,
-            .submission_layer_mask = submission_layer_mask_,
-            .prepare_fn = &PrepareRenderer<shadow::ShadowRenderer2D>,
-            .record_fn = &RecordRenderer<shadow::ShadowRenderer2D>,
-            .swapchain_recreated_fn = &OptionalOnSwapchainRecreatedRenderer<shadow::ShadowRenderer2D>,
-        };
-        UpsertPreSceneRendererEntry(entry);
-        BindShadowRuntime(&shadow_renderer_.FrameCoordinatorMutable(),
-                          &shadow_renderer_.AtlasHostMutable());
-    }
+                                std::uint32_t submission_layer_mask_ = all_submission_layers);
 
     template<typename RendererT>
     void RegisterSceneRenderer(RendererT& renderer_,
                                SceneRenderPassRole pass_role_,
-                               std::uint32_t submission_layer_mask_ = all_submission_layers) {
-        EnsureInitialized("RegisterSceneRenderer");
-        const SceneRendererEntry entry{
-            .renderer = &renderer_,
-            .pass_role = pass_role_,
-            .submission_layer_mask = submission_layer_mask_,
-            .prepare_fn = &PrepareRenderer<RendererT>,
-            .graph_record_fn = ResolveGraphRecordFn<RendererT>(),
-            .describe_graph_bindings_fn = ResolveGraphDescriptorBindingsFn<RendererT>(),
-            .register_graph_imported_resources_fn =
-                ResolveGraphImportedResourcesFn<RendererT>(),
-            .swapchain_recreated_fn = &OnSwapchainRecreatedRenderer<RendererT>,
-            .configure_lighting_fn = &ConfigureSceneLightingBinding<RendererT>,
-        };
-        UpsertSceneRendererEntry(entry);
-    }
+                               std::uint32_t submission_layer_mask_ = all_submission_layers);
 
     template<typename RendererT>
     void RegisterSceneConsumer(RendererT& renderer_,
-                               std::uint32_t submission_layer_mask_ = all_submission_layers) {
-        EnsureInitialized("RegisterSceneConsumer");
-        const SceneConsumerEntry entry{
-            .renderer = &renderer_,
-            .submission_layer_mask = submission_layer_mask_,
-            .prepare_fn = &PrepareRenderer<RendererT>,
-            .graph_record_fn = ResolveSceneConsumerGraphRecordFn<RendererT>(),
-            .build_graph_color_attachment_fn = ResolveSceneConsumerGraphColorAttachmentFn<RendererT>(),
-            .describe_graph_bindings_fn = ResolveGraphDescriptorBindingsFn<RendererT>(),
-            .register_graph_imported_resources_fn =
-                ResolveGraphImportedResourcesFn<RendererT>(),
-            .swapchain_recreated_fn = &OnSwapchainRecreatedRenderer<RendererT>,
-        };
-        SetSceneConsumerEntry(entry);
-    }
+                               std::uint32_t submission_layer_mask_ = all_submission_layers);
 
     template<typename RendererT>
     void RegisterOverlayRenderer(RendererT& renderer_,
-                                 std::uint32_t submission_layer_mask_ = all_submission_layers) {
-        EnsureInitialized("RegisterOverlayRenderer");
-        const OverlayRendererEntry entry{
-            .renderer = &renderer_,
-            .submission_layer_mask = submission_layer_mask_,
-            .prepare_fn = &PrepareRenderer<RendererT>,
-            .graph_record_fn = ResolveGraphRecordFn<RendererT>(),
-            .describe_graph_bindings_fn = ResolveGraphDescriptorBindingsFn<RendererT>(),
-            .register_graph_imported_resources_fn =
-                ResolveGraphImportedResourcesFn<RendererT>(),
-            .swapchain_recreated_fn = &OnSwapchainRecreatedRenderer<RendererT>,
-        };
-        UpsertOverlayRendererEntry(entry);
-    }
+                                 std::uint32_t submission_layer_mask_ = all_submission_layers);
 
     void ClearPreSceneRenderers() noexcept;
     void ClearSceneRenderers() noexcept;
@@ -349,142 +280,53 @@ private:
 
     template<typename RendererT>
     static void PrepareRenderer(void* renderer_,
-                                const SceneRecorder2DPrepareView& prepare_view_) {
-        RendererT& renderer_ref = *static_cast<RendererT*>(renderer_);
-        if constexpr (requires(RendererT& candidate_,
-                               const RenderTargetCompositeRendererPrepareView& renderer_prepare_view_) {
-                          candidate_.PrepareFrame(renderer_prepare_view_);
-                      }) {
-            renderer_ref.PrepareFrame(MakeRenderTargetCompositeRendererPrepareView(prepare_view_));
-        } else if constexpr (requires(RendererT& candidate_,
-                               const TextRenderer2DPrepareView& renderer_prepare_view_) {
-                          candidate_.PrepareFrame(renderer_prepare_view_);
-                      }) {
-            renderer_ref.PrepareFrame(MakeTextRenderer2DPrepareView(prepare_view_));
-        } else if constexpr (requires(RendererT& candidate_,
-                                      const GeometryRenderer2DPrepareView& renderer_prepare_view_) {
-                                 candidate_.PrepareFrame(renderer_prepare_view_);
-                             }) {
-            renderer_ref.PrepareFrame(MakeGeometryRenderer2DPrepareView(prepare_view_));
-        } else if constexpr (requires(RendererT& candidate_,
-                                      const SurfaceRenderer2DPrepareView& renderer_prepare_view_) {
-                                 candidate_.PrepareFrame(renderer_prepare_view_);
-                             }) {
-            renderer_ref.PrepareFrame(MakeSurfaceRenderer2DPrepareView(prepare_view_));
-        } else if constexpr (requires(RendererT& candidate_,
-                                      const ParticleRenderer2DPrepareView& renderer_prepare_view_) {
-                                 candidate_.PrepareFrame(renderer_prepare_view_);
-                             }) {
-            renderer_ref.PrepareFrame(MakeParticleRenderer2DPrepareView(prepare_view_));
-        } else if constexpr (requires(RendererT& candidate_,
-                                      const ShadowRenderer2DPrepareView& renderer_prepare_view_) {
-                                 candidate_.PrepareFrame(renderer_prepare_view_);
-                             }) {
-            renderer_ref.PrepareFrame(MakeShadowRenderer2DPrepareView(prepare_view_));
-        } else if constexpr (requires(RendererT& candidate_,
-                                      const SceneRecorder2DPrepareView& renderer_prepare_view_) {
-                                 candidate_.PrepareFrame(renderer_prepare_view_);
-                             }) {
-            renderer_ref.PrepareFrame(prepare_view_);
-        } else {
-            static_assert(sizeof(RendererT) == 0,
-                          "SceneRecorder2D renderer must expose a typed PrepareFrame overload");
-        }
-    }
+                                const SceneRecorder2DPrepareView& prepare_view_);
 
     template<typename RendererT>
     static void RecordRenderer(void* renderer_,
-                               const FrameRecordContext& record_context_) {
-        static_cast<RendererT*>(renderer_)->Record(record_context_);
-    }
+                               const FrameRecordContext& record_context_);
 
     template<typename RendererT>
     static void RecordGraphRenderer(void* renderer_,
                                     render_graph::GraphCommandContext& context_,
-                                    render_graph::ResourceHandle color_target_) {
-        if constexpr (SceneRecorder2DGraphColorPassRecordable<RendererT>) {
-            static_cast<RendererT*>(renderer_)->RecordGraphColorPass(context_, color_target_);
-        } else {
-            static_cast<RendererT*>(renderer_)->RecordGraphOverlay(context_, color_target_);
-        }
-    }
+                                    render_graph::ResourceHandle color_target_);
 
     template<typename RendererT>
-    static constexpr GraphRecordFn ResolveGraphRecordFn() noexcept {
-        if constexpr (SceneRecorder2DGraphRecordSupport<RendererT>::value) {
-            return &RecordGraphRenderer<RendererT>;
-        } else {
-            return nullptr;
-        }
-    }
+    static constexpr GraphRecordFn ResolveGraphRecordFn() noexcept;
 
     template<typename RendererT>
     static void RecordGraphSceneConsumer(void* renderer_,
                                          render_graph::GraphCommandContext& context_,
                                          render_graph::ResourceHandle source_color_,
-                                         render_graph::ResourceHandle output_target_) {
-        static_cast<RendererT*>(renderer_)->RecordGraphPass(context_, source_color_, output_target_);
-    }
+                                         render_graph::ResourceHandle output_target_);
 
     template<typename RendererT>
-    static constexpr GraphSceneConsumerRecordFn ResolveSceneConsumerGraphRecordFn() noexcept {
-        if constexpr (SceneRecorder2DGraphSceneConsumerRecordable<RendererT>) {
-            return &RecordGraphSceneConsumer<RendererT>;
-        } else {
-            return nullptr;
-        }
-    }
+    static constexpr GraphSceneConsumerRecordFn ResolveSceneConsumerGraphRecordFn() noexcept;
 
     template<typename RendererT>
     static render_graph::RasterColorAttachmentDesc BuildSceneConsumerGraphColorAttachment(
         void* renderer_,
         render_graph::ResourceHandle output_target_,
-        bool has_previous_content_) {
-        return static_cast<RendererT*>(renderer_)->BuildGraphColorAttachmentDesc(output_target_,
-                                                                                 has_previous_content_);
-    }
+        bool has_previous_content_);
 
     template<typename RendererT>
-    static constexpr BuildGraphColorAttachmentFn ResolveSceneConsumerGraphColorAttachmentFn() noexcept {
-        if constexpr (SceneRecorder2DGraphSceneConsumerAttachmentDescribable<RendererT>) {
-            return &BuildSceneConsumerGraphColorAttachment<RendererT>;
-        } else {
-            return nullptr;
-        }
-    }
+    static constexpr BuildGraphColorAttachmentFn ResolveSceneConsumerGraphColorAttachmentFn() noexcept;
 
     template<typename RendererT>
     static void DescribeGraphBindings(void* renderer_,
                                       render_graph::RenderGraphBuilder& builder_,
-                                      render_graph::PassHandle pass_) {
-        static_cast<RendererT*>(renderer_)->DescribeGraphDescriptorBindings(builder_, pass_);
-    }
+                                      render_graph::PassHandle pass_);
 
     template<typename RendererT>
-    static constexpr DescribeGraphBindingsFn ResolveGraphDescriptorBindingsFn() noexcept {
-        if constexpr (SceneRecorder2DGraphDescriptorBindable<RendererT>) {
-            return &DescribeGraphBindings<RendererT>;
-        } else {
-            return nullptr;
-        }
-    }
+    static constexpr DescribeGraphBindingsFn ResolveGraphDescriptorBindingsFn() noexcept;
 
     template<typename RendererT>
     static void RegisterGraphImportedResources(
         void* renderer_,
-        runtime::services::RenderGraphRuntimeService& graph_runtime_service_) {
-        static_cast<RendererT*>(renderer_)->RegisterGraphImportedResources(
-            graph_runtime_service_);
-    }
+        runtime::services::RenderGraphRuntimeService& graph_runtime_service_);
 
     template<typename RendererT>
-    static constexpr RegisterGraphImportedResourcesFn ResolveGraphImportedResourcesFn() noexcept {
-        if constexpr (SceneRecorder2DGraphImportedResourceRegistrable<RendererT>) {
-            return &RegisterGraphImportedResources<RendererT>;
-        } else {
-            return nullptr;
-        }
-    }
+    static constexpr RegisterGraphImportedResourcesFn ResolveGraphImportedResourcesFn() noexcept;
 
     template<typename RendererT>
     static void OnSwapchainRecreatedRenderer(void* renderer_,
@@ -492,25 +334,7 @@ private:
                                              VkExtent2D extent_,
                                              VkFormat format_,
                                              std::uint64_t last_submitted_value_,
-                                             std::uint64_t completed_submit_value_) {
-        if constexpr (requires(RendererT& renderer_ref_) {
-                          renderer_ref_.OnSwapchainRecreated(image_count_,
-                                                             extent_,
-                                                             format_,
-                                                             last_submitted_value_,
-                                                             completed_submit_value_);
-                      }) {
-            static_cast<RendererT*>(renderer_)->OnSwapchainRecreated(image_count_,
-                                                                     extent_,
-                                                                     format_,
-                                                                     last_submitted_value_,
-                                                                     completed_submit_value_);
-        } else {
-            static_cast<RendererT*>(renderer_)->OnSwapchainRecreated(image_count_,
-                                                                     extent_,
-                                                                     format_);
-        }
-    }
+                                             std::uint64_t completed_submit_value_);
 
     template<typename RendererT>
     static void OptionalOnSwapchainRecreatedRenderer(void* renderer_,
@@ -518,29 +342,7 @@ private:
                                                      VkExtent2D extent_,
                                                      VkFormat format_,
                                                      std::uint64_t last_submitted_value_,
-                                                     std::uint64_t completed_submit_value_) {
-        if constexpr (requires(RendererT& renderer_ref_) {
-                          renderer_ref_.OnSwapchainRecreated(image_count_,
-                                                             extent_,
-                                                             format_,
-                                                             last_submitted_value_,
-                                                             completed_submit_value_);
-                      }) {
-            static_cast<RendererT*>(renderer_)->OnSwapchainRecreated(image_count_,
-                                                                     extent_,
-                                                                     format_,
-                                                                     last_submitted_value_,
-                                                                     completed_submit_value_);
-        } else if constexpr (requires(RendererT& renderer_ref_) {
-                                 renderer_ref_.OnSwapchainRecreated(image_count_,
-                                                                    extent_,
-                                                                    format_);
-                             }) {
-            static_cast<RendererT*>(renderer_)->OnSwapchainRecreated(image_count_,
-                                                                     extent_,
-                                                                     format_);
-        }
-    }
+                                                     std::uint64_t completed_submit_value_);
 
     template<typename RendererT>
     static void ConfigureSceneLightingBinding(void* renderer_,
@@ -548,39 +350,7 @@ private:
                                               render::LightShadowLinkCoordinator2D* light_shadow_link_coordinator_,
                                               render::ShadowAtlasBindingCoordinator* shadow_atlas_binding_coordinator_,
                                               render::ShadowFrameCoordinator<ecs::Dim2>* shadow_frame_coordinator_,
-                                              shadow::ShadowAtlasHost* shadow_atlas_host_) {
-        RendererT& renderer_ref = *static_cast<RendererT*>(renderer_);
-        if constexpr (requires(RendererT& candidate_,
-                               render::LightFrameCoordinator<ecs::Dim2>* coordinator_) {
-                          candidate_.SetLightFrameCoordinator(coordinator_);
-                      }) {
-            renderer_ref.SetLightFrameCoordinator(light_frame_coordinator_);
-        }
-        if constexpr (requires(RendererT& candidate_,
-                               render::LightShadowLinkCoordinator2D* coordinator_) {
-                          candidate_.SetLightShadowLinkCoordinator(coordinator_);
-                      }) {
-            renderer_ref.SetLightShadowLinkCoordinator(light_shadow_link_coordinator_);
-        }
-        if constexpr (requires(RendererT& candidate_,
-                               render::ShadowAtlasBindingCoordinator* coordinator_) {
-                          candidate_.SetShadowAtlasBindingCoordinator(coordinator_);
-                      }) {
-            renderer_ref.SetShadowAtlasBindingCoordinator(shadow_atlas_binding_coordinator_);
-        }
-        if constexpr (requires(RendererT& candidate_,
-                               render::ShadowFrameCoordinator<ecs::Dim2>* coordinator_) {
-                          candidate_.SetShadowFrameCoordinator(coordinator_);
-                      }) {
-            renderer_ref.SetShadowFrameCoordinator(shadow_frame_coordinator_);
-        }
-        if constexpr (requires(RendererT& candidate_,
-                               shadow::ShadowAtlasHost* host_) {
-                          candidate_.SetShadowAtlasHost(host_);
-                      }) {
-            renderer_ref.SetShadowAtlasHost(shadow_atlas_host_);
-        }
-    }
+                                              shadow::ShadowAtlasHost* shadow_atlas_host_);
 
     void UpsertPreSceneRendererEntry(const PreSceneRendererEntry& entry_);
     void UpsertSceneRendererEntry(const SceneRendererEntry& entry_);
@@ -628,4 +398,6 @@ private:
 };
 
 } // namespace vr::render
+
+#include "vr/render/detail/scene_recorder_2d_registration_detail.hpp"
 

@@ -2,7 +2,7 @@
 
 #include "vr/render/ibl_bake_host.hpp"
 #include "vr/render/render_loop_host.hpp"
-#include "vr/render/runtime_prepare_views.hpp"
+#include "vr/render/scene_prepare_views.hpp"
 
 #include <cstdint>
 #include <stdexcept>

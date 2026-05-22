@@ -54,3 +54,48 @@ VR_TEST_CASE(SceneRecorder2D_graph_only_mainline_source_avoids_scene_level_trans
     VR_CHECK(!Contains(source, "AcquireTransientTarget("));
     VR_CHECK(!Contains(source, "CreateTransientTarget("));
 }
+
+VR_TEST_CASE(SceneRecorder2D_graph_only_source_split_keeps_orchestration_facade_thin,
+             "unit;contract;scene2d;render_graph") {
+    const auto header_path =
+        SourceRoot() / "include" / "vr" / "render" / "scene_recorder_2d.hpp";
+    const auto detail_header_path =
+        SourceRoot() / "include" / "vr" / "render" / "detail" /
+        "scene_recorder_2d_registration_detail.hpp";
+    const auto root_source_path =
+        SourceRoot() / "src" / "render" / "scene_recorder_2d.cpp";
+    const auto registration_source_path =
+        SourceRoot() / "src" / "render" / "scene_recorder_2d_registration.cpp";
+    const auto prepare_source_path =
+        SourceRoot() / "src" / "render" / "scene_recorder_2d_prepare.cpp";
+    const auto graph_source_path =
+        SourceRoot() / "src" / "render" / "scene_recorder_2d_graph.cpp";
+
+    const std::string header = ReadUtf8TextFile(header_path);
+    const std::string detail_header = ReadUtf8TextFile(detail_header_path);
+    const std::string root_source = ReadUtf8TextFile(root_source_path);
+    const std::string registration_source =
+        ReadUtf8TextFile(registration_source_path);
+    const std::string prepare_source = ReadUtf8TextFile(prepare_source_path);
+    const std::string graph_source = ReadUtf8TextFile(graph_source_path);
+
+    VR_CHECK(std::filesystem::exists(detail_header_path));
+    VR_CHECK(std::filesystem::exists(registration_source_path));
+    VR_CHECK(std::filesystem::exists(prepare_source_path));
+    VR_CHECK(std::filesystem::exists(graph_source_path));
+    VR_CHECK(
+        Contains(header,
+                 "#include \"vr/render/detail/scene_recorder_2d_registration_detail.hpp\""));
+    VR_CHECK(!Contains(header, "renderer_ref.PrepareFrame("));
+    VR_CHECK(!Contains(header, "renderer_ref.SetLightFrameCoordinator("));
+    VR_CHECK(Contains(detail_header, "SceneRecorder2D::RegisterSceneRenderer"));
+    VR_CHECK(Contains(detail_header, "SceneRecorder2D::PrepareRenderer"));
+    VR_CHECK(Contains(detail_header, "renderer_ref.PrepareFrame("));
+    VR_CHECK(Contains(detail_header, "renderer_ref.SetLightFrameCoordinator("));
+    VR_CHECK(!Contains(root_source, "SceneRecorder2D::PrepareFrame("));
+    VR_CHECK(!Contains(root_source, "SceneRecorder2D::BuildRenderGraph("));
+    VR_CHECK(Contains(root_source, "UsesGraphManagedSceneOutput("));
+    VR_CHECK(Contains(registration_source, "SceneRecorder2D::RegisterShadowRenderer("));
+    VR_CHECK(Contains(prepare_source, "SceneRecorder2D::PrepareFrame("));
+    VR_CHECK(Contains(graph_source, "SceneRecorder2D::BuildRenderGraph("));
+}
