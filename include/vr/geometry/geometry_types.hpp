@@ -2,6 +2,7 @@
 
 #include "Center/Memory/Container/Vector/McVector.hpp"
 #include "vr/ecs/component/spatial_types.hpp"
+#include "vr/runtime/runtime_ingress_ids.hpp"
 
 #include <cstdint>
 #include <type_traits>
@@ -64,7 +65,7 @@ struct GeometrySubmeshRange final {
 };
 
 struct GeometryMeshUploadInfo final {
-    std::uint32_t geometry_id = 0U;
+    GeometryResourceId geometry_id{};
     const GeometryMeshVertex* vertices = nullptr;
     std::uint32_t vertex_count = 0U;
     const std::uint32_t* indices = nullptr;

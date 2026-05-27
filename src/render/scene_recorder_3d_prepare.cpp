@@ -1,5 +1,7 @@
 #include "vr/render/scene_recorder_3d.hpp"
 
+#include "render_target_temporal_motion_renderer.hpp"
+#include "render_target_temporal_resolve_renderer.hpp"
 #include "vr/render/environment/sky_environment_gpu_host.hpp"
 #include "vr/render/ibl_bake_host.hpp"
 
@@ -47,21 +49,21 @@ void SceneRecorder3D::PrepareFrame(const SceneRecorder3DPrepareView& prepare_vie
     const bool overlay_enabled = IsOverlayEnabledForSubmission();
     const bool shadow_enabled = IsShadowEnabledForSubmission();
     const bool use_bloom_chain = ShouldUseBloomChainForSubmission();
-    resolved_environment_gpu = frame_packet != nullptr ? frame_packet->extra.environment_gpu
+    resolved_environment_gpu = frame_packet != nullptr ? frame_packet->Payload().environment_gpu
                                                        : scene::SkyEnvironmentGpuHandle{};
     sky_environment_pass_ready = false;
-    std::uint32_t ibl_environment_id =
-        frame_packet != nullptr ? frame_packet->extra.ibl_environment_id : 0U;
-    std::uint32_t ibl_brdf_lut_texture_id = 0U;
+    IblEnvironmentId ibl_environment_id =
+        frame_packet != nullptr ? frame_packet->Payload().ibl_environment_id : IblEnvironmentId{};
+    asset::TextureId ibl_brdf_lut_texture_id{};
 
     if (prepare_view_.sky_environment != nullptr &&
         frame_packet != nullptr &&
-        frame_packet->extra.environment.mode != scene::SkyEnvironmentMode::none) {
+        frame_packet->Payload().environment.mode != scene::SkyEnvironmentMode::none) {
         const auto sky_prepare_view = MakeSkyEnvironmentGpuPrepareView(prepare_view_);
         prepare_view_.sky_environment->PrepareFrame(sky_prepare_view);
         if (!resolved_environment_gpu.IsValid()) {
             resolved_environment_gpu =
-                prepare_view_.sky_environment->RegisterOrUpdate(frame_packet->extra.environment,
+                prepare_view_.sky_environment->RegisterOrUpdate(frame_packet->Payload().environment,
                                                                 sky_prepare_view);
             ++stats.environment_gpu_resolve_count;
         }
@@ -86,13 +88,13 @@ void SceneRecorder3D::PrepareFrame(const SceneRecorder3DPrepareView& prepare_vie
                 MakeIblBakeHostPrepareView(prepare_view_));
         }
         ibl_brdf_lut_texture_id =
-            prepare_view_.sky_environment->IblData(resolved_environment_gpu).brdf_lut_texture.value;
-        if (prepare_view_.ibl != nullptr && ibl_environment_id == 0U) {
+            prepare_view_.sky_environment->IblData(resolved_environment_gpu).brdf_lut_texture;
+        if (prepare_view_.ibl != nullptr && !ibl_environment_id.IsValid()) {
             const IblEnvironmentId environment_id =
                 prepare_view_.sky_environment->EnsureIblEnvironment(prepare_view_.device,
                                                                     *prepare_view_.ibl,
                                                                     resolved_environment_gpu);
-            ibl_environment_id = environment_id.value;
+            ibl_environment_id = environment_id;
         }
     }
 
@@ -105,13 +107,34 @@ void SceneRecorder3D::PrepareFrame(const SceneRecorder3DPrepareView& prepare_vie
     sky_environment_pass.ResetDepthTargetConfig();
     if (HasSkyEnvironmentPassForSubmission() &&
         frame_packet != nullptr &&
-        CanPrepareSkyEnvironmentPass(resolved_prepare_view, frame_packet->extra.environment)) {
+        CanPrepareSkyEnvironmentPass(resolved_prepare_view, frame_packet->Payload().environment)) {
         sky_environment_pass.PrepareFrame(MakeSkyEnvironmentPassPrepareView(resolved_prepare_view),
-                                          frame_packet->extra.environment,
+                                          frame_packet->Payload().environment,
                                           resolved_environment_gpu);
         sky_environment_pass_ready = true;
         ++stats.environment_prepare_count;
     }
+
+    dirty_scheduler.BeginPrepareCycle();
+    dirty_scheduler.ReserveSceneRendererStates(
+        static_cast<std::uint32_t>(scene_renderer_entries.size()));
+    dirty_scheduler.ScheduleLightFrameCoordinator(light_frame_coordinator);
+    dirty_scheduler.ScheduleShadowFrameCoordinator(shadow_frame_coordinator);
+    auto schedule_scene_renderer_dirty =
+        [&](const SceneRendererEntry& entry_) {
+            if (entry_.renderer == nullptr ||
+                !IsLayerVisibleForSubmission(entry_.submission_layer_mask) ||
+                !IsFirstSceneRendererEntryForRenderer(entry_)) {
+                return;
+            }
+            dirty_scheduler.ScheduleSceneRenderer(
+                entry_.renderer,
+                entry_.describe_transform_dirty_source_fn,
+                entry_.apply_transform_dirty_hint_fn,
+                entry_.describe_appearance_dirty_source_fn,
+                entry_.apply_appearance_dirty_hint_fn);
+        };
+    ForEachSceneRendererInStageOrder(schedule_scene_renderer_dirty);
 
     for (const PreSceneRendererEntry& entry : pre_scene_renderer_entries) {
         if (!IsLayerVisibleForSubmission(entry.submission_layer_mask)) {
@@ -127,6 +150,17 @@ void SceneRecorder3D::PrepareFrame(const SceneRecorder3DPrepareView& prepare_vie
             entry.prepare_fn(entry.renderer, resolved_prepare_view);
         }
     }
+
+    auto clear_scene_renderer_temporal_view_projection =
+        [&](const SceneRendererEntry& entry_) {
+            if (entry_.renderer == nullptr ||
+                entry_.configure_temporal_view_projection_fn == nullptr ||
+                !IsFirstSceneRendererEntryForRenderer(entry_)) {
+                return;
+            }
+            entry_.configure_temporal_view_projection_fn(entry_.renderer, nullptr);
+        };
+    ForEachSceneRendererInStageOrder(clear_scene_renderer_temporal_view_projection);
 
     auto configure_scene_renderer = [&](const SceneRendererEntry& entry_) {
         if (!IsLayerVisibleForSubmission(entry_.submission_layer_mask)) {
@@ -166,6 +200,29 @@ void SceneRecorder3D::PrepareFrame(const SceneRecorder3DPrepareView& prepare_vie
         entry_.prepare_fn(entry_.renderer, resolved_prepare_view);
     };
     ForEachSceneRendererInStageOrder(prepare_scene_renderer);
+    if (temporal_motion_renderer != nullptr) {
+        temporal_motion_renderer->ResetPreparedRuntimeState();
+    }
+    if (temporal_resolve_renderer != nullptr) {
+        temporal_resolve_renderer->ResetPreparedRuntimeState();
+    }
+    if (temporal_motion_renderer != nullptr &&
+        SupportsGraphExecution(prepare_view_.device) &&
+        resolved_prepare_view.descriptor != nullptr &&
+        resolved_prepare_view.pipeline != nullptr &&
+        resolved_prepare_view.sampler != nullptr &&
+        resolved_prepare_view.bindless != nullptr) {
+        temporal_motion_renderer->PrepareGraphFrame(resolved_prepare_view);
+    }
+    if (temporal_resolve_renderer != nullptr &&
+        SupportsGraphExecution(prepare_view_.device) &&
+        IsPostProcessEnabledForSubmission() &&
+        resolved_prepare_view.descriptor != nullptr &&
+        resolved_prepare_view.pipeline != nullptr &&
+        resolved_prepare_view.sampler != nullptr &&
+        resolved_prepare_view.bindless != nullptr) {
+        temporal_resolve_renderer->PrepareGraphFrame(resolved_prepare_view);
+    }
     for (const OverlayRendererEntry& entry : overlay_renderer_entries) {
         if (!overlay_enabled || !IsOverlayLayerVisibleForSubmission(entry.submission_layer_mask)) {
             continue;

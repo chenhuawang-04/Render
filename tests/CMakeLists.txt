@@ -46,6 +46,7 @@ add_executable(${VR_TEST_TARGET}
     cases/render_light_shadow_link_stage_tests.cpp
     cases/render_shadow_atlas_binding_coordinator_tests.cpp
     cases/render_shadow_frame_coordinator_tests.cpp
+    cases/scene_recorder_3d_dirty_scheduler_tests.cpp
     cases/render_target_types_tests.cpp
     cases/scene_recorder_2d_graph_only_contract_tests.cpp
     cases/scene_recorder_3d_graph_only_contract_tests.cpp

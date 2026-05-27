@@ -152,6 +152,7 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_2d_end_to_end_smoke, "integrat
         create_info.render_loop.swapchain.preferred_image_count = 2U;
         create_info.render_loop.commands.initial_primary_per_frame = 2U;
         create_info.render_loop.commands.primary_growth_chunk = 2U;
+        create_info.diagnostics.level = vr::runtime::DiagnosticsLevel::Detailed;
         create_info.poll_events_each_tick = true;
         runtime.Initialize(create_info);
         runtime_initialized = true;
@@ -283,6 +284,7 @@ VR_TEST_CASE(RuntimeIntegration_scene_recorder_2d_geometry_scene_packet_smoke,
         create_info.render_loop.swapchain.preferred_image_count = 2U;
         create_info.render_loop.commands.initial_primary_per_frame = 2U;
         create_info.render_loop.commands.primary_growth_chunk = 2U;
+        create_info.diagnostics.level = vr::runtime::DiagnosticsLevel::Detailed;
         create_info.poll_events_each_tick = true;
         runtime.Initialize(create_info);
         runtime_initialized = true;
@@ -425,6 +427,7 @@ VR_TEST_CASE(RuntimeIntegration_scene_recorder_2d_scene_consumer_composite_smoke
         create_info.render_loop.swapchain.preferred_image_count = 2U;
         create_info.render_loop.commands.initial_primary_per_frame = 2U;
         create_info.render_loop.commands.primary_growth_chunk = 2U;
+        create_info.diagnostics.level = vr::runtime::DiagnosticsLevel::Detailed;
         create_info.poll_events_each_tick = true;
         runtime.Initialize(create_info);
         runtime_initialized = true;

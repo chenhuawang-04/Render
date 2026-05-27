@@ -15,6 +15,7 @@
 #include "vr/scene/scene_submission_builder.hpp"
 
 #include <type_traits>
+#include <utility>
 
 namespace {
 
@@ -47,16 +48,41 @@ VR_TEST_CASE(SceneBackgroundTraits_3D, "[scene][background]") {
 
 VR_TEST_CASE(SpriteBackground_is_pod, "[scene][background]") {
     VR_CHECK((std::is_standard_layout_v<vr::scene::SpriteBackground>));
-    VR_CHECK((std::is_trivial_v<vr::scene::SpriteBackground>));
+    VR_CHECK((std::is_trivially_copyable_v<vr::scene::SpriteBackground>));
     VR_CHECK((std::is_standard_layout_v<vr::scene::Background2DRenderState>));
-    VR_CHECK((std::is_trivial_v<vr::scene::Background2DRenderState>));
+    VR_CHECK((std::is_trivially_copyable_v<vr::scene::Background2DRenderState>));
 }
 
 VR_TEST_CASE(SkyEnvironment_is_pod, "[scene][background]") {
     VR_CHECK((std::is_standard_layout_v<vr::scene::SkyEnvironment>));
-    VR_CHECK((std::is_trivial_v<vr::scene::SkyEnvironment>));
+    VR_CHECK((std::is_trivially_copyable_v<vr::scene::SkyEnvironment>));
     VR_CHECK((std::is_standard_layout_v<vr::scene::SkyEnvironmentRenderState>));
-    VR_CHECK((std::is_trivial_v<vr::scene::SkyEnvironmentRenderState>));
+    VR_CHECK((std::is_trivially_copyable_v<vr::scene::SkyEnvironmentRenderState>));
+}
+
+VR_TEST_CASE(SceneBackground_runtime_ingress_contract_uses_typed_scene_identity_fields,
+             "[scene][background][contract]") {
+    static_assert(std::is_same_v<decltype(std::declval<vr::scene::SpriteBackground&>().image_id),
+                                 vr::surface::SurfaceImageId>);
+    static_assert(std::is_same_v<decltype(std::declval<vr::scene::Background2DRenderState&>().image_id),
+                                 vr::surface::SurfaceImageId>);
+    static_assert(std::is_same_v<decltype(std::declval<vr::scene::SkyEnvironment&>().sky_texture_id),
+                                 vr::asset::TextureId>);
+    static_assert(std::is_same_v<decltype(std::declval<vr::scene::SkyEnvironment&>().sky_appearance_id),
+                                 vr::geometry::GeometryAppearanceId>);
+    static_assert(std::is_same_v<decltype(std::declval<vr::scene::SkyEnvironmentRenderState&>().sky_texture_id),
+                                 vr::asset::TextureId>);
+    static_assert(std::is_same_v<decltype(std::declval<vr::render::RenderScenePacket3D&>().extra.ibl_environment_id),
+                                 vr::render::IblEnvironmentId>);
+    static_assert(std::is_same_v<decltype(std::declval<vr::render::RenderScenePacket3D&>().Payload().ibl_environment_id),
+                                 vr::render::IblEnvironmentId>);
+    static_assert(std::is_same_v<decltype(std::declval<vr::render::RenderScenePacket3D&>().Metadata().submission_id),
+                                 vr::render::SceneSubmissionId>);
+    static_assert(std::is_same_v<decltype(std::declval<vr::render::SceneRecorder3DPrepareView&>().ibl_environment_id),
+                                 vr::render::IblEnvironmentId>);
+    static_assert(std::is_same_v<decltype(std::declval<vr::render::SceneRecorder3DPrepareView&>().ibl_brdf_lut_texture_id),
+                                 vr::asset::TextureId>);
+    VR_CHECK(true);
 }
 
 VR_TEST_CASE(ScenePacket_signature_changes_on_background_revision, "[scene][background][render]") {
@@ -301,7 +327,7 @@ VR_TEST_CASE(SkyEnvironmentGpuHost_multi_environment, "[scene][background][rende
 
     vr::scene::SkyEnvironmentRenderState state_b{};
     state_b.mode = vr::scene::SkyEnvironmentMode::cubemap;
-    state_b.sky_texture_id = 7U;
+    state_b.sky_texture_id = vr::asset::TextureId{7U};
     state_b.revision = 2U;
     state_b.exposure = 3.0F;
     state_b.tint = vr::ecs::Float4{.x = 0.8F, .y = 0.7F, .z = 0.6F, .w = 1.0F};
@@ -340,10 +366,10 @@ VR_TEST_CASE(SkyEnvironmentGpuHost_explicit_ibl_textures_are_resolved_without_ba
 
     vr::scene::SkyEnvironmentRenderState state{};
     state.mode = vr::scene::SkyEnvironmentMode::cubemap;
-    state.sky_texture_id = 3U;
-    state.irradiance_texture_id = 11U;
-    state.prefiltered_texture_id = 12U;
-    state.brdf_lut_texture_id = 13U;
+    state.sky_texture_id = vr::asset::TextureId{3U};
+    state.irradiance_texture_id = vr::asset::TextureId{11U};
+    state.prefiltered_texture_id = vr::asset::TextureId{12U};
+    state.brdf_lut_texture_id = vr::asset::TextureId{13U};
     state.revision = 8U;
 
     const auto handle = host.RegisterOrUpdate(state, prepare_view);
@@ -379,7 +405,7 @@ VR_TEST_CASE(SkyEnvironmentGpuHost_hdri_without_ibl_marks_pending_bake,
 
     vr::scene::SkyEnvironmentRenderState state{};
     state.mode = vr::scene::SkyEnvironmentMode::equirectangular_hdr;
-    state.sky_texture_id = 21U;
+    state.sky_texture_id = vr::asset::TextureId{21U};
     state.revision = 9U;
 
     const auto handle = host.RegisterOrUpdate(state, prepare_view);
@@ -388,7 +414,7 @@ VR_TEST_CASE(SkyEnvironmentGpuHost_hdri_without_ibl_marks_pending_bake,
 
     VR_CHECK(handle.IsValid());
     VR_CHECK(bake_desc != nullptr);
-    VR_CHECK(bake_desc->source_texture_id == 21U);
+    VR_CHECK(bake_desc->source_texture_id == vr::asset::TextureId{21U});
     VR_CHECK(bake_desc->source_mode == vr::scene::SkyEnvironmentMode::equirectangular_hdr);
     VR_CHECK(ibl.pending_bake == 1U);
     VR_CHECK(ibl.uses_shared_brdf_lut == 1U);
@@ -524,13 +550,13 @@ VR_TEST_CASE(SkyEnvironmentGpuHost_shared_brdf_lut_resolution_updates_ibl_revisi
 
     vr::scene::SkyEnvironmentRenderState state{};
     state.mode = vr::scene::SkyEnvironmentMode::equirectangular_hdr;
-    state.sky_texture_id = 31U;
+    state.sky_texture_id = vr::asset::TextureId{31U};
     state.revision = 10U;
 
     const auto handle = host.RegisterOrUpdate(state, prepare_view);
     const auto before = host.IblData(handle);
     const bool changed =
-        host.ResolveSharedBrdfLut(handle, vr::asset::TextureId{.value = 77U});
+        host.ResolveSharedBrdfLut(handle, vr::asset::TextureId{77U});
     const auto after = host.IblData(handle);
 
     VR_CHECK(changed);
@@ -563,7 +589,7 @@ VR_TEST_CASE(SkyEnvironmentGpuHost_apply_bake_result_clears_pending_state,
 
     vr::scene::SkyEnvironmentRenderState state{};
     state.mode = vr::scene::SkyEnvironmentMode::equirectangular_hdr;
-    state.sky_texture_id = 41U;
+    state.sky_texture_id = vr::asset::TextureId{41U};
     state.revision = 11U;
 
     const auto handle = host.RegisterOrUpdate(state, prepare_view);
@@ -571,9 +597,9 @@ VR_TEST_CASE(SkyEnvironmentGpuHost_apply_bake_result_clears_pending_state,
 
     const bool changed = host.ApplyBakeResult(handle,
                                               vr::render::SkyEnvironmentBakeResult{
-                                                  .irradiance_texture_id = 101U,
-                                                  .prefiltered_texture_id = 102U,
-                                                  .brdf_lut_texture_id = 103U,
+                                                  .irradiance_texture_id = vr::asset::TextureId{101U},
+                                                  .prefiltered_texture_id = vr::asset::TextureId{102U},
+                                                  .brdf_lut_texture_id = vr::asset::TextureId{103U},
                                                   .revision = 55U,
                                               });
     const auto ibl = host.IblData(handle);
@@ -609,9 +635,9 @@ VR_TEST_CASE(SceneRecorder3D_resolves_environment_gpu_handle_from_prepare_view_h
     vr::render::RefreshRenderViewSignature(view);
     vr::render::RenderScenePacket3D packet =
         vr::render::MakeSingleViewScenePacket(view, 21U, vr::render::RenderScenePacketKind::world);
-    packet.extra.environment.mode = vr::scene::SkyEnvironmentMode::cubemap;
-    packet.extra.environment.sky_texture_id = 7U;
-    packet.extra.environment.revision = 4U;
+    packet.Payload().environment.mode = vr::scene::SkyEnvironmentMode::cubemap;
+    packet.Payload().environment.sky_texture_id = vr::asset::TextureId{7U};
+    packet.Payload().environment.revision = 4U;
 
     recorder.PrepareFrame(vr::render::SceneRecorder3DPrepareView{
                               .device = context,

@@ -15,7 +15,7 @@ void RefreshExtentBoundWorldSceneSubmission(
     ecs::Camera<DimensionT>& camera_,
     const ecs::Transform<DimensionT>& camera_transform_,
     VkExtent2D extent_,
-    std::uint64_t submission_id_,
+    SceneSubmissionId submission_id_,
     std::uint32_t view_flags_ = render_view_lighting_enabled_flag |
                                 render_view_shadow_enabled_flag |
                                 render_view_postprocess_enabled_flag,
@@ -54,15 +54,17 @@ void RefreshExtentBoundWorldSceneSubmission(
     view_.postprocess_policy = postprocess_policy_;
     RefreshRenderViewSignature(view_);
 
-    packet_.kind = RenderScenePacketKind::world;
-    packet_.views = &view_;
-    packet_.view_count = 1U;
-    packet_.active_view_index = 0U;
-    packet_.flags = packet_flags_;
-    packet_.render_layer_mask = layer_mask_;
-    packet_.debug_flags = debug_flags_;
-    packet_.postprocess_policy = postprocess_policy_;
-    packet_.submission_id = submission_id_;
+    BindSceneSubmissionViews(packet_, &view_, 1U, 0U);
+    ApplySceneSubmissionMetadata(
+        packet_,
+        SceneSubmissionMetadata{
+            .kind = RenderScenePacketKind::world,
+            .flags = packet_flags_,
+            .render_layer_mask = layer_mask_,
+            .debug_flags = debug_flags_,
+            .postprocess_policy = postprocess_policy_,
+            .submission_id = submission_id_,
+        });
     RefreshRenderScenePacketSignature(packet_);
 }
 
@@ -71,7 +73,7 @@ void RefreshExtentBoundScreenSceneSubmission(
     RenderView<DimensionT>& view_,
     RenderScenePacket<DimensionT>& packet_,
     VkExtent2D extent_,
-    std::uint64_t submission_id_,
+    SceneSubmissionId submission_id_,
     RenderViewKind kind_ = RenderViewKind::ui,
     std::uint32_t view_flags_ = render_view_overlay_enabled_flag,
     std::uint32_t packet_flags_ = render_scene_packet_allow_overlay_flag,
@@ -103,17 +105,19 @@ void RefreshExtentBoundScreenSceneSubmission(
     };
     RefreshRenderViewSignature(view_);
 
-    packet_.kind = (kind_ == RenderViewKind::ui)
-        ? RenderScenePacketKind::ui
-        : RenderScenePacketKind::world;
-    packet_.views = &view_;
-    packet_.view_count = 1U;
-    packet_.active_view_index = 0U;
-    packet_.flags = packet_flags_;
-    packet_.render_layer_mask = layer_mask_;
-    packet_.debug_flags = debug_flags_;
-    packet_.postprocess_policy = postprocess_policy_;
-    packet_.submission_id = submission_id_;
+    BindSceneSubmissionViews(packet_, &view_, 1U, 0U);
+    ApplySceneSubmissionMetadata(
+        packet_,
+        SceneSubmissionMetadata{
+            .kind = (kind_ == RenderViewKind::ui)
+                        ? RenderScenePacketKind::ui
+                        : RenderScenePacketKind::world,
+            .flags = packet_flags_,
+            .render_layer_mask = layer_mask_,
+            .debug_flags = debug_flags_,
+            .postprocess_policy = postprocess_policy_,
+            .submission_id = submission_id_,
+        });
     RefreshRenderScenePacketSignature(packet_);
 }
 

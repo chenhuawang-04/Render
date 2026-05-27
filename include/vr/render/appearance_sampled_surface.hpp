@@ -1,5 +1,7 @@
 #pragma once
 
+#include "vr/runtime/runtime_ingress_ids.hpp"
+
 #include <cstdint>
 
 namespace vr::render {
@@ -26,6 +28,39 @@ struct AppearanceSampledSurfaceHandle final {
         .surface_id = surface_id_,
         .domain = domain_,
     };
+}
+
+[[nodiscard]] constexpr AppearanceSampledSurfaceHandle MakeAppearanceTextureHandle(
+    asset::TextureId texture_id_) noexcept {
+    return MakeAppearanceSampledSurfaceHandle(texture_id_.value,
+                                              AppearanceSampledSurfaceDomain::asset_texture);
+}
+
+[[nodiscard]] constexpr AppearanceSampledSurfaceHandle MakeAppearanceSurfaceImageHandle(
+    surface::SurfaceImageId image_id_) noexcept {
+    return MakeAppearanceSampledSurfaceHandle(image_id_.value,
+                                              AppearanceSampledSurfaceDomain::surface_image);
+}
+
+[[nodiscard]] constexpr AppearanceSampledSurfaceHandle MakeAppearanceGeometryImageHandle(
+    geometry::GeometryImageId image_id_) noexcept {
+    return MakeAppearanceSampledSurfaceHandle(image_id_.value,
+                                              AppearanceSampledSurfaceDomain::geometry_image);
+}
+
+[[nodiscard]] constexpr AppearanceSampledSurfaceHandle MakeAppearanceSampledSurfaceHandle(
+    asset::TextureId texture_id_) noexcept {
+    return MakeAppearanceTextureHandle(texture_id_);
+}
+
+[[nodiscard]] constexpr AppearanceSampledSurfaceHandle MakeAppearanceSampledSurfaceHandle(
+    surface::SurfaceImageId image_id_) noexcept {
+    return MakeAppearanceSurfaceImageHandle(image_id_);
+}
+
+[[nodiscard]] constexpr AppearanceSampledSurfaceHandle MakeAppearanceSampledSurfaceHandle(
+    geometry::GeometryImageId image_id_) noexcept {
+    return MakeAppearanceGeometryImageHandle(image_id_);
 }
 
 enum class AppearanceSampledSurfaceSlot3D : std::uint32_t {

@@ -138,11 +138,15 @@
         result.upload_cross_queue_wait = upload_flush.cross_queue_wait;
 
         phase_driver_.OnFlushUploads();
+        auto* graph_service =
+            services_ref.template TryGet<runtime::services::RenderGraphRuntimeService>();
+        if (graph_service != nullptr) {
+            graph_service->SetDiagnosticsLevel(
+                create_info_cache.diagnostics.level);
+        }
         phase_driver_.OnPreRecord(frame_index,
                                   render_loop.Sync().LastSubmittedValue(),
                                   render_loop.Sync().CompletedSubmitValue());
-        auto* graph_service =
-            services_ref.template TryGet<runtime::services::RenderGraphRuntimeService>();
         if (graph_service != nullptr &&
             upload_flush.extra_wait_count != 0U &&
             upload_flush.extra_wait.semaphore != VK_NULL_HANDLE) {

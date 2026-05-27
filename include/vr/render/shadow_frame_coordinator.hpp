@@ -10,6 +10,10 @@
 
 namespace vr::render {
 
+namespace detail {
+struct SceneRecorder3DDirtySchedulingAccess;
+}
+
 template<typename T>
 using ShadowFrameCoordinatorMcVector = Center::Memory::mc_vector<T, Center::Memory::Tags::Container>;
 
@@ -102,7 +106,13 @@ public:
         AppendDirtyHint(dirty_component_indices_,
                         dirty_component_count_,
                         accumulated_shadow_dirty_indices,
-                        stats.shadow_dirty_hint_input_count);
+                        shadow_count,
+                        shadow_dirty_marker_stamps,
+                        shadow_dirty_marker_epoch,
+                        stats.shadow_dirty_hint_input_count,
+                        stats.shadow_dirty_hint_unique_count,
+                        stats.shadow_dirty_hint_out_of_range_drop_count,
+                        stats.shadow_dirty_hint_duplicate_drop_count);
         if (dirty_component_indices_ != nullptr && dirty_component_count_ > 0U) {
             ++shadow_dirty_revision;
             frame_cache_valid = false;
@@ -116,13 +126,28 @@ public:
         AppendDirtyHint(dirty_component_indices_,
                         dirty_component_count_,
                         accumulated_transform_dirty_indices,
-                        stats.transform_dirty_hint_input_count);
+                        shadow_count,
+                        transform_dirty_marker_stamps,
+                        transform_dirty_marker_epoch,
+                        stats.transform_dirty_hint_input_count,
+                        stats.transform_dirty_hint_unique_count,
+                        stats.transform_dirty_hint_out_of_range_drop_count,
+                        stats.transform_dirty_hint_duplicate_drop_count);
         if (dirty_component_indices_ != nullptr && dirty_component_count_ > 0U) {
             ++transform_dirty_revision;
             frame_cache_valid = false;
             runtime_cache_valid = false;
             caster_cache_valid = false;
         }
+    }
+
+    [[nodiscard]] std::uint32_t PendingShadowDirtyHintCount() const noexcept {
+        return static_cast<std::uint32_t>(accumulated_shadow_dirty_indices.size());
+    }
+
+    [[nodiscard]] std::uint32_t PendingTransformDirtyHintCount() const noexcept {
+        return static_cast<std::uint32_t>(
+            accumulated_transform_dirty_indices.size());
     }
 
     void Reserve(std::uint32_t shadow_count_, std::uint32_t caster_count_) {
@@ -300,6 +325,8 @@ public:
     }
 
 private:
+    friend struct detail::SceneRecorder3DDirtySchedulingAccess;
+
     static constexpr std::uint64_t k_hash_offset_basis = 14695981039346656037ULL;
     static constexpr std::uint64_t k_hash_prime = 1099511628211ULL;
 
@@ -372,72 +399,32 @@ private:
         accumulated_transform_dirty_indices.clear();
         normalized_shadow_dirty_indices.clear();
         normalized_transform_dirty_indices.clear();
+        ResetDirtyMarkerWindow(shadow_dirty_marker_stamps, shadow_dirty_marker_epoch);
+        ResetDirtyMarkerWindow(transform_dirty_marker_stamps,
+                               transform_dirty_marker_epoch);
     }
 
     static void AppendDirtyHint(const std::uint32_t* dirty_component_indices_,
                                 std::uint32_t dirty_component_count_,
                                 ShadowFrameCoordinatorMcVector<std::uint32_t>& out_indices_,
-                                std::uint64_t& input_counter_) {
+                                std::uint32_t component_count_,
+                                ShadowFrameCoordinatorMcVector<std::uint32_t>& marker_stamps_,
+                                std::uint32_t& marker_epoch_,
+                                std::uint64_t& input_counter_,
+                                std::uint64_t& unique_counter_,
+                                std::uint64_t& out_of_range_counter_,
+                                std::uint64_t& duplicate_counter_) {
         if (dirty_component_indices_ == nullptr || dirty_component_count_ == 0U) {
             return;
         }
         input_counter_ += static_cast<std::uint64_t>(dirty_component_count_);
-        const std::size_t old_size = out_indices_.size();
-        out_indices_.resize(old_size + dirty_component_count_);
+        if (marker_stamps_.size() < component_count_) {
+            marker_stamps_.resize(component_count_, 0U);
+        }
+        NormalizeMarkerEpoch(marker_stamps_, marker_epoch_);
         for (std::uint32_t i = 0U; i < dirty_component_count_; ++i) {
-            out_indices_[old_size + i] = dirty_component_indices_[i];
-        }
-    }
-
-    void NormalizeDirtyHints() {
-        NormalizeOneDirtyHint(accumulated_shadow_dirty_indices,
-                              normalized_shadow_dirty_indices,
-                              shadow_dirty_marker_stamps,
-                              shadow_dirty_marker_epoch,
-                              stats.shadow_dirty_hint_unique_count,
-                              stats.shadow_dirty_hint_out_of_range_drop_count,
-                              stats.shadow_dirty_hint_duplicate_drop_count);
-        NormalizeOneDirtyHint(accumulated_transform_dirty_indices,
-                              normalized_transform_dirty_indices,
-                              transform_dirty_marker_stamps,
-                              transform_dirty_marker_epoch,
-                              stats.transform_dirty_hint_unique_count,
-                              stats.transform_dirty_hint_out_of_range_drop_count,
-                              stats.transform_dirty_hint_duplicate_drop_count);
-    }
-
-    void ConsumeNormalizedHints() noexcept {
-        accumulated_shadow_dirty_indices.clear();
-        accumulated_transform_dirty_indices.clear();
-        normalized_shadow_dirty_indices.clear();
-        normalized_transform_dirty_indices.clear();
-    }
-
-    void NormalizeOneDirtyHint(const ShadowFrameCoordinatorMcVector<std::uint32_t>& raw_indices_,
-                               ShadowFrameCoordinatorMcVector<std::uint32_t>& normalized_indices_,
-                               ShadowFrameCoordinatorMcVector<std::uint32_t>& marker_stamps_,
-                               std::uint32_t& marker_epoch_,
-                               std::uint64_t& unique_counter_,
-                               std::uint64_t& out_of_range_counter_,
-                               std::uint64_t& duplicate_counter_) {
-        normalized_indices_.clear();
-        if (raw_indices_.empty()) {
-            return;
-        }
-        if (marker_stamps_.size() < shadow_count) {
-            marker_stamps_.resize(shadow_count, 0U);
-        }
-        if (marker_epoch_ == 0U || marker_epoch_ == (std::numeric_limits<std::uint32_t>::max)()) {
-            for (std::size_t i = 0U; i < marker_stamps_.size(); ++i) {
-                marker_stamps_[i] = 0U;
-            }
-            marker_epoch_ = 1U;
-        } else {
-            ++marker_epoch_;
-        }
-
-        for (const std::uint32_t component_index : raw_indices_) {
-            if (component_index >= shadow_count) {
+            const std::uint32_t component_index = dirty_component_indices_[i];
+            if (component_index >= component_count_) {
                 ++out_of_range_counter_;
                 continue;
             }
@@ -446,9 +433,46 @@ private:
                 continue;
             }
             marker_stamps_[component_index] = marker_epoch_;
-            normalized_indices_.push_back(component_index);
+            out_indices_.push_back(component_index);
             ++unique_counter_;
         }
+    }
+
+    void NormalizeDirtyHints() {
+        normalized_shadow_dirty_indices = accumulated_shadow_dirty_indices;
+        normalized_transform_dirty_indices = accumulated_transform_dirty_indices;
+    }
+
+    void ConsumeNormalizedHints() noexcept {
+        accumulated_shadow_dirty_indices.clear();
+        accumulated_transform_dirty_indices.clear();
+        normalized_shadow_dirty_indices.clear();
+        normalized_transform_dirty_indices.clear();
+        ResetDirtyMarkerWindow(shadow_dirty_marker_stamps, shadow_dirty_marker_epoch);
+        ResetDirtyMarkerWindow(transform_dirty_marker_stamps,
+                               transform_dirty_marker_epoch);
+    }
+
+    static void NormalizeMarkerEpoch(
+        ShadowFrameCoordinatorMcVector<std::uint32_t>& marker_stamps_,
+        std::uint32_t& marker_epoch_) noexcept {
+        if (marker_epoch_ == 0U || marker_epoch_ == (std::numeric_limits<std::uint32_t>::max)()) {
+            for (std::size_t i = 0U; i < marker_stamps_.size(); ++i) {
+                marker_stamps_[i] = 0U;
+            }
+            marker_epoch_ = 1U;
+        }
+    }
+
+    static void ResetDirtyMarkerWindow(
+        ShadowFrameCoordinatorMcVector<std::uint32_t>& marker_stamps_,
+        std::uint32_t& marker_epoch_) noexcept {
+        if (!marker_stamps_.empty()) {
+            for (std::size_t i = 0U; i < marker_stamps_.size(); ++i) {
+                marker_stamps_[i] = 0U;
+            }
+        }
+        marker_epoch_ = 1U;
     }
 
 private:

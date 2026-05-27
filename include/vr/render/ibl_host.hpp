@@ -17,14 +17,6 @@ namespace vr::render {
 template<typename T>
 using IblMcVector = Center::Memory::mc_vector<T, Center::Memory::Tags::Container>;
 
-struct IblEnvironmentId final {
-    std::uint32_t value = 0U;
-
-    [[nodiscard]] bool IsValid() const noexcept {
-        return value != 0U;
-    }
-};
-
 struct alignas(16) IblGpuParams final {
     std::array<std::array<float, 4U>, 9U> sh9{};
     std::array<float, 4U> tint_intensity{1.0F, 1.0F, 1.0F, 0.0F};

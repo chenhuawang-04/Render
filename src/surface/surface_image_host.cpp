@@ -99,7 +99,7 @@ void SurfaceImageHost::UploadImage(VulkanContext& context_,
     if (!initialized || gpu_memory_host == nullptr) {
         throw std::runtime_error("SurfaceImageHost::UploadImage called before Initialize");
     }
-    if (upload_info_.image_id == 0U) {
+    if (!upload_info_.image_id.IsValid()) {
         throw std::invalid_argument("SurfaceImageHost::UploadImage image_id must be non-zero");
     }
     if (upload_info_.pixels == nullptr) {
@@ -234,13 +234,13 @@ void SurfaceImageHost::UploadImage(VulkanContext& context_,
 }
 
 bool SurfaceImageHost::RemoveImage(VulkanContext& context_,
-                                   std::uint32_t image_id_,
+                                   SurfaceImageId image_id_,
                                    std::uint64_t last_submitted_value_,
                                    std::uint64_t completed_submit_value_) {
     if (!initialized) {
         throw std::runtime_error("SurfaceImageHost::RemoveImage called before Initialize");
     }
-    if (image_id_ == 0U) {
+    if (!image_id_.IsValid()) {
         return false;
     }
 
@@ -274,8 +274,8 @@ bool SurfaceImageHost::RemoveImage(VulkanContext& context_,
     return true;
 }
 
-const SurfaceImageHost::ImageRecord* SurfaceImageHost::FindImage(std::uint32_t image_id_) const noexcept {
-    if (!initialized || image_id_ == 0U) {
+const SurfaceImageHost::ImageRecord* SurfaceImageHost::FindImage(SurfaceImageId image_id_) const noexcept {
+    if (!initialized || !image_id_.IsValid()) {
         return nullptr;
     }
 
@@ -290,7 +290,7 @@ const SurfaceImageHost::ImageRecord* SurfaceImageHost::FindImage(std::uint32_t i
     return &record;
 }
 
-render::BindlessSlot SurfaceImageHost::ResolveBindlessImageSlot(std::uint32_t image_id_) const noexcept {
+render::BindlessSlot SurfaceImageHost::ResolveBindlessImageSlot(SurfaceImageId image_id_) const noexcept {
     const ImageRecord* record = FindImage(image_id_);
     return record != nullptr ? record->bindless.image_slot : render::BindlessSlot{};
 }
@@ -307,7 +307,7 @@ const SurfaceImageHostBindlessConfig& SurfaceImageHost::BindlessConfig() const n
     return bindless_config;
 }
 
-std::size_t SurfaceImageHost::LowerBoundImageIndex(std::uint32_t image_id_) const noexcept {
+std::size_t SurfaceImageHost::LowerBoundImageIndex(SurfaceImageId image_id_) const noexcept {
     std::size_t first = 0U;
     std::size_t count = images.size();
     while (count > 0U) {

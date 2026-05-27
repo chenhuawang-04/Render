@@ -4,6 +4,7 @@
 #include "vr/runtime/detail/render_runtime_host.hpp"
 #include "vr/render/render_view_submission_utils.hpp"
 #include "vr/render/scene_recorder_3d.hpp"
+#include "vr/render_graph/compiled_render_graph_observability.hpp"
 #include "vr/render_graph/frame_snapshot.hpp"
 #include "vr/render_graph/queue_execution_policy.hpp"
 #include "vr/render_graph/render_graph_executor.hpp"
@@ -102,13 +103,13 @@ struct ResolveFailureInjectionScope final {
 
 [[nodiscard]] bool HasEffectiveQueueBatchWithPass(
     const vr::runtime::RenderGraphRuntimeDiagnostics& diagnostics_,
-    std::string_view queue_name_,
+    const vr::render_graph::QueueClass queue_,
     std::string_view pass_name_) {
     return std::any_of(
         diagnostics_.effective_queue_batches.begin(),
         diagnostics_.effective_queue_batches.end(),
         [&](const vr::runtime::RenderGraphQueueBatchDiagnostics& batch_) {
-            if (batch_.queue_name != queue_name_) {
+            if (batch_.queue != queue_) {
                 return false;
             }
             return std::any_of(
@@ -122,13 +123,13 @@ struct ResolveFailureInjectionScope final {
 
 [[nodiscard]] bool AllEffectiveQueueBatchesUseQueue(
     const vr::runtime::RenderGraphRuntimeDiagnostics& diagnostics_,
-    std::string_view queue_name_) {
+    const vr::render_graph::QueueClass queue_) {
     return !diagnostics_.effective_queue_batches.empty() &&
            std::all_of(
                diagnostics_.effective_queue_batches.begin(),
                diagnostics_.effective_queue_batches.end(),
                [&](const vr::runtime::RenderGraphQueueBatchDiagnostics& batch_) {
-                   return batch_.queue_name == queue_name_;
+                   return batch_.queue == queue_;
                });
 }
 
@@ -254,11 +255,12 @@ void EnableRenderGraphRuntimeExecutionFeatures(Host::CreateInfo& create_info_) n
     diagnostics.graphics_fallback_active = true;
     diagnostics.queue_fallback_reason = "distinct transfer/compute queues unavailable";
     diagnostics.effective_queue_batch_count = 1U;
+    diagnostics.effective_graphics_queue_batch_count = 1U;
     diagnostics.effective_queue_batches.push_back(
         vr::runtime::RenderGraphQueueBatchDiagnostics{
-            .batch_index = 0U,
-            .queue_name = "graphics",
-            .pass_indices = {0U, 1U},
+            .batch_id = 0U,
+            .queue = vr::render_graph::QueueClass::graphics,
+            .pass_ids = {0U, 1U},
             .pass_debug_names = {"upload_payload", "prepare_present_target"},
         });
     return diagnostics;
@@ -274,36 +276,42 @@ void EnableRenderGraphRuntimeExecutionFeatures(Host::CreateInfo& create_info_) n
     diagnostics.multi_queue_enabled = true;
     diagnostics.effective_queue_batch_count = 2U;
     diagnostics.effective_queue_dependency_count = 1U;
+    diagnostics.effective_graphics_queue_batch_count = 1U;
+    diagnostics.effective_transfer_queue_batch_count = 1U;
+    diagnostics.effective_owned_submit_batch_count = 1U;
+    diagnostics.effective_cross_queue_dependency_count = 1U;
+    diagnostics.effective_total_submit_wait_count = 1U;
+    diagnostics.effective_total_submit_signal_count = 1U;
     diagnostics.graphics_submit_wait_count = 1U;
     diagnostics.non_graphics_submit_batch_count = 1U;
     diagnostics.effective_queue_batches.push_back(
         vr::runtime::RenderGraphQueueBatchDiagnostics{
-            .batch_index = 0U,
-            .queue_name = "transfer",
-            .pass_indices = {0U},
+            .batch_id = 0U,
+            .queue = vr::render_graph::QueueClass::transfer,
+            .pass_ids = {0U},
             .pass_debug_names = {"text_2d_upload_instances"},
-            .signal_dependency_indices = {0U},
+            .signal_dependency_ids = {0U},
             .submit_signal_count = 1U,
             .submitted_on_owned_queue = true,
         });
     diagnostics.effective_queue_batches.push_back(
         vr::runtime::RenderGraphQueueBatchDiagnostics{
-            .batch_index = 1U,
-            .queue_name = "graphics",
-            .pass_indices = {1U},
+            .batch_id = 1U,
+            .queue = vr::render_graph::QueueClass::graphics,
+            .pass_ids = {1U},
             .pass_debug_names = {"overlay_pass"},
-            .wait_dependency_indices = {0U},
+            .wait_dependency_ids = {0U},
             .submit_wait_count = 1U,
         });
     diagnostics.effective_queue_dependencies.push_back(
         vr::runtime::RenderGraphQueueDependencyDiagnostics{
-            .dependency_index = 0U,
-            .source_queue_name = "transfer",
-            .target_queue_name = "graphics",
-            .source_batch_index = 0U,
-            .target_batch_index = 1U,
-            .source_pass_index = 0U,
-            .target_pass_index = 1U,
+            .dependency_id = 0U,
+            .source_queue = vr::render_graph::QueueClass::transfer,
+            .target_queue = vr::render_graph::QueueClass::graphics,
+            .source_batch_id = 0U,
+            .target_batch_id = 1U,
+            .source_pass_id = 0U,
+            .target_pass_id = 1U,
             .source_pass_debug_name = "text_2d_upload_instances",
             .target_pass_debug_name = "overlay_pass",
             .resource_count = 1U,
@@ -322,36 +330,42 @@ void EnableRenderGraphRuntimeExecutionFeatures(Host::CreateInfo& create_info_) n
     diagnostics.multi_queue_enabled = true;
     diagnostics.effective_queue_batch_count = 2U;
     diagnostics.effective_queue_dependency_count = 1U;
+    diagnostics.effective_graphics_queue_batch_count = 1U;
+    diagnostics.effective_compute_queue_batch_count = 1U;
+    diagnostics.effective_owned_submit_batch_count = 1U;
+    diagnostics.effective_cross_queue_dependency_count = 1U;
+    diagnostics.effective_total_submit_wait_count = 1U;
+    diagnostics.effective_total_submit_signal_count = 1U;
     diagnostics.graphics_submit_wait_count = 1U;
     diagnostics.non_graphics_submit_batch_count = 1U;
     diagnostics.effective_queue_batches.push_back(
         vr::runtime::RenderGraphQueueBatchDiagnostics{
-            .batch_index = 0U,
-            .queue_name = "compute",
-            .pass_indices = {0U},
+            .batch_id = 0U,
+            .queue = vr::render_graph::QueueClass::compute,
+            .pass_ids = {0U},
             .pass_debug_names = {"particle_2d_gpu_build"},
-            .signal_dependency_indices = {0U},
+            .signal_dependency_ids = {0U},
             .submit_signal_count = 1U,
             .submitted_on_owned_queue = true,
         });
     diagnostics.effective_queue_batches.push_back(
         vr::runtime::RenderGraphQueueBatchDiagnostics{
-            .batch_index = 1U,
-            .queue_name = "graphics",
-            .pass_indices = {1U},
+            .batch_id = 1U,
+            .queue = vr::render_graph::QueueClass::graphics,
+            .pass_ids = {1U},
             .pass_debug_names = {"overlay_pass"},
-            .wait_dependency_indices = {0U},
+            .wait_dependency_ids = {0U},
             .submit_wait_count = 1U,
         });
     diagnostics.effective_queue_dependencies.push_back(
         vr::runtime::RenderGraphQueueDependencyDiagnostics{
-            .dependency_index = 0U,
-            .source_queue_name = "compute",
-            .target_queue_name = "graphics",
-            .source_batch_index = 0U,
-            .target_batch_index = 1U,
-            .source_pass_index = 0U,
-            .target_pass_index = 1U,
+            .dependency_id = 0U,
+            .source_queue = vr::render_graph::QueueClass::compute,
+            .target_queue = vr::render_graph::QueueClass::graphics,
+            .source_batch_id = 0U,
+            .target_batch_id = 1U,
+            .source_pass_id = 0U,
+            .target_pass_id = 1U,
             .source_pass_debug_name = "particle_2d_gpu_build",
             .target_pass_debug_name = "overlay_pass",
             .resource_count = 1U,
@@ -372,48 +386,55 @@ void EnableRenderGraphRuntimeExecutionFeatures(Host::CreateInfo& create_info_) n
     diagnostics.multi_queue_enabled = true;
     diagnostics.effective_queue_batch_count = 3U;
     diagnostics.effective_queue_dependency_count = 2U;
+    diagnostics.effective_graphics_queue_batch_count = 1U;
+    diagnostics.effective_transfer_queue_batch_count = 1U;
+    diagnostics.effective_compute_queue_batch_count = 1U;
+    diagnostics.effective_owned_submit_batch_count = 2U;
+    diagnostics.effective_cross_queue_dependency_count = 2U;
+    diagnostics.effective_total_submit_wait_count = 3U;
+    diagnostics.effective_total_submit_signal_count = 2U;
     diagnostics.graphics_submit_wait_count = 2U;
     diagnostics.non_graphics_submit_batch_count = 2U;
     diagnostics.effective_queue_batches.push_back(
         vr::runtime::RenderGraphQueueBatchDiagnostics{
-            .batch_index = 0U,
-            .queue_name = "transfer",
-            .pass_indices = {0U},
+            .batch_id = 0U,
+            .queue = vr::render_graph::QueueClass::transfer,
+            .pass_ids = {0U},
             .pass_debug_names = {"upload_payload"},
-            .signal_dependency_indices = {0U},
+            .signal_dependency_ids = {0U},
             .submit_signal_count = 1U,
             .submitted_on_owned_queue = true,
         });
     diagnostics.effective_queue_batches.push_back(
         vr::runtime::RenderGraphQueueBatchDiagnostics{
-            .batch_index = 1U,
-            .queue_name = "compute",
-            .pass_indices = {1U},
+            .batch_id = 1U,
+            .queue = vr::render_graph::QueueClass::compute,
+            .pass_ids = {1U},
             .pass_debug_names = {"simulate_payload"},
-            .wait_dependency_indices = {0U},
-            .signal_dependency_indices = {1U},
+            .wait_dependency_ids = {0U},
+            .signal_dependency_ids = {1U},
             .submit_wait_count = 1U,
             .submit_signal_count = 1U,
             .submitted_on_owned_queue = true,
         });
     diagnostics.effective_queue_batches.push_back(
         vr::runtime::RenderGraphQueueBatchDiagnostics{
-            .batch_index = 2U,
-            .queue_name = "graphics",
-            .pass_indices = {2U},
+            .batch_id = 2U,
+            .queue = vr::render_graph::QueueClass::graphics,
+            .pass_ids = {2U},
             .pass_debug_names = {"prepare_present_target"},
-            .wait_dependency_indices = {1U},
+            .wait_dependency_ids = {1U},
             .submit_wait_count = 2U,
         });
     diagnostics.effective_queue_dependencies.push_back(
         vr::runtime::RenderGraphQueueDependencyDiagnostics{
-            .dependency_index = 0U,
-            .source_queue_name = "transfer",
-            .target_queue_name = "compute",
-            .source_batch_index = 0U,
-            .target_batch_index = 1U,
-            .source_pass_index = 0U,
-            .target_pass_index = 1U,
+            .dependency_id = 0U,
+            .source_queue = vr::render_graph::QueueClass::transfer,
+            .target_queue = vr::render_graph::QueueClass::compute,
+            .source_batch_id = 0U,
+            .target_batch_id = 1U,
+            .source_pass_id = 0U,
+            .target_pass_id = 1U,
             .source_pass_debug_name = "upload_payload",
             .target_pass_debug_name = "simulate_payload",
             .resource_count = 1U,
@@ -421,13 +442,13 @@ void EnableRenderGraphRuntimeExecutionFeatures(Host::CreateInfo& create_info_) n
         });
     diagnostics.effective_queue_dependencies.push_back(
         vr::runtime::RenderGraphQueueDependencyDiagnostics{
-            .dependency_index = 1U,
-            .source_queue_name = "compute",
-            .target_queue_name = "graphics",
-            .source_batch_index = 1U,
-            .target_batch_index = 2U,
-            .source_pass_index = 1U,
-            .target_pass_index = 2U,
+            .dependency_id = 1U,
+            .source_queue = vr::render_graph::QueueClass::compute,
+            .target_queue = vr::render_graph::QueueClass::graphics,
+            .source_batch_id = 1U,
+            .target_batch_id = 2U,
+            .source_pass_id = 1U,
+            .target_pass_id = 2U,
             .source_pass_debug_name = "simulate_payload",
             .target_pass_debug_name = "prepare_present_target",
             .resource_count = 1U,
@@ -446,48 +467,54 @@ void EnableRenderGraphRuntimeExecutionFeatures(Host::CreateInfo& create_info_) n
     diagnostics.multi_queue_enabled = true;
     diagnostics.effective_queue_batch_count = 3U;
     diagnostics.effective_queue_dependency_count = 2U;
+    diagnostics.effective_graphics_queue_batch_count = 2U;
+    diagnostics.effective_compute_queue_batch_count = 1U;
+    diagnostics.effective_owned_submit_batch_count = 2U;
+    diagnostics.effective_cross_queue_dependency_count = 2U;
+    diagnostics.effective_total_submit_wait_count = 2U;
+    diagnostics.effective_total_submit_signal_count = 2U;
     diagnostics.graphics_submit_wait_count = 1U;
     diagnostics.non_graphics_submit_batch_count = 2U;
     diagnostics.effective_queue_batches.push_back(
         vr::runtime::RenderGraphQueueBatchDiagnostics{
-            .batch_index = 0U,
-            .queue_name = "graphics",
-            .pass_indices = {0U},
+            .batch_id = 0U,
+            .queue = vr::render_graph::QueueClass::graphics,
+            .pass_ids = {0U},
             .pass_debug_names = {"scene_prepare"},
-            .signal_dependency_indices = {0U},
+            .signal_dependency_ids = {0U},
             .submit_signal_count = 1U,
             .submitted_on_owned_queue = true,
         });
     diagnostics.effective_queue_batches.push_back(
         vr::runtime::RenderGraphQueueBatchDiagnostics{
-            .batch_index = 1U,
-            .queue_name = "compute",
-            .pass_indices = {1U},
+            .batch_id = 1U,
+            .queue = vr::render_graph::QueueClass::compute,
+            .pass_ids = {1U},
             .pass_debug_names = {"simulate_payload"},
-            .wait_dependency_indices = {0U},
-            .signal_dependency_indices = {1U},
+            .wait_dependency_ids = {0U},
+            .signal_dependency_ids = {1U},
             .submit_wait_count = 1U,
             .submit_signal_count = 1U,
             .submitted_on_owned_queue = true,
         });
     diagnostics.effective_queue_batches.push_back(
         vr::runtime::RenderGraphQueueBatchDiagnostics{
-            .batch_index = 2U,
-            .queue_name = "graphics",
-            .pass_indices = {2U, 3U},
+            .batch_id = 2U,
+            .queue = vr::render_graph::QueueClass::graphics,
+            .pass_ids = {2U, 3U},
             .pass_debug_names = {"prepare_present_target", "present_transition"},
-            .wait_dependency_indices = {1U},
+            .wait_dependency_ids = {1U},
             .submit_wait_count = 1U,
         });
     diagnostics.effective_queue_dependencies.push_back(
         vr::runtime::RenderGraphQueueDependencyDiagnostics{
-            .dependency_index = 0U,
-            .source_queue_name = "graphics",
-            .target_queue_name = "compute",
-            .source_batch_index = 0U,
-            .target_batch_index = 1U,
-            .source_pass_index = 0U,
-            .target_pass_index = 1U,
+            .dependency_id = 0U,
+            .source_queue = vr::render_graph::QueueClass::graphics,
+            .target_queue = vr::render_graph::QueueClass::compute,
+            .source_batch_id = 0U,
+            .target_batch_id = 1U,
+            .source_pass_id = 0U,
+            .target_pass_id = 1U,
             .source_pass_debug_name = "scene_prepare",
             .target_pass_debug_name = "simulate_payload",
             .resource_count = 1U,
@@ -495,13 +522,13 @@ void EnableRenderGraphRuntimeExecutionFeatures(Host::CreateInfo& create_info_) n
         });
     diagnostics.effective_queue_dependencies.push_back(
         vr::runtime::RenderGraphQueueDependencyDiagnostics{
-            .dependency_index = 1U,
-            .source_queue_name = "compute",
-            .target_queue_name = "graphics",
-            .source_batch_index = 1U,
-            .target_batch_index = 2U,
-            .source_pass_index = 1U,
-            .target_pass_index = 2U,
+            .dependency_id = 1U,
+            .source_queue = vr::render_graph::QueueClass::compute,
+            .target_queue = vr::render_graph::QueueClass::graphics,
+            .source_batch_id = 1U,
+            .target_batch_id = 2U,
+            .source_pass_id = 1U,
+            .target_pass_id = 2U,
             .source_pass_debug_name = "simulate_payload",
             .target_pass_debug_name = "prepare_present_target",
             .resource_count = 1U,
@@ -898,6 +925,10 @@ VR_TEST_CASE(RenderGraphQueueTimelineJson_serializes_stable_mode_batches_and_dep
     VR_CHECK(json.find("\"queue\": \"transfer\"") != std::string::npos);
     VR_CHECK(json.find("\"queue\": \"compute\"") != std::string::npos);
     VR_CHECK(json.find("\"queue\": \"graphics\"") != std::string::npos);
+    VR_CHECK(json.find("\"id\": 0") != std::string::npos);
+    VR_CHECK(json.find("\"sourceBatchId\": 0") != std::string::npos);
+    VR_CHECK(json.find("\"targetBatchId\": 2") != std::string::npos);
+    VR_CHECK(json.find("\"sourcePassId\": 1") != std::string::npos);
     VR_CHECK(json.find("\"sourceQueue\": \"transfer\"") != std::string::npos);
     VR_CHECK(json.find("\"targetQueue\": \"graphics\"") != std::string::npos);
     VR_CHECK(json.find("\"passes\": [\"upload_payload\"]") != std::string::npos);
@@ -2193,11 +2224,28 @@ VR_TEST_CASE(RenderGraphRuntimeService_builds_bloom_chain_from_scene_recorder_3d
     VR_CHECK(compiled->TransientAllocations().timeline.page_count > 0U);
     const std::string compiled_debug = compiled->BuildDebugString();
     const std::string compiled_json = compiled->BuildJson();
+    const auto topology_view =
+        vr::render_graph::BuildCompiledRenderGraphTopologyView(*compiled);
+    const std::string topology_json =
+        vr::render_graph::BuildCompiledRenderGraphTopologyJson(topology_view);
+    const auto count_occurrences = [](std::string_view text_,
+                                      std::string_view needle_) {
+        std::size_t count = 0U;
+        std::size_t position = 0U;
+        while ((position = text_.find(needle_, position)) !=
+               std::string_view::npos) {
+            ++count;
+            position += needle_.size();
+        }
+        return count;
+    };
     const auto& local_read_caps =
         host.Context().DynamicRenderingLocalReadCapsInfo();
     VR_CHECK(local_read_caps.requested);
 
     const auto& diagnostics = service.LastDiagnostics();
+    const auto observability_view =
+        vr::runtime::BuildRenderGraphObservabilityView(diagnostics);
     VR_CHECK(diagnostics.available);
     VR_CHECK(diagnostics.frame_compiled);
     VR_CHECK(diagnostics.compiled_pass_count >= 1U);
@@ -2228,11 +2276,9 @@ VR_TEST_CASE(RenderGraphRuntimeService_builds_bloom_chain_from_scene_recorder_3d
     VR_CHECK(diagnostics.dynamic_rendering_local_read_requested ==
              local_read_caps.requested);
     VR_CHECK(diagnostics.dynamic_rendering_local_read_status ==
-             std::string(vr::render_graph::NativePassLocalReadStatusName(
-                 compiled->NativePasses().local_read.status)));
+             compiled->NativePasses().local_read.status);
     VR_CHECK(diagnostics.dynamic_rendering_local_read_reason ==
-             std::string(vr::render_graph::NativePassLocalReadReasonName(
-                 compiled->NativePasses().local_read.reason)));
+             compiled->NativePasses().local_read.reason);
     VR_CHECK(diagnostics.transient_saved_bytes == compiled->TransientAllocations().timeline.saved_bytes);
     VR_CHECK(diagnostics.transient_page_count == compiled->TransientAllocations().timeline.page_count);
     VR_CHECK(diagnostics.lazy_memory_requested_count > 0U);
@@ -2251,6 +2297,43 @@ VR_TEST_CASE(RenderGraphRuntimeService_builds_bloom_chain_from_scene_recorder_3d
     VR_CHECK(compiled_json.find("\"effectiveStoreOp\":") != std::string::npos);
     VR_CHECK(compiled_json.find("\"loadReason\":") != std::string::npos);
     VR_CHECK(compiled_json.find("\"storeReason\":") != std::string::npos);
+    VR_CHECK(topology_view.summary.pass_count ==
+             static_cast<std::uint32_t>(compiled->Passes().size()));
+    VR_CHECK(topology_view.summary.queue_batch_count ==
+             static_cast<std::uint32_t>(
+                 compiled->PlannedBarriers().queue_batches.size()));
+    VR_CHECK(topology_view.summary.queue_dependency_count ==
+             static_cast<std::uint32_t>(
+                 compiled->PlannedBarriers().queue_dependencies.size()));
+    VR_CHECK(topology_view.summary.native_pass_group_count ==
+             static_cast<std::uint32_t>(compiled->NativePasses().groups.size()));
+    VR_CHECK(topology_json.find("\"nativePassTopology\"") !=
+             std::string::npos);
+    const std::string compiled_topology_fragment =
+        std::string{"\"topology\": "} + topology_json;
+    VR_CHECK(compiled_json.find("\"topology\": {") != std::string::npos);
+    VR_CHECK(compiled_json.find(compiled_topology_fragment) !=
+             std::string::npos);
+    VR_CHECK(count_occurrences(compiled_json, "\"topologySummary\"") == 1U);
+    VR_CHECK(count_occurrences(compiled_json, "\"nativePassTopology\"") ==
+             1U);
+    VR_REQUIRE(observability_view.compile.liveness_ranges != nullptr);
+    VR_REQUIRE(observability_view.compile.transient_memory != nullptr);
+    VR_CHECK(observability_view.compile.transient_memory->summary.saved_bytes ==
+             compiled->TransientAllocations().timeline.saved_bytes);
+    VR_CHECK(observability_view.compile.transient_memory->summary.page_count ==
+             compiled->TransientAllocations().timeline.page_count);
+    VR_CHECK(observability_view.compile.transient_memory->summary.alias_barrier_count ==
+             static_cast<std::uint32_t>(
+                 compiled->TransientAllocations().alias_barriers.size()));
+    VR_CHECK(observability_view.compile.transient_memory->records.size() ==
+             compiled->TransientAllocations().records.size());
+    VR_CHECK(observability_view.compile.transient_memory->pages.size() ==
+             compiled->TransientAllocations().pages.size());
+    VR_CHECK(observability_view.compile.transient_memory->timeline_samples.size() ==
+             compiled->TransientAllocations().timeline.samples.size());
+    VR_CHECK(observability_view.compile.liveness_ranges->size() ==
+             compiled->LivenessRanges().size());
     VR_CHECK(std::any_of(diagnostics.lazy_memory_resources.begin(),
                          diagnostics.lazy_memory_resources.end(),
                          [](const vr::runtime::RenderGraphLazyMemoryResourceDiagnostics& resource_) {
@@ -2263,6 +2346,552 @@ VR_TEST_CASE(RenderGraphRuntimeService_builds_bloom_chain_from_scene_recorder_3d
                                     resource_.realized ||
                                     !resource_.unavailable_reason.empty();
                          }));
+
+    recorder.ClearFramePacket();
+    host.Shutdown();
+}
+
+VR_TEST_CASE(RenderGraphRuntimeService_builds_temporal_resolve_stub_from_scene_recorder_3d_with_explicit_fallback_and_history_imports,
+             "integration;render_graph;runtime;temporal;scene3d;vulkan") {
+    Host host{};
+    auto create_info = MakeMinimalRenderTargetRuntimeCreateInfo();
+    EnableRenderGraphRuntimeExecutionFeatures(create_info);
+    create_info.modules.enable_descriptor_host = true;
+    create_info.modules.enable_pipeline_host = true;
+    create_info.modules.enable_sampler_host = true;
+    try {
+        host.Initialize(create_info);
+    } catch (const std::exception& exception_) {
+        if (IsEnvironmentSkipError(exception_.what())) {
+            VR_SKIP(exception_.what());
+        }
+        throw;
+    }
+
+    vr::render::SceneRecorder3D recorder{};
+    recorder.Initialize();
+    recorder.BindRuntime(host);
+
+    vr::ecs::Camera<vr::ecs::Dim3> camera{};
+    camera.style.viewport = {.origin_x = 0.0F, .origin_y = 0.0F, .width = 320.0F, .height = 180.0F};
+    camera.runtime.revision = 1U;
+    camera.runtime.culling_mask = 0xFFU;
+    vr::render::RenderView3D main_view{};
+    vr::render::RenderScenePacket3D main_scene_packet{};
+    vr::ecs::Transform<vr::ecs::Dim3> camera_transform{};
+    vr::ecs::TransformSystem<vr::ecs::Dim3>::Initialize(camera_transform);
+    vr::ecs::TransformSystem<vr::ecs::Dim3>::SetLocalPosition(
+        camera_transform,
+        vr::ecs::Float3{.x = 0.0F, .y = 0.0F, .z = 4.0F});
+    vr::ecs::TransformSystem<vr::ecs::Dim3>::UpdateHierarchy(&camera_transform, 1U);
+    vr::ecs::CameraSystem<vr::ecs::Dim3>::Initialize(camera);
+    vr::ecs::CameraSystem<vr::ecs::Dim3>::SetAspectRatio(camera, 320.0F / 180.0F);
+    vr::ecs::CameraSystem<vr::ecs::Dim3>::SetNearFar(camera, 0.05F, 256.0F);
+    vr::ecs::CameraSystem<vr::ecs::Dim3>::SetVerticalFovRadians(
+        camera,
+        60.0F * 0.01745329251994329577F);
+    vr::render::RefreshExtentBoundWorldSceneSubmission(main_view,
+                                                       main_scene_packet,
+                                                       camera,
+                                                       camera_transform,
+                                                       host.Swapchain().Extent(),
+                                                       4200U);
+    recorder.SetFramePacket(&main_scene_packet);
+
+    host.EnsureSwapchainTargetsForFrame(0U, 0U);
+
+    struct MockPhaseContext final {
+        struct FrameContext final {
+            vr::VulkanContext& device;
+            Host::RuntimeServicesType& services;
+            struct FrameInfo final {
+                std::uint32_t frame_index = 0U;
+                std::uint32_t image_index = 0U;
+            } frame{};
+            struct ProgressInfo final {
+                std::uint64_t graphics_submitted = 0U;
+                std::uint64_t graphics_completed = 0U;
+            } progress{};
+            VkCommandBuffer command_buffer = VK_NULL_HANDLE;
+            vr::render::SwapchainTargetSet* swapchain_targets = nullptr;
+        } frame_context;
+    };
+
+    auto& service = host.Services().Get<RenderGraphRuntimeService>();
+    const auto make_context =
+        [&](const std::uint32_t frame_index_, const VkCommandBuffer command_buffer_) {
+            return MockPhaseContext{
+                .frame_context =
+                    {
+                        .device = host.Context(),
+                        .services = host.Services(),
+                        .frame = {.frame_index = frame_index_, .image_index = 0U},
+                        .progress = {.graphics_submitted = 0U, .graphics_completed = 0U},
+                        .command_buffer = command_buffer_,
+                        .swapchain_targets = &host.SwapchainTargets(),
+                    },
+            };
+        };
+
+    auto warmup_context = make_context(0U, VK_NULL_HANDLE);
+    service.BeginFrame(warmup_context);
+    host.PrepareTickFrame(recorder, 0U);
+    service.PreRecord(warmup_context);
+
+    const auto* warmup_snapshot = service.TryGetFrameSnapshot<vr::ecs::Dim3>();
+    VR_REQUIRE(warmup_snapshot != nullptr);
+    VR_CHECK(!warmup_snapshot->temporal.color.previous_available);
+    VR_CHECK(!warmup_snapshot->temporal.depth.previous_available);
+    VR_CHECK(!warmup_snapshot->temporal.motion.previous_available);
+    VR_CHECK(warmup_snapshot->temporal.motion.current_writable);
+    VR_CHECK(warmup_snapshot->temporal.reprojection.current_available);
+    VR_CHECK(!warmup_snapshot->temporal.reprojection.previous_available);
+    VR_CHECK(warmup_snapshot->temporal.jitter.current_available);
+    VR_CHECK(!warmup_snapshot->temporal.jitter.previous_available);
+    VR_CHECK(warmup_snapshot->temporal.jitter.invalidation_reason ==
+             vr::render_graph::FrameHistoryInvalidationReason::first_frame);
+    const auto* compiled_warmup = service.TryGetCompiledGraph();
+    VR_REQUIRE(compiled_warmup != nullptr);
+    const auto warmup_motion_pass = std::find_if(
+        compiled_warmup->Passes().begin(),
+        compiled_warmup->Passes().end(),
+        [](const vr::render_graph::CompiledPass& pass_) {
+            return pass_.debug_name == "temporal_motion_vector_pass";
+        });
+    VR_REQUIRE(warmup_motion_pass != compiled_warmup->Passes().end());
+    const auto warmup_temporal_pass = std::find_if(
+        compiled_warmup->Passes().begin(),
+        compiled_warmup->Passes().end(),
+        [](const vr::render_graph::CompiledPass& pass_) {
+            return pass_.debug_name == "temporal_history_resolve_stub";
+        });
+    VR_REQUIRE(warmup_temporal_pass != compiled_warmup->Passes().end());
+    VR_CHECK(std::none_of(
+        compiled_warmup->Resources().begin(),
+        compiled_warmup->Resources().end(),
+        [](const vr::render_graph::CompiledResource& resource_) {
+            return resource_.debug_name == "temporal_previous_color" ||
+                   resource_.debug_name == "temporal_previous_depth";
+        }));
+    VR_CHECK(std::any_of(
+        compiled_warmup->Resources().begin(),
+        compiled_warmup->Resources().end(),
+        [](const vr::render_graph::CompiledResource& resource_) {
+            return resource_.debug_name == "frame_motion_history_current" &&
+                   resource_.lifetime == vr::render_graph::ResourceLifetime::imported;
+        }));
+    service.MarkGraphicsSubmissionEnqueued(
+        vr::render::FrameToken{
+            .frame_index = 0U,
+            .graphics_signal_value = 1U,
+        });
+
+    host.EnsureSwapchainTargetsForFrame(1U, 0U);
+    auto ready_context = make_context(1U, VK_NULL_HANDLE);
+    service.BeginFrame(ready_context);
+    host.PrepareTickFrame(recorder, 1U);
+    service.PreRecord(ready_context);
+
+    const auto* ready_snapshot = service.TryGetFrameSnapshot<vr::ecs::Dim3>();
+    VR_REQUIRE(ready_snapshot != nullptr);
+    VR_CHECK(ready_snapshot->temporal.color.previous_available);
+    VR_CHECK(ready_snapshot->temporal.depth.previous_available);
+    VR_CHECK(ready_snapshot->temporal.motion.previous_available);
+    VR_CHECK(ready_snapshot->temporal.motion.current_writable);
+    VR_CHECK(ready_snapshot->temporal.reprojection.current_available);
+    VR_CHECK(ready_snapshot->temporal.reprojection.previous_available);
+    VR_CHECK(ready_snapshot->temporal.jitter.current_available);
+    VR_CHECK(ready_snapshot->temporal.jitter.previous_available);
+    VR_CHECK(ready_snapshot->temporal.jitter.invalidation_reason ==
+             vr::render_graph::FrameHistoryInvalidationReason::none);
+    const auto* compiled_ready = service.TryGetCompiledGraph();
+    VR_REQUIRE(compiled_ready != nullptr);
+    const auto ready_motion_pass = std::find_if(
+        compiled_ready->Passes().begin(),
+        compiled_ready->Passes().end(),
+        [](const vr::render_graph::CompiledPass& pass_) {
+            return pass_.debug_name == "temporal_motion_vector_pass";
+        });
+    VR_REQUIRE(ready_motion_pass != compiled_ready->Passes().end());
+    const auto ready_temporal_pass = std::find_if(
+        compiled_ready->Passes().begin(),
+        compiled_ready->Passes().end(),
+        [](const vr::render_graph::CompiledPass& pass_) {
+            return pass_.debug_name == "temporal_history_resolve_stub";
+        });
+    VR_REQUIRE(ready_temporal_pass != compiled_ready->Passes().end());
+    VR_CHECK(std::any_of(
+        compiled_ready->Resources().begin(),
+        compiled_ready->Resources().end(),
+        [](const vr::render_graph::CompiledResource& resource_) {
+            return resource_.debug_name == "temporal_previous_color" &&
+                   resource_.lifetime == vr::render_graph::ResourceLifetime::imported;
+        }));
+    VR_CHECK(std::any_of(
+        compiled_ready->Resources().begin(),
+        compiled_ready->Resources().end(),
+        [](const vr::render_graph::CompiledResource& resource_) {
+            return resource_.debug_name == "temporal_previous_depth" &&
+                   resource_.lifetime == vr::render_graph::ResourceLifetime::imported;
+        }));
+    VR_CHECK(std::any_of(
+        compiled_ready->Resources().begin(),
+        compiled_ready->Resources().end(),
+        [](const vr::render_graph::CompiledResource& resource_) {
+            return resource_.debug_name == "frame_motion_history_current" &&
+                   resource_.lifetime == vr::render_graph::ResourceLifetime::imported;
+        }));
+
+    recorder.ClearFramePacket();
+    host.Shutdown();
+}
+
+VR_TEST_CASE(RenderGraphRuntimeService_builds_temporal_object_motion_overlay_when_scene_renderer_supports_temporal_motion,
+             "integration;render_graph;runtime;temporal;scene3d;vulkan") {
+    Host host{};
+    auto create_info = MakeMinimalRenderTargetRuntimeCreateInfo();
+    EnableRenderGraphRuntimeExecutionFeatures(create_info);
+    create_info.modules.enable_descriptor_host = true;
+    create_info.modules.enable_pipeline_host = true;
+    create_info.modules.enable_sampler_host = true;
+    try {
+        host.Initialize(create_info);
+    } catch (const std::exception& exception_) {
+        if (IsEnvironmentSkipError(exception_.what())) {
+            VR_SKIP(exception_.what());
+        }
+        throw;
+    }
+
+    struct MockTemporalMotionRenderer final {
+        void PrepareFrame(const vr::render::SceneRecorder3DPrepareView&) noexcept {}
+        void RecordGraphSceneStage(vr::render_graph::GraphCommandContext&,
+                                   vr::render::SceneRenderStage,
+                                   vr::render_graph::ResourceHandle,
+                                   vr::render_graph::ResourceHandle) {}
+        void SetFrameTemporalMotionProducerState(
+            const vr::render::SceneTemporalMotionProducerState& state_) noexcept {
+            current_state_active = true;
+            last_state = state_;
+            if (configured_state_count < configured_states.size()) {
+                configured_states[configured_state_count] = state_;
+            }
+            configured_state_count += 1U;
+        }
+        void ClearFrameTemporalMotionProducerState() noexcept {
+            current_state_active = false;
+            clear_state_count += 1U;
+        }
+        void DescribeGraphTemporalMotionBindings(
+            vr::render_graph::RenderGraphBuilder&,
+            vr::render_graph::PassHandle) noexcept {
+            temporal_motion_binding_count += 1U;
+        }
+        void RegisterGraphImportedResources(
+            vr::runtime::services::RenderGraphRuntimeService&) noexcept {
+            imported_resource_registration_count += 1U;
+        }
+        void RecordGraphTemporalMotion(vr::render_graph::GraphCommandContext&,
+                                       vr::render_graph::ResourceHandle,
+                                       vr::render_graph::ResourceHandle) {}
+        void OnSwapchainRecreated(std::uint32_t,
+                                  VkExtent2D,
+                                  VkFormat,
+                                  std::uint64_t,
+                                  std::uint64_t) noexcept {}
+
+        std::uint32_t temporal_motion_binding_count = 0U;
+        std::uint32_t imported_resource_registration_count = 0U;
+        std::array<vr::render::SceneTemporalMotionProducerState, 4U>
+            configured_states{};
+        vr::render::SceneTemporalMotionProducerState last_state{};
+        std::uint32_t configured_state_count = 0U;
+        std::uint32_t clear_state_count = 0U;
+        bool current_state_active = false;
+    };
+
+    vr::render::SceneRecorder3D recorder{};
+    recorder.Initialize();
+    recorder.BindRuntime(host);
+    MockTemporalMotionRenderer renderer{};
+    recorder.RegisterTransparentSceneRenderer(
+        renderer,
+        vr::render::SceneRenderPassRole::single);
+
+    vr::ecs::Camera<vr::ecs::Dim3> camera{};
+    camera.style.viewport = {.origin_x = 0.0F, .origin_y = 0.0F, .width = 320.0F, .height = 180.0F};
+    camera.runtime.revision = 1U;
+    camera.runtime.culling_mask = 0xFFU;
+    vr::ecs::Transform<vr::ecs::Dim3> camera_transform{};
+    vr::ecs::TransformSystem<vr::ecs::Dim3>::Initialize(camera_transform);
+    vr::ecs::TransformSystem<vr::ecs::Dim3>::SetLocalPosition(
+        camera_transform,
+        vr::ecs::Float3{.x = 0.0F, .y = 0.0F, .z = 4.0F});
+    vr::ecs::TransformSystem<vr::ecs::Dim3>::UpdateHierarchy(
+        &camera_transform,
+        1U);
+    vr::ecs::CameraSystem<vr::ecs::Dim3>::Initialize(camera);
+    vr::ecs::CameraSystem<vr::ecs::Dim3>::SetAspectRatio(camera, 320.0F / 180.0F);
+    vr::ecs::CameraSystem<vr::ecs::Dim3>::SetNearFar(camera, 0.05F, 256.0F);
+    vr::ecs::CameraSystem<vr::ecs::Dim3>::SetVerticalFovRadians(
+        camera,
+        60.0F * 0.01745329251994329577F);
+    vr::render::RenderView3D main_view{};
+    vr::render::RenderScenePacket3D main_scene_packet{};
+    vr::render::RefreshExtentBoundWorldSceneSubmission(main_view,
+                                                       main_scene_packet,
+                                                       camera,
+                                                       camera_transform,
+                                                       host.Swapchain().Extent(),
+                                                       4300U);
+    recorder.SetFramePacket(&main_scene_packet);
+
+    struct MockPhaseContext final {
+        struct FrameContext final {
+            vr::VulkanContext& device;
+            Host::RuntimeServicesType& services;
+            struct FrameInfo final {
+                std::uint32_t frame_index = 0U;
+                std::uint32_t image_index = 0U;
+            } frame{};
+            struct ProgressInfo final {
+                std::uint64_t graphics_submitted = 0U;
+                std::uint64_t graphics_completed = 0U;
+            } progress{};
+            VkCommandBuffer command_buffer = VK_NULL_HANDLE;
+            vr::render::SwapchainTargetSet* swapchain_targets = nullptr;
+        } frame_context;
+    };
+
+    auto& service = host.Services().Get<RenderGraphRuntimeService>();
+    const auto make_context =
+        [&](const std::uint32_t frame_index_) {
+            return MockPhaseContext{
+                .frame_context =
+                    {
+                        .device = host.Context(),
+                        .services = host.Services(),
+                        .frame = {.frame_index = frame_index_, .image_index = 0U},
+                        .progress = {.graphics_submitted = 0U, .graphics_completed = 0U},
+                        .command_buffer = VK_NULL_HANDLE,
+                        .swapchain_targets = &host.SwapchainTargets(),
+                    },
+            };
+        };
+
+    host.EnsureSwapchainTargetsForFrame(0U, 0U);
+    auto context_frame0 = make_context(0U);
+    service.BeginFrame(context_frame0);
+    host.PrepareTickFrame(recorder, 0U);
+    service.PreRecord(context_frame0);
+
+    const auto* compiled_warmup = service.TryGetCompiledGraph();
+    VR_REQUIRE(compiled_warmup != nullptr);
+    const auto warmup_overlay_pass = std::find_if(
+        compiled_warmup->Passes().begin(),
+        compiled_warmup->Passes().end(),
+        [](const vr::render_graph::CompiledPass& pass_) {
+            return pass_.debug_name == "temporal_object_motion_overlay_pass";
+        });
+    VR_REQUIRE(warmup_overlay_pass != compiled_warmup->Passes().end());
+    VR_REQUIRE(warmup_overlay_pass->raster_pass.has_value());
+    VR_CHECK(warmup_overlay_pass->raster_pass->color_attachments[0].load_op ==
+             vr::render_graph::AttachmentLoadOp::load);
+    VR_CHECK(warmup_overlay_pass->raster_pass->has_depth_attachment);
+    VR_CHECK(warmup_overlay_pass->raster_pass->depth_attachment.read_only);
+    VR_CHECK(std::any_of(
+        warmup_overlay_pass->reads.begin(),
+        warmup_overlay_pass->reads.end(),
+        [](const vr::render_graph::AccessDesc& access_) {
+            return access_.access ==
+                   vr::render_graph::AccessKind::color_attachment_read;
+        }));
+    VR_CHECK(std::any_of(
+        warmup_overlay_pass->reads.begin(),
+        warmup_overlay_pass->reads.end(),
+        [](const vr::render_graph::AccessDesc& access_) {
+            return access_.access ==
+                   vr::render_graph::AccessKind::depth_stencil_read;
+        }));
+    VR_REQUIRE(warmup_overlay_pass->writes.size() == 1U);
+    VR_CHECK(warmup_overlay_pass->writes[0].access ==
+             vr::render_graph::AccessKind::color_attachment_write);
+    VR_CHECK(renderer.temporal_motion_binding_count == 1U);
+    VR_CHECK(renderer.imported_resource_registration_count == 2U);
+    VR_CHECK(renderer.current_state_active);
+    VR_CHECK(renderer.clear_state_count == 1U);
+    VR_CHECK(renderer.configured_state_count == 1U);
+    VR_CHECK(!renderer.configured_states[0U].previous_available);
+    VR_CHECK(renderer.configured_states[0U].invalidation_reason ==
+             vr::render_graph::FrameHistoryInvalidationReason::first_frame);
+
+    service.MarkGraphicsSubmissionEnqueued(
+        vr::render::FrameToken{
+            .frame_index = 0U,
+            .graphics_signal_value = 1U,
+        });
+
+    host.EnsureSwapchainTargetsForFrame(1U, 0U);
+    auto context_frame1 = make_context(1U);
+    service.BeginFrame(context_frame1);
+    host.PrepareTickFrame(recorder, 1U);
+    service.PreRecord(context_frame1);
+
+    const auto* compiled_ready = service.TryGetCompiledGraph();
+    VR_REQUIRE(compiled_ready != nullptr);
+    VR_CHECK(std::any_of(
+        compiled_ready->Passes().begin(),
+        compiled_ready->Passes().end(),
+        [](const vr::render_graph::CompiledPass& pass_) {
+            return pass_.debug_name == "temporal_object_motion_overlay_pass";
+        }));
+    VR_CHECK(renderer.current_state_active);
+    VR_CHECK(renderer.clear_state_count == 2U);
+    VR_CHECK(renderer.configured_state_count == 2U);
+    VR_CHECK(renderer.configured_states[1U].previous_available);
+    VR_CHECK(renderer.configured_states[1U].invalidation_reason ==
+             vr::render_graph::FrameHistoryInvalidationReason::none);
+    VR_CHECK(renderer.configured_states[1U].previous_frame_index == 0U);
+    VR_CHECK(renderer.configured_states[1U].previous_submission_id ==
+             main_scene_packet.Metadata().submission_id);
+
+    service.RequestFrameColorHistoryReset();
+    service.MarkGraphicsSubmissionEnqueued(
+        vr::render::FrameToken{
+            .frame_index = 1U,
+            .graphics_signal_value = 2U,
+        });
+
+    host.EnsureSwapchainTargetsForFrame(0U, 0U);
+    auto context_frame2 = make_context(2U);
+    service.BeginFrame(context_frame2);
+    host.PrepareTickFrame(recorder, 0U);
+    service.PreRecord(context_frame2);
+
+    VR_CHECK(renderer.current_state_active);
+    VR_CHECK(renderer.clear_state_count == 3U);
+    VR_CHECK(renderer.configured_state_count == 3U);
+    VR_CHECK(!renderer.configured_states[2U].previous_available);
+    VR_CHECK(renderer.configured_states[2U].invalidation_reason ==
+             vr::render_graph::FrameHistoryInvalidationReason::reset_requested);
+
+    recorder.ClearFramePacket();
+    host.Shutdown();
+}
+
+VR_TEST_CASE(RenderGraphRuntimeService_skips_temporal_object_motion_overlay_when_scene_renderer_lacks_temporal_motion_producer,
+             "integration;render_graph;runtime;temporal;scene3d;vulkan") {
+    Host host{};
+    auto create_info = MakeMinimalRenderTargetRuntimeCreateInfo();
+    EnableRenderGraphRuntimeExecutionFeatures(create_info);
+    create_info.modules.enable_descriptor_host = true;
+    create_info.modules.enable_pipeline_host = true;
+    create_info.modules.enable_sampler_host = true;
+    try {
+        host.Initialize(create_info);
+    } catch (const std::exception& exception_) {
+        if (IsEnvironmentSkipError(exception_.what())) {
+            VR_SKIP(exception_.what());
+        }
+        throw;
+    }
+
+    struct MockSceneRenderer final {
+        void PrepareFrame(const vr::render::SceneRecorder3DPrepareView&) noexcept {}
+        void RecordGraphSceneStage(vr::render_graph::GraphCommandContext&,
+                                   vr::render::SceneRenderStage,
+                                   vr::render_graph::ResourceHandle,
+                                   vr::render_graph::ResourceHandle) {}
+        void OnSwapchainRecreated(std::uint32_t,
+                                  VkExtent2D,
+                                  VkFormat,
+                                  std::uint64_t,
+                                  std::uint64_t) noexcept {}
+    };
+
+    vr::render::SceneRecorder3D recorder{};
+    recorder.Initialize();
+    recorder.BindRuntime(host);
+    MockSceneRenderer renderer{};
+    recorder.RegisterTransparentSceneRenderer(
+        renderer,
+        vr::render::SceneRenderPassRole::single);
+
+    vr::ecs::Camera<vr::ecs::Dim3> camera{};
+    camera.style.viewport = {.origin_x = 0.0F, .origin_y = 0.0F, .width = 320.0F, .height = 180.0F};
+    camera.runtime.revision = 1U;
+    camera.runtime.culling_mask = 0xFFU;
+    vr::ecs::Transform<vr::ecs::Dim3> camera_transform{};
+    vr::ecs::TransformSystem<vr::ecs::Dim3>::Initialize(camera_transform);
+    vr::ecs::TransformSystem<vr::ecs::Dim3>::SetLocalPosition(
+        camera_transform,
+        vr::ecs::Float3{.x = 0.0F, .y = 0.0F, .z = 4.0F});
+    vr::ecs::TransformSystem<vr::ecs::Dim3>::UpdateHierarchy(
+        &camera_transform,
+        1U);
+    vr::ecs::CameraSystem<vr::ecs::Dim3>::Initialize(camera);
+    vr::ecs::CameraSystem<vr::ecs::Dim3>::SetAspectRatio(camera, 320.0F / 180.0F);
+    vr::ecs::CameraSystem<vr::ecs::Dim3>::SetNearFar(camera, 0.05F, 256.0F);
+    vr::ecs::CameraSystem<vr::ecs::Dim3>::SetVerticalFovRadians(
+        camera,
+        60.0F * 0.01745329251994329577F);
+    vr::render::RenderView3D main_view{};
+    vr::render::RenderScenePacket3D main_scene_packet{};
+    vr::render::RefreshExtentBoundWorldSceneSubmission(main_view,
+                                                       main_scene_packet,
+                                                       camera,
+                                                       camera_transform,
+                                                       host.Swapchain().Extent(),
+                                                       4301U);
+    recorder.SetFramePacket(&main_scene_packet);
+
+    struct MockPhaseContext final {
+        struct FrameContext final {
+            vr::VulkanContext& device;
+            Host::RuntimeServicesType& services;
+            struct FrameInfo final {
+                std::uint32_t frame_index = 0U;
+                std::uint32_t image_index = 0U;
+            } frame{};
+            struct ProgressInfo final {
+                std::uint64_t graphics_submitted = 0U;
+                std::uint64_t graphics_completed = 0U;
+            } progress{};
+            VkCommandBuffer command_buffer = VK_NULL_HANDLE;
+            vr::render::SwapchainTargetSet* swapchain_targets = nullptr;
+        } frame_context;
+    };
+
+    host.EnsureSwapchainTargetsForFrame(0U, 0U);
+    auto& service = host.Services().Get<RenderGraphRuntimeService>();
+    MockPhaseContext context{
+        .frame_context = {
+            .device = host.Context(),
+            .services = host.Services(),
+            .frame = {.frame_index = 0U, .image_index = 0U},
+            .progress = {.graphics_submitted = 0U, .graphics_completed = 0U},
+            .command_buffer = VK_NULL_HANDLE,
+            .swapchain_targets = &host.SwapchainTargets(),
+        },
+    };
+    service.BeginFrame(context);
+    host.PrepareTickFrame(recorder, 0U);
+    service.PreRecord(context);
+
+    const auto* compiled = service.TryGetCompiledGraph();
+    VR_REQUIRE(compiled != nullptr);
+    VR_CHECK(std::none_of(
+        compiled->Passes().begin(),
+        compiled->Passes().end(),
+        [](const vr::render_graph::CompiledPass& pass_) {
+            return pass_.debug_name == "temporal_object_motion_overlay_pass";
+        }));
+    VR_CHECK(std::any_of(
+        compiled->Passes().begin(),
+        compiled->Passes().end(),
+        [](const vr::render_graph::CompiledPass& pass_) {
+            return pass_.debug_name == "temporal_motion_vector_pass";
+        }));
 
     recorder.ClearFramePacket();
     host.Shutdown();
@@ -2341,6 +2970,394 @@ VR_TEST_CASE(RenderGraphRuntimeService_records_barrier_batches_when_execution_en
         VR_CHECK(stats.image_barrier_count == 0U);
     }
     VR_CHECK(stats.queue_transfer_batch_count == 0U);
+}
+
+VR_TEST_CASE(RenderGraphRuntimeService_temporal_history_warms_up_then_hands_off_and_invalidates_on_reset_or_resize,
+             "integration;render_graph;runtime;temporal;vulkan") {
+    Host host{};
+    try {
+        host.Initialize(MakeMinimalRenderTargetRuntimeCreateInfo());
+    } catch (const std::exception& exception_) {
+        if (IsEnvironmentSkipError(exception_.what())) {
+            VR_SKIP(exception_.what());
+        }
+        throw;
+    }
+
+    host.EnsureSwapchainTargetsForFrame(0U, 0U);
+
+    struct MockPhaseContext final {
+        struct FrameContext final {
+            vr::VulkanContext& device;
+            Host::RuntimeServicesType& services;
+            struct FrameInfo final {
+                std::uint32_t frame_index = 0U;
+                std::uint32_t image_index = 0U;
+            } frame{};
+            struct ProgressInfo final {
+                std::uint64_t graphics_submitted = 0U;
+                std::uint64_t graphics_completed = 0U;
+            } progress{};
+            VkCommandBuffer command_buffer = VK_NULL_HANDLE;
+            vr::render::SwapchainTargetSet* swapchain_targets = nullptr;
+        } frame_context;
+    };
+
+    const auto make_snapshot =
+        [](const std::uint32_t width_,
+           const std::uint32_t height_,
+           const std::uint64_t frame_index_,
+           const vr::render::SceneSubmissionId submission_id_) {
+            vr::ecs::Camera<vr::ecs::Dim3> camera{};
+            camera.style.viewport = {
+                .origin_x = 0.0F,
+                .origin_y = 0.0F,
+                .width = static_cast<float>(width_),
+                .height = static_cast<float>(height_),
+            };
+            camera.runtime.revision = static_cast<std::uint32_t>(frame_index_) + 1U;
+            camera.runtime.culling_mask = 0xFFU;
+            camera.runtime.view_projection_matrix.m[0] = 1.0F;
+            camera.runtime.view_projection_matrix.m[5] = 1.0F;
+            camera.runtime.view_projection_matrix.m[10] = 1.0F;
+            camera.runtime.view_projection_matrix.m[15] = 1.0F;
+            auto view = vr::render::MakeRenderViewFromCamera(
+                camera,
+                static_cast<const vr::ecs::Transform<vr::ecs::Dim3>*>(nullptr),
+                vr::render::RenderViewKind::world,
+                0U);
+            auto packet =
+                vr::render::MakeSingleViewScenePacket(view, submission_id_);
+            return vr::render_graph::MakeFrameSnapshot(
+                packet,
+                frame_index_,
+                vr::render_graph::Extent3D{
+                    .width = width_,
+                    .height = height_,
+                    .depth = 1U,
+                });
+        };
+
+    auto make_context =
+        [&](const std::uint32_t frame_index_) {
+            return MockPhaseContext{
+                .frame_context =
+                    {
+                        .device = host.Context(),
+                        .services = host.Services(),
+                        .frame = {.frame_index = frame_index_, .image_index = 0U},
+                        .progress = {.graphics_submitted = 0U, .graphics_completed = 0U},
+                        .command_buffer = VK_NULL_HANDLE,
+                        .swapchain_targets = &host.SwapchainTargets(),
+                    },
+            };
+        };
+
+    auto& service = host.Services().Get<RenderGraphRuntimeService>();
+
+    auto context_frame4 = make_context(4U);
+    service.BeginFrame(context_frame4);
+    service.SetFrameSnapshot<vr::ecs::Dim3>(
+        make_snapshot(256U, 144U, 4U, {410U}));
+    service.PreRecord(context_frame4);
+
+    const auto* warmup_snapshot =
+        service.TryGetFrameSnapshot<vr::ecs::Dim3>();
+    VR_REQUIRE(warmup_snapshot != nullptr);
+    VR_CHECK(!warmup_snapshot->temporal.color.previous_available);
+    VR_CHECK(warmup_snapshot->temporal.color.current_writable);
+    VR_CHECK(warmup_snapshot->temporal.color.invalidation_reason ==
+             vr::render_graph::FrameHistoryInvalidationReason::first_frame);
+    VR_CHECK(!warmup_snapshot->temporal.depth.previous_available);
+    VR_CHECK(warmup_snapshot->temporal.depth.current_writable);
+    VR_CHECK(warmup_snapshot->temporal.depth.invalidation_reason ==
+             vr::render_graph::FrameHistoryInvalidationReason::first_frame);
+    VR_CHECK(!warmup_snapshot->temporal.motion.previous_available);
+    VR_CHECK(warmup_snapshot->temporal.motion.current_writable);
+    VR_CHECK(warmup_snapshot->temporal.motion.invalidation_reason ==
+             vr::render_graph::FrameHistoryInvalidationReason::first_frame);
+    VR_CHECK(warmup_snapshot->temporal.reprojection.current_available);
+    VR_CHECK(!warmup_snapshot->temporal.reprojection.previous_available);
+    VR_CHECK(warmup_snapshot->temporal.reprojection.invalidation_reason ==
+             vr::render_graph::FrameHistoryInvalidationReason::first_frame);
+    VR_CHECK(warmup_snapshot->temporal.jitter.current_available);
+    VR_CHECK(!warmup_snapshot->temporal.jitter.previous_available);
+    VR_CHECK(warmup_snapshot->temporal.jitter.invalidation_reason ==
+             vr::render_graph::FrameHistoryInvalidationReason::first_frame);
+    VR_CHECK(vr::render::IsValidRenderTargetHandle(
+        warmup_snapshot->temporal.color.current.handle));
+    VR_CHECK(vr::render::IsValidRenderTargetHandle(
+        warmup_snapshot->temporal.depth.current.handle));
+    VR_CHECK(vr::render::IsValidRenderTargetHandle(
+        warmup_snapshot->temporal.motion.current.handle));
+    const auto warmup_current_handle =
+        warmup_snapshot->temporal.color.current.handle;
+    const auto warmup_current_revision =
+        warmup_snapshot->temporal.color.current.resource_revision;
+    const auto warmup_depth_handle =
+        warmup_snapshot->temporal.depth.current.handle;
+    const auto warmup_depth_revision =
+        warmup_snapshot->temporal.depth.current.resource_revision;
+    const auto warmup_motion_handle =
+        warmup_snapshot->temporal.motion.current.handle;
+    const auto warmup_motion_revision =
+        warmup_snapshot->temporal.motion.current.resource_revision;
+
+    const auto* compiled_warmup = service.TryGetCompiledGraph();
+    VR_REQUIRE(compiled_warmup != nullptr);
+    const auto history_capture_pass = std::find_if(
+        compiled_warmup->Passes().begin(),
+        compiled_warmup->Passes().end(),
+        [](const vr::render_graph::CompiledPass& pass_) {
+            return pass_.debug_name == "frame_color_history_capture";
+        });
+    VR_REQUIRE(history_capture_pass != compiled_warmup->Passes().end());
+    const auto history_import = std::find_if(
+        compiled_warmup->Resources().begin(),
+        compiled_warmup->Resources().end(),
+        [](const vr::render_graph::CompiledResource& resource_) {
+            return resource_.debug_name == "frame_color_history_current" &&
+                   resource_.lifetime == vr::render_graph::ResourceLifetime::imported;
+        });
+    VR_REQUIRE(history_import != compiled_warmup->Resources().end());
+    const auto depth_history_capture_pass = std::find_if(
+        compiled_warmup->Passes().begin(),
+        compiled_warmup->Passes().end(),
+        [](const vr::render_graph::CompiledPass& pass_) {
+            return pass_.debug_name == "frame_depth_history_capture";
+        });
+    VR_REQUIRE(depth_history_capture_pass != compiled_warmup->Passes().end());
+    const auto depth_history_import = std::find_if(
+        compiled_warmup->Resources().begin(),
+        compiled_warmup->Resources().end(),
+        [](const vr::render_graph::CompiledResource& resource_) {
+            return resource_.debug_name == "frame_depth_history_current" &&
+                   resource_.lifetime == vr::render_graph::ResourceLifetime::imported;
+        });
+    VR_REQUIRE(depth_history_import != compiled_warmup->Resources().end());
+    const auto motion_history_pass = std::find_if(
+        compiled_warmup->Passes().begin(),
+        compiled_warmup->Passes().end(),
+        [](const vr::render_graph::CompiledPass& pass_) {
+            return pass_.debug_name == "temporal_motion_vector_pass";
+        });
+    VR_CHECK(motion_history_pass == compiled_warmup->Passes().end());
+    const auto motion_history_import = std::find_if(
+        compiled_warmup->Resources().begin(),
+        compiled_warmup->Resources().end(),
+        [](const vr::render_graph::CompiledResource& resource_) {
+            return resource_.debug_name == "frame_motion_history_current" &&
+                   resource_.lifetime == vr::render_graph::ResourceLifetime::imported;
+        });
+    VR_CHECK(motion_history_import == compiled_warmup->Resources().end());
+
+    service.MarkGraphicsSubmissionEnqueued(
+        vr::render::FrameToken{
+            .frame_index = 4U,
+            .graphics_signal_value = 1U,
+        });
+
+    auto context_frame5 = make_context(5U);
+    service.BeginFrame(context_frame5);
+    service.SetFrameSnapshot<vr::ecs::Dim3>(
+        make_snapshot(256U, 144U, 5U, {510U}));
+    service.PreRecord(context_frame5);
+
+    const auto* unavailable_snapshot =
+        service.TryGetFrameSnapshot<vr::ecs::Dim3>();
+    VR_REQUIRE(unavailable_snapshot != nullptr);
+    VR_CHECK(unavailable_snapshot->temporal.color.previous_available);
+    VR_CHECK(unavailable_snapshot->temporal.color.current_writable);
+    VR_CHECK(unavailable_snapshot->temporal.color.invalidation_reason ==
+             vr::render_graph::FrameHistoryInvalidationReason::none);
+    VR_CHECK(unavailable_snapshot->temporal.color.previous.handle.index ==
+             warmup_current_handle.index);
+    VR_CHECK(unavailable_snapshot->temporal.color.previous.handle.generation ==
+             warmup_current_handle.generation);
+    VR_CHECK(unavailable_snapshot->temporal.color.previous.resource_revision ==
+             warmup_current_revision);
+    VR_CHECK(unavailable_snapshot->temporal.color.previous_submission_id ==
+             vr::render::SceneSubmissionId{410U});
+    VR_CHECK(unavailable_snapshot->temporal.color.previous_frame_index == 4U);
+    VR_CHECK(unavailable_snapshot->temporal.depth.previous_available);
+    VR_CHECK(unavailable_snapshot->temporal.depth.current_writable);
+    VR_CHECK(unavailable_snapshot->temporal.depth.invalidation_reason ==
+             vr::render_graph::FrameHistoryInvalidationReason::none);
+    VR_CHECK(unavailable_snapshot->temporal.depth.previous.handle.index ==
+             warmup_depth_handle.index);
+    VR_CHECK(unavailable_snapshot->temporal.depth.previous.handle.generation ==
+             warmup_depth_handle.generation);
+    VR_CHECK(unavailable_snapshot->temporal.depth.previous.resource_revision ==
+             warmup_depth_revision);
+    VR_CHECK(unavailable_snapshot->temporal.depth.previous_submission_id ==
+             vr::render::SceneSubmissionId{410U});
+    VR_CHECK(unavailable_snapshot->temporal.depth.previous_frame_index == 4U);
+    VR_CHECK(!unavailable_snapshot->temporal.motion.previous_available);
+    VR_CHECK(unavailable_snapshot->temporal.motion.current_writable);
+    VR_CHECK(unavailable_snapshot->temporal.motion.invalidation_reason ==
+             vr::render_graph::FrameHistoryInvalidationReason::first_frame);
+    VR_CHECK(unavailable_snapshot->temporal.reprojection.current_available);
+    VR_CHECK(unavailable_snapshot->temporal.reprojection.previous_available);
+    VR_CHECK(unavailable_snapshot->temporal.reprojection.invalidation_reason ==
+             vr::render_graph::FrameHistoryInvalidationReason::none);
+    VR_CHECK(unavailable_snapshot->temporal.reprojection.previous_submission_id ==
+             vr::render::SceneSubmissionId{410U});
+    VR_CHECK(unavailable_snapshot->temporal.reprojection.previous_frame_index == 4U);
+    VR_CHECK(unavailable_snapshot->temporal.jitter.current_available);
+    VR_CHECK(unavailable_snapshot->temporal.jitter.previous_available);
+    VR_CHECK(unavailable_snapshot->temporal.jitter.invalidation_reason ==
+             vr::render_graph::FrameHistoryInvalidationReason::none);
+    VR_CHECK(unavailable_snapshot->temporal.jitter.previous_submission_id ==
+             vr::render::SceneSubmissionId{410U});
+    VR_CHECK(unavailable_snapshot->temporal.jitter.previous_frame_index == 4U);
+    VR_CHECK(unavailable_snapshot->temporal.color.current.handle.index !=
+                 unavailable_snapshot->temporal.color.previous.handle.index ||
+             unavailable_snapshot->temporal.color.current.handle.generation !=
+                 unavailable_snapshot->temporal.color.previous.handle.generation);
+
+    service.QueueFrameMotionHistoryPublish(5U, {510U});
+
+    service.MarkGraphicsSubmissionEnqueued(
+        vr::render::FrameToken{
+            .frame_index = 5U,
+            .graphics_signal_value = 2U,
+        });
+
+    auto context_frame6 = make_context(6U);
+    service.BeginFrame(context_frame6);
+    service.SetFrameSnapshot<vr::ecs::Dim3>(
+        make_snapshot(256U, 144U, 6U, {610U}));
+    service.PreRecord(context_frame6);
+
+    const auto* ready_snapshot =
+        service.TryGetFrameSnapshot<vr::ecs::Dim3>();
+    VR_REQUIRE(ready_snapshot != nullptr);
+    VR_CHECK(ready_snapshot->temporal.color.previous_available);
+    VR_CHECK(ready_snapshot->temporal.color.current_writable);
+    VR_CHECK(ready_snapshot->temporal.color.invalidation_reason ==
+             vr::render_graph::FrameHistoryInvalidationReason::none);
+    VR_CHECK(ready_snapshot->temporal.depth.previous_available);
+    VR_CHECK(ready_snapshot->temporal.depth.current_writable);
+    VR_CHECK(ready_snapshot->temporal.depth.invalidation_reason ==
+             vr::render_graph::FrameHistoryInvalidationReason::none);
+    VR_CHECK(ready_snapshot->temporal.motion.previous_available);
+    VR_CHECK(ready_snapshot->temporal.motion.current_writable);
+    VR_CHECK(ready_snapshot->temporal.motion.invalidation_reason ==
+             vr::render_graph::FrameHistoryInvalidationReason::none);
+    VR_CHECK(ready_snapshot->temporal.motion.previous.handle.index ==
+             warmup_motion_handle.index);
+    VR_CHECK(ready_snapshot->temporal.motion.previous.handle.generation ==
+             warmup_motion_handle.generation);
+    VR_CHECK(ready_snapshot->temporal.motion.previous.resource_revision ==
+             warmup_motion_revision);
+    VR_CHECK(ready_snapshot->temporal.motion.previous_submission_id ==
+             vr::render::SceneSubmissionId{510U});
+    VR_CHECK(ready_snapshot->temporal.motion.previous_frame_index == 5U);
+    VR_CHECK(ready_snapshot->temporal.reprojection.current_available);
+    VR_CHECK(ready_snapshot->temporal.reprojection.previous_available);
+    VR_CHECK(ready_snapshot->temporal.reprojection.invalidation_reason ==
+             vr::render_graph::FrameHistoryInvalidationReason::none);
+    VR_CHECK(ready_snapshot->temporal.reprojection.previous_submission_id ==
+             vr::render::SceneSubmissionId{510U});
+    VR_CHECK(ready_snapshot->temporal.reprojection.previous_frame_index == 5U);
+    VR_CHECK(ready_snapshot->temporal.jitter.current_available);
+    VR_CHECK(ready_snapshot->temporal.jitter.previous_available);
+    VR_CHECK(ready_snapshot->temporal.jitter.invalidation_reason ==
+             vr::render_graph::FrameHistoryInvalidationReason::none);
+    VR_CHECK(ready_snapshot->temporal.jitter.previous_submission_id ==
+             vr::render::SceneSubmissionId{510U});
+    VR_CHECK(ready_snapshot->temporal.jitter.previous_frame_index == 5U);
+
+    service.RequestFrameColorHistoryReset();
+    service.MarkGraphicsSubmissionEnqueued(
+        vr::render::FrameToken{
+            .frame_index = 6U,
+            .graphics_signal_value = 3U,
+        });
+
+    auto context_frame7 = make_context(7U);
+    service.BeginFrame(context_frame7);
+    service.SetFrameSnapshot<vr::ecs::Dim3>(
+        make_snapshot(256U, 144U, 7U, {710U}));
+    service.PreRecord(context_frame7);
+
+    const auto* reset_snapshot =
+        service.TryGetFrameSnapshot<vr::ecs::Dim3>();
+    VR_REQUIRE(reset_snapshot != nullptr);
+    VR_CHECK(!reset_snapshot->temporal.color.previous_available);
+    VR_CHECK(reset_snapshot->temporal.color.current_writable);
+    VR_CHECK(reset_snapshot->temporal.color.invalidation_reason ==
+             vr::render_graph::FrameHistoryInvalidationReason::reset_requested);
+    VR_CHECK(!reset_snapshot->temporal.depth.previous_available);
+    VR_CHECK(reset_snapshot->temporal.depth.current_writable);
+    VR_CHECK(reset_snapshot->temporal.depth.invalidation_reason ==
+             vr::render_graph::FrameHistoryInvalidationReason::reset_requested);
+    VR_CHECK(!reset_snapshot->temporal.motion.previous_available);
+    VR_CHECK(reset_snapshot->temporal.motion.current_writable);
+    VR_CHECK(reset_snapshot->temporal.motion.invalidation_reason ==
+             vr::render_graph::FrameHistoryInvalidationReason::reset_requested);
+    VR_CHECK(reset_snapshot->temporal.reprojection.current_available);
+    VR_CHECK(!reset_snapshot->temporal.reprojection.previous_available);
+    VR_CHECK(reset_snapshot->temporal.reprojection.invalidation_reason ==
+             vr::render_graph::FrameHistoryInvalidationReason::reset_requested);
+    VR_CHECK(reset_snapshot->temporal.jitter.current_available);
+    VR_CHECK(!reset_snapshot->temporal.jitter.previous_available);
+    VR_CHECK(reset_snapshot->temporal.jitter.invalidation_reason ==
+             vr::render_graph::FrameHistoryInvalidationReason::reset_requested);
+
+    service.MarkGraphicsSubmissionEnqueued(
+        vr::render::FrameToken{
+            .frame_index = 7U,
+            .graphics_signal_value = 4U,
+        });
+
+    auto context_frame8 = make_context(8U);
+    service.BeginFrame(context_frame8);
+    service.SetFrameSnapshot<vr::ecs::Dim3>(
+        make_snapshot(512U, 288U, 8U, {810U}));
+    service.PreRecord(context_frame8);
+
+    const auto* resized_snapshot =
+        service.TryGetFrameSnapshot<vr::ecs::Dim3>();
+    VR_REQUIRE(resized_snapshot != nullptr);
+    VR_CHECK(!resized_snapshot->temporal.color.previous_available);
+    VR_CHECK(resized_snapshot->temporal.color.current_writable);
+    VR_CHECK(resized_snapshot->temporal.color.invalidation_reason ==
+             vr::render_graph::FrameHistoryInvalidationReason::extent_changed);
+    VR_CHECK(!resized_snapshot->temporal.depth.previous_available);
+    VR_CHECK(resized_snapshot->temporal.depth.current_writable);
+    VR_CHECK(resized_snapshot->temporal.depth.invalidation_reason ==
+             vr::render_graph::FrameHistoryInvalidationReason::extent_changed);
+    VR_CHECK(!resized_snapshot->temporal.motion.previous_available);
+    VR_CHECK(resized_snapshot->temporal.motion.current_writable);
+    VR_CHECK(resized_snapshot->temporal.motion.invalidation_reason ==
+             vr::render_graph::FrameHistoryInvalidationReason::extent_changed);
+    VR_CHECK(resized_snapshot->temporal.reprojection.current_available);
+    VR_CHECK(!resized_snapshot->temporal.reprojection.previous_available);
+    VR_CHECK(resized_snapshot->temporal.reprojection.invalidation_reason ==
+             vr::render_graph::FrameHistoryInvalidationReason::extent_changed);
+    VR_CHECK(resized_snapshot->temporal.jitter.current_available);
+    VR_CHECK(!resized_snapshot->temporal.jitter.previous_available);
+    VR_CHECK(resized_snapshot->temporal.jitter.invalidation_reason ==
+             vr::render_graph::FrameHistoryInvalidationReason::extent_changed);
+    VR_CHECK(resized_snapshot->temporal.color.current.handle.index ==
+             warmup_current_handle.index);
+    VR_CHECK(resized_snapshot->temporal.color.current.handle.generation ==
+             warmup_current_handle.generation);
+    VR_CHECK(resized_snapshot->temporal.color.current.resource_revision !=
+             warmup_current_revision);
+    VR_CHECK(resized_snapshot->temporal.depth.current.handle.index ==
+             warmup_depth_handle.index);
+    VR_CHECK(resized_snapshot->temporal.depth.current.handle.generation ==
+             warmup_depth_handle.generation);
+    VR_CHECK(resized_snapshot->temporal.depth.current.resource_revision !=
+             warmup_depth_revision);
+    VR_CHECK(resized_snapshot->temporal.motion.current.handle.index ==
+             warmup_motion_handle.index);
+    VR_CHECK(resized_snapshot->temporal.motion.current.handle.generation ==
+             warmup_motion_handle.generation);
+    VR_CHECK(resized_snapshot->temporal.motion.current.resource_revision !=
+             warmup_motion_revision);
 }
 
 VR_TEST_CASE(RenderGraphRuntimeService_resolves_cross_queue_graph_to_multi_queue_or_graphics_fallback,
@@ -2428,8 +3445,10 @@ VR_TEST_CASE(RenderGraphRuntimeService_resolves_cross_queue_graph_to_multi_queue
     VR_CHECK(diagnostics.transfer_queue_requested);
     VR_CHECK(!diagnostics.compute_queue_requested);
     VR_CHECK(diagnostics.multi_queue_requested);
-    VR_CHECK(!diagnostics.effective_queue_timeline_debug_string.empty());
-    VR_CHECK(!diagnostics.effective_queue_timeline_json.empty());
+    VR_CHECK(
+        !vr::runtime::BuildRenderGraphQueueTimelineDebugString(diagnostics).empty());
+    VR_CHECK(
+        !vr::runtime::BuildRenderGraphQueueTimelineJson(diagnostics).empty());
     VR_CHECK(diagnostics.effective_queue_batch_count > 0U);
     VR_CHECK(multi_queue_expected);
     VR_CHECK(!diagnostics.graphics_fallback_active);
@@ -2437,10 +3456,10 @@ VR_TEST_CASE(RenderGraphRuntimeService_resolves_cross_queue_graph_to_multi_queue
     VR_CHECK(diagnostics.multi_queue_enabled);
     VR_CHECK(diagnostics.effective_queue_dependency_count > 0U);
     VR_CHECK(HasEffectiveQueueBatchWithPass(diagnostics,
-                                           "transfer",
+                                           vr::render_graph::QueueClass::transfer,
                                            "upload_present_target"));
     VR_CHECK(HasEffectiveQueueBatchWithPass(diagnostics,
-                                           "graphics",
+                                           vr::render_graph::QueueClass::graphics,
                                            "present_transition"));
     VR_CHECK(service.PlannedCommandReadyVulkanBarriers().queue_transfer_batches.size() ==
              (distinct_transfer_queue ? 1U : 0U));
@@ -2586,11 +3605,15 @@ VR_TEST_CASE(RenderGraphRuntimeService_falls_back_to_graphics_for_host_boundary_
     VR_CHECK(!diagnostics.transfer_queue_enabled);
     VR_CHECK(!diagnostics.multi_queue_enabled);
     VR_CHECK(ContainsCaseInsensitive(diagnostics.queue_fallback_reason, "host boundary"));
-    VR_CHECK(!diagnostics.effective_queue_timeline_debug_string.empty());
-    VR_CHECK(!diagnostics.effective_queue_timeline_json.empty());
+    VR_CHECK(
+        !vr::runtime::BuildRenderGraphQueueTimelineDebugString(diagnostics).empty());
+    VR_CHECK(
+        !vr::runtime::BuildRenderGraphQueueTimelineJson(diagnostics).empty());
     VR_CHECK(diagnostics.effective_queue_batch_count == 3U);
     VR_CHECK(diagnostics.effective_queue_dependency_count == 2U);
-    VR_CHECK(AllEffectiveQueueBatchesUseQueue(diagnostics, "graphics"));
+    VR_CHECK(AllEffectiveQueueBatchesUseQueue(
+        diagnostics,
+        vr::render_graph::QueueClass::graphics));
     VR_CHECK(std::any_of(diagnostics.effective_queue_batches.begin(),
                          diagnostics.effective_queue_batches.end(),
                          [](const vr::runtime::RenderGraphQueueBatchDiagnostics& batch_) {
@@ -2621,12 +3644,378 @@ VR_TEST_CASE(RenderGraphRuntimeService_falls_back_to_graphics_for_host_boundary_
     host.Shutdown();
 }
 
+VR_TEST_CASE(RenderGraphRuntimeService_runtime_tick_counters_only_keeps_aggregate_queue_diagnostics,
+             "integration;render_graph;runtime;queue;diagnostics;vulkan") {
+    Host host{};
+    try {
+        auto create_info = MakeMinimalRenderTargetRuntimeCreateInfo();
+        EnableRenderGraphRuntimeExecutionFeatures(create_info);
+        host.Initialize(create_info);
+    } catch (const std::exception& exception_) {
+        if (IsEnvironmentSkipError(exception_.what())) {
+            VR_SKIP(exception_.what());
+        }
+        throw;
+    }
+
+    const bool graph_execution_supported =
+        host.Context().EnabledVulkan13Features().synchronization2 == VK_TRUE &&
+        host.Context().EnabledVulkan13Features().dynamicRendering == VK_TRUE;
+    if (!graph_execution_supported) {
+        host.Shutdown();
+        VR_SKIP("synchronization2 or dynamicRendering feature unavailable");
+    }
+
+    struct TickRecorder final {
+        std::uint32_t legacy_record_count = 0U;
+
+        void PrepareFrame(const vr::render::FrameComposerPrepareView&) noexcept {}
+        void Record(const vr::render::FrameRecordContext&) noexcept {
+            legacy_record_count += 1U;
+        }
+        void BuildRenderGraph(
+            vr::render_graph::RenderGraphBuilder& builder_,
+            const vr::render_graph::ResourceHandle present_target_,
+            const vr::render_graph::Extent3D&,
+            vr::render_graph::ResourceVersionHandle& present_ready_version_,
+            const RenderGraphRuntimeService::ImportedTextureRegisterFn&) {
+            const auto payload = builder_.CreateBuffer(
+                "tick_counters_payload",
+                vr::render_graph::BufferDesc{
+                    .size_bytes = 256U,
+                    .usage = vr::render_graph::buffer_usage_storage_flag |
+                             vr::render_graph::buffer_usage_transfer_dst_flag,
+                });
+            const auto upload = builder_.AddPass("upload_payload",
+                                                 false,
+                                                 vr::render_graph::QueueClass::transfer);
+            const auto compute = builder_.AddPass("simulate_payload",
+                                                  false,
+                                                  vr::render_graph::QueueClass::compute);
+            const auto present_prepare = builder_.AddPass(
+                "prepare_present_target",
+                false,
+                vr::render_graph::QueueClass::graphics);
+
+            builder_.SetExecuteCallback(
+                upload,
+                [](vr::render_graph::GraphCommandContext&) {});
+            builder_.SetExecuteCallback(
+                compute,
+                [](vr::render_graph::GraphCommandContext&) {});
+            builder_.SetExecuteCallback(
+                present_prepare,
+                [](vr::render_graph::GraphCommandContext&) {});
+
+            const auto uploaded = builder_.Write(
+                upload,
+                payload,
+                vr::render_graph::AccessDesc{
+                    .access = vr::render_graph::AccessKind::transfer_write,
+                    .buffer_range = {.offset_bytes = 0U, .size_bytes = 256U},
+                });
+            (void)builder_.Read(
+                compute,
+                uploaded,
+                vr::render_graph::AccessDesc{
+                    .access = vr::render_graph::AccessKind::shader_storage_read,
+                    .buffer_range = {.offset_bytes = 0U, .size_bytes = 256U},
+                });
+            const auto simulated = builder_.Write(
+                compute,
+                uploaded,
+                vr::render_graph::AccessDesc{
+                    .access = vr::render_graph::AccessKind::shader_storage_write,
+                    .buffer_range = {.offset_bytes = 0U, .size_bytes = 256U},
+                });
+            (void)builder_.Read(
+                present_prepare,
+                simulated,
+                vr::render_graph::AccessDesc{
+                    .access = vr::render_graph::AccessKind::uniform_read,
+                    .buffer_range = {.offset_bytes = 0U, .size_bytes = 256U},
+                });
+            present_ready_version_ = builder_.Write(
+                present_prepare,
+                present_target_,
+                vr::render_graph::AccessDesc{
+                    .access = vr::render_graph::AccessKind::transfer_write,
+                    .subresource_range = {
+                        .base_mip_level = 0U,
+                        .level_count = 1U,
+                        .base_array_layer = 0U,
+                        .layer_count = 1U,
+                    },
+                });
+        }
+    } recorder{};
+
+    auto& service = host.Services().Get<RenderGraphRuntimeService>();
+    Host::RuntimeTickResult last_tick{};
+    std::uint32_t submitted_frames = 0U;
+    for (std::uint32_t tick_index = 0U; tick_index < 4U && host.IsRunning(); ++tick_index) {
+        last_tick = host.Tick(recorder);
+        if (last_tick.render.code == vr::render::TickCode::Submitted ||
+            last_tick.render.code == vr::render::TickCode::RecreateRequested) {
+            ++submitted_frames;
+        }
+        SDL_Delay(1U);
+    }
+
+    const auto& diagnostics = service.LastDiagnostics();
+    const auto queue_timeline_view =
+        vr::runtime::BuildRenderGraphQueueTimelineView(diagnostics);
+    const auto observability_view =
+        vr::runtime::BuildRenderGraphObservabilityView(diagnostics);
+
+    VR_CHECK(submitted_frames > 0U);
+    VR_CHECK(recorder.legacy_record_count == 0U);
+    VR_CHECK(diagnostics.multi_queue_enabled);
+    VR_CHECK(diagnostics.effective_queue_batch_count == 3U);
+    VR_CHECK(diagnostics.effective_queue_dependency_count == 2U);
+    VR_CHECK(diagnostics.effective_graphics_queue_batch_count == 1U);
+    VR_CHECK(diagnostics.effective_transfer_queue_batch_count == 1U);
+    VR_CHECK(diagnostics.effective_compute_queue_batch_count == 1U);
+    VR_CHECK(diagnostics.effective_owned_submit_batch_count == 2U);
+    VR_CHECK(diagnostics.effective_cross_queue_dependency_count == 2U);
+    VR_CHECK(diagnostics.effective_total_submit_wait_count > 0U);
+    VR_CHECK(diagnostics.effective_total_submit_signal_count > 0U);
+    VR_CHECK(diagnostics.effective_queue_batches.empty());
+    VR_CHECK(diagnostics.effective_queue_dependencies.empty());
+    VR_CHECK(diagnostics.lazy_memory_resources.empty());
+    VR_CHECK(queue_timeline_view.available);
+    VR_CHECK(queue_timeline_view.batch_count == 3U);
+    VR_CHECK(queue_timeline_view.dependency_count == 2U);
+    VR_CHECK(queue_timeline_view.graphics_batch_count == 1U);
+    VR_CHECK(queue_timeline_view.transfer_batch_count == 1U);
+    VR_CHECK(queue_timeline_view.compute_batch_count == 1U);
+    VR_CHECK(queue_timeline_view.owned_submit_batch_count == 2U);
+    VR_CHECK(queue_timeline_view.cross_queue_dependency_count == 2U);
+    VR_CHECK(queue_timeline_view.total_submit_wait_count ==
+             diagnostics.effective_total_submit_wait_count);
+    VR_CHECK(queue_timeline_view.total_submit_signal_count ==
+             diagnostics.effective_total_submit_signal_count);
+    VR_CHECK(queue_timeline_view.batches.empty());
+    VR_CHECK(queue_timeline_view.dependencies.empty());
+    VR_CHECK(!vr::runtime::BuildRenderGraphQueueTimelineDebugString(diagnostics).empty());
+    VR_CHECK(!vr::runtime::BuildRenderGraphQueueTimelineJson(diagnostics).empty());
+    VR_CHECK(observability_view.runtime.graph_only_active);
+    VR_CHECK(observability_view.submission.effective_queue_batch_count == 3U);
+    VR_CHECK(observability_view.submission.effective_queue_batches->empty());
+    VR_CHECK(last_tick.diagnostics.queues.transfer_submitted > 0U);
+    VR_CHECK(last_tick.diagnostics.queues.compute_submitted > 0U);
+
+    host.Shutdown();
+}
+
+VR_TEST_CASE(
+    RenderGraphRuntimeService_runtime_tick_capture_level_exposes_canonical_timing_and_capture_contract,
+    "integration;render_graph;runtime;timing;capture;diagnostics;vulkan") {
+    Host host{};
+    try {
+        auto create_info = MakeMinimalRenderTargetRuntimeCreateInfo();
+        EnableRenderGraphRuntimeExecutionFeatures(create_info);
+        create_info.diagnostics.level = vr::runtime::DiagnosticsLevel::Capture;
+        host.Initialize(create_info);
+    } catch (const std::exception& exception_) {
+        if (IsEnvironmentSkipError(exception_.what())) {
+            VR_SKIP(exception_.what());
+        }
+        throw;
+    }
+
+    const bool graph_execution_supported =
+        host.Context().EnabledVulkan13Features().synchronization2 == VK_TRUE &&
+        host.Context().EnabledVulkan13Features().dynamicRendering == VK_TRUE;
+    if (!graph_execution_supported) {
+        host.Shutdown();
+        VR_SKIP("synchronization2 or dynamicRendering feature unavailable");
+    }
+
+    struct TickRecorder final {
+        std::uint32_t legacy_record_count = 0U;
+
+        void PrepareFrame(const vr::render::FrameComposerPrepareView&) noexcept {}
+        void Record(const vr::render::FrameRecordContext&) noexcept {
+            legacy_record_count += 1U;
+        }
+        void BuildRenderGraph(
+            vr::render_graph::RenderGraphBuilder& builder_,
+            const vr::render_graph::ResourceHandle present_target_,
+            const vr::render_graph::Extent3D&,
+            vr::render_graph::ResourceVersionHandle& present_ready_version_,
+            const RenderGraphRuntimeService::ImportedTextureRegisterFn&) {
+            const auto payload = builder_.CreateBuffer(
+                "capture_payload",
+                vr::render_graph::BufferDesc{
+                    .size_bytes = 256U,
+                    .usage = vr::render_graph::buffer_usage_storage_flag |
+                             vr::render_graph::buffer_usage_transfer_dst_flag,
+                });
+            const auto upload = builder_.AddPass("upload_payload",
+                                                 false,
+                                                 vr::render_graph::QueueClass::transfer);
+            const auto compute = builder_.AddPass("simulate_payload",
+                                                  false,
+                                                  vr::render_graph::QueueClass::compute);
+            const auto present_prepare = builder_.AddPass(
+                "prepare_present_target",
+                false,
+                vr::render_graph::QueueClass::graphics);
+
+            builder_.SetExecuteCallback(
+                upload,
+                [](vr::render_graph::GraphCommandContext&) {});
+            builder_.SetExecuteCallback(
+                compute,
+                [](vr::render_graph::GraphCommandContext&) {});
+            builder_.SetExecuteCallback(
+                present_prepare,
+                [](vr::render_graph::GraphCommandContext&) {});
+
+            const auto uploaded = builder_.Write(
+                upload,
+                payload,
+                vr::render_graph::AccessDesc{
+                    .access = vr::render_graph::AccessKind::transfer_write,
+                    .buffer_range = {.offset_bytes = 0U, .size_bytes = 256U},
+                });
+            (void)builder_.Read(
+                compute,
+                uploaded,
+                vr::render_graph::AccessDesc{
+                    .access = vr::render_graph::AccessKind::shader_storage_read,
+                    .buffer_range = {.offset_bytes = 0U, .size_bytes = 256U},
+                });
+            const auto simulated = builder_.Write(
+                compute,
+                uploaded,
+                vr::render_graph::AccessDesc{
+                    .access = vr::render_graph::AccessKind::shader_storage_write,
+                    .buffer_range = {.offset_bytes = 0U, .size_bytes = 256U},
+                });
+            (void)builder_.Read(
+                present_prepare,
+                simulated,
+                vr::render_graph::AccessDesc{
+                    .access = vr::render_graph::AccessKind::uniform_read,
+                    .buffer_range = {.offset_bytes = 0U, .size_bytes = 256U},
+                });
+            present_ready_version_ = builder_.Write(
+                present_prepare,
+                present_target_,
+                vr::render_graph::AccessDesc{
+                    .access = vr::render_graph::AccessKind::transfer_write,
+                    .subresource_range = {
+                        .base_mip_level = 0U,
+                        .level_count = 1U,
+                        .base_array_layer = 0U,
+                        .layer_count = 1U,
+                    },
+                });
+        }
+    } recorder{};
+
+    auto& service = host.Services().Get<RenderGraphRuntimeService>();
+    Host::RuntimeTickResult last_tick{};
+    std::uint32_t submitted_frames = 0U;
+    for (std::uint32_t tick_index = 0U; tick_index < 4U && host.IsRunning(); ++tick_index) {
+        last_tick = host.Tick(recorder);
+        if (last_tick.render.code == vr::render::TickCode::Submitted ||
+            last_tick.render.code == vr::render::TickCode::RecreateRequested) {
+            ++submitted_frames;
+        }
+        SDL_Delay(1U);
+    }
+
+    const auto& diagnostics = service.LastDiagnostics();
+    const auto observability_view =
+        vr::runtime::BuildRenderGraphObservabilityView(diagnostics);
+
+    VR_CHECK(submitted_frames > 0U);
+    VR_CHECK(recorder.legacy_record_count == 0U);
+    if (vr::runtime::RuntimeDiagnosticsAvailableInBuild()) {
+        VR_REQUIRE(last_tick.diagnostics.collected);
+        VR_CHECK(last_tick.diagnostics.level == vr::runtime::DiagnosticsLevel::Capture);
+        VR_CHECK(diagnostics.timing.available);
+        VR_CHECK(diagnostics.timing.enabled);
+        VR_CHECK(!diagnostics.timing.gpu_timestamp_supported);
+        VR_CHECK(diagnostics.timing.domain ==
+                 vr::runtime::RenderGraphTimingDomain::cpu_record);
+        VR_CHECK(diagnostics.timing.queue_batch_range_count ==
+                 diagnostics.effective_queue_batch_count);
+        VR_CHECK(diagnostics.timing.resolved_queue_batch_range_count ==
+                 diagnostics.timing.queue_batch_ranges.size());
+        VR_CHECK(diagnostics.timing.total_duration_ns > 0U);
+        VR_CHECK(diagnostics.capture.available);
+        VR_CHECK(diagnostics.capture.enabled);
+        VR_CHECK(diagnostics.capture.marker_count ==
+                 diagnostics.capture.markers.size());
+        VR_CHECK(diagnostics.capture.marker_count ==
+                 diagnostics.timing.queue_batch_ranges.size());
+        VR_CHECK(diagnostics.capture.artifact_count == 1U);
+        VR_REQUIRE(observability_view.timing.queue_batch_ranges != nullptr);
+        VR_REQUIRE(observability_view.capture.markers != nullptr);
+        VR_REQUIRE(observability_view.capture.artifacts != nullptr);
+        VR_CHECK(observability_view.capture.artifacts->size() == 1U);
+        VR_CHECK(std::any_of(
+            diagnostics.timing.queue_batch_ranges.begin(),
+            diagnostics.timing.queue_batch_ranges.end(),
+            [](const vr::runtime::RenderGraphQueueBatchTimingDiagnostics& range_) {
+                return range_.resolved &&
+                       ContainsCaseInsensitive(range_.marker_label, "upload_payload");
+            }));
+        VR_CHECK(std::any_of(
+            diagnostics.timing.queue_batch_ranges.begin(),
+            diagnostics.timing.queue_batch_ranges.end(),
+            [](const vr::runtime::RenderGraphQueueBatchTimingDiagnostics& range_) {
+                return range_.resolved &&
+                       ContainsCaseInsensitive(range_.marker_label, "simulate_payload");
+            }));
+        VR_CHECK(std::any_of(
+            diagnostics.timing.queue_batch_ranges.begin(),
+            diagnostics.timing.queue_batch_ranges.end(),
+            [](const vr::runtime::RenderGraphQueueBatchTimingDiagnostics& range_) {
+                return range_.resolved &&
+                       ContainsCaseInsensitive(range_.marker_label, "prepare_present_target");
+            }));
+
+        const auto* compiled = service.TryGetCompiledGraph();
+        VR_REQUIRE(compiled != nullptr);
+        const auto topology_view =
+            vr::render_graph::BuildCompiledRenderGraphTopologyView(*compiled);
+        const auto& artifact = diagnostics.capture.artifacts.front();
+        VR_CHECK(artifact.captured);
+        VR_CHECK(artifact.kind ==
+                 vr::runtime::RenderGraphCaptureArtifactKind::observability_snapshot);
+        VR_CHECK(artifact.topology_json ==
+                 vr::render_graph::BuildCompiledRenderGraphTopologyJson(topology_view));
+        VR_CHECK(artifact.queue_timeline_json ==
+                 vr::runtime::BuildRenderGraphQueueTimelineJson(diagnostics));
+        VR_CHECK(last_tick.diagnostics.render_graph.capture.artifact_count == 1U);
+    } else {
+        VR_CHECK(!last_tick.diagnostics.collected);
+        VR_CHECK(last_tick.diagnostics.level == vr::runtime::DiagnosticsLevel::Off);
+        VR_CHECK(!diagnostics.timing.enabled);
+        VR_CHECK(diagnostics.timing.queue_batch_ranges.empty());
+        VR_CHECK(!diagnostics.capture.enabled);
+        VR_CHECK(diagnostics.capture.markers.empty());
+        VR_CHECK(diagnostics.capture.artifacts.empty());
+        VR_CHECK(observability_view.timing.queue_batch_ranges == nullptr);
+        VR_CHECK(observability_view.capture.markers == nullptr);
+        VR_CHECK(observability_view.capture.artifacts == nullptr);
+    }
+
+    host.Shutdown();
+}
+
 VR_TEST_CASE(RenderGraphRuntimeService_submits_cross_queue_graph_during_runtime_tick,
              "integration;render_graph;runtime;queue;submit;vulkan") {
     Host host{};
     try {
         auto create_info = MakeMinimalRenderTargetRuntimeCreateInfo();
         EnableRenderGraphRuntimeExecutionFeatures(create_info);
+        create_info.diagnostics.level = vr::runtime::DiagnosticsLevel::Detailed;
         host.Initialize(create_info);
     } catch (const std::exception& exception_) {
         if (IsEnvironmentSkipError(exception_.what())) {
@@ -2741,18 +4130,22 @@ VR_TEST_CASE(RenderGraphRuntimeService_submits_cross_queue_graph_during_runtime_
     VR_CHECK(recorder.legacy_record_count == 0U);
     VR_CHECK(service.LastDiagnostics().multi_queue_enabled);
     VR_CHECK(!service.LastDiagnostics().graphics_fallback_active);
-    VR_CHECK(!service.LastDiagnostics().effective_queue_timeline_debug_string.empty());
-    VR_CHECK(!service.LastDiagnostics().effective_queue_timeline_json.empty());
+    VR_CHECK(!vr::runtime::BuildRenderGraphQueueTimelineDebugString(
+                  service.LastDiagnostics())
+                  .empty());
+    VR_CHECK(!vr::runtime::BuildRenderGraphQueueTimelineJson(
+                  service.LastDiagnostics())
+                  .empty());
     VR_CHECK(service.LastDiagnostics().effective_queue_batch_count == 3U);
     VR_CHECK(service.LastDiagnostics().effective_queue_dependency_count == 2U);
     VR_CHECK(HasEffectiveQueueBatchWithPass(service.LastDiagnostics(),
-                                           "transfer",
+                                           vr::render_graph::QueueClass::transfer,
                                            "upload_payload"));
     VR_CHECK(HasEffectiveQueueBatchWithPass(service.LastDiagnostics(),
-                                           "compute",
+                                           vr::render_graph::QueueClass::compute,
                                            "simulate_payload"));
     VR_CHECK(HasEffectiveQueueBatchWithPass(service.LastDiagnostics(),
-                                           "graphics",
+                                           vr::render_graph::QueueClass::graphics,
                                            "prepare_present_target"));
     VR_CHECK(service.LastDiagnostics().graphics_submit_wait_count > 0U);
     VR_CHECK(service.LastDiagnostics().non_graphics_submit_batch_count == 2U);
@@ -2776,6 +4169,7 @@ VR_TEST_CASE(RenderGraphRuntimeService_submits_multi_graphics_compute_graph_duri
     try {
         auto create_info = MakeMinimalRenderTargetRuntimeCreateInfo();
         EnableRenderGraphRuntimeExecutionFeatures(create_info);
+        create_info.diagnostics.level = vr::runtime::DiagnosticsLevel::Detailed;
         host.Initialize(create_info);
     } catch (const std::exception& exception_) {
         if (IsEnvironmentSkipError(exception_.what())) {
@@ -2889,18 +4283,22 @@ VR_TEST_CASE(RenderGraphRuntimeService_submits_multi_graphics_compute_graph_duri
     VR_CHECK(recorder.legacy_record_count == 0U);
     VR_CHECK(service.LastDiagnostics().multi_queue_enabled);
     VR_CHECK(!service.LastDiagnostics().graphics_fallback_active);
-    VR_CHECK(!service.LastDiagnostics().effective_queue_timeline_debug_string.empty());
-    VR_CHECK(!service.LastDiagnostics().effective_queue_timeline_json.empty());
+    VR_CHECK(!vr::runtime::BuildRenderGraphQueueTimelineDebugString(
+                  service.LastDiagnostics())
+                  .empty());
+    VR_CHECK(!vr::runtime::BuildRenderGraphQueueTimelineJson(
+                  service.LastDiagnostics())
+                  .empty());
     VR_CHECK(service.LastDiagnostics().effective_queue_batch_count == 3U);
     VR_CHECK(service.LastDiagnostics().effective_queue_dependency_count == 2U);
     VR_CHECK(HasEffectiveQueueBatchWithPass(service.LastDiagnostics(),
-                                           "graphics",
+                                           vr::render_graph::QueueClass::graphics,
                                            "scene_prepare"));
     VR_CHECK(HasEffectiveQueueBatchWithPass(service.LastDiagnostics(),
-                                           "compute",
+                                           vr::render_graph::QueueClass::compute,
                                            "simulate_payload"));
     VR_CHECK(HasEffectiveQueueBatchWithPass(service.LastDiagnostics(),
-                                           "graphics",
+                                           vr::render_graph::QueueClass::graphics,
                                            "prepare_present_target"));
     VR_CHECK(service.LastDiagnostics().graphics_submit_wait_count > 0U);
     VR_CHECK(service.LastDiagnostics().non_graphics_submit_batch_count == 2U);
@@ -2915,7 +4313,7 @@ VR_TEST_CASE(RenderGraphRuntimeService_submits_multi_graphics_compute_graph_duri
         service.LastDiagnostics().effective_queue_batches.begin(),
         service.LastDiagnostics().effective_queue_batches.end(),
         [](const vr::runtime::RenderGraphQueueBatchDiagnostics& batch_) {
-            return batch_.queue_name == "graphics" &&
+            return batch_.queue == vr::render_graph::QueueClass::graphics &&
                    batch_.submitted_on_owned_queue &&
                    std::find(batch_.pass_debug_names.begin(),
                              batch_.pass_debug_names.end(),

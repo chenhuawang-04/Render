@@ -3,6 +3,7 @@
 #include "Center/Memory/Container/Vector/McVector.hpp"
 #include "vr/render/appearance_sampled_surface.hpp"
 #include "vr/resource/sampler_host.hpp"
+#include "vr/runtime/runtime_ingress_ids.hpp"
 
 #include <cstdint>
 
@@ -20,7 +21,7 @@ enum GeometryAppearanceFlags : std::uint32_t {
 };
 
 struct GeometryAppearanceDesc {
-    std::uint32_t appearance_id = 0U;
+    GeometryAppearanceId appearance_id{};
     render::AppearanceSampledSurfaceBinding3D sampled_surface_binding =
         render::MakeAppearanceSampledSurfaceBinding3D(
             render::AppearanceSampledSurfaceDomain::geometry_image);
@@ -64,14 +65,14 @@ public:
     void Shutdown() noexcept;
 
     void UpsertAppearance(const GeometryAppearanceDesc& desc_);
-    [[nodiscard]] bool RemoveAppearance(std::uint32_t appearance_id_) noexcept;
-    [[nodiscard]] const AppearanceRecord* FindAppearance(std::uint32_t appearance_id_) const noexcept;
+    [[nodiscard]] bool RemoveAppearance(GeometryAppearanceId appearance_id_) noexcept;
+    [[nodiscard]] const AppearanceRecord* FindAppearance(GeometryAppearanceId appearance_id_) const noexcept;
 
     [[nodiscard]] bool IsInitialized() const noexcept;
     [[nodiscard]] const GeometryAppearanceHostStats& Stats() const noexcept;
 
 private:
-    [[nodiscard]] std::size_t LowerBoundAppearanceIndex(std::uint32_t appearance_id_) const noexcept;
+    [[nodiscard]] std::size_t LowerBoundAppearanceIndex(GeometryAppearanceId appearance_id_) const noexcept;
 
 private:
     GeometryAppearanceHostCreateInfo create_info_cache{};

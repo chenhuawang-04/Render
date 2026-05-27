@@ -49,6 +49,16 @@ namespace {
 
 } // namespace
 
+void TextRenderer3D::SetFrameViewProjectionOverride(
+    const ecs::Matrix4x4& view_projection_) noexcept {
+    frame_view_projection_override = view_projection_;
+    frame_view_projection_override_active = true;
+}
+
+void TextRenderer3D::ClearFrameViewProjectionOverride() noexcept {
+    frame_view_projection_override_active = false;
+}
+
 void TextRenderer3D::BuildDirectRuntimeGraph(
     const render::RuntimeDirectGraphBuildView& graph_view_) {
     if (!initialized) {
@@ -288,7 +298,9 @@ void TextRenderer3D::RecordGraphInternal(render_graph::GraphCommandContext& cont
     const VkPipelineLayout pipeline_layout = pipeline_host->GetPipelineLayout(pipeline_layout_id);
 
     PushConstants push_constants{};
-    push_constants.view_projection = frame_data_cache.view_projection;
+    push_constants.view_projection = frame_view_projection_override_active
+        ? frame_view_projection_override
+        : frame_data_cache.view_projection;
     push_constants.shading_params = ecs::Float4{
         .x = create_info_cache.sdf_smooth,
         .y = create_info_cache.bitmap_gamma,

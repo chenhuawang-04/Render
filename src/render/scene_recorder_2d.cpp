@@ -151,7 +151,7 @@ bool SceneRecorder2D::HasBackgroundPassForSubmission() const noexcept {
     if (frame_packet == nullptr) {
         return false;
     }
-    switch (frame_packet->extra.background.mode) {
+    switch (frame_packet->Payload().background.mode) {
     case scene::Background2DMode::solid_color:
     case scene::Background2DMode::gradient:
         return scene_view != nullptr;

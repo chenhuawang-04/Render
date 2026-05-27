@@ -1,4 +1,5 @@
 #include "support/test_framework.hpp"
+#include "vr/render_graph/native_pass_plan.hpp"
 #include "vr/render_graph/render_graph_builder.hpp"
 
 #include <string>
@@ -192,9 +193,25 @@ VR_TEST_CASE(RenderGraphNativePassPlan_groups_attachment_compatible_adjacent_ras
              vr::render_graph::NativePassFusionBlockReason::next_pass_not_raster);
 
     const std::string debug_string = compiled.BuildDebugString();
+    const std::string legacy_debug_string =
+        vr::render_graph::BuildNativePassPlanDebugString(compiled);
     const std::string json = compiled.BuildJson();
     VR_CHECK(debug_string.find("native_pass_groups=1") != std::string::npos);
-    VR_CHECK(debug_string.find("opaque_scene -> transparent_scene fused=1") !=
+    VR_CHECK(debug_string.find("transparent_scene fused=1") !=
+             std::string::npos);
+    VR_CHECK(debug_string.find("native_pass_attachment_group[0]") !=
+             std::string::npos);
+    VR_CHECK(legacy_debug_string.find("logical_raster_passes=") ==
+             std::string::npos);
+    VR_CHECK(legacy_debug_string.find("native_pass_groups=") ==
+             std::string::npos);
+    VR_CHECK(legacy_debug_string.find("native_pass_store_elisions=") ==
+             std::string::npos);
+    VR_CHECK(legacy_debug_string.find("native_pass_boundaries=") ==
+             std::string::npos);
+    VR_CHECK(legacy_debug_string.find("native_pass_local_read requested=") ==
+             std::string::npos);
+    VR_CHECK(legacy_debug_string.find("native_pass_attachment_group[0]") !=
              std::string::npos);
     VR_CHECK(json.find("\"nativePassPlan\"") != std::string::npos);
     VR_CHECK(json.find("\"reason\": \"none\"") != std::string::npos);

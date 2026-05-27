@@ -14,6 +14,18 @@ concept SceneRecorder3DGraphSceneRecordable =
     };
 
 template<typename RendererT>
+concept SceneRecorder3DGraphTemporalMotionRecordable =
+    requires {
+        &RendererT::RecordGraphTemporalMotion;
+    };
+
+template<typename RendererT>
+concept SceneRecorder3DGraphTemporalMotionDescriptorBindable =
+    requires {
+        &RendererT::DescribeGraphTemporalMotionBindings;
+    };
+
+template<typename RendererT>
 concept SceneRecorder3DGraphOverlayRecordable =
     requires {
         &RendererT::RecordGraphOverlay;
@@ -30,6 +42,33 @@ concept SceneRecorder3DGraphImportedResourceRegistrable =
     requires(RendererT& renderer_,
              runtime::services::RenderGraphRuntimeService& graph_runtime_service_) {
         renderer_.RegisterGraphImportedResources(graph_runtime_service_);
+    };
+
+template<typename RendererT>
+concept SceneRecorder3DTransformDirtySourceTrackable =
+    requires(RendererT& renderer_) {
+        SceneRecorder3DDirtySchedulingAccess::DescribeTransformSource(renderer_);
+    };
+
+template<typename RendererT>
+concept SceneRecorder3DAppearanceDirtySourceTrackable =
+    requires(RendererT& renderer_) {
+        SceneRecorder3DDirtySchedulingAccess::DescribeAppearanceSource(renderer_);
+    };
+
+template<typename RendererT>
+concept SceneRecorder3DTemporalViewProjectionConfigurable =
+    requires(RendererT& renderer_, const ecs::Matrix4x4& view_projection_) {
+        renderer_.SetFrameViewProjectionOverride(view_projection_);
+        renderer_.ClearFrameViewProjectionOverride();
+    };
+
+template<typename RendererT>
+concept SceneRecorder3DTemporalMotionProducerStateConfigurable =
+    requires(RendererT& renderer_,
+             const SceneTemporalMotionProducerState& state_) {
+        renderer_.SetFrameTemporalMotionProducerState(state_);
+        renderer_.ClearFrameTemporalMotionProducerState();
     };
 
 template<typename RendererT>
@@ -94,13 +133,29 @@ void SceneRecorder3D::RegisterSceneRenderer(RendererT& renderer_,
         .reserved0 = 0U,
         .submission_layer_mask = submission_layer_mask_,
         .prepare_fn = &PrepareRenderer<RendererT>,
+        .describe_transform_dirty_source_fn =
+            ResolveTransformDirtySourceFn<RendererT>(),
+        .apply_transform_dirty_hint_fn =
+            ResolveTransformDirtyHintFn<RendererT>(),
+        .describe_appearance_dirty_source_fn =
+            ResolveAppearanceDirtySourceFn<RendererT>(),
+        .apply_appearance_dirty_hint_fn =
+            ResolveAppearanceDirtyHintFn<RendererT>(),
         .graph_record_fn = ResolveGraphSceneRecordFn<RendererT>(),
+        .graph_temporal_motion_record_fn =
+            ResolveGraphTemporalMotionRecordFn<RendererT>(),
+        .describe_graph_temporal_motion_bindings_fn =
+            ResolveGraphTemporalMotionBindingsFn<RendererT>(),
         .describe_graph_bindings_fn = ResolveGraphDescriptorBindingsFn<RendererT>(),
         .register_graph_imported_resources_fn =
             ResolveGraphImportedResourcesFn<RendererT>(),
         .swapchain_recreated_fn = &OnSwapchainRecreatedRenderer<RendererT>,
         .configure_lighting_fn = &ConfigureSceneLightingBinding<RendererT>,
         .configure_animation_fn = &ConfigureSceneAnimationBinding<RendererT>,
+        .configure_temporal_view_projection_fn =
+            ResolveTemporalViewProjectionFn<RendererT>(),
+        .configure_temporal_motion_producer_state_fn =
+            ResolveTemporalMotionProducerStateFn<RendererT>(),
     };
     UpsertSceneRendererEntry(entry);
 }
@@ -241,6 +296,28 @@ SceneRecorder3D::ResolveGraphSceneRecordFn() noexcept {
 }
 
 template<typename RendererT>
+void SceneRecorder3D::RecordGraphTemporalMotionRenderer(
+    void* renderer_,
+    render_graph::GraphCommandContext& context_,
+    render_graph::ResourceHandle motion_target_,
+    render_graph::ResourceHandle depth_target_) {
+    static_cast<RendererT*>(renderer_)->RecordGraphTemporalMotion(
+        context_,
+        motion_target_,
+        depth_target_);
+}
+
+template<typename RendererT>
+constexpr SceneRecorder3D::GraphTemporalMotionRecordFn
+SceneRecorder3D::ResolveGraphTemporalMotionRecordFn() noexcept {
+    if constexpr (detail::SceneRecorder3DGraphTemporalMotionRecordable<RendererT>) {
+        return &RecordGraphTemporalMotionRenderer<RendererT>;
+    } else {
+        return nullptr;
+    }
+}
+
+template<typename RendererT>
 void SceneRecorder3D::RecordGraphOverlayRenderer(
     void* renderer_,
     render_graph::GraphCommandContext& context_,
@@ -249,10 +326,111 @@ void SceneRecorder3D::RecordGraphOverlayRenderer(
 }
 
 template<typename RendererT>
+SceneRecorder3DTransformSourceView SceneRecorder3D::DescribeTransformDirtySource(
+    void* renderer_) {
+    return detail::SceneRecorder3DDirtySchedulingAccess::DescribeTransformSource(
+        *static_cast<RendererT*>(renderer_));
+}
+
+template<typename RendererT>
+constexpr SceneRecorder3DDescribeTransformSourceFn
+SceneRecorder3D::ResolveTransformDirtySourceFn() noexcept {
+    if constexpr (detail::SceneRecorder3DTransformDirtySourceTrackable<
+                      RendererT>) {
+        return &DescribeTransformDirtySource<RendererT>;
+    } else {
+        return nullptr;
+    }
+}
+
+template<typename RendererT>
+void SceneRecorder3D::ApplyTransformDirtyHint(
+    void* renderer_,
+    const std::uint32_t* dirty_component_indices_,
+    std::uint32_t dirty_component_count_) noexcept {
+    detail::SceneRecorder3DDirtySchedulingAccess::ApplyTransformDirtyHint(
+        *static_cast<RendererT*>(renderer_),
+        dirty_component_indices_,
+        dirty_component_count_);
+}
+
+template<typename RendererT>
+constexpr SceneRecorder3DApplyDirtyHintFn
+SceneRecorder3D::ResolveTransformDirtyHintFn() noexcept {
+    if constexpr (detail::SceneRecorder3DTransformDirtyHintApplicable<
+                      RendererT>) {
+        return &ApplyTransformDirtyHint<RendererT>;
+    } else {
+        return nullptr;
+    }
+}
+
+template<typename RendererT>
+SceneRecorder3DAppearanceSourceView
+SceneRecorder3D::DescribeAppearanceDirtySource(void* renderer_) {
+    return detail::SceneRecorder3DDirtySchedulingAccess::
+        DescribeAppearanceSource(*static_cast<RendererT*>(renderer_));
+}
+
+template<typename RendererT>
+constexpr SceneRecorder3DDescribeAppearanceSourceFn
+SceneRecorder3D::ResolveAppearanceDirtySourceFn() noexcept {
+    if constexpr (detail::SceneRecorder3DAppearanceDirtySourceTrackable<
+                      RendererT>) {
+        return &DescribeAppearanceDirtySource<RendererT>;
+    } else {
+        return nullptr;
+    }
+}
+
+template<typename RendererT>
+void SceneRecorder3D::ApplyAppearanceDirtyHint(
+    void* renderer_,
+    const std::uint32_t* dirty_component_indices_,
+    std::uint32_t dirty_component_count_) noexcept {
+    detail::SceneRecorder3DDirtySchedulingAccess::ApplyAppearanceDirtyHint(
+        *static_cast<RendererT*>(renderer_),
+        dirty_component_indices_,
+        dirty_component_count_);
+}
+
+template<typename RendererT>
+constexpr SceneRecorder3DApplyDirtyHintFn
+SceneRecorder3D::ResolveAppearanceDirtyHintFn() noexcept {
+    if constexpr (detail::SceneRecorder3DAppearanceDirtyHintApplicable<
+                      RendererT>) {
+        return &ApplyAppearanceDirtyHint<RendererT>;
+    } else {
+        return nullptr;
+    }
+}
+
+template<typename RendererT>
 constexpr SceneRecorder3D::GraphOverlayRecordFn
 SceneRecorder3D::ResolveGraphOverlayRecordFn() noexcept {
     if constexpr (detail::SceneRecorder3DGraphOverlaySupport<RendererT>::value) {
         return &RecordGraphOverlayRenderer<RendererT>;
+    } else {
+        return nullptr;
+    }
+}
+
+template<typename RendererT>
+void SceneRecorder3D::DescribeGraphTemporalMotionBindings(
+    void* renderer_,
+    render_graph::RenderGraphBuilder& builder_,
+    render_graph::PassHandle pass_) {
+    static_cast<RendererT*>(renderer_)->DescribeGraphTemporalMotionBindings(
+        builder_,
+        pass_);
+}
+
+template<typename RendererT>
+constexpr SceneRecorder3D::DescribeGraphTemporalMotionBindingsFn
+SceneRecorder3D::ResolveGraphTemporalMotionBindingsFn() noexcept {
+    if constexpr (detail::SceneRecorder3DGraphTemporalMotionDescriptorBindable<
+                      RendererT>) {
+        return &DescribeGraphTemporalMotionBindings<RendererT>;
     } else {
         return nullptr;
     }
@@ -423,6 +601,52 @@ void SceneRecorder3D::ConfigurePreSceneAnimationBinding(
                                                             0U);
                          }) {
         renderer_ref.SetAnimationOutputs(nullptr, 0U, nullptr, 0U, nullptr, 0U);
+    }
+}
+
+template<typename RendererT>
+void SceneRecorder3D::ConfigureTemporalViewProjection(
+    void* renderer_,
+    const ecs::Matrix4x4* view_projection_) {
+    RendererT& renderer_ref = *static_cast<RendererT*>(renderer_);
+    if (view_projection_ != nullptr) {
+        renderer_ref.SetFrameViewProjectionOverride(*view_projection_);
+        return;
+    }
+    renderer_ref.ClearFrameViewProjectionOverride();
+}
+
+template<typename RendererT>
+constexpr SceneRecorder3D::ConfigureTemporalViewProjectionFn
+SceneRecorder3D::ResolveTemporalViewProjectionFn() noexcept {
+    if constexpr (detail::SceneRecorder3DTemporalViewProjectionConfigurable<RendererT>) {
+        return &ConfigureTemporalViewProjection<RendererT>;
+    } else {
+        return nullptr;
+    }
+}
+
+template<typename RendererT>
+void SceneRecorder3D::ConfigureTemporalMotionProducerState(
+    void* renderer_,
+    const SceneTemporalMotionProducerState* state_) {
+    RendererT& renderer_ref = *static_cast<RendererT*>(renderer_);
+    if (state_ != nullptr) {
+        renderer_ref.SetFrameTemporalMotionProducerState(*state_);
+        return;
+    }
+    renderer_ref.ClearFrameTemporalMotionProducerState();
+}
+
+template<typename RendererT>
+constexpr SceneRecorder3D::ConfigureTemporalMotionProducerStateFn
+SceneRecorder3D::ResolveTemporalMotionProducerStateFn() noexcept {
+    if constexpr (
+        detail::SceneRecorder3DTemporalMotionProducerStateConfigurable<
+            RendererT>) {
+        return &ConfigureTemporalMotionProducerState<RendererT>;
+    } else {
+        return nullptr;
     }
 }
 

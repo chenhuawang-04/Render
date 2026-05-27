@@ -1,5 +1,7 @@
 #include "vr/render/scene_recorder_3d.hpp"
 
+#include "render_target_temporal_motion_renderer.hpp"
+#include "render_target_temporal_resolve_renderer.hpp"
 #include "vr/runtime/services/render_graph_runtime_service.hpp"
 
 #include <stdexcept>
@@ -7,10 +9,19 @@
 
 namespace vr::render {
 
+SceneRecorder3D::SceneRecorder3D() = default;
+SceneRecorder3D::~SceneRecorder3D() = default;
+
 void SceneRecorder3D::Initialize(const SceneRecorder3DCreateInfo& create_info_) noexcept {
     create_info_cache = create_info_;
     sky_environment_pass.Initialize();
     bloom_renderer.Initialize(create_info_cache.bloom);
+    temporal_motion_renderer =
+        std::make_unique<detail::RenderTargetTemporalMotionRenderer>();
+    temporal_motion_renderer->Initialize();
+    temporal_resolve_renderer =
+        std::make_unique<detail::RenderTargetTemporalResolveRenderer>();
+    temporal_resolve_renderer->Initialize();
     pre_scene_renderer_entries.clear();
     scene_renderer_entries.clear();
     overlay_renderer_entries.clear();
@@ -34,6 +45,7 @@ void SceneRecorder3D::Initialize(const SceneRecorder3DCreateInfo& create_info_) 
     active_view_signature = 0U;
     light_shadow_link_coordinator.Reset();
     shadow_atlas_binding_coordinator.Reset();
+    dirty_scheduler.Reset();
     initialized = true;
 }
 
@@ -44,6 +56,14 @@ void SceneRecorder3D::Shutdown(VulkanContext& context_) noexcept {
 
     sky_environment_pass.Shutdown(context_);
     bloom_renderer.Shutdown(context_);
+    if (temporal_motion_renderer != nullptr) {
+        temporal_motion_renderer->Shutdown(context_);
+        temporal_motion_renderer.reset();
+    }
+    if (temporal_resolve_renderer != nullptr) {
+        temporal_resolve_renderer->Shutdown(context_);
+        temporal_resolve_renderer.reset();
+    }
     pre_scene_renderer_entries.clear();
     scene_renderer_entries.clear();
     overlay_renderer_entries.clear();
@@ -64,6 +84,7 @@ void SceneRecorder3D::Shutdown(VulkanContext& context_) noexcept {
     active_view_signature = 0U;
     light_shadow_link_coordinator.Reset();
     shadow_atlas_binding_coordinator.Reset();
+    dirty_scheduler.Reset();
     initialized = false;
 }
 
@@ -186,7 +207,7 @@ bool SceneRecorder3D::HasSkyEnvironmentPassForSubmission() const noexcept {
     if (frame_packet == nullptr || scene_view == nullptr) {
         return false;
     }
-    switch (frame_packet->extra.environment.mode) {
+    switch (frame_packet->Payload().environment.mode) {
     case scene::SkyEnvironmentMode::solid_color:
     case scene::SkyEnvironmentMode::gradient:
     case scene::SkyEnvironmentMode::cubemap:
@@ -230,7 +251,7 @@ scene::SkyEnvironmentDrawOrder SceneRecorder3D::SkyEnvironmentDrawOrderForSubmis
     if (!HasSkyEnvironmentPassForSubmission() || frame_packet == nullptr) {
         return scene::SkyEnvironmentDrawOrder::before_opaque;
     }
-    return frame_packet->extra.environment.draw_order;
+    return frame_packet->Payload().environment.draw_order;
 }
 
 bool SceneRecorder3D::ShouldRecordSkyEnvironmentBeforeOpaque() const noexcept {

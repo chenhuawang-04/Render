@@ -1,6 +1,7 @@
 #pragma once
 
 #include "vr/ecs/component/spatial_types.hpp"
+#include "vr/runtime/runtime_ingress_ids.hpp"
 
 #include <array>
 #include <cstdint>
@@ -25,12 +26,12 @@ enum class SkyEnvironmentDrawOrder : std::uint8_t {
 struct SkyEnvironment final {
     SkyEnvironmentMode mode;
 
-    std::uint32_t sky_texture_id;
-    std::uint32_t sky_appearance_id;
+    asset::TextureId sky_texture_id{};
+    geometry::GeometryAppearanceId sky_appearance_id{};
 
-    std::uint32_t irradiance_texture_id;
-    std::uint32_t prefiltered_texture_id;
-    std::uint32_t brdf_lut_texture_id;
+    asset::TextureId irradiance_texture_id{};
+    asset::TextureId prefiltered_texture_id{};
+    asset::TextureId brdf_lut_texture_id{};
 
     ecs::Float4 zenith_color;
     ecs::Float4 horizon_color;
@@ -67,10 +68,10 @@ struct SkyEnvironmentGpuHandle final {
 struct SkyEnvironmentRenderState final {
     SkyEnvironmentMode mode;
 
-    std::uint32_t sky_texture_id;
-    std::uint32_t irradiance_texture_id;
-    std::uint32_t prefiltered_texture_id;
-    std::uint32_t brdf_lut_texture_id;
+    asset::TextureId sky_texture_id{};
+    asset::TextureId irradiance_texture_id{};
+    asset::TextureId prefiltered_texture_id{};
+    asset::TextureId brdf_lut_texture_id{};
 
     ecs::Float4 zenith_color;
     ecs::Float4 horizon_color;
@@ -96,11 +97,11 @@ struct SkyEnvironmentRenderState final {
 };
 
 static_assert(std::is_standard_layout_v<SkyEnvironment>);
-static_assert(std::is_trivial_v<SkyEnvironment>);
+static_assert(std::is_trivially_copyable_v<SkyEnvironment>);
 static_assert(std::is_standard_layout_v<SkyEnvironmentGpuHandle>);
-static_assert(std::is_trivial_v<SkyEnvironmentGpuHandle>);
+static_assert(std::is_trivially_copyable_v<SkyEnvironmentGpuHandle>);
 static_assert(std::is_standard_layout_v<SkyEnvironmentRenderState>);
-static_assert(std::is_trivial_v<SkyEnvironmentRenderState>);
+static_assert(std::is_trivially_copyable_v<SkyEnvironmentRenderState>);
 
 } // namespace vr::scene
 

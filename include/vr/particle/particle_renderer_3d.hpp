@@ -125,16 +125,23 @@ public:
                       ecs::Camera<ecs::Dim3>* camera_component_,
                       ecs::Transform<ecs::Dim3>* camera_transform_,
                       ecs::Bounds<ecs::Dim3>* bounds_components_ = nullptr) noexcept;
+    void SetFrameViewProjectionOverride(const ecs::Matrix4x4& view_projection_) noexcept;
+    void ClearFrameViewProjectionOverride() noexcept;
     void PrepareFrame(const render::ParticleRenderer3DPrepareView& prepare_view_);
     void BuildDirectRuntimeGraph(const render::RuntimeDirectGraphBuildView& graph_view_);
     void DescribeGraphDescriptorBindings(render_graph::RenderGraphBuilder& builder_,
                                          render_graph::PassHandle pass_) const;
+    void DescribeGraphTemporalMotionBindings(render_graph::RenderGraphBuilder& builder_,
+                                             render_graph::PassHandle pass_) const;
     void RegisterGraphImportedResources(
         runtime::services::RenderGraphRuntimeService& graph_runtime_service_) const;
     void RecordGraphSceneStage(render_graph::GraphCommandContext& context_,
                                render::SceneRenderStage stage_,
                                render_graph::ResourceHandle color_target_,
                                render_graph::ResourceHandle depth_target_ = render_graph::invalid_resource_handle);
+    void RecordGraphTemporalMotion(render_graph::GraphCommandContext& context_,
+                                   render_graph::ResourceHandle motion_target_,
+                                   render_graph::ResourceHandle depth_target_ = render_graph::invalid_resource_handle);
     void OnSwapchainRecreated(std::uint32_t image_count_,
                               VkExtent2D extent_,
                               VkFormat format_);
@@ -166,6 +173,13 @@ private:
         count = 5U
     };
 
+    enum class TemporalMotionDepthMode : std::uint8_t {
+        no_depth = 0U,
+        depth_test = 1U,
+        depth_test_reverse_z = 2U,
+        count = 3U
+    };
+
     struct PushConstants final {
         ecs::Matrix4x4 view_projection;
         ecs::Float4 camera_right;
@@ -191,7 +205,22 @@ private:
         std::uint64_t retire_value = 0U;
     };
 
+    struct TemporalMotionPushConstants final {
+        ecs::Matrix4x4 view_projection;
+        ecs::Float4 camera_right;
+        ecs::Float4 camera_up;
+        float delta_time_s = 0.0F;
+        float responsive_velocity_begin_pixels = 0.0F;
+        float responsive_velocity_end_pixels = 0.0F;
+        std::uint32_t params = 0U;
+        std::uint32_t target_width = 0U;
+        std::uint32_t target_height = 0U;
+        std::uint32_t reserved0 = 0U;
+        std::uint32_t reserved1 = 0U;
+    };
+
     static_assert(sizeof(PushConstants) == 128U);
+    static_assert(sizeof(TemporalMotionPushConstants) == 128U);
 
     [[nodiscard]] static bool IsDepthFormatSupported(VulkanContext& context_, VkFormat format_) noexcept;
     [[nodiscard]] static bool DepthFormatHasStencil(VkFormat format_) noexcept;
@@ -200,6 +229,8 @@ private:
 
     [[nodiscard]] static std::size_t BlendModeIndex(BlendModeKind blend_mode_) noexcept;
     [[nodiscard]] static std::size_t DepthPipelineModeIndex(DepthPipelineMode mode_) noexcept;
+    [[nodiscard]] static std::size_t TemporalMotionDepthModeIndex(
+        TemporalMotionDepthMode mode_) noexcept;
     [[nodiscard]] static BlendModeKind DecodeBlendModeKind(std::uint32_t pipeline_state_) noexcept;
     [[nodiscard]] static ecs::ParticleFacingMode DecodeFacingMode(std::uint32_t pipeline_state_) noexcept;
     [[nodiscard]] static ecs::ParticleRenderMode DecodeRenderMode(std::uint32_t pipeline_state_) noexcept;
@@ -207,6 +238,8 @@ private:
     [[nodiscard]] static DepthPipelineMode ResolveDepthPipelineMode(std::uint32_t pipeline_state_,
                                                                     bool use_depth_,
                                                                     bool reverse_z_) noexcept;
+    [[nodiscard]] static TemporalMotionDepthMode ResolveTemporalMotionDepthMode(
+        DepthPipelineMode mode_) noexcept;
     [[nodiscard]] static std::uint64_t ComposeBindlessUploadRevision(
         const ecs::ParticleRuntimeBuildStats& runtime_stats_,
         std::uint32_t texture_revision_) noexcept;
@@ -218,6 +251,7 @@ private:
     [[nodiscard]] ecs::Float3 ResolveCameraRight() const noexcept;
     [[nodiscard]] ecs::Float3 ResolveCameraUp() const noexcept;
     [[nodiscard]] ecs::Float3 ResolveCameraForward() const noexcept;
+    [[nodiscard]] ecs::Matrix4x4 ResolveActiveViewProjection() const noexcept;
 
     void EnsurePipelineObjects(VulkanContext& context_,
                                render::BindlessResourceSystem& bindless_resources_,
@@ -231,6 +265,16 @@ private:
         VkFormat depth_format_,
         BlendModeKind blend_mode_,
         DepthPipelineMode depth_mode_);
+    void EnsureTemporalMotionPipelineObjects(VulkanContext& context_,
+                                             render::PipelineHost& pipeline_host_,
+                                             VkFormat motion_format_,
+                                             VkFormat depth_format_);
+    [[nodiscard]] render::GraphicsPipelineId EnsureTemporalMotionPipelineForMode(
+        VulkanContext& context_,
+        render::PipelineHost& pipeline_host_,
+        VkFormat motion_format_,
+        VkFormat depth_format_,
+        TemporalMotionDepthMode depth_mode_);
     void ScheduleGraphComputeBuild(render_graph::RenderGraphBuilder& builder_,
                                    render_graph::PassHandle pass_);
     void RemapCpuInstancesToBindless();
@@ -300,6 +344,14 @@ private:
                static_cast<std::size_t>(BlendModeKind::count)> pipeline_ids{};
     VkFormat pipeline_color_format = VK_FORMAT_UNDEFINED;
     VkFormat pipeline_depth_format = VK_FORMAT_UNDEFINED;
+    render::PipelineLayoutId temporal_motion_pipeline_layout_id{};
+    render::ShaderModuleId temporal_motion_shader_vertex_id{};
+    render::ShaderModuleId temporal_motion_shader_fragment_id{};
+    std::array<render::GraphicsPipelineId,
+               static_cast<std::size_t>(TemporalMotionDepthMode::count)>
+        temporal_motion_pipeline_ids{};
+    VkFormat temporal_motion_pipeline_color_format = VK_FORMAT_UNDEFINED;
+    VkFormat temporal_motion_pipeline_depth_format = VK_FORMAT_UNDEFINED;
 
     VkFormat depth_format = VK_FORMAT_UNDEFINED;
     ParticleRenderer3DMcVector<resource::ImageResource> depth_images{};
@@ -313,6 +365,8 @@ private:
     std::uint64_t last_submitted_value_seen = 0U;
     std::uint64_t completed_submit_value_seen = 0U;
     bool active_camera_reverse_z = false;
+    ecs::Matrix4x4 frame_view_projection_override{};
+    bool frame_view_projection_override_active = false;
     bool initialized = false;
 };
 

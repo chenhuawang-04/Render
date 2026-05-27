@@ -1,0 +1,110 @@
+{
+  "available": true,
+  "mode": "transfer_compute_enabled",
+  "fallbackReason": "",
+  "requested": {
+    "transfer": true,
+    "compute": true,
+    "multiQueue": true
+  },
+  "enabled": {
+    "transfer": true,
+    "compute": true,
+    "multiQueue": true,
+    "graphicsFallback": false
+  },
+  "counts": {
+    "batches": 3,
+    "dependencies": 2,
+    "graphicsBatches": 1,
+    "transferBatches": 1,
+    "computeBatches": 1,
+    "ownedSubmitBatches": 2,
+    "crossQueueDependencies": 2,
+    "totalSubmitWaits": 3,
+    "totalSubmitSignals": 2
+  },
+  "batches": [
+    {
+      "id": 0,
+      "queue": "transfer",
+      "passCount": 1,
+      "passIds": [0],
+      "waitDependencyCount": 0,
+      "waitDependencyIds": [],
+      "signalDependencyCount": 1,
+      "signalDependencyIds": [0],
+      "barrierBatchCount": 0,
+      "barrierBatchIds": [],
+      "submitWaitCount": 0,
+      "submitSignalCount": 1,
+      "containsHostBoundary": false,
+      "submittedOnOwnedQueue": true,
+      "passes": ["upload_payload"]
+    },
+    {
+      "id": 1,
+      "queue": "compute",
+      "passCount": 1,
+      "passIds": [1],
+      "waitDependencyCount": 1,
+      "waitDependencyIds": [0],
+      "signalDependencyCount": 1,
+      "signalDependencyIds": [1],
+      "barrierBatchCount": 0,
+      "barrierBatchIds": [],
+      "submitWaitCount": 1,
+      "submitSignalCount": 1,
+      "containsHostBoundary": false,
+      "submittedOnOwnedQueue": true,
+      "passes": ["simulate_payload"]
+    },
+    {
+      "id": 2,
+      "queue": "graphics",
+      "passCount": 1,
+      "passIds": [2],
+      "waitDependencyCount": 1,
+      "waitDependencyIds": [1],
+      "signalDependencyCount": 0,
+      "signalDependencyIds": [],
+      "barrierBatchCount": 0,
+      "barrierBatchIds": [],
+      "submitWaitCount": 2,
+      "submitSignalCount": 0,
+      "containsHostBoundary": false,
+      "submittedOnOwnedQueue": false,
+      "passes": ["prepare_present_target"]
+    }
+  ],
+  "dependencies": [
+    {
+      "id": 0,
+      "sourceQueue": "transfer",
+      "targetQueue": "compute",
+      "sourceBatchId": 0,
+      "targetBatchId": 1,
+      "sourcePassId": 0,
+      "targetPassId": 1,
+      "sourcePass": "upload_payload",
+      "targetPass": "simulate_payload",
+      "resourceCount": 1,
+      "queueTransfer": true,
+      "hostBoundary": false
+    },
+    {
+      "id": 1,
+      "sourceQueue": "compute",
+      "targetQueue": "graphics",
+      "sourceBatchId": 1,
+      "targetBatchId": 2,
+      "sourcePassId": 1,
+      "targetPassId": 2,
+      "sourcePass": "simulate_payload",
+      "targetPass": "prepare_present_target",
+      "resourceCount": 1,
+      "queueTransfer": true,
+      "hostBoundary": false
+    }
+  ]
+}

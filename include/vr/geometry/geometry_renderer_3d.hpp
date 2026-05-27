@@ -2,6 +2,7 @@
 
 #include "Center/Memory/Container/Vector/McVector.hpp"
 #include "vr/ecs/component/bounds_component.hpp"
+#include "vr/geometry/geometry_temporal_motion_builder.hpp"
 #include "vr/render_graph/render_graph_types.hpp"
 #include "vr/ecs/component/camera_component.hpp"
 #include "vr/ecs/system/culling_system.hpp"
@@ -20,6 +21,7 @@
 #include "vr/render/light_shadow_link_coordinator.hpp"
 #include "vr/render/pipeline_host.hpp"
 #include "vr/render/render_target_pass.hpp"
+#include "vr/render/scene_temporal_motion_producer_state.hpp"
 #include "vr/render/scene_render_stage.hpp"
 #include "vr/render/shadow_atlas_binding_coordinator.hpp"
 #include "vr/render/shadow_frame_coordinator.hpp"
@@ -45,6 +47,9 @@ struct RuntimeDirectGraphBuildView;
 struct FrameRecordContext;
 class IblHost;
 class BindlessResourceSystem;
+namespace detail {
+struct SceneRecorder3DDirtySchedulingAccess;
+}
 }
 
 namespace vr::render_graph {
@@ -55,6 +60,7 @@ class RenderGraphBuilder;
 namespace vr::geometry {
 
 struct GeometryAppearanceResolvedState;
+struct GeometryRenderer3DTestAccess;
 
 template<typename T>
 using GeometryRenderer3DMcVector = Center::Memory::mc_vector<T, Center::Memory::Tags::Container>;
@@ -115,6 +121,9 @@ struct GeometryRenderer3DStats {
     std::uint32_t uploaded_instance_count = 0U;
     std::uint32_t descriptor_set_bind_count = 0U;
     std::uint32_t descriptor_set_update_count = 0U;
+    std::uint32_t temporal_motion_rigid_candidate_count = 0U;
+    std::uint32_t temporal_motion_previous_match_count = 0U;
+    std::uint32_t temporal_motion_draw_call_count = 0U;
     std::uint32_t appearance_push_constant_update_count = 0U;
     std::uint32_t appearance_resolve_cache_hit_count = 0U;
     std::uint32_t appearance_resolve_cache_miss_count = 0U;
@@ -194,14 +203,24 @@ public:
     void SetShadowAtlasBindingCoordinator(render::ShadowAtlasBindingCoordinator* shadow_atlas_binding_coordinator_) noexcept;
     void SetShadowFrameCoordinator(render::ShadowFrameCoordinator<ecs::Dim3>* shadow_frame_coordinator_) noexcept;
     void SetShadowAtlasHost(shadow::ShadowAtlasHost* shadow_atlas_host_) noexcept;
+    void SetFrameViewProjectionOverride(const ecs::Matrix4x4& view_projection_) noexcept;
+    void ClearFrameViewProjectionOverride() noexcept;
+    void SetFrameTemporalMotionProducerState(
+        const render::SceneTemporalMotionProducerState& state_) noexcept;
+    void ClearFrameTemporalMotionProducerState() noexcept;
     void PrepareFrame(const render::GeometryRenderer3DPrepareView& prepare_view_);
     void BuildDirectRuntimeGraph(const render::RuntimeDirectGraphBuildView& graph_view_);
     void DescribeGraphDescriptorBindings(render_graph::RenderGraphBuilder& builder_,
                                          render_graph::PassHandle pass_) const;
+    void DescribeGraphTemporalMotionBindings(render_graph::RenderGraphBuilder& builder_,
+                                             render_graph::PassHandle pass_) const;
     void RecordGraphSceneStage(render_graph::GraphCommandContext& context_,
                                render::SceneRenderStage stage_,
                                render_graph::ResourceHandle color_target_,
                                render_graph::ResourceHandle depth_target_ = render_graph::invalid_resource_handle);
+    void RecordGraphTemporalMotion(render_graph::GraphCommandContext& context_,
+                                   render_graph::ResourceHandle motion_target_,
+                                   render_graph::ResourceHandle depth_target_ = render_graph::invalid_resource_handle);
     void OnSwapchainRecreated(std::uint32_t image_count_,
                               VkExtent2D extent_,
                               VkFormat format_);
@@ -215,6 +234,9 @@ public:
     [[nodiscard]] const GeometryRenderer3DStats& Stats() const noexcept;
 
 private:
+    friend struct render::detail::SceneRecorder3DDirtySchedulingAccess;
+    friend struct GeometryRenderer3DTestAccess;
+
     struct FramePushConstants final {
         ecs::Matrix4x4 view_projection;
         float directional_light_x;
@@ -280,11 +302,15 @@ private:
         resource::BufferResource appearance_records{};
         resource::BufferResource skeletal_components{};
         resource::BufferResource skeletal_matrices{};
+        resource::BufferResource previous_skeletal_components{};
+        resource::BufferResource previous_skeletal_matrices{};
         VkDescriptorSet descriptor_set = VK_NULL_HANDLE;
         std::uint32_t shadow_namespace_id = 0U;
         std::uint32_t appearance_record_count = 0U;
         std::uint32_t skeletal_component_count = 0U;
         std::uint32_t skeletal_matrix_count = 0U;
+        std::uint32_t previous_skeletal_component_count = 0U;
+        std::uint32_t previous_skeletal_matrix_count = 0U;
         std::uint64_t appearance_content_revision = 0U;
         std::uint64_t appearance_bindless_revision = 0U;
         std::uint32_t appearance_texture_host_revision = 0U;
@@ -332,6 +358,26 @@ private:
         count = 6U
     };
 
+    enum class TemporalMotionDepthMode : std::uint8_t {
+        no_depth = 0U,
+        depth_test = 1U,
+        count = 2U
+    };
+
+    struct TemporalMotionPushConstants final {
+        ecs::Matrix4x4 current_view_projection{};
+        ecs::Matrix4x4 current_clip_to_previous_clip{};
+        float current_jitter_uv_x = 0.0F;
+        float current_jitter_uv_y = 0.0F;
+        float previous_jitter_uv_x = 0.0F;
+        float previous_jitter_uv_y = 0.0F;
+        std::uint32_t flags = 0U;
+        std::uint32_t reserved0 = 0U;
+        std::uint32_t reserved1 = 0U;
+        std::uint32_t reserved2 = 0U;
+    };
+    static_assert(sizeof(TemporalMotionPushConstants) == 160U);
+
     struct RetiredDepthImage final {
         resource::ImageResource resource{};
         std::uint64_t retire_value = 0U;
@@ -342,6 +388,58 @@ private:
         AppearancePushConstants sampling_push_constants{};
     };
 
+    struct CpuRuntimeFrameDispatchPayload final {
+        std::uint64_t bindless_revision = 0U;
+        std::uint64_t appearance_override_signature = 0U;
+        std::uint64_t previous_temporal_runtime_world_signature = 0U;
+        std::uint64_t previous_temporal_vertex_deform_signature = 0U;
+        std::uint64_t current_temporal_runtime_world_signature = 0U;
+        std::uint64_t instance_upload_revision = 0U;
+        std::uint64_t temporal_motion_upload_revision = 0U;
+        std::uint64_t temporal_motion_capture_id = 0U;
+        VkFormat active_color_format = VK_FORMAT_UNDEFINED;
+        VkFormat active_depth_format = VK_FORMAT_UNDEFINED;
+        bool upload_instances = false;
+        bool upload_temporal_motion_instances = false;
+        bool publish_temporal_history = false;
+        bool prepare_pipeline_objects = false;
+        bool prewarm_common_pipelines = false;
+        bool compile_required_pipelines = false;
+        bool has_scene_data = false;
+    };
+
+    struct PreparedFrameArtifacts final {
+        GeometryRenderer3DMcVector<ecs::Geometry3DGpuInstance>
+            instance_upload_source{};
+        GeometryRenderer3DMcVector<ecs::Geometry3DDrawBatch> draw_batches{};
+        GeometryRenderer3DMcVector<ecs::AppearanceGpuRecord<ecs::Dim3>>
+            appearance_source_records{};
+        GeometryRenderer3DMcVector<GeometrySkeletalComponentGpu>
+            skeletal_components{};
+        GeometryRenderer3DMcVector<GeometrySkeletalMatrixGpu> skeletal_matrices{};
+        GeometrySkeletalPaletteBuildStats skeletal_palette_build_stats{};
+        GeometryRenderer3DMcVector<Geometry3DTemporalMotionInstance>
+            temporal_motion_instances{};
+        Geometry3DTemporalMotionBuildStats temporal_motion_build_stats{};
+        bool has_scene_data = false;
+    };
+
+    struct CpuRuntimeFrameBuildResult final {
+        CpuRuntimeFrameDispatchPayload dispatch_payload{};
+        PreparedFrameArtifacts prepared_artifacts{};
+    };
+
+    struct ActivePreparedFrameState final {
+        CpuRuntimeFrameDispatchPayload dispatch_payload{};
+        PreparedFrameArtifacts artifacts{};
+    };
+
+    struct ActiveFrameRuntimeTruth final {
+        std::uint32_t frame_index = 0U;
+        GeometryUploadRange instance_upload_range{};
+        GeometryUploadRange temporal_motion_instance_range{};
+    };
+
     [[nodiscard]] static bool IsDepthFormatSupported(VulkanContext& context_, VkFormat format_) noexcept;
     [[nodiscard]] static bool DepthFormatHasStencil(VkFormat format_) noexcept;
     [[nodiscard]] static VkImageAspectFlags DepthImageAspectMask(VkFormat format_) noexcept;
@@ -350,10 +448,13 @@ private:
     [[nodiscard]] static std::size_t TopologyModeIndex(TopologyMode mode_) noexcept;
     [[nodiscard]] static std::size_t CullModeIndex(CullMode mode_) noexcept;
     [[nodiscard]] static std::size_t BlendModeIndex(BlendMode mode_) noexcept;
+    [[nodiscard]] static std::size_t TemporalMotionDepthModeIndex(
+        TemporalMotionDepthMode mode_) noexcept;
     [[nodiscard]] static std::size_t LowerBoundResolvedAppearanceIndex(
         const GeometryRenderer3DMcVector<ResolvedAppearanceEntry>& entries_,
         std::uint32_t appearance_id_) noexcept;
-    [[nodiscard]] std::uint64_t ApplyAppearanceStateOverrides();
+    [[nodiscard]] std::uint64_t ApplyAppearanceStateOverrides(
+        PreparedFrameArtifacts& prepared_artifacts_);
     [[nodiscard]] static PipelineMode ResolvePipelineMode(const ecs::Geometry3DDrawBatch& batch_,
                                                           bool use_depth_) noexcept;
     [[nodiscard]] static TopologyMode ResolveTopologyMode(VkPrimitiveTopology mesh_topology_,
@@ -374,10 +475,20 @@ private:
         const void* user_data_);
     [[nodiscard]] static render_graph::ExternalBufferBindingPayload ResolveSkeletalMatricesExternalBufferBinding(
         const void* user_data_);
+    [[nodiscard]] static render_graph::ExternalBufferBindingPayload ResolvePreviousSkeletalComponentsExternalBufferBinding(
+        const void* user_data_);
+    [[nodiscard]] static render_graph::ExternalBufferBindingPayload ResolvePreviousSkeletalMatricesExternalBufferBinding(
+        const void* user_data_);
     [[nodiscard]] static render_graph::ExternalBufferBindingPayload ResolveAppearanceExternalBufferBinding(
         const void* user_data_);
     [[nodiscard]] static render_graph::ExternalBufferBindingPayload ResolveIblParamsExternalBufferBinding(
         const void* user_data_);
+    void BindPrepareFrameRuntime(const render::GeometryRenderer3DPrepareView& prepare_view_);
+    [[nodiscard]] CpuRuntimeFrameBuildResult BuildCpuRuntimeFrameStage(
+        const render::GeometryRenderer3DPrepareView& prepare_view_);
+    void ApplyPreparedFrameState(
+        const render::GeometryRenderer3DPrepareView& prepare_view_,
+        CpuRuntimeFrameBuildResult&& cpu_build_result_);
 
     void EnsurePipelineObjects(VulkanContext& context_,
                                render::PipelineHost& pipeline_host_,
@@ -391,6 +502,18 @@ private:
                                                                    PipelineMode mode_,
                                                                    TopologyMode topology_mode_,
                                                                    CullMode cull_mode_);
+    void EnsureTemporalMotionPipelineObjects(VulkanContext& context_,
+                                             render::PipelineHost& pipeline_host_,
+                                             VkFormat motion_format_,
+                                             VkFormat depth_format_);
+    [[nodiscard]] render::GraphicsPipelineId EnsureTemporalMotionPipelineForMode(
+        VulkanContext& context_,
+        render::PipelineHost& pipeline_host_,
+        VkFormat motion_format_,
+        VkFormat depth_format_,
+        TemporalMotionDepthMode depth_mode_,
+        TopologyMode topology_mode_,
+        CullMode cull_mode_);
     void PrewarmCommonPipelines(VulkanContext& context_,
                                 render::PipelineHost& pipeline_host_,
                                 VkFormat color_format_,
@@ -401,6 +524,8 @@ private:
                                                  VkFormat depth_format_);
     void EnsureLightingDescriptorObjects(VulkanContext& context_,
                                          render::DescriptorHost& descriptor_host_);
+    void EnsureTemporalMotionDescriptorObjects(VulkanContext& context_,
+                                               render::DescriptorHost& descriptor_host_);
     void EnsureLightingResourcesForFrame(VulkanContext& context_);
     void EnsureStorageBufferCapacity(resource::BufferResource& buffer_,
                                      VkDeviceSize required_bytes_);
@@ -414,6 +539,12 @@ private:
     void EnsureDepthResources(VulkanContext& context_,
                               std::uint32_t image_count_,
                               VkExtent2D extent_);
+    static void ClearPreparedFrameArtifacts(
+        PreparedFrameArtifacts& artifacts_) noexcept;
+    void PreserveActivePreparedFrameArtifactsForReclaim() noexcept;
+    void ResetActiveFrameRuntimeTruth() noexcept;
+    void ResetActivePreparedFrameState() noexcept;
+    void ReclaimPreparedFrameArtifactScratchStorage() noexcept;
     void RetireDepthResources(std::uint64_t retire_value_);
     void CollectRetiredDepthResources(VulkanContext& context_,
                                       std::uint64_t completed_value_);
@@ -432,6 +563,7 @@ private:
     ecs::Geometry<ecs::Dim3>* geometry_components = nullptr;
     ecs::Transform<ecs::Dim3>* transforms = nullptr;
     std::uint32_t component_count = 0U;
+    ecs::Appearance<ecs::Dim3>* appearance_components = nullptr;
     std::uint32_t appearance_component_count = 0U;
     ecs::Camera<ecs::Dim3>* camera_component = nullptr;
     ecs::Transform<ecs::Dim3>* camera_transform = nullptr;
@@ -470,6 +602,7 @@ private:
     resource::SamplerHost* sampler_host = nullptr;
 
     render::DescriptorSetLayoutId lighting_descriptor_layout_id{};
+    render::DescriptorSetLayoutId temporal_motion_descriptor_layout_id{};
     render::PipelineLayoutId pipeline_layout_id{};
     render::ShaderModuleId shader_vertex_id{};
     render::ShaderModuleId shader_fragment_id{};
@@ -480,6 +613,16 @@ private:
                static_cast<std::size_t>(BlendMode::count)> pipeline_ids{};
     VkFormat pipeline_color_format = VK_FORMAT_UNDEFINED;
     VkFormat pipeline_depth_format = VK_FORMAT_UNDEFINED;
+    render::PipelineLayoutId temporal_motion_pipeline_layout_id{};
+    render::ShaderModuleId temporal_motion_shader_vertex_id{};
+    render::ShaderModuleId temporal_motion_shader_fragment_id{};
+    std::array<std::array<std::array<render::GraphicsPipelineId,
+                                     static_cast<std::size_t>(CullMode::count)>,
+                          static_cast<std::size_t>(TopologyMode::count)>,
+               static_cast<std::size_t>(TemporalMotionDepthMode::count)>
+        temporal_motion_pipeline_ids{};
+    VkFormat temporal_motion_pipeline_color_format = VK_FORMAT_UNDEFINED;
+    VkFormat temporal_motion_pipeline_depth_format = VK_FORMAT_UNDEFINED;
 
     VkFormat depth_format = VK_FORMAT_UNDEFINED;
     GeometryRenderer3DMcVector<resource::ImageResource> depth_images{};
@@ -498,7 +641,7 @@ private:
     std::uint32_t active_frame_index = 0U;
     VkExtent2D swapchain_extent{};
     VkFormat swapchain_format = VK_FORMAT_UNDEFINED;
-    GeometryUploadRange instance_range{};
+    ActiveFrameRuntimeTruth active_frame_runtime_truth{};
 
     std::uint64_t last_submitted_value_seen = 0U;
     std::uint64_t completed_submit_value_seen = 0U;
@@ -507,6 +650,8 @@ private:
     std::uint32_t appearance_record_texture_host_revision_seen = 0U;
     std::uint64_t appearance_record_content_revision = 0U;
     std::uint32_t appearance_host_revision_seen = 0U;
+    const std::uint32_t* pending_transform_dirty_component_indices = nullptr;
+    std::uint32_t pending_transform_dirty_component_count = 0U;
     render::LightFrameCoordinator<ecs::Dim3>* light_frame_coordinator = nullptr;
     render::IblHost* ibl_host = nullptr;
     render::LightShadowLinkCoordinator3D* light_shadow_link_coordinator = nullptr;
@@ -516,6 +661,20 @@ private:
     render::ShadowFrameCoordinator<ecs::Dim3>* shadow_frame_coordinator = nullptr;
     shadow::ShadowAtlasHost* shadow_atlas_host = nullptr;
     light::LightShadowUploadHost light_shadow_upload_host{};
+    Geometry3DTemporalRuntimeWorldHistory
+        temporal_motion_previous_runtime_world_history{};
+    Geometry3DTemporalSkeletalPaletteHistory
+        temporal_motion_previous_skeletal_palette_history{};
+    Geometry3DTemporalVertexDeformHistory
+        temporal_motion_previous_vertex_deform_history{};
+    std::uint64_t temporal_motion_history_capture_id = 0U;
+    PreparedFrameArtifacts reclaimable_prepared_frame_artifacts{};
+    bool prepared_frame_artifact_reclaim_pending = false;
+    ActivePreparedFrameState active_prepared_frame_state{};
+    render::SceneTemporalMotionProducerState temporal_motion_producer_state{};
+    bool temporal_motion_producer_state_active = false;
+    ecs::Matrix4x4 frame_view_projection_override{};
+    bool frame_view_projection_override_active = false;
     bool initialized = false;
 };
 

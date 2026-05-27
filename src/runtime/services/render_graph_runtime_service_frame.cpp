@@ -21,6 +21,17 @@ void RenderGraphRuntimeService::BeginFrame(const std::uint32_t frame_index_) noe
     direct_imported_textures.clear();
     direct_imported_buffers.clear();
     external_queue_waits.clear();
+    auto reset_pending_history_publish =
+        [](FrameHistoryState& history_) noexcept {
+            history_.pending_publish_slot = invalid_frame_index;
+            history_.pending_frame_index = 0U;
+            history_.pending_submission_id = {};
+        };
+    reset_pending_history_publish(frame_color_history);
+    reset_pending_history_publish(frame_depth_history);
+    reset_pending_history_publish(frame_motion_history);
+    ResetPendingReprojectionPublish();
+    ResetPendingJitterPublish();
     last_diagnostics = {};
 }
 
@@ -30,6 +41,57 @@ void RenderGraphRuntimeService::Shutdown(VulkanContext& device_) noexcept {
 
 void RenderGraphRuntimeService::MarkGraphicsSubmissionEnqueued(
     const vr::render::FrameToken& token_) noexcept {
+    const auto publish_history =
+        [this, &token_](FrameHistoryState& history_) noexcept {
+            if (history_.pending_publish_slot != invalid_frame_index &&
+                history_.pending_frame_index == token_.frame_index &&
+                history_.pending_publish_slot < history_.slots.size()) {
+                history_.previous_frame_index =
+                    history_.pending_frame_index;
+                history_.previous_submission_id =
+                    history_.pending_submission_id;
+                history_.published_slot =
+                    history_.pending_publish_slot;
+                history_.write_slot = history_.published_slot ^ 1U;
+                history_.last_invalidation_reason =
+                    render_graph::FrameHistoryInvalidationReason::none;
+            }
+            history_.pending_publish_slot = invalid_frame_index;
+            history_.pending_frame_index = 0U;
+            history_.pending_submission_id = {};
+        };
+    publish_history(frame_color_history);
+    publish_history(frame_depth_history);
+    publish_history(frame_motion_history);
+    if (frame_reprojection.pending_available &&
+        frame_reprojection.pending_frame_index == token_.frame_index) {
+        frame_reprojection.previous_available = true;
+        frame_reprojection.previous_view_projection =
+            frame_reprojection.pending_view_projection;
+        frame_reprojection.previous_frame_index =
+            frame_reprojection.pending_frame_index;
+        frame_reprojection.previous_submission_id =
+            frame_reprojection.pending_submission_id;
+        frame_reprojection.last_invalidation_reason =
+            render_graph::FrameHistoryInvalidationReason::none;
+    } else {
+        frame_reprojection.previous_available = false;
+    }
+    ResetPendingReprojectionPublish();
+    if (frame_jitter.pending_available &&
+        frame_jitter.pending_frame_index == token_.frame_index) {
+        frame_jitter.previous_available = true;
+        frame_jitter.previous_uv_x = frame_jitter.pending_uv_x;
+        frame_jitter.previous_uv_y = frame_jitter.pending_uv_y;
+        frame_jitter.previous_frame_index = frame_jitter.pending_frame_index;
+        frame_jitter.previous_submission_id = frame_jitter.pending_submission_id;
+        frame_jitter.last_invalidation_reason =
+            render_graph::FrameHistoryInvalidationReason::none;
+    } else {
+        frame_jitter.previous_available = false;
+    }
+    ResetPendingJitterPublish();
+
     if (!prepared_multi_queue_submission.active ||
         !prepared_multi_queue_submission.submitted ||
         token_.frame_index >= multi_queue_frame_slots.size()) {
@@ -105,6 +167,11 @@ void RenderGraphRuntimeService::DestroyMultiQueueResources(VulkanContext& device
     next_compute_submit_value = 1U;
     last_compute_submitted_value = 0U;
     completed_compute_submit_value = 0U;
+    frame_color_history = {};
+    frame_depth_history = {};
+    frame_motion_history = {};
+    frame_reprojection = {};
+    frame_jitter = {};
 }
 
 void RenderGraphRuntimeService::DestroyQueueCommandResources(
@@ -132,6 +199,38 @@ void RenderGraphRuntimeService::ResetQueueCommandResources(VulkanContext& device
             "RenderGraphRuntimeService failed to reset a multi-queue command pool");
     }
     resources_.used_primary_count = 0U;
+}
+
+void RenderGraphRuntimeService::RegisterImportedTexture(
+    const render_graph::ResourceHandle logical_,
+    const render::RenderTargetHandle render_target_) {
+    RegisterDirectImportedTexture(logical_, render_target_);
+}
+
+void RenderGraphRuntimeService::RequestFrameColorHistoryReset() noexcept {
+    frame_color_history.reset_requested = true;
+    frame_color_history.last_invalidation_reason =
+        render_graph::FrameHistoryInvalidationReason::reset_requested;
+    frame_depth_history.reset_requested = true;
+    frame_depth_history.last_invalidation_reason =
+        render_graph::FrameHistoryInvalidationReason::reset_requested;
+    frame_motion_history.reset_requested = true;
+    frame_motion_history.last_invalidation_reason =
+        render_graph::FrameHistoryInvalidationReason::reset_requested;
+    frame_reprojection.reset_requested = true;
+    frame_reprojection.last_invalidation_reason =
+        render_graph::FrameHistoryInvalidationReason::reset_requested;
+    frame_jitter.reset_requested = true;
+    frame_jitter.last_invalidation_reason =
+        render_graph::FrameHistoryInvalidationReason::reset_requested;
+}
+
+void RenderGraphRuntimeService::QueueFrameMotionHistoryPublish(
+    const std::uint64_t frame_index_,
+    const render::SceneSubmissionId submission_id_) noexcept {
+    frame_motion_history.pending_publish_slot = frame_motion_history.write_slot;
+    frame_motion_history.pending_frame_index = frame_index_;
+    frame_motion_history.pending_submission_id = submission_id_;
 }
 
 } // namespace vr::runtime::services

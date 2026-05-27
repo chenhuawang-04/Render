@@ -103,13 +103,13 @@ using TransformSystem2D = vr::ecs::TransformSystem<vr::ecs::Dim2>;
 
 [[nodiscard]] bool HasEffectiveQueueBatchWithPass(
     const vr::runtime::RenderGraphRuntimeDiagnostics& diagnostics_,
-    std::string_view queue_name_,
+    const vr::render_graph::QueueClass queue_,
     std::string_view pass_name_) {
     return std::any_of(
         diagnostics_.effective_queue_batches.begin(),
         diagnostics_.effective_queue_batches.end(),
         [&](const vr::runtime::RenderGraphQueueBatchDiagnostics& batch_) {
-            if (batch_.queue_name != queue_name_) {
+            if (batch_.queue != queue_) {
                 return false;
             }
             return std::any_of(
@@ -123,24 +123,24 @@ using TransformSystem2D = vr::ecs::TransformSystem<vr::ecs::Dim2>;
 
 [[nodiscard]] bool HasEffectiveQueueBatchOnQueue(
     const vr::runtime::RenderGraphRuntimeDiagnostics& diagnostics_,
-    std::string_view queue_name_) {
+    const vr::render_graph::QueueClass queue_) {
     return std::any_of(
         diagnostics_.effective_queue_batches.begin(),
         diagnostics_.effective_queue_batches.end(),
         [&](const vr::runtime::RenderGraphQueueBatchDiagnostics& batch_) {
-            return batch_.queue_name == queue_name_;
+            return batch_.queue == queue_;
         });
 }
 
 [[nodiscard]] bool AllEffectiveQueueBatchesUseQueue(
     const vr::runtime::RenderGraphRuntimeDiagnostics& diagnostics_,
-    std::string_view queue_name_) {
+    const vr::render_graph::QueueClass queue_) {
     return !diagnostics_.effective_queue_batches.empty() &&
            std::all_of(
                diagnostics_.effective_queue_batches.begin(),
                diagnostics_.effective_queue_batches.end(),
                 [&](const vr::runtime::RenderGraphQueueBatchDiagnostics& batch_) {
-                    return batch_.queue_name == queue_name_;
+                    return batch_.queue == queue_;
                 });
 }
 
@@ -204,7 +204,7 @@ void ConfigureScene2DGraphRuntimeCreateInfo(Runtime::CreateInfo& create_info_,
 void BuildMixedWorldOverlayPacket(std::array<vr::render::RenderView2D, 2U>& views_,
                                   vr::render::RenderScenePacket2D& packet_,
                                   const VkExtent2D extent_,
-                                  const std::uint64_t submission_id_,
+                                  const vr::render::SceneSubmissionId submission_id_,
                                   const std::uint32_t layer_mask_ = 0x1U) {
     views_[0U] = MakeFullscreenView(extent_,
                                     vr::render::RenderViewKind::world,
@@ -230,7 +230,7 @@ void BuildMixedWorldOverlayPacket(std::array<vr::render::RenderView2D, 2U>& view
 void BuildOverlayOnlyPacket(vr::render::RenderView2D& view_,
                             vr::render::RenderScenePacket2D& packet_,
                             const VkExtent2D extent_,
-                            const std::uint64_t submission_id_,
+                            const vr::render::SceneSubmissionId submission_id_,
                             const std::uint32_t layer_mask_ = 0x1U) {
     view_ = MakeFullscreenView(extent_,
                                vr::render::RenderViewKind::ui,
@@ -508,9 +508,11 @@ VR_TEST_CASE(RuntimeIntegration_scene_recorder_2d_text_overlay_graph_transfer_up
             graphics_fallback_active =
                 graphics_fallback_active || graph_diag.graphics_fallback_active;
             queue_timeline_available =
-                queue_timeline_available || !graph_diag.effective_queue_timeline_debug_string.empty();
+                queue_timeline_available ||
+                !vr::runtime::BuildRenderGraphQueueTimelineDebugString(graph_diag).empty();
             queue_timeline_json_available =
-                queue_timeline_json_available || !graph_diag.effective_queue_timeline_json.empty();
+                queue_timeline_json_available ||
+                !vr::runtime::BuildRenderGraphQueueTimelineJson(graph_diag).empty();
             max_recorded_queue_transfer_batch_count =
                 std::max(max_recorded_queue_transfer_batch_count,
                          graph_diag.recorded_queue_transfer_batch_count);
@@ -522,13 +524,19 @@ VR_TEST_CASE(RuntimeIntegration_scene_recorder_2d_text_overlay_graph_transfer_up
                          graph_diag.effective_queue_dependency_count);
             transfer_queue_batch_seen =
                 transfer_queue_batch_seen ||
-                HasEffectiveQueueBatchOnQueue(graph_diag, "transfer");
+                HasEffectiveQueueBatchOnQueue(
+                    graph_diag,
+                    vr::render_graph::QueueClass::transfer);
             graphics_queue_batch_seen =
                 graphics_queue_batch_seen ||
-                HasEffectiveQueueBatchOnQueue(graph_diag, "graphics");
+                HasEffectiveQueueBatchOnQueue(
+                    graph_diag,
+                    vr::render_graph::QueueClass::graphics);
             graphics_only_effective_batches_seen =
                 graphics_only_effective_batches_seen ||
-                AllEffectiveQueueBatchesUseQueue(graph_diag, "graphics");
+                AllEffectiveQueueBatchesUseQueue(
+                    graph_diag,
+                    vr::render_graph::QueueClass::graphics);
             max_upload_buffer_copy_count =
                 std::max(max_upload_buffer_copy_count,
                          tick_result.diagnostics.upload.buffer_copy_count);
@@ -895,9 +903,11 @@ VR_TEST_CASE(RuntimeIntegration_scene_recorder_2d_particle_overlay_graph_async_c
             graphics_fallback_active =
                 graphics_fallback_active || graph_diag.graphics_fallback_active;
             queue_timeline_available =
-                queue_timeline_available || !graph_diag.effective_queue_timeline_debug_string.empty();
+                queue_timeline_available ||
+                !vr::runtime::BuildRenderGraphQueueTimelineDebugString(graph_diag).empty();
             queue_timeline_json_available =
-                queue_timeline_json_available || !graph_diag.effective_queue_timeline_json.empty();
+                queue_timeline_json_available ||
+                !vr::runtime::BuildRenderGraphQueueTimelineJson(graph_diag).empty();
             max_effective_queue_batch_count =
                 std::max(max_effective_queue_batch_count,
                          graph_diag.effective_queue_batch_count);
@@ -906,13 +916,19 @@ VR_TEST_CASE(RuntimeIntegration_scene_recorder_2d_particle_overlay_graph_async_c
                          graph_diag.effective_queue_dependency_count);
             compute_queue_batch_seen =
                 compute_queue_batch_seen ||
-                HasEffectiveQueueBatchOnQueue(graph_diag, "compute");
+                HasEffectiveQueueBatchOnQueue(
+                    graph_diag,
+                    vr::render_graph::QueueClass::compute);
             graphics_queue_batch_seen =
                 graphics_queue_batch_seen ||
-                HasEffectiveQueueBatchOnQueue(graph_diag, "graphics");
+                HasEffectiveQueueBatchOnQueue(
+                    graph_diag,
+                    vr::render_graph::QueueClass::graphics);
             graphics_only_effective_batches_seen =
                 graphics_only_effective_batches_seen ||
-                AllEffectiveQueueBatchesUseQueue(graph_diag, "graphics");
+                AllEffectiveQueueBatchesUseQueue(
+                    graph_diag,
+                    vr::render_graph::QueueClass::graphics);
             max_indirect_draw_calls = std::max(max_indirect_draw_calls,
                                                particle_renderer.Stats().indirect_draw_count);
             max_upload_buffer_copy_count = std::max(

@@ -47,7 +47,7 @@ struct BindlessShaderContractExpectation final {
     return haystack_.find(needle_) != std::string_view::npos;
 }
 
-constexpr std::array<BindlessShaderContractExpectation, 13U> kBindlessFragmentShaders{{
+constexpr std::array<BindlessShaderContractExpectation, 15U> kBindlessFragmentShaders{{
     {"geometry_3d.frag",
      "k_geometry_3d_frag_spv.contract.json",
      "k_geometry_3d_frag_spv.reflect.json"},
@@ -69,6 +69,12 @@ constexpr std::array<BindlessShaderContractExpectation, 13U> kBindlessFragmentSh
     {"render_target_composite.frag",
      "k_render_target_composite_frag_spv.contract.json",
      "k_render_target_composite_frag_spv.reflect.json"},
+    {"render_target_temporal_motion.frag",
+     "k_render_target_temporal_motion_frag_spv.contract.json",
+     "k_render_target_temporal_motion_frag_spv.reflect.json"},
+    {"render_target_temporal_resolve.frag",
+     "k_render_target_temporal_resolve_frag_spv.contract.json",
+     "k_render_target_temporal_resolve_frag_spv.reflect.json"},
     {"sky_environment_equirect.frag",
      "k_sky_environment_equirect_frag_spv.contract.json",
      "k_sky_environment_equirect_frag_spv.reflect.json"},

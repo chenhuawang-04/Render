@@ -121,6 +121,7 @@ void ConfigureSurface2DRuntimeCreateInfo(Runtime::CreateInfo& create_info_,
     create_info_.render_loop.swapchain.preferred_image_count = 2U;
     create_info_.render_loop.commands.initial_primary_per_frame = 2U;
     create_info_.render_loop.commands.primary_growth_chunk = 2U;
+    create_info_.diagnostics.level = vr::runtime::DiagnosticsLevel::Detailed;
     create_info_.poll_events_each_tick = true;
 }
 

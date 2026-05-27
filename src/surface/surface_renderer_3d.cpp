@@ -261,6 +261,42 @@ void SurfaceRenderer3D::BuildAppearanceRecordsAndAssignIndices() {
     }
 }
 
+void SurfaceRenderer3D::ClearPreparedFrameArtifacts(
+    PreparedFrameArtifacts& artifacts_) noexcept {
+    artifacts_.instance_upload_source.clear();
+    artifacts_.draw_batches.clear();
+    artifacts_.appearance_source_records.clear();
+    artifacts_.upload_patch_ranges.clear();
+    artifacts_.has_scene_data = false;
+}
+
+void SurfaceRenderer3D::ResetActiveFrameRuntimeTruth() noexcept {
+    active_frame_runtime_truth = {};
+    last_upload_result = {};
+}
+
+void SurfaceRenderer3D::ResetActivePreparedFrameState() noexcept {
+    active_prepared_frame_state.dispatch_payload = {};
+    ClearPreparedFrameArtifacts(active_prepared_frame_state.artifacts);
+}
+
+void SurfaceRenderer3D::ReclaimPreparedFrameArtifactScratchStorage() noexcept {
+    runtime_scratch.instances.clear();
+    runtime_scratch.draw_batches.clear();
+    appearance_source_record_scratch.clear();
+
+    runtime_scratch.instances.swap(
+        active_prepared_frame_state.artifacts.instance_upload_source);
+    runtime_scratch.draw_batches.swap(
+        active_prepared_frame_state.artifacts.draw_batches);
+    appearance_source_record_scratch.swap(
+        active_prepared_frame_state.artifacts.appearance_source_records);
+
+    active_prepared_frame_state.artifacts.upload_patch_ranges.clear();
+    active_prepared_frame_state.artifacts.has_scene_data = false;
+    active_prepared_frame_state.dispatch_payload = {};
+}
+
 void SurfaceRenderer3D::Initialize(const SurfaceRenderer3DCreateInfo& create_info_) {
     create_info_cache = create_info_;
 
@@ -312,6 +348,7 @@ void SurfaceRenderer3D::Initialize(const SurfaceRenderer3DCreateInfo& create_inf
     surface_components = nullptr;
     transforms = nullptr;
     component_count = 0U;
+    appearance_components = nullptr;
     appearance_component_count = 0U;
     camera_component = nullptr;
     camera_transform = nullptr;
@@ -327,11 +364,13 @@ void SurfaceRenderer3D::Initialize(const SurfaceRenderer3DCreateInfo& create_inf
     ibl_host = nullptr;
     gpu_memory_host = nullptr;
     frame_appearance_resources.clear();
+    ResetActiveFrameRuntimeTruth();
+    ResetActivePreparedFrameState();
+    appearance_source_record_scratch.clear();
     appearance_record_scratch.clear();
     descriptor_buffer_write_scratch.clear();
     descriptor_image_write_scratch.clear();
 
-    last_upload_result = {};
     culling_stats = {};
     stats = {};
     active_frame_index = 0U;
@@ -359,6 +398,7 @@ void SurfaceRenderer3D::Shutdown(VulkanContext& context_) {
     surface_components = nullptr;
     transforms = nullptr;
     component_count = 0U;
+    appearance_components = nullptr;
     appearance_component_count = 0U;
     camera_component = nullptr;
     camera_transform = nullptr;
@@ -414,10 +454,12 @@ void SurfaceRenderer3D::Shutdown(VulkanContext& context_) {
         resource::BufferHost::DestroyBuffer(context_, frame_resources.appearance_records);
     }
     frame_appearance_resources.clear();
+    ResetActiveFrameRuntimeTruth();
+    ResetActivePreparedFrameState();
+    appearance_source_record_scratch.clear();
     appearance_record_scratch.clear();
     descriptor_buffer_write_scratch.clear();
     descriptor_image_write_scratch.clear();
-    last_upload_result = {};
     stats = {};
 
     depth_format = VK_FORMAT_UNDEFINED;
@@ -454,12 +496,21 @@ void SurfaceRenderer3D::SetSceneData(ecs::Surface<ecs::Dim3>* surface_components
                                      ecs::Camera<ecs::Dim3>* camera_component_,
                                      ecs::Transform<ecs::Dim3>* camera_transform_,
                                      ecs::Bounds<ecs::Dim3>* bounds_components_) noexcept {
+    const bool scene_data_changed =
+        surface_components != surface_components_ ||
+        transforms != transforms_ ||
+        component_count != component_count_;
     surface_components = surface_components_;
     transforms = transforms_;
     component_count = component_count_;
     camera_component = camera_component_;
     camera_transform = camera_transform_;
     bounds_components = bounds_components_;
+    if (scene_data_changed) {
+        ResetActiveFrameRuntimeTruth();
+        pending_dirty_component_indices = nullptr;
+        pending_dirty_component_count = 0U;
+    }
     if (component_count_ > 0U) {
         ecs::CullingSystem<ecs::Dim3>::Reserve(culling_scratch, component_count_);
     }
@@ -467,6 +518,7 @@ void SurfaceRenderer3D::SetSceneData(ecs::Surface<ecs::Dim3>* surface_components
 
 void SurfaceRenderer3D::SetAppearanceData(ecs::Appearance<ecs::Dim3>* appearance_components_,
                                           std::uint32_t appearance_component_count_) noexcept {
+    appearance_components = appearance_components_;
     appearance_component_count = appearance_component_count_;
     appearance_prepare_bridge.SetAppearanceData(appearance_components_,
                                                 appearance_component_count_);
@@ -515,6 +567,7 @@ void SurfaceRenderer3D::OnSwapchainRecreated(std::uint32_t image_count_,
     for (auto& value : image_initialized) {
         value = 0U;
     }
+    ResetActiveFrameRuntimeTruth();
 }
 
 bool SurfaceRenderer3D::IsInitialized() const noexcept {
@@ -526,4 +579,3 @@ const SurfaceRenderer3DStats& SurfaceRenderer3D::Stats() const noexcept {
 }
 
 } // namespace vr::surface
-

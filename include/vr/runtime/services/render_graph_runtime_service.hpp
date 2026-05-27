@@ -3,11 +3,13 @@
 #include "vr/render/frame_sync_host.hpp"
 #include "vr/render_graph/frame_graph_build.hpp"
 #include "vr/render_graph/frame_snapshot.hpp"
+#include "vr/render_graph/frame_temporal_consumer.hpp"
 #include "vr/render_graph/queue_execution_policy.hpp"
 #include "vr/render_graph/render_graph_builder.hpp"
 #include "vr/render_graph/render_graph_executor.hpp"
 #include "vr/render_graph/vulkan_barrier_plan.hpp"
 #include "vr/render_graph/vulkan_resource_table.hpp"
+#include "vr/ecs/system/spatial_math.hpp"
 #include "vr/runtime/runtime_diagnostics.hpp"
 #include "vr/runtime/runtime_service.hpp"
 #include "vr/runtime/service_dependency.hpp"
@@ -17,10 +19,12 @@
 
 #include <cstdint>
 #include <functional>
+#include <cmath>
 #include <limits>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <array>
 #include <type_traits>
 #include <utility>
 #include <variant>
@@ -89,12 +93,18 @@ public:
         direct_imported_textures.clear();
         direct_imported_buffers.clear();
         external_queue_waits.clear();
+#if VR_ENABLE_DEBUG_OBSERVABILITY
+        ResetRecordedTimingSamples();
+#endif
 
         if (const auto* snapshot_2d = TryGetFrameSnapshot<ecs::Dim2>();
             snapshot_2d != nullptr) {
+            auto prepared_snapshot = *snapshot_2d;
+            PrepareFrameTemporalContracts(context_, prepared_snapshot);
+            SetFrameSnapshot<ecs::Dim2>(prepared_snapshot);
             const auto build_result = render_graph::BuildMinimalFrameGraph(
                 builder,
-                *snapshot_2d,
+                prepared_snapshot,
                 [this](render_graph::RenderGraphBuilder& builder_ref_,
                        const render_graph::FrameSnapshot2D& snapshot_ref_,
                        render_graph::MinimalFrameGraphBuildResult<ecs::Dim2>& build_result_ref_,
@@ -106,12 +116,17 @@ public:
                                                 color_chain_ref_);
                     }
                 });
+            AppendFrameColorHistoryCapturePass(prepared_snapshot, build_result);
+            AppendFrameDepthHistoryCapturePass(prepared_snapshot, build_result);
             (void)build_result;
         } else if (const auto* snapshot_3d = TryGetFrameSnapshot<ecs::Dim3>();
                    snapshot_3d != nullptr) {
+            auto prepared_snapshot = *snapshot_3d;
+            PrepareFrameTemporalContracts(context_, prepared_snapshot);
+            SetFrameSnapshot<ecs::Dim3>(prepared_snapshot);
             const auto build_result = render_graph::BuildMinimalFrameGraph(
                 builder,
-                *snapshot_3d,
+                prepared_snapshot,
                 [this](render_graph::RenderGraphBuilder& builder_ref_,
                        const render_graph::FrameSnapshot3D& snapshot_ref_,
                        render_graph::MinimalFrameGraphBuildResult<ecs::Dim3>& build_result_ref_,
@@ -123,6 +138,8 @@ public:
                                                 color_chain_ref_);
                     }
                 });
+            AppendFrameColorHistoryCapturePass(prepared_snapshot, build_result);
+            AppendFrameDepthHistoryCapturePass(prepared_snapshot, build_result);
             (void)build_result;
         } else if (direct_graph_build_callback) {
             const auto& frame_context = vr::runtime::detail::ResolveFrameContext(context_);
@@ -230,7 +247,9 @@ public:
                 physical_resources,
                 services.template Get<RenderTargetService>().Host());
         }
+#if VR_ENABLE_DEBUG_OBSERVABILITY
         RefreshDiagnostics(vr::runtime::detail::ResolveDevice(context_));
+#endif
     }
 
     template<typename ContextT>
@@ -248,26 +267,63 @@ public:
         auto* descriptor_service = services.template TryGet<DescriptorService>();
         auto* descriptor_host =
             descriptor_service != nullptr ? descriptor_service->HostPtr() : nullptr;
-        auto graph_context = render_graph::GraphCommandContext{
-            device,
-            frame_index,
-            command_buffer,
-            compiled_graph,
-            physical_resources,
-            services.template Get<RenderTargetService>().Host(),
-            descriptor_host,
-            lowered_vulkan_barriers,
-            command_ready_vulkan_barriers,
-        };
+#if VR_ENABLE_DEBUG_OBSERVABILITY
+        if (CollectsTimingOrCapture()) {
+            if (queue_execution_policy.multi_queue_enabled) {
+                record_stats = RecordPreparedMultiQueueGraph(device,
+                                                             services.template Get<RenderTargetService>().Host(),
+                                                             descriptor_host,
+                                                             command_buffer);
+            } else {
+                record_stats = RecordSingleQueueGraphByQueueBatch(
+                    device,
+                    services.template Get<RenderTargetService>().Host(),
+                    descriptor_host,
+                    command_buffer);
+            }
+        } else if (queue_execution_policy.multi_queue_enabled) {
+            record_stats = RecordPreparedMultiQueueGraph(device,
+                                                         services.template Get<RenderTargetService>().Host(),
+                                                         descriptor_host,
+                                                         command_buffer);
+        } else {
+            auto graph_context = render_graph::GraphCommandContext{
+                device,
+                frame_index,
+                command_buffer,
+                compiled_graph,
+                physical_resources,
+                services.template Get<RenderTargetService>().Host(),
+                descriptor_host,
+                lowered_vulkan_barriers,
+                command_ready_vulkan_barriers,
+            };
+            record_stats = render_graph::RenderGraphExecutor::Record(graph_context);
+        }
+#else
         if (queue_execution_policy.multi_queue_enabled) {
             record_stats = RecordPreparedMultiQueueGraph(device,
                                                          services.template Get<RenderTargetService>().Host(),
                                                          descriptor_host,
                                                          command_buffer);
         } else {
+            auto graph_context = render_graph::GraphCommandContext{
+                device,
+                frame_index,
+                command_buffer,
+                compiled_graph,
+                physical_resources,
+                services.template Get<RenderTargetService>().Host(),
+                descriptor_host,
+                lowered_vulkan_barriers,
+                command_ready_vulkan_barriers,
+            };
             record_stats = render_graph::RenderGraphExecutor::Record(graph_context);
         }
+#endif
+#if VR_ENABLE_DEBUG_OBSERVABILITY
         RefreshDiagnostics(device);
+#endif
     }
 
     template<typename ContextT>
@@ -359,6 +415,12 @@ public:
                !compiled_graph.Passes().empty();
     }
 
+    [[nodiscard]] bool IsGraphOnlyRecordActive(
+        const VulkanContext& device_) const noexcept {
+        return CanExecuteGraphRecord(device_) &&
+               record_stats.pass_count > 0U;
+    }
+
     [[nodiscard]] bool HasGraphRecordWorkSource() const noexcept {
         return HasFrameSnapshot() || static_cast<bool>(direct_graph_build_callback);
     }
@@ -377,6 +439,19 @@ public:
 
     [[nodiscard]] const vr::runtime::RenderGraphRuntimeDiagnostics& LastDiagnostics() const noexcept {
         return last_diagnostics;
+    }
+
+    void RegisterImportedTexture(
+        const render_graph::ResourceHandle logical_,
+        const render::RenderTargetHandle render_target_);
+
+    void SetDiagnosticsLevel(const vr::runtime::DiagnosticsLevel level_) noexcept {
+        diagnostics_level =
+            vr::runtime::ResolveRuntimeDiagnosticsLevelForBuild(level_);
+    }
+
+    [[nodiscard]] vr::runtime::DiagnosticsLevel DiagnosticsLevel() const noexcept {
+        return diagnostics_level;
     }
 
     [[nodiscard]] bool UsesMultiQueueSubmitPath() const noexcept {
@@ -438,7 +513,68 @@ public:
 
     void MarkGraphicsSubmissionEnqueued(const vr::render::FrameToken& token_) noexcept;
 
+    void RequestFrameColorHistoryReset() noexcept;
+    void QueueFrameMotionHistoryPublish(std::uint64_t frame_index_,
+                                        render::SceneSubmissionId submission_id_) noexcept;
+
 private:
+    struct FrameHistorySlot final {
+        render::RenderTargetHandle handle =
+            render::invalid_render_target_handle;
+        std::uint32_t resource_revision = 0U;
+    };
+
+    struct FrameHistoryState final {
+        std::array<FrameHistorySlot, 2U> slots{};
+        render_graph::TextureDesc desc{};
+        std::uint32_t published_slot = invalid_frame_index;
+        std::uint32_t write_slot = 0U;
+        std::uint32_t pending_publish_slot = invalid_frame_index;
+        std::uint64_t previous_frame_index = 0U;
+        std::uint64_t pending_frame_index = 0U;
+        render::SceneSubmissionId previous_submission_id{};
+        render::SceneSubmissionId pending_submission_id{};
+        render_graph::FrameHistoryInvalidationReason last_invalidation_reason =
+            render_graph::FrameHistoryInvalidationReason::first_frame;
+        bool initialized = false;
+        bool reset_requested = false;
+        std::uint8_t active_dimension = 0U;
+    };
+
+    struct FrameTemporalReprojectionState final {
+        ecs::Matrix4x4 previous_view_projection =
+            ecs::spatial_math::IdentityMatrix4x4();
+        ecs::Matrix4x4 pending_view_projection =
+            ecs::spatial_math::IdentityMatrix4x4();
+        std::uint64_t previous_frame_index = 0U;
+        std::uint64_t pending_frame_index = 0U;
+        render::SceneSubmissionId previous_submission_id{};
+        render::SceneSubmissionId pending_submission_id{};
+        render_graph::FrameHistoryInvalidationReason last_invalidation_reason =
+            render_graph::FrameHistoryInvalidationReason::first_frame;
+        bool previous_available = false;
+        bool pending_available = false;
+        bool reset_requested = false;
+        std::uint8_t active_dimension = 0U;
+    };
+
+    struct FrameTemporalJitterState final {
+        float previous_uv_x = 0.0F;
+        float previous_uv_y = 0.0F;
+        float pending_uv_x = 0.0F;
+        float pending_uv_y = 0.0F;
+        std::uint64_t previous_frame_index = 0U;
+        std::uint64_t pending_frame_index = 0U;
+        render::SceneSubmissionId previous_submission_id{};
+        render::SceneSubmissionId pending_submission_id{};
+        render_graph::FrameHistoryInvalidationReason last_invalidation_reason =
+            render_graph::FrameHistoryInvalidationReason::first_frame;
+        bool previous_available = false;
+        bool pending_available = false;
+        bool reset_requested = false;
+        std::uint8_t active_dimension = 0U;
+    };
+
     struct QueueCommandResources final {
         VkCommandPool pool = VK_NULL_HANDLE;
         std::vector<VkCommandBuffer> primary_buffers{};
@@ -495,10 +631,8 @@ private:
         const std::uint32_t batch_index_) const noexcept;
 
     void BuildEffectiveQueueDiagnostics(
-        vr::runtime::RenderGraphRuntimeDiagnostics& diagnostics_) const;
-
-    [[nodiscard]] std::string BuildEffectiveQueueTimelineDebugString(
-        const vr::runtime::RenderGraphRuntimeDiagnostics& diagnostics_) const;
+        vr::runtime::RenderGraphRuntimeDiagnostics& diagnostics_,
+        bool include_detailed_) const;
 
     [[nodiscard]] std::string ResolveUnsupportedMultiQueueTopologyReason(
         const render_graph::BarrierPlan& barrier_plan_) const;
@@ -550,7 +684,609 @@ private:
         render::DescriptorHost* descriptor_host_,
         VkCommandBuffer graphics_command_buffer_);
 
+#if VR_ENABLE_DEBUG_OBSERVABILITY
+    void ResetRecordedTimingSamples() noexcept;
+
+    [[nodiscard]] bool CollectsTimingOrCapture() const noexcept;
+
+    void AppendRecordedQueueBatchTimingSample(
+        render_graph::QueueClass effective_queue_,
+        const render_graph::QueueSubmitBatch& queue_batch_,
+        std::uint32_t batch_index_,
+        std::uint64_t relative_begin_ns_,
+        std::uint64_t relative_end_ns_);
+
+    [[nodiscard]] render_graph::RenderGraphRecordStats RecordSingleQueueGraphByQueueBatch(
+        VulkanContext& device_,
+        render::RenderTargetHost& render_target_host_,
+        render::DescriptorHost* descriptor_host_,
+        VkCommandBuffer graphics_command_buffer_);
+#endif
+
     void RefreshDiagnostics(const VulkanContext& device_);
+
+    void ResetPendingHistoryPublish(FrameHistoryState& history_) noexcept {
+        history_.pending_publish_slot = invalid_frame_index;
+        history_.pending_frame_index = 0U;
+        history_.pending_submission_id = {};
+    }
+
+    void ResetPendingReprojectionPublish() noexcept {
+        frame_reprojection.pending_available = false;
+        frame_reprojection.pending_frame_index = 0U;
+        frame_reprojection.pending_submission_id = {};
+        frame_reprojection.pending_view_projection =
+            ecs::spatial_math::IdentityMatrix4x4();
+    }
+
+    void ResetPendingJitterPublish() noexcept {
+        frame_jitter.pending_available = false;
+        frame_jitter.pending_uv_x = 0.0F;
+        frame_jitter.pending_uv_y = 0.0F;
+        frame_jitter.pending_frame_index = 0U;
+        frame_jitter.pending_submission_id = {};
+    }
+
+    [[nodiscard]] static float BuildHaltonSequenceSample(std::uint32_t index_,
+                                                         const std::uint32_t base_) noexcept {
+        float result = 0.0F;
+        float fraction = 1.0F / static_cast<float>(base_);
+        while (index_ != 0U) {
+            result += fraction * static_cast<float>(index_ % base_);
+            index_ /= base_;
+            fraction /= static_cast<float>(base_);
+        }
+        return result;
+    }
+
+    [[nodiscard]] static std::array<float, 2U> BuildTemporalJitterUv(
+        const std::uint64_t frame_index_,
+        const render_graph::Extent3D& extent_) noexcept {
+        if (extent_.width == 0U || extent_.height == 0U) {
+            return {0.0F, 0.0F};
+        }
+
+        constexpr std::uint32_t k_jitter_phase_count = 8U;
+        const std::uint64_t extent_seed =
+            (static_cast<std::uint64_t>(extent_.width) * 73856093ULL) ^
+            (static_cast<std::uint64_t>(extent_.height) * 19349663ULL);
+        const auto sequence_index = static_cast<std::uint32_t>(
+            ((frame_index_ + extent_seed) % k_jitter_phase_count) + 1ULL);
+        return {
+            (BuildHaltonSequenceSample(sequence_index, 2U) - 0.5F) /
+                static_cast<float>(extent_.width),
+            (BuildHaltonSequenceSample(sequence_index, 3U) - 0.5F) /
+                static_cast<float>(extent_.height),
+        };
+    }
+
+    template<ecs::DimensionTag DimensionT>
+    void PrepareTemporalReprojectionContract(
+        render_graph::FrameSnapshot<DimensionT>& snapshot_,
+        const render_graph::FrameHistoryInvalidationReason fallback_invalidation_reason_,
+        const std::uint8_t desired_dimension) {
+        auto& contract = snapshot_.temporal.reprojection;
+        contract = {};
+        ResetPendingReprojectionPublish();
+
+        if constexpr (!std::is_same_v<DimensionT, ecs::Dim3>) {
+            frame_reprojection.previous_available = false;
+            frame_reprojection.reset_requested = false;
+            frame_reprojection.active_dimension = desired_dimension;
+            frame_reprojection.last_invalidation_reason =
+                render_graph::FrameHistoryInvalidationReason::source_unavailable;
+            contract.invalidation_reason =
+                render_graph::FrameHistoryInvalidationReason::source_unavailable;
+            return;
+        }
+
+        render_graph::FrameHistoryInvalidationReason invalidation_reason =
+            fallback_invalidation_reason_;
+        const auto* scene_view = snapshot_.SceneView();
+        if (scene_view == nullptr || scene_view->has_camera == 0U) {
+            invalidation_reason =
+                render_graph::FrameHistoryInvalidationReason::source_unavailable;
+            frame_reprojection.previous_available = false;
+            frame_reprojection.reset_requested = false;
+            frame_reprojection.active_dimension = desired_dimension;
+            frame_reprojection.last_invalidation_reason = invalidation_reason;
+            contract.invalidation_reason = invalidation_reason;
+            return;
+        }
+
+        if (invalidation_reason ==
+            render_graph::FrameHistoryInvalidationReason::none) {
+            if (frame_reprojection.reset_requested) {
+                invalidation_reason =
+                    render_graph::FrameHistoryInvalidationReason::reset_requested;
+            } else if (frame_reprojection.active_dimension != desired_dimension) {
+                invalidation_reason =
+                    render_graph::FrameHistoryInvalidationReason::dimension_changed;
+            } else if (!frame_reprojection.previous_available) {
+                invalidation_reason =
+                    render_graph::FrameHistoryInvalidationReason::first_frame;
+            }
+        }
+
+        contract.current_available = true;
+        frame_reprojection.pending_frame_index = snapshot_.frame_index;
+        frame_reprojection.pending_submission_id = snapshot_.submission_id;
+        frame_reprojection.pending_view_projection =
+            scene_view->camera.runtime.view_projection_matrix;
+
+        ecs::Matrix4x4 current_inverse_view_projection =
+            ecs::spatial_math::IdentityMatrix4x4();
+        if (!ecs::spatial_math::InvertAffineMatrix4x4(
+                scene_view->camera.runtime.view_projection_matrix,
+                current_inverse_view_projection)) {
+            invalidation_reason =
+                render_graph::FrameHistoryInvalidationReason::source_unavailable;
+            frame_reprojection.previous_available = false;
+            frame_reprojection.pending_available = false;
+            frame_reprojection.reset_requested = false;
+            frame_reprojection.active_dimension = desired_dimension;
+            frame_reprojection.last_invalidation_reason = invalidation_reason;
+            contract.current_available = false;
+            contract.invalidation_reason = invalidation_reason;
+            return;
+        }
+
+        frame_reprojection.pending_available = true;
+
+        const bool previous_available =
+            frame_reprojection.previous_available &&
+            invalidation_reason ==
+                render_graph::FrameHistoryInvalidationReason::none;
+        contract.previous_available = previous_available;
+        contract.invalidation_reason = previous_available
+            ? render_graph::FrameHistoryInvalidationReason::none
+            : invalidation_reason;
+        if (previous_available) {
+            contract.current_clip_to_previous_clip =
+                ecs::spatial_math::MultiplyMatrix4x4(
+                    frame_reprojection.previous_view_projection,
+                    current_inverse_view_projection);
+            contract.previous_frame_index = frame_reprojection.previous_frame_index;
+            contract.previous_submission_id =
+                frame_reprojection.previous_submission_id;
+        }
+
+        frame_reprojection.reset_requested = false;
+        frame_reprojection.active_dimension = desired_dimension;
+        frame_reprojection.last_invalidation_reason =
+            contract.invalidation_reason;
+    }
+
+    template<ecs::DimensionTag DimensionT>
+    void PrepareTemporalJitterContract(
+        render_graph::FrameSnapshot<DimensionT>& snapshot_,
+        const render_graph::FrameHistoryInvalidationReason fallback_invalidation_reason_,
+        const std::uint8_t desired_dimension) {
+        auto& contract = snapshot_.temporal.jitter;
+        contract = {};
+        ResetPendingJitterPublish();
+
+        if constexpr (!std::is_same_v<DimensionT, ecs::Dim3>) {
+            frame_jitter.previous_available = false;
+            frame_jitter.reset_requested = false;
+            frame_jitter.active_dimension = desired_dimension;
+            frame_jitter.last_invalidation_reason =
+                render_graph::FrameHistoryInvalidationReason::source_unavailable;
+            contract.invalidation_reason =
+                render_graph::FrameHistoryInvalidationReason::source_unavailable;
+            return;
+        }
+
+        render_graph::FrameHistoryInvalidationReason invalidation_reason =
+            fallback_invalidation_reason_;
+        const auto* scene_view = snapshot_.SceneView();
+        const bool valid_extent =
+            snapshot_.reference_extent.width != 0U &&
+            snapshot_.reference_extent.height != 0U &&
+            snapshot_.reference_extent.depth != 0U;
+        if (!valid_extent || scene_view == nullptr || scene_view->has_camera == 0U) {
+            invalidation_reason =
+                render_graph::FrameHistoryInvalidationReason::source_unavailable;
+            frame_jitter.previous_available = false;
+            frame_jitter.reset_requested = false;
+            frame_jitter.active_dimension = desired_dimension;
+            frame_jitter.last_invalidation_reason = invalidation_reason;
+            contract.invalidation_reason = invalidation_reason;
+            return;
+        }
+
+        if (invalidation_reason == render_graph::FrameHistoryInvalidationReason::none) {
+            if (frame_jitter.reset_requested) {
+                invalidation_reason =
+                    render_graph::FrameHistoryInvalidationReason::reset_requested;
+            } else if (frame_jitter.active_dimension != desired_dimension) {
+                invalidation_reason =
+                    render_graph::FrameHistoryInvalidationReason::dimension_changed;
+            } else if (!frame_jitter.previous_available) {
+                invalidation_reason =
+                    render_graph::FrameHistoryInvalidationReason::first_frame;
+            }
+        }
+
+        const auto jitter_uv =
+            BuildTemporalJitterUv(snapshot_.frame_index, snapshot_.reference_extent);
+        contract.current_uv_x = jitter_uv[0U];
+        contract.current_uv_y = jitter_uv[1U];
+        contract.current_available = true;
+
+        frame_jitter.pending_uv_x = jitter_uv[0U];
+        frame_jitter.pending_uv_y = jitter_uv[1U];
+        frame_jitter.pending_frame_index = snapshot_.frame_index;
+        frame_jitter.pending_submission_id = snapshot_.submission_id;
+        frame_jitter.pending_available = true;
+
+        const bool previous_available =
+            frame_jitter.previous_available &&
+            invalidation_reason == render_graph::FrameHistoryInvalidationReason::none;
+        contract.previous_available = previous_available;
+        contract.invalidation_reason = previous_available
+            ? render_graph::FrameHistoryInvalidationReason::none
+            : invalidation_reason;
+        if (previous_available) {
+            contract.previous_uv_x = frame_jitter.previous_uv_x;
+            contract.previous_uv_y = frame_jitter.previous_uv_y;
+            contract.previous_frame_index = frame_jitter.previous_frame_index;
+            contract.previous_submission_id = frame_jitter.previous_submission_id;
+        }
+
+        frame_jitter.reset_requested = false;
+        frame_jitter.active_dimension = desired_dimension;
+        frame_jitter.last_invalidation_reason = contract.invalidation_reason;
+    }
+
+    template<typename ContextT>
+    void PrepareSurfaceHistoryContract(ContextT& context_,
+                                       FrameHistoryState& history_,
+                                       render_graph::FrameHistorySurfaceContract& contract_,
+                                       const render_graph::TextureDesc& desired_desc_,
+                                       const std::string_view target_debug_name_,
+                                       const bool source_available,
+                                       const std::uint8_t desired_dimension) {
+        auto& device = vr::runtime::detail::ResolveDevice(context_);
+        auto& services = vr::runtime::detail::ResolveServices(context_);
+        auto& render_target_host = services.template Get<RenderTargetService>().Host();
+        contract_ = {};
+        contract_.desc = desired_desc_;
+        ResetPendingHistoryPublish(history_);
+
+        const bool valid_extent =
+            desired_desc_.extent.width != 0U &&
+            desired_desc_.extent.height != 0U &&
+            desired_desc_.extent.depth != 0U;
+
+        render_graph::FrameHistoryInvalidationReason invalidation_reason =
+            render_graph::FrameHistoryInvalidationReason::none;
+        if (!source_available || !valid_extent) {
+            invalidation_reason =
+                render_graph::FrameHistoryInvalidationReason::source_unavailable;
+        } else if (!history_.initialized) {
+            invalidation_reason =
+                render_graph::FrameHistoryInvalidationReason::first_frame;
+        } else if (history_.reset_requested) {
+            invalidation_reason =
+                render_graph::FrameHistoryInvalidationReason::reset_requested;
+        } else if (history_.active_dimension != desired_dimension) {
+            invalidation_reason =
+                render_graph::FrameHistoryInvalidationReason::dimension_changed;
+        } else if (history_.desc.extent.width != desired_desc_.extent.width ||
+                   history_.desc.extent.height != desired_desc_.extent.height ||
+                   history_.desc.extent.depth != desired_desc_.extent.depth) {
+            invalidation_reason =
+                render_graph::FrameHistoryInvalidationReason::extent_changed;
+        }
+
+        if (invalidation_reason ==
+            render_graph::FrameHistoryInvalidationReason::source_unavailable) {
+            history_.initialized = false;
+            history_.published_slot = invalid_frame_index;
+            history_.active_dimension = desired_dimension;
+            history_.desc = desired_desc_;
+            history_.last_invalidation_reason = invalidation_reason;
+            history_.reset_requested = false;
+            contract_.invalidation_reason = invalidation_reason;
+            return;
+        }
+
+        const auto target_resource_desc =
+            render_graph::VulkanResourceTable::BuildRenderTargetDesc(desired_desc_);
+        render::RenderTargetDesc target_desc{};
+        target_desc.debug_name = target_debug_name_.data();
+        target_desc.dimension = render::RenderTargetDimension::image_2d;
+        target_desc.lifetime = render::RenderTargetLifetime::history;
+        target_desc.scale_mode = render::RenderTargetScaleMode::absolute;
+        target_desc.width = desired_desc_.extent.width;
+        target_desc.height = desired_desc_.extent.height;
+        target_desc.depth = desired_desc_.extent.depth;
+        target_desc.format = target_resource_desc.format;
+        target_desc.samples = target_resource_desc.samples;
+        target_desc.usage = target_resource_desc.usage;
+        target_desc.aspect = target_resource_desc.aspect;
+        target_desc.mip_levels = desired_desc_.mip_level_count;
+        target_desc.array_layers = desired_desc_.array_layer_count;
+        target_desc.color_encoding = render::RenderTargetColorEncoding::linear;
+        target_desc.memory_policy = render::RenderTargetMemoryPolicy::auto_select;
+        target_desc.allow_uav = false;
+        target_desc.allow_alias = false;
+        target_desc.allow_history = true;
+
+        const std::uint64_t last_submitted =
+            vr::runtime::detail::ResolveGraphicsSubmitted(context_);
+        const std::uint64_t completed_submitted =
+            vr::runtime::detail::ResolveGraphicsCompleted(context_);
+
+        bool revision_changed = false;
+        for (std::uint32_t slot_index = 0U; slot_index < history_.slots.size(); ++slot_index) {
+            const auto ensure = render_target_host.EnsurePersistentTarget(
+                device,
+                history_.slots[slot_index].handle,
+                target_desc,
+                VkExtent2D{desired_desc_.extent.width, desired_desc_.extent.height},
+                last_submitted,
+                completed_submitted);
+            history_.slots[slot_index].handle = ensure.handle;
+            if (const auto resolved_view =
+                    render_target_host.Resolve(ensure.handle);
+                resolved_view != nullptr) {
+                history_.slots[slot_index].resource_revision =
+                    resolved_view->resource_revision;
+            } else {
+                history_.slots[slot_index].resource_revision = 0U;
+            }
+            revision_changed =
+                revision_changed || ensure.created || ensure.recreated ||
+                ensure.revision_changed;
+        }
+
+        if (!history_.initialized) {
+            history_.published_slot = invalid_frame_index;
+            history_.write_slot = 0U;
+        } else if (history_.published_slot == invalid_frame_index) {
+            history_.write_slot = 0U;
+        } else {
+            history_.write_slot = history_.published_slot ^ 1U;
+        }
+
+        if (revision_changed &&
+            invalidation_reason ==
+                render_graph::FrameHistoryInvalidationReason::none) {
+            invalidation_reason =
+                render_graph::FrameHistoryInvalidationReason::extent_changed;
+        }
+        if (history_.published_slot == invalid_frame_index &&
+            invalidation_reason ==
+                render_graph::FrameHistoryInvalidationReason::none) {
+            invalidation_reason =
+                history_.last_invalidation_reason ==
+                    render_graph::FrameHistoryInvalidationReason::none
+                ? render_graph::FrameHistoryInvalidationReason::first_frame
+                : history_.last_invalidation_reason;
+        }
+
+        const bool previous_available =
+            history_.published_slot != invalid_frame_index &&
+            invalidation_reason ==
+                render_graph::FrameHistoryInvalidationReason::none &&
+            history_.slots[history_.published_slot].resource_revision != 0U;
+
+        contract_.current = render_graph::FrameHistoryResourceIdentity{
+            .handle = history_.slots[history_.write_slot].handle,
+            .resource_revision = history_.slots[history_.write_slot].resource_revision,
+        };
+        contract_.current_writable =
+            render_graph::IsValidFrameHistoryResourceIdentity(
+                contract_.current);
+        contract_.previous_available = previous_available;
+        contract_.invalidation_reason = previous_available
+            ? render_graph::FrameHistoryInvalidationReason::none
+            : invalidation_reason;
+        if (previous_available) {
+            contract_.previous =
+                render_graph::FrameHistoryResourceIdentity{
+                    .handle = history_.slots[history_.published_slot].handle,
+                    .resource_revision =
+                        history_.slots[history_.published_slot].resource_revision,
+                };
+            contract_.previous_frame_index = history_.previous_frame_index;
+            contract_.previous_submission_id = history_.previous_submission_id;
+        }
+
+        history_.initialized = true;
+        history_.desc = desired_desc_;
+        history_.active_dimension = desired_dimension;
+        history_.last_invalidation_reason = contract_.invalidation_reason;
+        history_.reset_requested = false;
+        if (!previous_available) {
+            history_.published_slot = invalid_frame_index;
+        }
+    }
+
+    template<typename ContextT, ecs::DimensionTag DimensionT>
+    void PrepareFrameTemporalContracts(ContextT& context_,
+                                       render_graph::FrameSnapshot<DimensionT>& snapshot_) {
+        const bool has_active_view =
+            snapshot_.ViewCount() != 0U && snapshot_.ActiveView() != nullptr;
+        const auto* scene_view = snapshot_.SceneView();
+        const bool has_scene_view = snapshot_.HasSceneView() && scene_view != nullptr;
+        const bool has_scene_camera =
+            has_scene_view && scene_view->has_camera != 0U;
+        const std::uint8_t desired_dimension =
+            std::is_same_v<DimensionT, ecs::Dim3> ? 3U : 2U;
+        snapshot_.temporal = {};
+
+        PrepareSurfaceHistoryContract(
+            context_,
+            frame_color_history,
+            snapshot_.temporal.color,
+            render_graph::detail::MakeFrameColorHistoryDesc(snapshot_),
+            "frame_color_history",
+            has_active_view,
+            desired_dimension);
+
+        if constexpr (std::is_same_v<DimensionT, ecs::Dim3>) {
+            PrepareSurfaceHistoryContract(
+                context_,
+                frame_depth_history,
+                snapshot_.temporal.depth,
+                render_graph::detail::MakeFrameDepthHistoryDesc(snapshot_),
+                "frame_depth_history",
+                has_active_view && has_scene_view,
+                desired_dimension);
+            PrepareSurfaceHistoryContract(
+                context_,
+                frame_motion_history,
+                snapshot_.temporal.motion,
+                render_graph::detail::MakeFrameMotionHistoryDesc(snapshot_),
+                "frame_motion_history",
+                has_active_view && has_scene_camera,
+                desired_dimension);
+            PrepareTemporalJitterContract(
+                snapshot_,
+                snapshot_.temporal.color.invalidation_reason,
+                desired_dimension);
+            PrepareTemporalReprojectionContract(
+                snapshot_,
+                snapshot_.temporal.color.invalidation_reason,
+                desired_dimension);
+        } else {
+            ResetPendingHistoryPublish(frame_depth_history);
+            frame_depth_history.initialized = false;
+            frame_depth_history.published_slot = invalid_frame_index;
+            frame_depth_history.reset_requested = false;
+            frame_depth_history.last_invalidation_reason =
+                render_graph::FrameHistoryInvalidationReason::source_unavailable;
+            snapshot_.temporal.depth.desc =
+                render_graph::detail::MakeFrameDepthHistoryDesc(snapshot_);
+            snapshot_.temporal.depth.invalidation_reason =
+                render_graph::FrameHistoryInvalidationReason::source_unavailable;
+            ResetPendingHistoryPublish(frame_motion_history);
+            frame_motion_history.initialized = false;
+            frame_motion_history.published_slot = invalid_frame_index;
+            frame_motion_history.reset_requested = false;
+            frame_motion_history.last_invalidation_reason =
+                render_graph::FrameHistoryInvalidationReason::source_unavailable;
+            snapshot_.temporal.motion.desc =
+                render_graph::detail::MakeFrameMotionHistoryDesc(snapshot_);
+            snapshot_.temporal.motion.invalidation_reason =
+                render_graph::FrameHistoryInvalidationReason::source_unavailable;
+            ResetPendingReprojectionPublish();
+            frame_reprojection.previous_available = false;
+            frame_reprojection.reset_requested = false;
+            frame_reprojection.active_dimension = desired_dimension;
+            frame_reprojection.last_invalidation_reason =
+                render_graph::FrameHistoryInvalidationReason::source_unavailable;
+            snapshot_.temporal.reprojection.invalidation_reason =
+                render_graph::FrameHistoryInvalidationReason::source_unavailable;
+            ResetPendingJitterPublish();
+            frame_jitter.previous_available = false;
+            frame_jitter.reset_requested = false;
+            frame_jitter.active_dimension = desired_dimension;
+            frame_jitter.last_invalidation_reason =
+                render_graph::FrameHistoryInvalidationReason::source_unavailable;
+            snapshot_.temporal.jitter.invalidation_reason =
+                render_graph::FrameHistoryInvalidationReason::source_unavailable;
+        }
+    }
+
+    template<ecs::DimensionTag DimensionT>
+    void AppendFrameColorHistoryCapturePass(
+        const render_graph::FrameSnapshot<DimensionT>& snapshot_,
+        const render_graph::MinimalFrameGraphBuildResult<DimensionT>& build_result_) {
+        if (!snapshot_.temporal.color.current_writable ||
+            !render::IsValidRenderTargetHandle(
+                snapshot_.temporal.color.current.handle) ||
+            !render_graph::IsValidResourceVersionHandle(
+                build_result_.final_color_version) ||
+            !render_graph::IsValidResourceHandle(build_result_.final_color)) {
+            return;
+        }
+
+        const auto history_target = builder.CreateTexture(
+            "frame_color_history_current",
+            snapshot_.temporal.color.desc,
+            render_graph::ResourceLifetime::imported);
+        RegisterImportedTexture(history_target, snapshot_.temporal.color.current.handle);
+
+        const auto history_capture_pass =
+            builder.AddPass("frame_color_history_capture", true);
+        (void)builder.Read(history_capture_pass,
+                           build_result_.final_color_version,
+                           render_graph::AccessDesc{
+                               .access =
+                                   render_graph::AccessKind::transfer_read,
+                           });
+        (void)builder.Write(history_capture_pass,
+                            history_target,
+                            render_graph::AccessDesc{
+                                .access =
+                                    render_graph::AccessKind::transfer_write,
+                            });
+        builder.SetExecuteCallback(
+            history_capture_pass,
+            [source = build_result_.final_color,
+             target = history_target](render_graph::GraphCommandContext& context_) {
+                render_graph::detail::RecordTextureCopyOrBlit(
+                    context_,
+                    source,
+                    target);
+            });
+
+        frame_color_history.pending_publish_slot = frame_color_history.write_slot;
+        frame_color_history.pending_frame_index = snapshot_.frame_index;
+        frame_color_history.pending_submission_id = snapshot_.submission_id;
+    }
+
+    template<ecs::DimensionTag DimensionT>
+    void AppendFrameDepthHistoryCapturePass(
+        const render_graph::FrameSnapshot<DimensionT>& snapshot_,
+        const render_graph::MinimalFrameGraphBuildResult<DimensionT>& build_result_) {
+        if (!snapshot_.temporal.depth.current_writable ||
+            !render::IsValidRenderTargetHandle(
+                snapshot_.temporal.depth.current.handle) ||
+            !build_result_.has_depth ||
+            !render_graph::IsValidResourceHandle(build_result_.scene_depth)) {
+            return;
+        }
+
+        const auto history_target = builder.CreateTexture(
+            "frame_depth_history_current",
+            snapshot_.temporal.depth.desc,
+            render_graph::ResourceLifetime::imported);
+        RegisterImportedTexture(history_target, snapshot_.temporal.depth.current.handle);
+
+        const auto history_capture_pass =
+            builder.AddPass("frame_depth_history_capture", true);
+        (void)builder.Read(history_capture_pass,
+                           build_result_.scene_depth,
+                           render_graph::AccessDesc{
+                               .access =
+                                   render_graph::AccessKind::transfer_read,
+                           });
+        (void)builder.Write(history_capture_pass,
+                            history_target,
+                            render_graph::AccessDesc{
+                                .access =
+                                    render_graph::AccessKind::transfer_write,
+                            });
+        builder.SetExecuteCallback(
+            history_capture_pass,
+            [source = build_result_.scene_depth,
+             target = history_target](render_graph::GraphCommandContext& context_) {
+                render_graph::detail::RecordTextureCopy(
+                    context_,
+                    source,
+                    target,
+                    VK_IMAGE_ASPECT_DEPTH_BIT);
+            });
+
+        frame_depth_history.pending_publish_slot = frame_depth_history.write_slot;
+        frame_depth_history.pending_frame_index = snapshot_.frame_index;
+        frame_depth_history.pending_submission_id = snapshot_.submission_id;
+    }
 
     template<typename ContextT>
     void ResolvePhysicalResources(ContextT& context_) {
@@ -630,7 +1366,14 @@ private:
     DirectGraphBuildCallback direct_graph_build_callback{};
     render_graph::VulkanResourceTable physical_resources{};
     bool has_compiled_graph = false;
+    vr::runtime::DiagnosticsLevel diagnostics_level =
+        vr::runtime::DiagnosticsLevel::Detailed;
     vr::runtime::RenderGraphRuntimeDiagnostics last_diagnostics{};
+#if VR_ENABLE_DEBUG_OBSERVABILITY
+    std::vector<vr::runtime::RenderGraphQueueBatchTimingDiagnostics>
+        last_recorded_queue_batch_timings{};
+    std::uint64_t last_recorded_timing_total_duration_ns = 0U;
+#endif
     FrameSnapshotVariant frame_snapshot{};
     std::vector<ImportedTextureBinding> direct_imported_textures{};
     std::vector<ImportedBufferBinding> direct_imported_buffers{};
@@ -643,6 +1386,11 @@ private:
     std::uint64_t next_compute_submit_value = 1U;
     std::uint64_t last_compute_submitted_value = 0U;
     std::uint64_t completed_compute_submit_value = 0U;
+    FrameHistoryState frame_color_history{};
+    FrameHistoryState frame_depth_history{};
+    FrameHistoryState frame_motion_history{};
+    FrameTemporalReprojectionState frame_reprojection{};
+    FrameTemporalJitterState frame_jitter{};
 
     static constexpr bool kRenderGraphMultiQueueSubmitEnabled = true;
 };

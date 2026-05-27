@@ -10,6 +10,10 @@
 
 namespace vr::render {
 
+namespace detail {
+struct SceneRecorder3DDirtySchedulingAccess;
+}
+
 template<typename T>
 using LightFrameCoordinatorMcVector = Center::Memory::mc_vector<T, Center::Memory::Tags::Container>;
 
@@ -86,7 +90,13 @@ public:
         AppendDirtyHint(dirty_component_indices_,
                         dirty_component_count_,
                         accumulated_light_dirty_indices,
-                        stats.light_dirty_hint_input_count);
+                        light_count,
+                        light_dirty_marker_stamps,
+                        light_dirty_marker_epoch,
+                        stats.light_dirty_hint_input_count,
+                        stats.light_dirty_hint_unique_count,
+                        stats.light_dirty_hint_out_of_range_drop_count,
+                        stats.light_dirty_hint_duplicate_drop_count);
         if (dirty_component_indices_ != nullptr && dirty_component_count_ > 0U) {
             ++light_dirty_revision;
             frame_cache_valid = false;
@@ -100,13 +110,28 @@ public:
         AppendDirtyHint(dirty_component_indices_,
                         dirty_component_count_,
                         accumulated_transform_dirty_indices,
-                        stats.transform_dirty_hint_input_count);
+                        light_count,
+                        transform_dirty_marker_stamps,
+                        transform_dirty_marker_epoch,
+                        stats.transform_dirty_hint_input_count,
+                        stats.transform_dirty_hint_unique_count,
+                        stats.transform_dirty_hint_out_of_range_drop_count,
+                        stats.transform_dirty_hint_duplicate_drop_count);
         if (dirty_component_indices_ != nullptr && dirty_component_count_ > 0U) {
             ++transform_dirty_revision;
             frame_cache_valid = false;
             runtime_cache_valid = false;
             culling_cache_valid = false;
         }
+    }
+
+    [[nodiscard]] std::uint32_t PendingLightDirtyHintCount() const noexcept {
+        return static_cast<std::uint32_t>(accumulated_light_dirty_indices.size());
+    }
+
+    [[nodiscard]] std::uint32_t PendingTransformDirtyHintCount() const noexcept {
+        return static_cast<std::uint32_t>(
+            accumulated_transform_dirty_indices.size());
     }
 
     void Reserve(std::uint32_t light_count_,
@@ -291,6 +316,8 @@ public:
     }
 
 private:
+    friend struct detail::SceneRecorder3DDirtySchedulingAccess;
+
     void InvalidateCaches() noexcept {
         frame_cache_valid = false;
         frame_cache_frame_index = invalid_frame_index;
@@ -324,72 +351,34 @@ private:
         accumulated_transform_dirty_indices.clear();
         normalized_light_dirty_indices.clear();
         normalized_transform_dirty_indices.clear();
+        ResetDirtyMarkerWindow(light_dirty_marker_stamps, light_dirty_marker_epoch);
+        ResetDirtyMarkerWindow(transform_dirty_marker_stamps,
+                               transform_dirty_marker_epoch);
     }
 
     static void AppendDirtyHint(const std::uint32_t* dirty_component_indices_,
                                 std::uint32_t dirty_component_count_,
                                 LightFrameCoordinatorMcVector<std::uint32_t>& out_indices_,
-                                std::uint64_t& input_counter_) {
+                                std::uint32_t component_count_,
+                                LightFrameCoordinatorMcVector<std::uint32_t>& marker_stamps_,
+                                std::uint32_t& marker_epoch_,
+                                std::uint64_t& input_counter_,
+                                std::uint64_t& unique_counter_,
+                                std::uint64_t& out_of_range_counter_,
+                                std::uint64_t& duplicate_counter_) {
         if (dirty_component_indices_ == nullptr || dirty_component_count_ == 0U) {
             return;
         }
         input_counter_ += static_cast<std::uint64_t>(dirty_component_count_);
-        const std::size_t old_size = out_indices_.size();
-        out_indices_.resize(old_size + dirty_component_count_);
+
+        if (marker_stamps_.size() < component_count_) {
+            marker_stamps_.resize(component_count_, 0U);
+        }
+        NormalizeMarkerEpoch(marker_stamps_, marker_epoch_);
+
         for (std::uint32_t i = 0U; i < dirty_component_count_; ++i) {
-            out_indices_[old_size + i] = dirty_component_indices_[i];
-        }
-    }
-
-    void NormalizeDirtyHints() {
-        NormalizeOneDirtyHint(accumulated_light_dirty_indices,
-                              normalized_light_dirty_indices,
-                              light_dirty_marker_stamps,
-                              light_dirty_marker_epoch,
-                              stats.light_dirty_hint_unique_count,
-                              stats.light_dirty_hint_out_of_range_drop_count,
-                              stats.light_dirty_hint_duplicate_drop_count);
-        NormalizeOneDirtyHint(accumulated_transform_dirty_indices,
-                              normalized_transform_dirty_indices,
-                              transform_dirty_marker_stamps,
-                              transform_dirty_marker_epoch,
-                              stats.transform_dirty_hint_unique_count,
-                              stats.transform_dirty_hint_out_of_range_drop_count,
-                              stats.transform_dirty_hint_duplicate_drop_count);
-    }
-
-    void ConsumeNormalizedHints() noexcept {
-        accumulated_light_dirty_indices.clear();
-        accumulated_transform_dirty_indices.clear();
-        normalized_light_dirty_indices.clear();
-        normalized_transform_dirty_indices.clear();
-    }
-
-    void NormalizeOneDirtyHint(const LightFrameCoordinatorMcVector<std::uint32_t>& raw_indices_,
-                               LightFrameCoordinatorMcVector<std::uint32_t>& normalized_indices_,
-                               LightFrameCoordinatorMcVector<std::uint32_t>& marker_stamps_,
-                               std::uint32_t& marker_epoch_,
-                               std::uint64_t& unique_counter_,
-                               std::uint64_t& out_of_range_counter_,
-                               std::uint64_t& duplicate_counter_) {
-        normalized_indices_.clear();
-        if (raw_indices_.empty()) {
-            return;
-        }
-        if (marker_stamps_.size() < light_count) {
-            marker_stamps_.resize(light_count, 0U);
-        }
-        if (marker_epoch_ == 0U || marker_epoch_ == (std::numeric_limits<std::uint32_t>::max)()) {
-            for (std::size_t i = 0U; i < marker_stamps_.size(); ++i) {
-                marker_stamps_[i] = 0U;
-            }
-            marker_epoch_ = 1U;
-        } else {
-            ++marker_epoch_;
-        }
-
-        for (const std::uint32_t component_index : raw_indices_) {
-            if (component_index >= light_count) {
+            const std::uint32_t component_index = dirty_component_indices_[i];
+            if (component_index >= component_count_) {
                 ++out_of_range_counter_;
                 continue;
             }
@@ -398,9 +387,46 @@ private:
                 continue;
             }
             marker_stamps_[component_index] = marker_epoch_;
-            normalized_indices_.push_back(component_index);
+            out_indices_.push_back(component_index);
             ++unique_counter_;
         }
+    }
+
+    void NormalizeDirtyHints() {
+        normalized_light_dirty_indices = accumulated_light_dirty_indices;
+        normalized_transform_dirty_indices = accumulated_transform_dirty_indices;
+    }
+
+    void ConsumeNormalizedHints() noexcept {
+        accumulated_light_dirty_indices.clear();
+        accumulated_transform_dirty_indices.clear();
+        normalized_light_dirty_indices.clear();
+        normalized_transform_dirty_indices.clear();
+        ResetDirtyMarkerWindow(light_dirty_marker_stamps, light_dirty_marker_epoch);
+        ResetDirtyMarkerWindow(transform_dirty_marker_stamps,
+                               transform_dirty_marker_epoch);
+    }
+
+    static void NormalizeMarkerEpoch(
+        LightFrameCoordinatorMcVector<std::uint32_t>& marker_stamps_,
+        std::uint32_t& marker_epoch_) noexcept {
+        if (marker_epoch_ == 0U || marker_epoch_ == (std::numeric_limits<std::uint32_t>::max)()) {
+            for (std::size_t i = 0U; i < marker_stamps_.size(); ++i) {
+                marker_stamps_[i] = 0U;
+            }
+            marker_epoch_ = 1U;
+        }
+    }
+
+    static void ResetDirtyMarkerWindow(
+        LightFrameCoordinatorMcVector<std::uint32_t>& marker_stamps_,
+        std::uint32_t& marker_epoch_) noexcept {
+        if (!marker_stamps_.empty()) {
+            for (std::size_t i = 0U; i < marker_stamps_.size(); ++i) {
+                marker_stamps_[i] = 0U;
+            }
+        }
+        marker_epoch_ = 1U;
     }
 
     [[nodiscard]] static std::uint64_t ComposeCullingConfigSignature(const CullingBuildConfigType& config_) noexcept {

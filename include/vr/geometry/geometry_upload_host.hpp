@@ -1,6 +1,7 @@
 ﻿#pragma once
 
 #include "Center/Memory/Container/Vector/McVector.hpp"
+#include "vr/geometry/geometry_temporal_motion_builder.hpp"
 #include "vr/ecs/system/geometry_runtime_system.hpp"
 #include "vr/render/retire_bus.hpp"
 #include "vr/geometry/geometry_types.hpp"
@@ -23,6 +24,7 @@ struct GeometryUploadHostCreateInfo {
     std::uint32_t frames_in_flight = 2U;
     VkDeviceSize initial_2d_primitive_buffer_bytes = 2U * 1024U * 1024U;
     VkDeviceSize initial_3d_instance_buffer_bytes = 4U * 1024U * 1024U;
+    VkDeviceSize initial_3d_temporal_motion_buffer_bytes = 4U * 1024U * 1024U;
     VkMemoryPropertyFlags memory_properties = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
     bool allow_growth = true;
 };
@@ -70,6 +72,14 @@ public:
                                                         std::uint32_t instance_count_,
                                                         std::uint64_t revision_);
 
+    [[nodiscard]] GeometryUploadRange Upload3DTemporalMotionInstances(
+        VulkanContext& context_,
+        render::UploadHost& upload_host_,
+        std::uint32_t frame_index_,
+        const Geometry3DTemporalMotionInstance* instances_,
+        std::uint32_t instance_count_,
+        std::uint64_t revision_);
+
     [[nodiscard]] bool IsInitialized() const noexcept;
     [[nodiscard]] std::uint32_t FramesInFlight() const noexcept;
     [[nodiscard]] const GeometryUploadHostStats& Stats() const noexcept;
@@ -86,6 +96,7 @@ private:
     struct FrameState final {
         StreamBuffer primitives_2d{};
         StreamBuffer instances_3d{};
+        StreamBuffer temporal_motion_instances_3d{};
     };
 
     [[nodiscard]] static VkDeviceSize NextPow2(VkDeviceSize value_) noexcept;

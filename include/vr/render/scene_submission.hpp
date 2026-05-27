@@ -2,6 +2,7 @@
 
 #include "vr/ecs/concept/dimension.hpp"
 #include "vr/render/render_view.hpp"
+#include "vr/runtime/runtime_ingress_ids.hpp"
 #include "vr/scene/background/background_traits.hpp"
 
 #include <cstdint>
@@ -23,24 +24,66 @@ enum RenderScenePacketFlags : std::uint32_t {
     render_scene_packet_allow_overlay_flag = 1U << 2U,
 };
 
+static constexpr std::uint32_t invalid_scene_view_index = 0xFFFF'FFFFU;
+
 template<ecs::DimensionTag DimensionT>
-struct RenderScenePacketExtra;
+struct SceneSubmissionPayload;
 
 template<>
-struct RenderScenePacketExtra<ecs::Dim2> final {
+struct SceneSubmissionPayload<ecs::Dim2> final {
     scene::Background2DRenderState background{};
 };
 
 template<>
-struct RenderScenePacketExtra<ecs::Dim3> final {
+struct SceneSubmissionPayload<ecs::Dim3> final {
     scene::SkyEnvironmentRenderState environment{};
     scene::SkyEnvironmentGpuHandle environment_gpu{};
-    std::uint32_t ibl_environment_id = 0U;
+    IblEnvironmentId ibl_environment_id{};
+};
+
+template<ecs::DimensionTag DimensionT>
+using RenderScenePacketExtra = SceneSubmissionPayload<DimensionT>;
+
+struct SceneSubmissionMetadata final {
+    RenderScenePacketKind kind = RenderScenePacketKind::world;
+    std::uint32_t flags = render_scene_packet_allow_postprocess_flag |
+                          render_scene_packet_allow_shadow_flag |
+                          render_scene_packet_allow_overlay_flag;
+    std::uint32_t render_layer_mask = 0xFFFF'FFFFU;
+    std::uint32_t debug_flags = render_view_debug_none_flag;
+    RenderPostProcessPolicy postprocess_policy = RenderPostProcessPolicy::inherit;
+    SceneSubmissionId submission_id{};
+};
+
+struct SceneSubmissionViewSelection final {
+    std::uint32_t active_view_index = invalid_scene_view_index;
+    std::uint32_t scene_view_index = invalid_scene_view_index;
+    std::uint32_t overlay_view_index = invalid_scene_view_index;
+
+    [[nodiscard]] constexpr bool HasActiveView() const noexcept {
+        return active_view_index != invalid_scene_view_index;
+    }
+
+    [[nodiscard]] constexpr bool HasSceneView() const noexcept {
+        return scene_view_index != invalid_scene_view_index;
+    }
+
+    [[nodiscard]] constexpr bool HasOverlayView() const noexcept {
+        return overlay_view_index != invalid_scene_view_index;
+    }
+};
+
+template<ecs::DimensionTag DimensionT>
+struct SceneSubmissionSchema final {
+    SceneSubmissionMetadata metadata{};
+    SceneSubmissionViewSelection selection{};
+    SceneSubmissionPayload<DimensionT> payload{};
 };
 
 template<ecs::DimensionTag DimensionT>
 struct RenderScenePacket final {
     using ViewType = RenderView<DimensionT>;
+    using PayloadType = SceneSubmissionPayload<DimensionT>;
 
     RenderScenePacketKind kind = RenderScenePacketKind::world;
     std::uint8_t reserved0 = 0U;
@@ -56,8 +99,8 @@ struct RenderScenePacket final {
     RenderPostProcessPolicy postprocess_policy = RenderPostProcessPolicy::inherit;
     std::uint8_t reserved2 = 0U;
     std::uint16_t reserved3 = 0U;
-    RenderScenePacketExtra<DimensionT> extra{};
-    std::uint64_t submission_id = 0U;
+    PayloadType extra{};
+    SceneSubmissionId submission_id{};
     std::uint64_t signature = 0U;
 
     [[nodiscard]] const ViewType* ActiveView() const noexcept {
@@ -73,15 +116,36 @@ struct RenderScenePacket final {
         }
         return views + view_index_;
     }
+
+    [[nodiscard]] constexpr SceneSubmissionMetadata Metadata() const noexcept {
+        return SceneSubmissionMetadata{
+            .kind = kind,
+            .flags = flags,
+            .render_layer_mask = render_layer_mask,
+            .debug_flags = debug_flags,
+            .postprocess_policy = postprocess_policy,
+            .submission_id = submission_id,
+        };
+    }
+
+    [[nodiscard]] constexpr const PayloadType& Payload() const noexcept {
+        return extra;
+    }
+
+    [[nodiscard]] constexpr PayloadType& Payload() noexcept {
+        return extra;
+    }
 };
 
 using RenderScenePacket2D = RenderScenePacket<ecs::Dim2>;
 using RenderScenePacket3D = RenderScenePacket<ecs::Dim3>;
 
-static constexpr std::uint32_t invalid_scene_view_index = 0xFFFF'FFFFU;
-
-static_assert(std::is_standard_layout_v<RenderScenePacketExtra<ecs::Dim2>>);
-static_assert(std::is_standard_layout_v<RenderScenePacketExtra<ecs::Dim3>>);
+static_assert(std::is_standard_layout_v<SceneSubmissionPayload<ecs::Dim2>>);
+static_assert(std::is_standard_layout_v<SceneSubmissionPayload<ecs::Dim3>>);
+static_assert(std::is_standard_layout_v<SceneSubmissionMetadata>);
+static_assert(std::is_standard_layout_v<SceneSubmissionViewSelection>);
+static_assert(std::is_standard_layout_v<SceneSubmissionSchema<ecs::Dim2>>);
+static_assert(std::is_standard_layout_v<SceneSubmissionSchema<ecs::Dim3>>);
 
 template<ecs::DimensionTag DimensionT>
 struct ResolvedSceneViewSelection final {
@@ -108,18 +172,17 @@ template<ecs::DimensionTag DimensionT>
     RenderViewHashCombine(hash, static_cast<std::uint64_t>(packet_.postprocess_policy));
     if constexpr (std::is_same_v<DimensionT, ecs::Dim2>) {
         RenderViewHashCombine(hash,
-                              static_cast<std::uint64_t>(packet_.extra.background.revision));
+                              static_cast<std::uint64_t>(packet_.Payload().background.revision));
     } else {
         RenderViewHashCombine(hash,
-                              static_cast<std::uint64_t>(packet_.extra.environment.revision));
+                              static_cast<std::uint64_t>(packet_.Payload().environment.revision));
         RenderViewHashCombine(hash,
-                              static_cast<std::uint64_t>(packet_.extra.environment_gpu.index));
+                              static_cast<std::uint64_t>(packet_.Payload().environment_gpu.index));
         RenderViewHashCombine(hash,
-                              static_cast<std::uint64_t>(packet_.extra.environment_gpu.generation));
-        RenderViewHashCombine(hash,
-                              static_cast<std::uint64_t>(packet_.extra.ibl_environment_id));
+                              static_cast<std::uint64_t>(packet_.Payload().environment_gpu.generation));
+        RenderViewHashCombine(hash, packet_.Payload().ibl_environment_id.value);
     }
-    RenderViewHashCombine(hash, packet_.submission_id);
+    RenderViewHashCombine(hash, packet_.Metadata().submission_id.value);
     for (std::uint32_t view_index = 0U; view_index < packet_.view_count; ++view_index) {
         const RenderView<DimensionT>& view = packet_.views[view_index];
         RenderViewHashCombine(hash, view.signature);
@@ -128,6 +191,56 @@ template<ecs::DimensionTag DimensionT>
 }
 
 } // namespace detail
+
+template<ecs::DimensionTag DimensionT>
+[[nodiscard]] constexpr std::uint32_t ComputeSceneSubmissionViewLayerMask(
+    const RenderView<DimensionT>* views_,
+    const std::uint32_t view_count_) noexcept {
+    std::uint32_t layer_mask = 0U;
+    if (views_ == nullptr) {
+        return layer_mask;
+    }
+    for (std::uint32_t view_index = 0U; view_index < view_count_; ++view_index) {
+        layer_mask |= views_[view_index].layer_mask;
+    }
+    return layer_mask;
+}
+
+template<ecs::DimensionTag DimensionT>
+constexpr void BindSceneSubmissionViews(RenderScenePacket<DimensionT>& packet_,
+                                        const RenderView<DimensionT>* views_,
+                                        const std::uint32_t view_count_,
+                                        const std::uint32_t active_view_index_ = 0U) noexcept {
+    packet_.views = views_;
+    packet_.view_count = view_count_;
+    packet_.active_view_index = active_view_index_;
+}
+
+template<ecs::DimensionTag DimensionT>
+constexpr void ApplySceneSubmissionMetadata(RenderScenePacket<DimensionT>& packet_,
+                                            const SceneSubmissionMetadata& metadata_) noexcept {
+    packet_.kind = metadata_.kind;
+    packet_.flags = metadata_.flags;
+    packet_.render_layer_mask = metadata_.render_layer_mask;
+    packet_.debug_flags = metadata_.debug_flags;
+    packet_.postprocess_policy = metadata_.postprocess_policy;
+    packet_.submission_id = metadata_.submission_id;
+}
+
+template<ecs::DimensionTag DimensionT>
+constexpr void ApplySceneSubmissionPayload(RenderScenePacket<DimensionT>& packet_,
+                                           const SceneSubmissionPayload<DimensionT>& payload_) noexcept {
+    packet_.extra = payload_;
+}
+
+template<ecs::DimensionTag DimensionT>
+constexpr void ApplySceneSubmissionSchema(RenderScenePacket<DimensionT>& packet_,
+                                          const SceneSubmissionSchema<DimensionT>& schema_) noexcept {
+    ApplySceneSubmissionMetadata(packet_, schema_.metadata);
+    ApplySceneSubmissionPayload(packet_, schema_.payload);
+    packet_.active_view_index =
+        schema_.selection.HasActiveView() ? schema_.selection.active_view_index : 0U;
+}
 
 [[nodiscard]] constexpr bool IsSceneSubmissionViewKind(RenderViewKind kind_) noexcept {
     switch (kind_) {
@@ -160,15 +273,37 @@ template<ecs::DimensionTag DimensionT>
 template<ecs::DimensionTag DimensionT>
 [[nodiscard]] RenderScenePacket<DimensionT> MakeSingleViewScenePacket(
     const RenderView<DimensionT>& view_,
-    std::uint64_t submission_id_ = 0U,
-    RenderScenePacketKind kind_ = RenderScenePacketKind::world) noexcept {
+    const SceneSubmissionMetadata& metadata_) noexcept {
     RenderScenePacket<DimensionT> packet{};
-    packet.kind = kind_;
-    packet.views = &view_;
-    packet.view_count = 1U;
-    packet.active_view_index = 0U;
-    packet.submission_id = submission_id_;
-    packet.render_layer_mask = view_.layer_mask;
+    BindSceneSubmissionViews(packet, &view_, 1U, 0U);
+    ApplySceneSubmissionMetadata(packet, metadata_);
+    packet.signature = detail::ComposeRenderScenePacketSignature(packet);
+    return packet;
+}
+
+template<ecs::DimensionTag DimensionT>
+[[nodiscard]] RenderScenePacket<DimensionT> MakeSingleViewScenePacket(
+    const RenderView<DimensionT>& view_,
+    SceneSubmissionId submission_id_ = {},
+    RenderScenePacketKind kind_ = RenderScenePacketKind::world) noexcept {
+    return MakeSingleViewScenePacket(
+        view_,
+        SceneSubmissionMetadata{
+            .kind = kind_,
+            .render_layer_mask = view_.layer_mask,
+            .submission_id = submission_id_,
+        });
+}
+
+template<ecs::DimensionTag DimensionT>
+[[nodiscard]] RenderScenePacket<DimensionT> MakeScenePacketFromViewRange(
+    const RenderView<DimensionT>* views_,
+    std::uint32_t view_count_,
+    std::uint32_t active_view_index_,
+    const SceneSubmissionMetadata& metadata_) noexcept {
+    RenderScenePacket<DimensionT> packet{};
+    BindSceneSubmissionViews(packet, views_, view_count_, active_view_index_);
+    ApplySceneSubmissionMetadata(packet, metadata_);
     packet.signature = detail::ComposeRenderScenePacketSignature(packet);
     return packet;
 }
@@ -178,23 +313,17 @@ template<ecs::DimensionTag DimensionT>
     const RenderView<DimensionT>* views_,
     std::uint32_t view_count_,
     std::uint32_t active_view_index_ = 0U,
-    std::uint64_t submission_id_ = 0U,
+    SceneSubmissionId submission_id_ = {},
     RenderScenePacketKind kind_ = RenderScenePacketKind::world) noexcept {
-    RenderScenePacket<DimensionT> packet{};
-    packet.kind = kind_;
-    packet.views = views_;
-    packet.view_count = view_count_;
-    packet.active_view_index = active_view_index_;
-    packet.submission_id = submission_id_;
-    packet.render_layer_mask = 0U;
-    for (std::uint32_t view_index = 0U; view_index < view_count_; ++view_index) {
-        if (const RenderView<DimensionT>* view = packet.ViewAt(view_index);
-            view != nullptr) {
-            packet.render_layer_mask |= view->layer_mask;
-        }
-    }
-    packet.signature = detail::ComposeRenderScenePacketSignature(packet);
-    return packet;
+    return MakeScenePacketFromViewRange(
+        views_,
+        view_count_,
+        active_view_index_,
+        SceneSubmissionMetadata{
+            .kind = kind_,
+            .render_layer_mask = ComputeSceneSubmissionViewLayerMask(views_, view_count_),
+            .submission_id = submission_id_,
+        });
 }
 
 template<ecs::DimensionTag DimensionT>
@@ -255,6 +384,27 @@ template<ecs::DimensionTag DimensionT>
     }
 
     return selection;
+}
+
+template<ecs::DimensionTag DimensionT>
+[[nodiscard]] constexpr SceneSubmissionViewSelection ResolveSceneSubmissionViewSelection(
+    const RenderScenePacket<DimensionT>& packet_) noexcept {
+    const ResolvedSceneViewSelection<DimensionT> resolved = ResolveSceneViewSelection(packet_);
+    return SceneSubmissionViewSelection{
+        .active_view_index = resolved.active_view_index,
+        .scene_view_index = resolved.scene_view_index,
+        .overlay_view_index = resolved.overlay_view_index,
+    };
+}
+
+template<ecs::DimensionTag DimensionT>
+[[nodiscard]] constexpr SceneSubmissionSchema<DimensionT> MakeSceneSubmissionSchema(
+    const RenderScenePacket<DimensionT>& packet_) noexcept {
+    return SceneSubmissionSchema<DimensionT>{
+        .metadata = packet_.Metadata(),
+        .selection = ResolveSceneSubmissionViewSelection(packet_),
+        .payload = packet_.Payload(),
+    };
 }
 
 template<ecs::DimensionTag DimensionT>

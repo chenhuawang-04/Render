@@ -1,6 +1,7 @@
 ﻿#pragma once
 
 #include "Center/Memory/Container/Vector/McVector.hpp"
+#include "vr/runtime/runtime_ingress_ids.hpp"
 #include "vr/ecs/component/spatial_types.hpp"
 #include "vr/render/bindless_types.hpp"
 #include "vr/render/retire_bus.hpp"
@@ -28,14 +29,6 @@ struct TextureHostCreateInfo final {
     std::uint32_t reserve_retired_texture_count = 128U;
     VkMemoryPropertyFlags memory_properties = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
     bool prefer_bc6h_hdr_format = true;
-};
-
-struct TextureId final {
-    std::uint32_t value = 0U;
-
-    [[nodiscard]] bool IsValid() const noexcept {
-        return value != 0U;
-    }
 };
 
 struct TextureCreateInfo final {

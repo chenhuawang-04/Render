@@ -54,7 +54,7 @@ void GeometryAppearanceHost::UpsertAppearance(const GeometryAppearanceDesc& desc
     if (!initialized) {
         throw std::runtime_error("GeometryAppearanceHost::UpsertAppearance called before Initialize");
     }
-    if (desc_.appearance_id == 0U) {
+    if (!desc_.appearance_id.IsValid()) {
         throw std::invalid_argument("GeometryAppearanceHost::UpsertAppearance appearance_id must be non-zero");
     }
     const GeometryAppearanceDesc normalized_desc = NormalizeAppearanceDesc(desc_);
@@ -84,8 +84,8 @@ void GeometryAppearanceHost::UpsertAppearance(const GeometryAppearanceDesc& desc
     ++stats.revision;
 }
 
-bool GeometryAppearanceHost::RemoveAppearance(std::uint32_t appearance_id_) noexcept {
-    if (!initialized || appearance_id_ == 0U) {
+bool GeometryAppearanceHost::RemoveAppearance(GeometryAppearanceId appearance_id_) noexcept {
+    if (!initialized || !appearance_id_.IsValid()) {
         return false;
     }
 
@@ -102,8 +102,8 @@ bool GeometryAppearanceHost::RemoveAppearance(std::uint32_t appearance_id_) noex
     return true;
 }
 
-const GeometryAppearanceHost::AppearanceRecord* GeometryAppearanceHost::FindAppearance(std::uint32_t appearance_id_) const noexcept {
-    if (!initialized || appearance_id_ == 0U) {
+const GeometryAppearanceHost::AppearanceRecord* GeometryAppearanceHost::FindAppearance(GeometryAppearanceId appearance_id_) const noexcept {
+    if (!initialized || !appearance_id_.IsValid()) {
         return nullptr;
     }
 
@@ -126,7 +126,7 @@ const GeometryAppearanceHostStats& GeometryAppearanceHost::Stats() const noexcep
     return stats;
 }
 
-std::size_t GeometryAppearanceHost::LowerBoundAppearanceIndex(std::uint32_t appearance_id_) const noexcept {
+std::size_t GeometryAppearanceHost::LowerBoundAppearanceIndex(GeometryAppearanceId appearance_id_) const noexcept {
     std::size_t first = 0U;
     std::size_t count = appearances.size();
     while (count > 0U) {

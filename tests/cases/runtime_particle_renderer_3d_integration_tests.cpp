@@ -107,13 +107,13 @@ void ConfigureParticle3DRuntimeCreateInfo(Runtime::CreateInfo& create_info_,
 
 [[nodiscard]] bool HasEffectiveQueueBatchWithPass(
     const vr::runtime::RenderGraphRuntimeDiagnostics& diagnostics_,
-    std::string_view queue_name_,
+    const vr::render_graph::QueueClass queue_,
     std::string_view pass_name_) {
     return std::any_of(
         diagnostics_.effective_queue_batches.begin(),
         diagnostics_.effective_queue_batches.end(),
         [&](const vr::runtime::RenderGraphQueueBatchDiagnostics& batch_) {
-            if (batch_.queue_name != queue_name_) {
+            if (batch_.queue != queue_) {
                 return false;
             }
             return std::any_of(
@@ -127,24 +127,24 @@ void ConfigureParticle3DRuntimeCreateInfo(Runtime::CreateInfo& create_info_,
 
 [[nodiscard]] bool HasEffectiveQueueBatchOnQueue(
     const vr::runtime::RenderGraphRuntimeDiagnostics& diagnostics_,
-    std::string_view queue_name_) {
+    const vr::render_graph::QueueClass queue_) {
     return std::any_of(
         diagnostics_.effective_queue_batches.begin(),
         diagnostics_.effective_queue_batches.end(),
         [&](const vr::runtime::RenderGraphQueueBatchDiagnostics& batch_) {
-            return batch_.queue_name == queue_name_;
+            return batch_.queue == queue_;
         });
 }
 
 [[nodiscard]] bool AllEffectiveQueueBatchesUseQueue(
     const vr::runtime::RenderGraphRuntimeDiagnostics& diagnostics_,
-    std::string_view queue_name_) {
+    const vr::render_graph::QueueClass queue_) {
     return !diagnostics_.effective_queue_batches.empty() &&
            std::all_of(
                diagnostics_.effective_queue_batches.begin(),
                diagnostics_.effective_queue_batches.end(),
                [&](const vr::runtime::RenderGraphQueueBatchDiagnostics& batch_) {
-                   return batch_.queue_name == queue_name_;
+                   return batch_.queue == queue_;
                });
 }
 
@@ -728,7 +728,8 @@ VR_TEST_CASE(RuntimeIntegration_scene_recorder_3d_particle_graph_async_compute_u
             graphics_fallback_active =
                 graphics_fallback_active || graph_diag.graphics_fallback_active;
             queue_timeline_json_available =
-                queue_timeline_json_available || !graph_diag.effective_queue_timeline_json.empty();
+                queue_timeline_json_available ||
+                !vr::runtime::BuildRenderGraphQueueTimelineJson(graph_diag).empty();
             max_effective_queue_batch_count =
                 std::max(max_effective_queue_batch_count,
                          graph_diag.effective_queue_batch_count);
@@ -737,13 +738,19 @@ VR_TEST_CASE(RuntimeIntegration_scene_recorder_3d_particle_graph_async_compute_u
                          graph_diag.effective_queue_dependency_count);
             compute_queue_batch_seen =
                 compute_queue_batch_seen ||
-                HasEffectiveQueueBatchOnQueue(graph_diag, "compute");
+                HasEffectiveQueueBatchOnQueue(
+                    graph_diag,
+                    vr::render_graph::QueueClass::compute);
             graphics_queue_batch_seen =
                 graphics_queue_batch_seen ||
-                HasEffectiveQueueBatchOnQueue(graph_diag, "graphics");
+                HasEffectiveQueueBatchOnQueue(
+                    graph_diag,
+                    vr::render_graph::QueueClass::graphics);
             graphics_only_effective_batches_seen =
                 graphics_only_effective_batches_seen ||
-                AllEffectiveQueueBatchesUseQueue(graph_diag, "graphics");
+                AllEffectiveQueueBatchesUseQueue(
+                    graph_diag,
+                    vr::render_graph::QueueClass::graphics);
             max_indirect_draw_calls = std::max(max_indirect_draw_calls,
                                                particle_renderer.Stats().indirect_draw_count);
             max_compute_submitted = std::max(max_compute_submitted,

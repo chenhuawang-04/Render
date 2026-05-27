@@ -42,7 +42,7 @@ struct GeometryResourceHostStats {
 class GeometryResourceHost final {
 public:
     struct MeshRecord final {
-        std::uint32_t geometry_id = 0U;
+        GeometryResourceId geometry_id{};
         VkPrimitiveTopology topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
         std::uint32_t vertex_count = 0U;
         std::uint32_t index_count = 0U;
@@ -81,11 +81,11 @@ public:
                     const GeometryMeshUploadInfo& upload_info_);
 
     [[nodiscard]] bool RemoveMesh(VulkanContext& context_,
-                                  std::uint32_t geometry_id_,
+                                  GeometryResourceId geometry_id_,
                                   std::uint64_t last_submitted_value_,
                                   std::uint64_t completed_submit_value_);
 
-    [[nodiscard]] const MeshRecord* FindMesh(std::uint32_t geometry_id_) const noexcept;
+    [[nodiscard]] const MeshRecord* FindMesh(GeometryResourceId geometry_id_) const noexcept;
     [[nodiscard]] std::uint32_t MeshCount() const noexcept;
     [[nodiscard]] bool IsInitialized() const noexcept;
     [[nodiscard]] const GeometryResourceHostStats& Stats() const noexcept;
@@ -100,7 +100,7 @@ private:
     [[nodiscard]] static std::size_t LowerBoundReusableBufferIndex(
         const GeometryMcVector<resource::BufferResource>& buffers_,
         VkDeviceSize required_size_) noexcept;
-    [[nodiscard]] std::size_t LowerBoundMeshIndex(std::uint32_t geometry_id_) const noexcept;
+    [[nodiscard]] std::size_t LowerBoundMeshIndex(GeometryResourceId geometry_id_) const noexcept;
     void RetireMeshBuffers(MeshRecord& mesh_,
                            std::uint64_t retire_value_);
     void DestroyMeshBuffers(VulkanContext& context_,

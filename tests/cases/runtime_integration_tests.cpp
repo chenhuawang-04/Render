@@ -526,6 +526,53 @@ VR_TEST_CASE(RuntimeIntegration_frame_diagnostics_capture_swapchain_state,
              tick_result.diagnostics.queues.graphics_completed);
 }
 
+VR_TEST_CASE(
+    RuntimeIntegration_frame_diagnostics_requested_detailed_respects_build_capability,
+    "integration;gpu;sdl;runtime;diagnostics") {
+    Runtime runtime{};
+    Runtime::CreateInfo create_info{};
+    create_info.platform.window.title =
+        "vr_tests_runtime_diagnostics_detailed_capability";
+    create_info.platform.window.width = 320;
+    create_info.platform.window.height = 240;
+    create_info.platform.window.resizable = false;
+    create_info.platform.window.high_pixel_density = false;
+    create_info.platform.instance.enable_validation = false;
+    create_info.render_loop.swapchain.enable_vsync = false;
+    create_info.diagnostics.level = vr::runtime::DiagnosticsLevel::Detailed;
+
+    ClearToPresentRecorder recorder{};
+    try {
+        runtime.Initialize(create_info);
+    } catch (const std::exception& exception_) {
+        if (IsEnvironmentSkipError(exception_.what())) {
+            VR_SKIP(exception_.what());
+        }
+        throw;
+    }
+
+    const Runtime::RuntimeTickResult tick_result = runtime.Tick(recorder);
+    runtime.Shutdown();
+
+    if (vr::runtime::RuntimeDiagnosticsAvailableInBuild()) {
+        VR_REQUIRE(tick_result.diagnostics.collected);
+        VR_CHECK(tick_result.diagnostics.level ==
+                 vr::runtime::DiagnosticsLevel::Detailed);
+        VR_CHECK(tick_result.diagnostics.frame.frame_id > 0U);
+        VR_CHECK(tick_result.diagnostics.swapchain.valid);
+    } else {
+        VR_CHECK(!tick_result.diagnostics.collected);
+        VR_CHECK(tick_result.diagnostics.level ==
+                 vr::runtime::DiagnosticsLevel::Off);
+        VR_CHECK(tick_result.diagnostics.frame.frame_id == 0U);
+        VR_CHECK(!tick_result.diagnostics.swapchain.valid);
+        VR_CHECK(!tick_result.diagnostics.render_graph.available);
+        VR_CHECK(tick_result.diagnostics.render_graph.lazy_memory_resources.empty());
+        VR_CHECK(tick_result.diagnostics.render_graph.compile_liveness_ranges.empty());
+        VR_CHECK(tick_result.diagnostics.render_graph.compile_transient_memory.records.empty());
+    }
+}
+
 VR_TEST_CASE(RuntimeIntegration_frame_diagnostics_off_skips_collection,
              "integration;gpu;sdl;runtime;diagnostics") {
     Runtime runtime{};
@@ -554,6 +601,63 @@ VR_TEST_CASE(RuntimeIntegration_frame_diagnostics_off_skips_collection,
 
     VR_CHECK(!tick_result.diagnostics.collected);
     VR_CHECK(tick_result.diagnostics.level == vr::runtime::DiagnosticsLevel::Off);
+}
+
+VR_TEST_CASE(RuntimeIntegration_frame_diagnostics_off_stays_cold_during_upload_activity,
+             "integration;gpu;sdl;runtime;diagnostics;upload") {
+    Runtime runtime{};
+    Runtime::CreateInfo create_info{};
+    create_info.platform.window.title = "vr_tests_runtime_diagnostics_off_upload";
+    create_info.platform.window.width = 320;
+    create_info.platform.window.height = 240;
+    create_info.platform.window.resizable = false;
+    create_info.platform.window.high_pixel_density = false;
+    create_info.platform.instance.enable_validation = false;
+    create_info.render_loop.swapchain.enable_vsync = false;
+    create_info.diagnostics.level = vr::runtime::DiagnosticsLevel::Off;
+
+    UploadCopyRecorder recorder{};
+    vr::resource::BufferResource destination_buffer{};
+
+    try {
+        runtime.Initialize(create_info);
+    } catch (const std::exception& exception_) {
+        if (IsEnvironmentSkipError(exception_.what())) {
+            VR_SKIP(exception_.what());
+        }
+        throw;
+    }
+
+    vr::resource::BufferCreateInfo buffer_create_info{};
+    buffer_create_info.size = recorder.PayloadBytes();
+    buffer_create_info.usage =
+        VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+    buffer_create_info.memory_properties = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+    destination_buffer = runtime.CreateBuffer(buffer_create_info);
+    recorder.SetDestinationBuffer(destination_buffer.buffer);
+
+    const Runtime::RuntimeTickResult tick_result = runtime.Tick(recorder);
+    runtime.DestroyBuffer(destination_buffer);
+    runtime.Shutdown();
+
+    VR_CHECK(recorder.prepare_count == 1U);
+    VR_CHECK(recorder.upload_record_count == 1U);
+    VR_CHECK(tick_result.upload_submitted);
+    VR_CHECK(!tick_result.diagnostics.collected);
+    VR_CHECK(tick_result.diagnostics.level ==
+             vr::runtime::DiagnosticsLevel::Off);
+    VR_CHECK(tick_result.diagnostics.frame.frame_id == 0U);
+    VR_CHECK(!tick_result.diagnostics.swapchain.valid);
+    VR_CHECK(tick_result.diagnostics.commands.frame_slot_count == 0U);
+    VR_CHECK(tick_result.diagnostics.upload.buffer_copy_count == 0U);
+    VR_CHECK(tick_result.diagnostics.upload.staging_page_count == 0U);
+    VR_CHECK(tick_result.diagnostics.allocations.upload_capacity_bytes == 0U);
+    VR_CHECK(!tick_result.diagnostics.render_graph.available);
+    VR_CHECK(tick_result.diagnostics.render_graph.lazy_memory_resources.empty());
+    VR_CHECK(
+        tick_result.diagnostics.render_graph.effective_queue_batches.empty());
+    VR_CHECK(
+        tick_result.diagnostics.render_graph.effective_queue_dependencies.empty());
 }
 
 VR_TEST_CASE(RuntimeIntegration_swapchain_mark_dirty_notifies_recorder,

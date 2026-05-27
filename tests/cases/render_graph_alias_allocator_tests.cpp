@@ -1,5 +1,6 @@
 #include "support/test_framework.hpp"
 #include "vr/render_graph/alias_allocator.hpp"
+#include "vr/render_graph/compiled_render_graph_observability.hpp"
 #include "vr/render_graph/render_graph_builder.hpp"
 
 #include <string_view>
@@ -567,7 +568,13 @@ VR_TEST_CASE(RenderGraphAliasAllocator_compiled_graph_json_exports_transient_pla
     const auto compiled = builder.Compile();
     const auto json = compiled.BuildJson();
 
-    VR_CHECK(json.find("\"transientAllocationPlan\"") != std::string::npos);
+    if (!vr::render_graph::CompiledRenderGraphObservabilityAvailableInBuild()) {
+        VR_CHECK(json.empty());
+        return;
+    }
+
+    VR_CHECK(json.find("\"topology\"") != std::string::npos);
+    VR_CHECK(json.find("\"transientMemory\"") != std::string::npos);
     VR_CHECK(json.find("\"savedBytes\": 4096") != std::string::npos);
     VR_CHECK(json.find("\"pageCount\": 1") != std::string::npos);
 }

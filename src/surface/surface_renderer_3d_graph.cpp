@@ -56,6 +56,16 @@ namespace {
 
 } // namespace
 
+void SurfaceRenderer3D::SetFrameViewProjectionOverride(
+    const ecs::Matrix4x4& view_projection_) noexcept {
+    frame_view_projection_override = view_projection_;
+    frame_view_projection_override_active = true;
+}
+
+void SurfaceRenderer3D::ClearFrameViewProjectionOverride() noexcept {
+    frame_view_projection_override_active = false;
+}
+
 void SurfaceRenderer3D::BuildDirectRuntimeGraph(
     const render::RuntimeDirectGraphBuildView& graph_view_) {
     if (!initialized) {
@@ -320,12 +330,18 @@ void SurfaceRenderer3D::RecordGraphInternal(render_graph::GraphCommandContext& c
     scissor.extent = render_extent;
     vkCmdSetScissor(context_.CommandBuffer(), 0U, 1U, &scissor);
 
-    if (last_upload_result.upload.buffer != VK_NULL_HANDLE &&
-        !runtime_scratch.draw_batches.empty()) {
+    const ActiveFrameRuntimeTruth& active_runtime_truth =
+        active_frame_runtime_truth;
+    const auto& prepared_draw_batches =
+        active_prepared_frame_state.artifacts.draw_batches;
+    if (active_runtime_truth.instance_upload_range.buffer != VK_NULL_HANDLE &&
+        !prepared_draw_batches.empty()) {
         std::uint32_t stage_draw_call_count = 0U;
         std::uint32_t stage_filtered_batch_count = 0U;
-        const VkBuffer vertex_buffer = last_upload_result.upload.buffer;
-        const VkDeviceSize vertex_offset = last_upload_result.upload.offset;
+        const VkBuffer vertex_buffer =
+            active_runtime_truth.instance_upload_range.buffer;
+        const VkDeviceSize vertex_offset =
+            active_runtime_truth.instance_upload_range.offset;
         vkCmdBindVertexBuffers(context_.CommandBuffer(),
                                0U,
                                1U,
@@ -334,7 +350,9 @@ void SurfaceRenderer3D::RecordGraphInternal(render_graph::GraphCommandContext& c
         const VkPipelineLayout pipeline_layout = pipeline_host->GetPipelineLayout(pipeline_layout_id);
 
         PushConstants push_constants{};
-        if (camera_component != nullptr) {
+        if (frame_view_projection_override_active) {
+            push_constants.view_projection = frame_view_projection_override;
+        } else if (camera_component != nullptr) {
             push_constants.view_projection = camera_component->runtime.view_projection_matrix;
         } else {
             push_constants.view_projection = ecs::spatial_math::IdentityMatrix4x4();
@@ -356,7 +374,7 @@ void SurfaceRenderer3D::RecordGraphInternal(render_graph::GraphCommandContext& c
 
         render::GraphicsPipelineId bound_pipeline{};
         bool shared_state_bound = false;
-        for (const ecs::Surface3DDrawBatch& batch : runtime_scratch.draw_batches) {
+        for (const ecs::Surface3DDrawBatch& batch : prepared_draw_batches) {
             if (filter_by_pass_bucket_ &&
                 ecs::SurfaceSystem<ecs::Dim3>::ExtractPassBucket(batch.sort_key) != pass_bucket_) {
                 ++stage_filtered_batch_count;

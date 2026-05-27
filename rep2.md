@@ -1,1160 +1,869 @@
-# Render 项目 Bindless 全量重构规划书
+# 下一阶段完整规划书
 
-## 0. 总结论
+  ## 1. 当前阶段判断
 
-我建议把这次改造定义为 **“资源绑定层重构”**，而不是在现有 renderer 里局部替换 descriptor set。你的目标是“不计代价、最优设计”，那么正确终态应当是：
+  当前主线应判断为：
 
-**所有可采样资源进入全局 Bindless Resource Table；所有渲染对象、材质、粒子实例、Surface 实例只携带资源 slot index；renderer 在 pass/pipeline 级别绑定一次全局表；shader 通过 `nonuniformEXT`/NonUniformResourceIndex 访问资源。**
+  > RenderGraph Phase 8《Descriptor Lowering 与 Shader Contract》已经完成关键收尾，下一阶段应进入 Phase 9《Transient
+  > Alias Allocator》
 
-参考文档已经指出：当前项目并不是真正 bindless，而是“按纹理/图像缓存 `VkDescriptorSet`，录制时按 batch 绑定”的传统模型；我又按当前 `master` 关键路径核查了一遍，结论仍然成立。当前 `master` 已是 `29fc1b2b789e59109c1145b8d5942276941e768f`，而参考文档基于更早的 `master@80ec57f`；这次 master 主要更新了 SkyEnvironment/Scene/IBL 相关文档与结构说明，并没有改变 bindless 主矛盾。 
+  ### 为什么这么判断
 
----
+  结合当前提交 31da238 和已完成内容，Phase 8 的关键目标已经基本闭环：
 
-# 1. 当前项目的真实状态
+  - DescriptorBindingSource::external_buffer 已接入 graph descriptor lowering
+  - DescriptorBindingKind::storage_buffer / uniform_buffer 已进入 shader contract 语义
+  - external buffer resolver registry 已贯通 builder / compiled graph / executor
+  - executor 已支持 graph-owned transient descriptor staging
+  - GraphCommandContext 已带 frame_index
+  - SurfaceRenderer2D / SurfaceRenderer3D / GeometryRenderer3D / SkyEnvironmentPass 的 graph path 已切到 graph-owned
+    descriptor contract
+  - SceneRecorder3D 的 sky pre/post opaque graph path 已能声明 descriptor bindings
+  - compile 阶段已区分：
+      - 完整 shader contract layout
+      - 当前 pass 实际 descriptor write batch
+  - executor 已能按 layout + writes 联合构造 transient descriptor set
 
-## 1.1 可以保留的基础设施
+  这些内容已经对应上 rendergraph_final_development_plan.md 中 Phase 8 的核心验收条目：
 
-### VulkanContext：保留，并扩展为能力中心
+  - shader binding 与 graph resource declaration 一致
+  - 未声明资源绑定会失败
+  - 声明未绑定会失败
+  - descriptor writes 批量化
+  - 移除 renderer-owned transient descriptor assumptions
 
-`VulkanDeviceCreateInfo` 已经包含 `VkPhysicalDeviceVulkan12Features`、`VkPhysicalDeviceVulkan13Features` 和额外 `required_features_pnext`；`VulkanContext` 也已经暴露 `EnabledVulkan12Features()` / `EnabledVulkan13Features()`。这说明 descriptor indexing 特性链不需要推倒设备创建流程，只需要在其上增加查询、缓存、校验和启用策略。
+  ———
 
-### DescriptorHost：保留 layout cache，但重构生命周期
+  ## 2. 下一阶段名称
 
-`DescriptorSetLayoutDesc` 已经有 `bindings`、`binding_flags`、`flags`，这对 `PARTIALLY_BOUND`、`VARIABLE_DESCRIPTOR_COUNT`、`UPDATE_AFTER_BIND` 等 bindless flag 非常关键；但 `DescriptorHost` 当前核心仍是 `AllocateSet(s)` + `UpdateSet()` + frame arena，不是全局 slot table。
+  > Phase 9：Transient Alias Allocator
 
-`src/render/descriptor_host.cpp` 中 `BeginFrame` 会对当前 frame arena 内所有 descriptor pool 执行 `vkResetDescriptorPool`，这决定了现有 `VkDescriptorSet` 是 frame-local/transient 生命周期，不能承载长期存在的 bindless table。
+  一句话目标：
 
-### TextureHost / SurfaceImageHost：保留资源管理，但挂接 bindless slot
+  > 让 RenderGraph 基于资源 liveness / compatibility / footprint 生成真实的 transient allocation plan，并让 Vulkan
+  > backend 实际把不重叠生命周期的 transient buffer / opt-in transient image 绑定到共享物理内存页，同时输出 alias
+  > barrier、memory timeline 和 saved bytes 诊断。
 
-`TextureHost::TextureRecord` 当前管理 `TextureId`、image 信息、layout、`ImageResource`、revision、CPU snapshot 等，但没有 `BindlessSlot`、generation、descriptor write revision。
+  ———
 
-`SurfaceImageHost::ImageRecord` 同样管理 image id、尺寸、format、usage、layout、resource、revision，但也没有全局 descriptor slot。
+  ## 3. 为什么现在必须先做 Phase 9
 
-这两者不是要推倒，而是要接入一个统一的 `BindlessResourceSystem`。
+  ## 3.1 它是 Phase 10 的前置条件
 
----
+  Phase 10 是 Async Compute / Transfer / Advanced Scheduling。
+  但多队列调度要想正确，必须先知道：
 
-## 1.2 必须推倒的部分
+  - 资源 first use / last use
+  - 哪些逻辑资源会共享物理页
+  - alias 后的 hazard 如何同步
+  - queue overlap 是否会踩共享 page
 
-### ParticleRenderer2D 的 per-frame texture set cache 必须删除
+  如果先做 Phase 10，再补 alias allocator，后面还得反过来重写 queue overlap 判断。
 
-`ParticleRenderer2D` 现在有 `TextureSetEntry { texture_id, VkDescriptorSet }`、`AcquireTextureDescriptorSet()`、`frame_texture_sets`、`descriptor_set_bind_count` / `descriptor_set_update_count` 统计。
+  ### 结论
 
-实现中 `PrepareFrame` 会清空本帧 `frame_texture_sets`，`Record` 逐 batch 调 `AcquireTextureDescriptorSet(active_frame_index, batch.texture_id)`，然后在 set0 调 `vkCmdBindDescriptorSets`；pipeline layout 里 set0 仍是 `descriptorCount = 1` 的 `COMBINED_IMAGE_SAMPLER`。这条路径必须整体替换为 `texture_slot`。
+  Phase 9 是 Phase 10 的真实依赖，不是可选前置。
 
-### SurfaceRenderer2D 的贴图 descriptor set cache 必须删除
+  ———
 
-`SurfaceRenderer2D` 当前也是 `TextureSetEntry { image_id, VkDescriptorSet }` + `AcquireTextureDescriptorSet()` + `frame_texture_sets`；同时保留了 lighting 的 frame-local descriptor set。
+  ## 3.2 它也是 Phase 11 的语义基础
 
-实现中甚至有一段注释明确说明：`DescriptorHost::BeginFrame` 会 reset 当前 frame arena，因此之前为该 frame 分配的 `VkDescriptorSet` 会失效，必须在每帧 Prepare 阶段强制失效本地缓存。这正是 bindless 持久表不能复用当前路径的直接证据。
+  Phase 11 是 Native Pass Fusion / TBR 优化。
+  而这类优化依赖编译器知道：
 
-### SurfaceRenderer3D 的 binding_key descriptor set cache 必须删除
+  - attachment 是否是纯 transient
+  - 是否可以 lazy transient attachment
+  - 后续会不会被 sampled / storage / readback
+  - 是否可以安全 drop storeOp
+  - local read / pass merge 会不会破坏 lifetime 或 alias barrier
 
-`SurfaceRenderer3D` 当前用 `TextureSetEntry { binding_key, VkDescriptorSet }`，并通过 `AcquireTextureDescriptorSet(frame_index, texture_id, sampler_id)` 按 texture+sampler 组合缓存 descriptor set。好消息是 `Surface3DGpuInstance` / draw batch 已经有 `texture_id` 和 `sampler_id` 字段，非常适合直接替换成 `texture_slot` / `sampler_slot`。
+  这些都建立在 完整的 transient allocation / physical lifetime 之上。
 
-`SurfaceRuntimeSystem` 的 GPU instance 结构也已经按 POD 数据流组织，说明把资源 id 写入 GPU instance 是当前架构认可的设计方式；bindless 化只是在这里把“资源 id”升级为“GPU 可直接索引的资源 slot”。
+  ### 结论
 
----
+  Phase 11 必须建立在 Phase 9 之后。
 
-# 2. 终态架构设计
+  ———
 
-## 2.1 总体架构
+  ## 3.3 它是 Phase 12 清理旧架构的替代能力前提
 
-推荐新增一个核心服务：
+  Phase 12 要清理旧架构，包括：
 
-```cpp
-vr::render::BindlessResourceSystem
-```
+  - Scene / Feature 不再依赖 RenderTargetPool
+  - 所有 transient resources 由 graph 管理
+  - Scene 层不再手动 acquire transient target
 
-它不是 renderer 的工具类，而是和 `DescriptorHost`、`TextureHost`、`SurfaceImageHost`、`SamplerHost` 同级的资源绑定中心。
+  如果现在直接清理旧架构，而 graph 还没有真正接管 transient 生命周期，就会把旧能力删掉、但新能力还没补齐。
 
-终态分层如下：
+  ### 结论
 
-```text
-VulkanContext
-  └── DescriptorIndexingCaps / DescriptorBufferCaps
+  Phase 12 不能先做，必须先把 Phase 9 做成可运行的替代能力。
 
-DescriptorHost
-  ├── TransientDescriptorChannel        // 保留现有 per-frame descriptor set
-  └── PersistentBindlessChannel         // 新增：长期存在的全局资源表
+  ———
 
-BindlessResourceSystem
-  ├── BindlessTable sampled_images_2d[]
-  ├── BindlessTable sampled_images_cube[]
-  ├── BindlessTable samplers[]
-  ├── BindlessTable storage_images[]       // 后续
-  ├── BindlessTable storage_buffers[]      // 后续 GPU-driven
-  └── DeferredSlotRecycler
+  # 4. 本阶段总体目标 / 非目标 / 边界
 
-TextureHost / SurfaceImageHost / SkyEnvironmentGpuHost / IBLHost
-  └── 持有 BindlessSlot，不直接持有 descriptor set
+  ## 4.1 总体目标
 
-ParticleRenderer / SurfaceRenderer / BackgroundPass / SkyEnvironmentPass
-  └── 只绑定全局表，并把 slot index 写入 GPU instance/material
-```
+  Phase 9 完成后，系统必须具备以下能力：
 
-Khronos 的 descriptor indexing 示例把 bindless 描述为：把 descriptor memory 看成巨大数组，绑定巨大 descriptor set 后在 shader 中索引资源；这正是本项目应采用的模式。([docs.vulkan.org][1])
+  ### 目标 A：生成真实 transient allocation plan
 
----
+  基于：
 
-## 2.2 Bindless 后端抽象
+  - CompiledRenderGraph
+  - resource liveness
+  - compatibility class
+  - backend footprint / memory requirement
 
-为了“不计代价、最优设计”，不要把当前设计锁死在 `VK_EXT_descriptor_indexing` 上。应当定义一个后端接口：
+  输出：
 
-```cpp
-class IBindlessTableBackend {
-public:
-    virtual BindlessTableHandle CreateTable(const BindlessTableDesc&) = 0;
-    virtual BindlessSlot AllocateSlot(BindlessTableHandle) = 0;
-    virtual void FreeSlotDeferred(BindlessTableHandle, BindlessSlot, uint64_t retire_value) = 0;
-    virtual void QueueImageWrite(BindlessTableHandle, BindlessSlot, VkImageView, VkImageLayout) = 0;
-    virtual void QueueSamplerWrite(BindlessTableHandle, BindlessSlot, VkSampler) = 0;
-    virtual void FlushWrites(VulkanContext&, uint64_t safe_point) = 0;
-    virtual VkDescriptorSet DescriptorSet(BindlessTableHandle) const = 0;
-};
-```
+  - page
+  - offset
+  - alias group
+  - logical bytes
+  - physical bytes
+  - peak bytes
+  - saved bytes
 
-第一后端：`DescriptorIndexingBackend`。
-第二后端：`DescriptorBufferBackend`，未来用 `VK_EXT_descriptor_buffer` 实现。Khronos 对 descriptor buffer 的说明明确提到，bindless 通过巨大 descriptor arrays 和普通整数索引减少 descriptor set 绑定，并把 draw/dispatch 与具体 descriptor binding 解耦；descriptor buffer 更适合后续全 bindless/GPU-driven 架构，但需要额外工具链和生态适配，所以它应作为后端，而不是第一阶段强依赖。([The Khronos Group][2])
+  ### 目标 B：实现真实 physical alias
 
----
+  策略：
 
-# 3. Vulkan 能力设计
+  - device-local transient buffer 默认参与 alias
+  - transient image 采用 opt-in
+  - imported / persistent / host-visible / mapped / no-alias 不参与
+  - depth / MSAA / 特殊 format image 先保守
 
-## 3.1 必需能力
+  ### 目标 C：alias barrier 真正落地
 
-必须新增：
+  要求：
 
-```cpp
-struct DescriptorIndexingCaps {
-    bool supported = false;
+  - 当前 AliasBarrierDecision.realized = false 必须变成真实可执行
+  - Vulkan lowering 能产生对应 barrier / dependency
+  - executor 在正确 pass 前发出
 
-    bool runtime_descriptor_array = false;
-    bool descriptor_binding_partially_bound = false;
-    bool descriptor_binding_variable_descriptor_count = false;
+  ### 目标 D：graph path 不再依赖 RenderTargetPool
 
-    bool sampled_image_array_non_uniform_indexing = false;
-    bool sampler_array_non_uniform_indexing = false;
+  要求：
 
-    bool sampled_image_update_after_bind = false;
-    bool update_unused_while_pending = false;
-    bool null_descriptor = false;
+  - graph-facing APIs 不再依赖 pool
+  - pool 可以暂留给 legacy path
+  - graph-only path 的 transient ownership 必须由 graph 接管
 
-    uint32_t max_sampled_image_slots = 0;
-    uint32_t max_sampler_slots = 0;
-    uint32_t max_variable_descriptor_count = 0;
-    uint32_t max_update_after_bind_sampled_images = 0;
-};
-```
+  ### 目标 E：完整 diagnostics
 
-最低要求：
+  至少可见：
 
-```text
-runtimeDescriptorArray
-descriptorBindingPartiallyBound
-descriptorBindingVariableDescriptorCount
-shaderSampledImageArrayNonUniformIndexing
-```
+  - logical transient bytes
+  - physical transient bytes
+  - peak live bytes
+  - saved bytes
+  - page count
+  - alias barrier count
+  - non-alias reason
 
-可选增强：
+  ———
 
-```text
-descriptorBindingSampledImageUpdateAfterBind
-descriptorBindingUpdateUnusedWhilePending
-nullDescriptor
-```
+  ## 4.2 非目标
 
-Vulkan descriptor indexing 相关特性需要通过 `VkDeviceCreateInfo::pNext` 启用；`runtimeDescriptorArray`、`descriptorBindingPartiallyBound`、`descriptorBindingVariableDescriptorCount` 等都是明确的 feature 位。([docs.vulkan.org][3])
+  本阶段不要做：
 
-## 3.2 必须查询 layout support
+  - Phase 10 async compute / transfer advanced scheduling
+  - Phase 11 native pass fusion / local read / TBR store elimination
+  - Phase 12 彻底删除 legacy SceneRecorder / RenderTargetPool
+  - 重做 descriptor lowering / shader contract
+  - D3D12 / Metal 后端
+  - 跨帧 history resource alias
+  - imported / persistent / external buffer alias
+  - aggressive subresource-level alias
+  - 在 graph frontend 引入 Vulkan 类型
 
-不能把容量写死为 64K 或 128K。必须在创建 bindless layout 前调用 `vkGetDescriptorSetLayoutSupport`，并读取 `VkDescriptorSetVariableDescriptorCountLayoutSupport::maxVariableDescriptorCount`。variable descriptor count 的实际分配还需要在 `VkDescriptorSetAllocateInfo::pNext` 挂 `VkDescriptorSetVariableDescriptorCountAllocateInfo`。([docs.vulkan.org][4])
+  ———
 
-推荐容量策略：
+  ## 4.3 边界
 
-```text
-Debug:
-  sampled_image_2d: min(device_limit, 8192)
-  sampler:          min(device_limit, 512)
-  开启强校验、slot generation 检查、placeholder 检查
+  必须守住：
 
-Release:
-  sampled_image_2d: min(device_limit, 65536 或项目配置)
-  sampler:          min(device_limit, 2048)
-  只保留低成本 generation 检查和统计
-```
+  - include/vr/render_graph/* 继续 backend-neutral
+  - Vulkan-specific memory requirement / bind / page realization 只能在 backend/resource table 层
+  - CompiledRenderGraph 可持有 backend-neutral allocation plan，但不能持有 VkBuffer / VkImage / VkDeviceMemory
+  - resource object 与 memory page ownership 必须分离
+  - retire 必须基于 submit completion value，不能用固定帧数延迟
 
----
+  ———
 
-# 4. DescriptorHost 重构方案
+  # 5. 依赖顺序总览
 
-## 4.1 双生命周期模型
+  1. Phase 9 数据契约
+  2. compatibility / footprint / liveness 统一模型
+  3. CPU-only allocation plan + interval coloring
+  4. memory timeline / diagnostics
+  5. Vulkan low-level alias page ownership
+  6. Vulkan transient buffer alias realization
+  7. Vulkan opt-in image alias realization
+  8. alias barrier realized + lowering + executor emission
+  9. 移除 graph-facing RenderTargetPool 依赖
+  10. runtime smoke / benchmark / regression 收尾
 
-现有 `DescriptorHost` 保留，但内部拆成两条通道：
+  ———
 
-```cpp
-class DescriptorHost {
-public:
-    // 旧路径：继续服务 UBO、lighting、临时 set、回退路径
-    VkDescriptorSet AllocateSet(VulkanContext&, uint32_t frame_index, DescriptorSetLayoutId);
-    void BeginFrame(VulkanContext&, uint32_t frame_index);
+  # 6. 详细实施步骤
 
-    // 新路径：bindless 持久表
-    BindlessTableId CreateBindlessTable(VulkanContext&, const BindlessTableDesc&);
-    VkDescriptorSet GetBindlessDescriptorSet(BindlessTableId) const;
+  ———
 
-    BindlessSlot AllocateBindlessSlot(BindlessTableId);
-    void FreeBindlessSlotDeferred(BindlessTableId, BindlessSlot, uint64_t retire_value);
+  ## Step 1：建立 Phase 9 数据契约与文件边界
 
-    void QueueBindlessImageWrite(BindlessTableId, BindlessSlot, VkImageView, VkImageLayout);
-    void QueueBindlessSamplerWrite(BindlessTableId, BindlessSlot, VkSampler);
-    void FlushBindlessWrites(VulkanContext&, uint64_t completed_submit_value);
-};
-```
+  ### 要改什么
 
-关键规则：
+  新增核心文件：
 
-```text
-BeginFrame 只能 reset transient pools。
-Persistent bindless pool 永不被 BeginFrame reset。
-Bindless descriptor set 的销毁只能发生在 Shutdown 或完整 device idle 后。
-Slot 回收必须走 retire value，不允许立即复用。
-```
+  - include/vr/render_graph/alias_allocator.hpp
+  - src/render_graph/alias_allocator.cpp
+  - tests/cases/render_graph_alias_allocator_tests.cpp
 
-## 4.2 BindlessTable 内部结构
+  新增 backend-neutral 数据结构，至少包括：
 
-```cpp
-struct BindlessSlot {
-    uint32_t index = 0;
-    uint32_t generation = 0;
+  - ResourceFootprint
+  - TransientCompatibilityKey
+  - TransientAllocationRecord
+  - TransientMemoryPage
+  - TransientMemoryTimeline
+  - TransientAllocationPlan
 
-    bool IsValid() const noexcept {
-        return generation != 0;
-    }
-};
+  并让 CompiledRenderGraph 暴露：
 
-struct BindlessTable {
-    DescriptorSetLayoutId layout_id{};
-    VkDescriptorPool pool = VK_NULL_HANDLE;
-    VkDescriptorSet set = VK_NULL_HANDLE;
+  const TransientAllocationPlan& TransientAllocations() const noexcept;
 
-    VkDescriptorType descriptor_type{};
-    uint32_t capacity = 0;
-    uint32_t live_count = 0;
-
-    mc_vector<uint32_t> generations;
-    mc_vector<uint32_t> free_list;
-    mc_vector<uint8_t> initialized;
-    mc_vector<uint64_t> last_write_revision;
+  建议新增独立入口，而不是把 Vulkan footprint 查询塞进 Compile()：
 
-    mc_vector<PendingDescriptorWrite> pending_writes;
-    mc_vector<DeferredSlotFree> deferred_frees;
-};
-```
+  TransientAllocationPlan BuildTransientAllocationPlan(...);
 
-slot 0 必须永久保留为 placeholder：
+  ### 为什么这样设计
 
-```text
-slot 0 = white texture / fallback normal / fallback sampler
-invalid slot -> slot 0
-removed resource -> slot 0
-未加载完成资源 -> slot 0
-```
+  这一步的核心是把：
 
-原因很简单：`PARTIALLY_BOUND` 不是“可以随便写 null descriptor”，而是“未被动态访问到的 descriptor 可以不写”。为了 Debug 和跨驱动稳定，slot 0 placeholder 是最稳策略。Vulkan Guide 也明确区分了 partially bound、update-after-bind 和 non-uniform indexing 的具体规则。([docs.vulkan.org][5])
+  - 逻辑生命周期
+  - 物理内存布局
 
----
+  彻底分开。
 
-# 5. 资源层改造方案
+  graph frontend 不知道 Vulkan memory requirement。
+  backend 才知道 exact footprint。
+  allocator 算法必须 CPU-only 可测。
 
-## 5.1 TextureHost
-
-新增：
+  ### 完成判据
 
-```cpp
-struct TextureBindlessState {
-    BindlessSlot image_slot{};
-    BindlessSlot default_sampler_slot{};
-    uint32_t image_revision_written = 0;
-    uint32_t sampler_revision_written = 0;
-    uint64_t retire_value = 0;
-};
+  - 新类型编译通过
+  - graph debug / JSON 至少能输出空 plan
+  - 空 graph 返回空 allocation plan
+  - alias_allocator.hpp 不出现 Vk* 类型
 
-struct TextureRecord {
-    ...
-    TextureBindlessState bindless{};
-};
-```
+  ### 风险点
 
-行为规则：
-
-```text
-UploadTexture 首次创建:
-  1. 创建 ImageResource
-  2. 上传并 barrier 到 shader_read_layout
-  3. 分配 bindless image slot
-  4. QueueBindlessImageWrite(slot, image_view, shader_read_layout)
-
-UploadTexture 资源重建但 TextureId 不变:
-  1. 复用 slot
-  2. 更新 descriptor 到新 image view
-  3. 旧 ImageResource 走 RetireBus
-
-RemoveTexture:
-  1. 将 slot descriptor 更新为 placeholder
-  2. 延迟释放 slot
-  3. 到 completed_submit_value 后 generation++ 并回收 index
-```
-
-## 5.2 SurfaceImageHost
-
-`SurfaceImageHost` 做同样改造：
-
-```cpp
-struct SurfaceImageBindlessState {
-    BindlessSlot image_slot{};
-    uint32_t revision_written = 0;
-};
-
-struct ImageRecord {
-    ...
-    SurfaceImageBindlessState bindless{};
-};
-```
+  - 如果 Compile() 直接依赖 Vulkan，将污染整个 graph frontend
+  - 如果 allocation plan 只藏在 backend，不进入 graph diagnostics，调试价值不足
 
-短期不建议把 `TextureHost` 和 `SurfaceImageHost` 合并。当前项目已有明确的资产纹理与 Surface image 两条数据流，直接合并会波及过大。最优折中是新增一个共用 adapter：
-
-```cpp
-class ImageBindlessAdapter {
-public:
-    static BindlessSlot EnsureTextureSlot(TextureHost&, TextureId);
-    static BindlessSlot EnsureSurfaceImageSlot(SurfaceImageHost&, uint32_t image_id);
-};
-```
-
-长期可以把它们统一到：
+  ———
 
-```cpp
-GpuImageRegistry
-  ├── AssetTextureDomain
-  ├── SurfaceImageDomain
-  ├── GlyphAtlasDomain
-  ├── ShadowAtlasDomain
-  ├── RenderTargetDomain
-  └── EnvironmentDomain
-```
-
----
+  ## Step 2：把现有 alias candidate 逻辑从 BarrierPlan 中抽出
 
-# 6. Renderer 迁移方案
+  ### 要改什么
 
-## 6.1 ParticleRenderer2D
+  当前 barrier_plan.cpp 已有一套 alias 诊断逻辑：
 
-当前必须删除：
+  - compatibility class match
+  - resource allows alias
+  - aggregate liveness
+  - overlap 判断
+  - alias candidates
+  - alias barrier decision
 
-```cpp
-TextureSetEntry
-frame_texture_sets
-LowerBoundTextureSetIndex()
-AcquireTextureDescriptorSet()
-descriptor_image_write_scratch   // texture path 用不到
-```
+  这些必须迁移为 alias_allocator.cpp 的统一规则源。
 
-新增：
+  BarrierPlan 后续只负责消费 alias 决策，不再重新做 compatibility 判定。
 
-```cpp
-struct Particle2DGpuInstance {
-    ...
-    uint32_t texture_slot;
-    uint32_t sampler_slot;
-};
-```
+  ### 为什么这样设计
 
-或者，如果当前 batch 保证同一 batch 同纹理，可以先把 `texture_slot` 放入 draw batch，再通过 push constant 传入；但为了最终 GPU-driven 和 indirect draw，**更推荐实例数据直接携带 slot**。
+  不能让系统里同时存在两套 alias 真相：
 
-Record 路径变为：
+  - diagnostics 一套
+  - allocator 一套
+  - barrier planner 又一套
 
-```cpp
-vkCmdBindPipeline(...);
+  否则后面 debug 会极其痛苦。
 
-VkDescriptorSet bindless_sets[] = {
-    bindless_system.SampledImageSet(),
-    bindless_system.SamplerSet()
-};
+  ### 完成判据
 
-vkCmdBindDescriptorSets(
-    cmd,
-    VK_PIPELINE_BIND_POINT_GRAPHICS,
-    pipeline_layout,
-    0,
-    std::size(bindless_sets),
-    bindless_sets,
-    0,
-    nullptr
-);
+  - BarrierPlan 内不再维护独立 alias compatibility 逻辑
+  - alias candidate 规则统一来自 alias allocator
+  - 输出仍可诊断 non-alias reason
 
-// 后续每个 batch 只 draw，不再 AcquireTextureDescriptorSet，不再 per texture bind
-```
+  ### 风险点
 
-预期收益：
+  - 现有 barrier tests 输出顺序可能变化
+  - 需要固定 deterministic 排序规则
 
-```text
-descriptor_set_bind_count:
-  旧：O(unique_texture_batches)
-  新：O(pass_count / pipeline_layout_switch_count)
+  ———
 
-descriptor_set_update_count:
-  旧：renderer 每帧按 texture 更新
-  新：BindlessResourceSystem 按 changed resources 更新
-```
+  ## Step 3：定义 compatibility class 与 footprint provider
 
-## 6.2 SurfaceRenderer2D
+  ### 要改什么
 
-推荐 pipeline layout：
+  实现：
 
-```text
-set 0 = global bindless sampled image table
-set 1 = global bindless sampler table
-set 2 = frame-local lighting set
-```
+  TransientCompatibilityKey BuildCompatibilityKey(...);
 
-也可以为了最小改动使用：
+  并分开设计 buffer / image 策略。
 
-```text
-set 0 = global bindless combined image sampler table
-set 1 = lighting set
-```
+  ### Buffer 策略
 
-但最优设计是分离 image/sampler，原因是：
+  默认可 alias，但排除：
 
-```text
-combined image sampler 会把同一 image + 多 sampler 复制成多个 descriptor slot；
-separate image/sampler 可以复用 sampler slot；
-Surface3D 已有 texture_id + sampler_id 数据形态，天然适合分离表。
-```
+  - 非 transient
+  - allow_alias == false
+  - host-visible
+  - persistently mapped
+  - imported / external
+  - dedicated allocation required
+  - memory type incompatible
+  - usage incompatible
 
-`Surface2DGpuInstance` 现在已有 `surface_id`、`material_id`、`atlas_page_id`、`source_kind` 等字段；建议新增明确字段，而不是强行复用语义：
+  ### Image 策略
 
-```cpp
-uint32_t image_slot;
-uint32_t sampler_slot;
-uint32_t material_slot;   // 后续材质表
-uint32_t flags;
-```
+  必须 opt-in，默认保守。
 
-lighting set 暂时保留 transient descriptor，因为它是 per-frame buffer/cluster/shadow payload，生命周期和全局纹理表不同。不要一开始把 lighting、shadow、IBL、postprocess 全塞进同一张大表。
+  建议：
 
-## 6.3 SurfaceRenderer3D
+  - BufferDesc::allow_alias 保持默认 true
+  - TextureDesc::allow_alias 改为默认 false，或通过 allocator config 强制 texture 需要显式 opt-in
 
-`Surface3DGpuInstance` 当前已经有：
+  并新增：
 
-```cpp
-uint32_t texture_id;
-uint32_t sampler_id;
-```
+  bool prefer_lazy_memory = false;
 
-直接替换为：
+  ### Footprint provider
 
-```cpp
-uint32_t texture_slot;
-uint32_t sampler_slot;
-```
+  做两层：
 
-删除：
+  1. CPU-only test provider
+  2. Vulkan exact provider
 
-```cpp
-TextureSetEntry { binding_key, descriptor_set }
-frame_texture_sets
-AcquireTextureDescriptorSet(texture_id, sampler_id)
-```
+  ### 为什么这样设计
 
-Surface3D 是 bindless 收益最大的路径之一，因为 PBR/材质/IBL/透明排序最终都需要索引化资源。第一步只迁移 base color/default texture；第二步再接 normal/metallic/roughness/occlusion/emissive 材质槽。
+  buffer alias 是低风险默认能力。
+  image alias 风险高，必须 opt-in。
+  否则 Phase 9 会过于激进。
 
-## 6.4 ParticleRenderer3D
+  ### 完成判据
 
-Particle3D 与 Particle2D 迁移一致，只是需要注意：
+  - 每个 transient resource 都能生成 compatibility key
+  - 不可 alias 有明确 reason
+  - buffer 默认 alias 规则可测
+  - image 未 opt-in 不 alias
+  - image opt-in 后才进入 candidate
 
-```text
-depth pass / transparent pass 不能重复绑定 per texture set；
-GPU simulation path 的 indirect draw 数据中也应携带 texture_slot；
-排序 key 保持 blend/depth/texture locality。
-```
+  ### 风险点
 
-## 6.5 SkyEnvironment / IBL / Background / Shadow
+  - 改 TextureDesc::allow_alias 默认值会牵动既有测试和 graph desc builders
+  - Vulkan exact footprint 需要底层 unbound resource 支撑
 
-这些不应在 Phase 1 里强行一起迁移，但最终设计必须覆盖：
+  ———
 
-```text
-SkyEnvironment:
-  cubemap_slot
-  equirect_slot
-  atmosphere LUT slot
+  ## Step 4：实现 interval coloring 与 memory page assignment
 
-IBL:
-  irradiance_cubemap_slot
-  prefiltered_env_slot
-  brdf_lut_slot
+  ### 要改什么
 
-Background2D:
-  sprite/image slot
+  实现 CPU-only 核心算法：
 
-ShadowAtlas:
-  shadow_atlas_slot
-  shadow_sampler_slot
-```
+  按 compatibility class 分组
+  -> 计算 aggregate lifetime
+  -> 按 size desc / first pass / resource index 排序
+  -> first-fit interval coloring
+  -> 分配 page
+  -> 计算 logical / physical / saved / peak
 
-当前 master 已经有 SkyEnvironmentGpuHost、SkyEnvironmentPass、IBL lazy pipeline 等方向性更新；这些模块未来很适合统一接入 bindless，但应在 Surface/Particle 主路径稳定后推进。
+  ### 关键设计选择
 
----
+  本阶段采用 aggregate resource liveness，不要引入 version-level physicalization。
 
-# 7. Shader ABI 设计
+  也就是说，按 ResourceHandle 聚合 lifetime，而不是按每个 SSA version 单独物理化。
 
-## 7.1 最小 combined sampler 版本
+  ### 为什么这样设计
 
-第一阶段可以采用：
+  这是当前阶段最稳妥的边界：
 
-```glsl
-#version 460
-#extension GL_EXT_nonuniform_qualifier : require
+  - 不扩大到 version-level physical resource table 重写
+  - 先解决最核心的 transient alias capability
+  - deterministic、易验证、收益直接
 
-layout(set = 0, binding = 0) uniform sampler2D g_Textures[];
+  ### 完成判据
 
-vec4 SampleTexture2D(uint textureSlot, vec2 uv) {
-    return texture(g_Textures[nonuniformEXT(textureSlot)], uv);
-}
-```
+  - non-overlap transient buffers 能共享 page
+  - overlap resources 不能共享
+  - saved bytes 计算正确
+  - peak live bytes 计算正确
+  - 同一 page 内 lifetime 不重叠
+  - 输出 deterministic
 
-## 7.2 最优 separate image/sampler 版本
+  ### 风险点
 
-终态推荐：
+  - 如果直接按 version 分配，会把本阶段范围炸开
+  - 如果忽略 queue overlap，Phase 10 会埋雷
 
-```glsl
-#version 460
-#extension GL_EXT_nonuniform_qualifier : require
+  ———
 
-layout(set = 0, binding = 0) uniform texture2D g_Textures2D[];
-layout(set = 1, binding = 0) uniform sampler   g_Samplers[];
+  ## Step 5：加入 memory timeline、diagnostics 和 graph debug export
 
-vec4 SampleTexture2D(uint textureSlot, uint samplerSlot, vec2 uv) {
-    return texture(
-        sampler2D(
-            g_Textures2D[nonuniformEXT(textureSlot)],
-            g_Samplers[nonuniformEXT(samplerSlot)]
-        ),
-        uv
-    );
-}
-```
+  ### 要改什么
 
-Arm 对 descriptor indexing 的实践文章也强调：当一个 draw/dispatch 内不同 invocation 可能访问不同资源时，需要用 `nonuniformEXT` 或 HLSL 的 `NonUniformResourceIndex` 告知编译器；性能也会受索引发散影响。([Arm Community][6])
+  扩展：
 
-## 7.3 Shader 组织方式
+  - CompiledRenderGraph::BuildDebugString()
+  - CompiledRenderGraph::BuildJson()
+  - runtime diagnostics
 
-新增：
+  新增 graph transient memory counters，例如：
 
-```text
-shaders/include/bindless.glsl
-shaders/include/material_handles.glsl
-shaders/include/resource_slots.glsl
-```
+  - logical total bytes
+  - physical total bytes
+  - peak live bytes
+  - saved bytes
+  - transient resource count
+  - aliased resource count
+  - page count
+  - alias barrier count
 
-不要让每个 shader 手写 `nonuniformEXT`。应封装：
+  ### 为什么这样设计
 
-```glsl
-struct Texture2DHandle {
-    uint textureSlot;
-    uint samplerSlot;
-};
+  设计参考文档已经明确：
 
-vec4 Texture2DSample(Texture2DHandle h, vec2 uv);
-vec3 Texture2DSampleNormal(Texture2DHandle h, vec2 uv);
-```
+  > Graph viewer / DOT / barrier dump / memory peak 是必要基础设施
 
-这样后续从 descriptor indexing backend 切到 descriptor buffer backend，不会污染所有 shader。
+  Phase 9 没 diagnostics，就算实现了 alias 也几乎不可维护。
 
----
+  ### 完成判据
 
-# 8. 性能设计
+  - debug string 能看 page / allocation / saved bytes
+  - JSON 能机读 timeline
+  - runtime diagnostics 能暴露 counters
+  - Detailed 级别才输出高成本字符串
 
-## 8.1 CPU 侧收益
+  ### 风险点
 
-目标是把：
+  - diagnostics 不能反向驱动 allocator 逻辑
+  - 不能为了格式化输出让每帧产生高额 CPU 开销
 
-```text
-每 batch:
-  AcquireTextureDescriptorSet
-  UpdateSet
-  vkCmdBindDescriptorSets
-```
+  ———
 
-变为：
+  ## Step 6：扩展低层 Vulkan resource ownership，支持“对象独立、内存 page 共享”
 
-```text
-每 pass / pipeline layout:
-  vkCmdBindDescriptorSets(global bindless tables)
+  ### 要改什么
 
-每 changed resource:
-  QueueDescriptorWrite
-```
+  当前 BufferHost::CreateBuffer() / ImageHost::CreateImage() 都是假设：
 
-这正好符合 bindless 的核心价值：CPU 不再在 draw call 之间反复重绑资源，而是预先把资源放进大表，通过索引访问。Khronos sample 和 Arm 文章都把这一点作为 descriptor indexing/bindless 的主要动机。([docs.vulkan.org][1])
+  - 创建对象
+  - 立即分配/绑定独占内存
+  - 销毁时释放自己的 allocation
 
-## 8.2 GPU 侧风险：索引发散
+  这不支持 alias。
 
-bindless 不是免费午餐。非一致索引会带来潜在发散成本。策略：
+  需要新增窄接口，让 resource object 和 memory ownership 分离。
 
-```text
-Surface opaque:
-  排序 key 优先 pipeline/material/texture locality，再考虑 depth
+  例如对 Buffer / Image 增加：
 
-Surface transparent:
-  必须保持正确透明排序，但可在同 depth bucket 内保留 material locality
+  - object-only create
+  - footprint query
+  - bind existing page/slice
+  - object-only destroy
 
-Particle:
-  blend mode + texture slot 聚类，减少同 wave 内随机纹理访问
+  并为资源增加 ownership 语义，例如：
 
-3D material:
-  material_slot 作为主索引，texture slots 存在 material buffer 中
-```
+  - owns_allocation
+  - external_alias_page
+  - none
 
-## 8.3 Descriptor write 性能
+  shared alias page 统一由 graph transient allocator 或 resource table 退休、释放。
 
-不要每次资源上传都立即 `vkUpdateDescriptorSets`。推荐：
+  ### 为什么这样设计
 
-```cpp
-struct PendingBindlessWrite {
-    BindlessTableId table;
-    uint32_t dst_array_element;
-    VkDescriptorImageInfo image_info;
-    uint32_t revision;
-};
-```
+  真实 alias 的本质是：
 
-然后在 safe point 合批 flush：
+  - 多个 VkBuffer/VkImage object
+  - 绑定到同一 memory page / offset
+  - lifetime 不重叠
+  - 通过 alias barrier 保证顺序
 
-```text
-BeginFrame after fence completed:
-  Collect retired slots
-  Coalesce pending writes
-  vkUpdateDescriptorSets batched
-```
+  如果 ownership 不拆开，必然 double-free。
 
-Khronos 的 stable descriptor update 教程强调，把 descriptor 更新集中在已知 safe point 能显著降低 synchronization/lifetime 复杂度；这与当前项目的 frame-in-flight/retire 体系最匹配。([docs.vulkan.org][7])
+  ### 完成判据
 
----
+  - 普通资源创建/销毁路径不受影响
+  - aliased resource object 可独立销毁但不释放 shared page
+  - shared page 只释放一次
+  - retire 基于 submit completion value
 
-# 9. Debug / Release 双路径
+  ### 风险点
 
-## 9.1 Debug 路径
+  - double-free
+  - use-after-submit
+  - 语义若做成隐式约定，后续维护会踩雷
 
-Debug 目标不是最高性能，而是快速发现错误：
+  ———
 
-```text
-启用 GPU-assisted validation
-slot generation 强校验
-未初始化 slot 访问统计
-所有 invalid handle 映射 slot 0
-descriptor write revision 记录
-resource_id -> slot -> image_view 反查表
-每帧输出 bindless stats
-RenderDoc-friendly debug names
-```
+  ## Step 7：接入 Vulkan transient buffer alias realization
 
-统计：
+  ### 要改什么
 
-```cpp
-struct BindlessStats {
-    uint32_t image_slot_capacity;
-    uint32_t image_slot_live_count;
-    uint32_t image_slot_pending_write_count;
-    uint32_t image_slot_recycled_count;
-    uint32_t stale_handle_reject_count;
-    uint32_t placeholder_resolve_count;
-    uint32_t descriptor_write_count;
-};
-```
+  改造 VulkanResourceTable::Resolve() 的 transient buffer 路径。
 
-Arm 文章也建议在 descriptor indexing 开发中配合 GPU-assisted validation 和 RenderDoc，因为 bindless 让“访问错资源”的问题更容易发生。([Arm Community][6])
+  新流程应变成：
 
-## 9.2 Release 路径
+  1. 收集所有 transient buffers
+  2. 用 Vulkan exact footprint provider 生成 exact allocation plan
+  3. 为每个 page 分配 alias memory
+  4. 为每个 logical transient buffer 创建 VkBuffer object
+  5. 绑定到共享 page + offset
+  6. 写入 physical buffer records
+  7. 更新 stats / diagnostics
 
-Release 目标是最小 CPU overhead：
+  ### 为什么先做 buffer
 
-```text
-slot handle 只做轻量 generation 检查
-descriptor writes 合批
-无锁或低锁 freelist
-renderer 不保存 VkDescriptorSet cache
-shader slot 直接来自 GPU instance/material buffer
-```
+  因为 buffer alias：
 
-Release 不应保留 renderer 层 texture descriptor cache。否则 bindless 改造会被旧模型拖回去。
+  - 不涉及 image layout
+  - 不涉及 render target view
+  - 不涉及 lazy memory
+  - 风险最低
+  - 最适合先把 Phase 9 跑通
 
----
+  ### 完成判据
 
-# 10. 分阶段实施计划
+  - non-overlap transient buffers 共享同一 alias page
+  - diagnostics 中 saved_bytes > 0
+  - executor 可正常使用 aliased buffers
+  - 无 double-free
+  - validation clean
 
-## Phase 0：能力探测与基准插桩
+  ### 风险点
 
-目标：先让项目知道自己能不能 bindless，以及当前 descriptor bind/update 成本是多少。
+  - CPU estimate 与 Vulkan exact requirement 可能不一致，必须以后者为准
+  - external buffer descriptor resolver 不能被误归类为 graph-owned transient buffer
 
-改动：
+  ———
 
-```text
-VulkanContext:
-  + DescriptorIndexingCaps
-  + descriptor indexing feature/property query
-  + layout support query helper
+  ## Step 8：接入 opt-in transient image alias 与 lazy transient attachment
 
-RuntimeDiagnostics:
-  + descriptor_set_bind_count 全局统计
-  + descriptor_update_count 全局统计
-  + per renderer bind/update heatmap
-```
+  ### 要改什么
 
-验收：
+  改造 VulkanResourceTable::Resolve() 的 transient texture 路径。
 
-```text
-能打印当前 GPU 是否支持 bindless required features。
-能打印每帧 Particle/Surface descriptor bind/update 次数。
-不改变渲染结果。
-```
+  graph transient texture 不再直接走旧 CreateTransientTarget(...) 路径，而是：
 
----
+  1. query exact image footprint
+  2. allocator 分配 page
+  3. 创建 image object
+  4. bind shared page
+  5. 创建 default image view
+  6. 注册到 RenderTargetHost 或等价 physical texture record
+  7. page 由 graph allocator retire
 
-## Phase 1：DescriptorHost persistent bindless channel
+  并在 graph transient image 创建点显式标记：
 
-目标：不迁移 renderer，先把全局 bindless table 做出来。
+  .allow_alias = true
+  .prefer_lazy_memory = true // 仅适合的 attachment
 
-改动：
+  ### 为什么这样设计
 
-```text
-DescriptorHost:
-  + Persistent pool
-  + BindlessTable
-  + Variable descriptor count allocation
-  + Slot allocator
-  + Deferred slot recycle
-  + Batched descriptor writes
+  image alias 风险明显高于 buffer：
 
-Tests:
-  + create bindless table
-  + allocate/free slot
-  + generation check
-  + placeholder slot 0
-  + vkGetDescriptorSetLayoutSupport capacity clamp
-```
+  - image layout
+  - attachment state
+  - load/store
+  - bindless image slot
+  - depth / MSAA / format compatibility
+  - tile GPU lazy allocation
 
-验收：
+  所以必须 opt-in。
 
-```text
-BeginFrame 不影响 persistent bindless descriptor set。
-slot 分配/回收通过 generation 防悬挂。
-validation layer 无 descriptor lifetime error。
-```
+  ### 完成判据
 
----
+  - opt-in postprocess / bloom image 能进入 alias plan
+  - non-overlap intermediate image 能共享 page
+  - depth/MSAA 默认仍保守
+  - lazy memory 请求能进入 diagnostics
+  - graph transient image 不再独占内存创建
+  - validation clean
 
-## Phase 2：TextureHost / SurfaceImageHost 接入 slot
+  ### 风险点
 
-目标：资源上传后自动进入 bindless table。
+  - first use 不能继承前一个 aliased image 的 layout/state
+  - RenderTargetHost 原本可能隐含 owns allocation 假设，需要拆开 ownership
+  - bindless image slot 必须按 image view 更新，不能因为 memory page 共享而偷懒
 
-改动：
+  ———
 
-```text
-TextureRecord:
-  + TextureBindlessState
+  ## Step 9：让 alias barrier 从 required 变为 realized，并接入 Vulkan lowering / executor
 
-SurfaceImageHost::ImageRecord:
-  + SurfaceImageBindlessState
+  ### 要改什么
 
-Resource upload:
-  + QueueBindlessImageWrite
+  当前 alias barrier 还是诊断性质。
+  Phase 9 必须让它成为真实执行语义。
 
-Resource remove:
-  + placeholder rewrite
-  + deferred slot free
-```
+  BuildBarrierPlan() 应该消费 TransientAllocationPlan.alias_barriers，并在 next_first_pass 前插入 alias barrier。
 
-验收：
+  Vulkan lowering 规则：
 
-```text
-上传纹理后可拿到 stable texture_slot。
-重建纹理不改变 slot index，只更新 descriptor。
-删除纹理后旧 slot 不会被立即复用。
-```
+  - same queue：降为 VkMemoryBarrier2
+  - different queue：生成 queue dependency，但 Phase 9 仍保持串行保守，不假装 async overlap
+  - image first use：按 fresh resource 处理，不继承前一个 aliased image layout
 
----
+  ### 为什么这样设计
 
-## Phase 3：ParticleRenderer2D bindless 化
+  “共享 page 但不插 barrier” 不算 allocator 完成。
+  physical alias 必须配合同步语义。
 
-目标：第一条真实渲染路径落地。
+  ### 完成判据
 
-改动：
+  - alias pair 的 realized == true
+  - barrier debug / JSON 可见
+  - Vulkan lowering 可输出 alias barrier
+  - executor 在正确 pass 前发出
+  - validation clean
 
-```text
-删除:
-  TextureSetEntry
-  frame_texture_sets
-  AcquireTextureDescriptorSet
+  ### 风险点
 
-新增:
-  Particle2DGpuInstance.texture_slot
-  Particle2DGpuInstance.sampler_slot
-  bindless.glsl include
-  bindless particle shader
+  - barrier 放错位置
+  - image layout 状态误复用
+  - 跨 queue alias 过早放开
 
-Record:
-  每 pass 绑定一次 global table
-  每 batch 不再 bind texture descriptor set
-```
+  ———
 
-验收：
+  ## Step 10：从 graph-facing APIs 中移除 RenderTargetPool 依赖
 
-```text
-渲染结果一致。
-descriptor_set_bind_count 从 unique texture batch 级下降到 pass 级。
-descriptor_set_update_count 不再由 ParticleRenderer2D 产生。
-```
+  ### 要改什么
 
----
+  注意：不是现在删除整个 RenderTargetPool 类。
+  而是要把它从 graph-facing path 中剥离出去。
 
-## Phase 4：SurfaceRenderer2D bindless 化
+  要求：
 
-目标：迁移主 2D surface 路径，同时保留 lighting transient set。
+  - graph runtime service 不依赖 pool
+  - graph feature builders 不依赖 pool
+  - graph-only Scene2D / Scene3D path 不再 acquire transient target
+  - transient resource 必须由 RenderGraphBuilder::CreateTexture/CreateBuffer 创建
+  - physicalization 只能由 VulkanResourceTable + TransientAliasAllocator 完成
 
-改动：
+  建议建立 grep gate：
 
-```text
-set0/set1:
-  bindless texture/sampler table
+  rg -n "RenderTargetPool|AcquireTransientTarget|CreateTransientTarget" include\vr\render_graph src\render_graph
 
-set2:
-  frame lighting descriptor set
+  graph core 必须无命中。
 
-Surface2DGpuInstance:
-  + image_slot
-  + sampler_slot
+  ### 为什么这样设计
 
-删除:
-  texture descriptor set cache
-```
+  Phase 9 验收项明确要求：
 
-验收：
+  > RenderTargetPool 不再被 Scene/Feature 层引用
 
-```text
-贴图、透明、混合、lighting、shadow atlas 功能不回退。
-lighting descriptor set 仍按 frame 管理。
-texture descriptor set bind 下降到 pass 级。
-```
+  但真正删除 legacy 是 Phase 12。
+  所以这一阶段做的是graph path 断依赖，不是全局删旧类。
 
----
+  ### 完成判据
 
-## Phase 5：ParticleRenderer3D / SurfaceRenderer3D bindless 化
+  - graph-facing code 无 pool 依赖
+  - graph-only scene path 不调用 acquire transient target
+  - legacy path 可保留，但严格隔离
+  - graph diagnostics 取代 graph path 的 pool counters
 
-目标：完成 3D 主路径。
+  ### 风险点
 
-改动：
+  - 不要顺手删整个 legacy pool
+  - 不要留下“参数还在但不再使用”的假清理
 
-```text
-Surface3DGpuInstance.texture_id -> texture_slot
-Surface3DGpuInstance.sampler_id -> sampler_slot
+  ———
 
-删除:
-  binding_key -> descriptor_set cache
-```
+  ## Step 11：完成 runtime smoke、memory bench 与 Phase 8 回归闭环
 
-验收：
+  ### 要改什么
 
-```text
-opaque/transparent/depth pass 正确。
-IBL 暂时可继续旧 descriptor set。
-3D surface 不再按 texture+sampler 组合绑定 descriptor set。
-```
+  最后一步不是继续加功能，而是让 Phase 9 真正可提交。
 
----
+  需要完成：
 
-## Phase 6：环境、IBL、Shadow、后处理统一接入
+  1. memory bench
+      - render_graph_alias_allocator_bench
+      - runtime_render_graph_memory_bench
+  2. diagnostics 收口
+      - baseline
+      - saved bytes
+      - page count
+      - alias barrier count
+  3. Phase 8 回归保护
+      - descriptor lowering 不倒退
+      - external buffer bindings 不被误纳入 graph transient alias
 
-目标：完成“全项目资源绑定统一”。
+  ### 为什么这样设计
 
-迁移对象：
+  Phase 9 的交付标准不是“allocator 单测过了”，而是：
 
-```text
-SkyEnvironment:
-  cubemap/equirect/atmosphere LUT
+  - graph path 真用了
+  - Vulkan backend 真 alias 了
+  - barrier 真发了
+  - smoke 真稳定
+  - saved bytes 真可见
+  - Phase 8 没回退
 
-IBL:
-  irradiance/prefiltered/brdf LUT
+  ### 完成判据
 
-Background2D:
-  sprite/surface image
+  - 全部新增 Phase 9 tests 通过
+  - Phase 8 descriptor regression 通过
+  - runtime graph smoke 通过
+  - 至少一个 postprocess 或 shadow scene 中 saved_bytes > 0
+  - 无 overlap alias bug
+  - validation clean
 
-Shadow:
-  shadow atlas
+  ### 风险点
 
-Postprocess:
-  bloom/composite/history buffers
-```
+  - 不能只靠 CPU tests 自证完成
+  - 如果 saved bytes 为 0，要回头检查 graph transient image 是否没有 opt-in，或 liveness 是否过宽
 
-此阶段可以开始引入：
+  ———
 
-```text
-material_slot
-environment_slot
-shadow_atlas_slot
-postprocess_source_slot
-```
+  # 7. 测试 / 验证矩阵
 
----
+  | 层级 | 验证目标 | 建议命令 / 内容 | 通过标准 |
+  |---|---|---|---|
+  | Build | 基础编译 | cmake --build build_preset/qa_debug --target vr_tests -j 8 | 编译通过 |
+  | CPU 单元：allocator | compatibility / liveness / interval coloring | vr_tests --filter RenderGraphAliasAllocator_
+  --fail-on-empty-selection | overlap 不 alias，non-overlap alias |
+  | CPU 单元：timeline | logical / physical / peak / saved | vr_tests --filter RenderGraphMemoryTimeline_ --fail-on-
+  empty-selection | 数值精确可断言 |
+  | CPU 单元：barrier | alias barrier realized | vr_tests --filter RenderGraphAliasBarrier_ --fail-on-empty-selection |
+  barrier 插在 next first use 前 |
+  | Backend：Vulkan | exact footprint / page sharing / ownership | vr_tests --filter RenderGraphVulkanBackend_ --fail-
+  on-empty-selection | shared page 生效，无 double-free |
+  | Phase 8 回归 | descriptor lowering 不回退 | vr_tests --filter RenderGraphDescriptor_ --fail-on-empty-selection | 全
+  通过 |
+  | Scene graph builder | topology / liveness 稳定 | vr_tests --filter SceneRecorder3D_build_render_graph_ --fail-on-
+  empty-selection | sky / bloom / overlay 图正确 |
+  | Runtime smoke：3D | graph-only record 正常 | vr_tests --filter
+  RuntimeIntegration_geometry_renderer_3d_graph_only_record_path_smoke --fail-on-empty-selection | 可执行稳定 |
+  | Runtime smoke：2D | 2D graph path 不回退 | vr_tests --filter
+  RuntimeIntegration_surface_renderer_2d_bindless_scene_packet_smoke --fail-on-empty-selection | 可执行稳定 |
+  | Pool 清理 gate | graph core 无 pool 依赖 | rg -n "RenderTargetPool|AcquireTransientTarget|CreateTransientTarget"
+  include\vr\render_graph src\render_graph | 无命中 |
+  | Diagnostics | transient memory stats 可见 | 新增 runtime diagnostics tests | counters / detailed 输出正确 |
+  | 性能 / 显存收益 | alias 有真实收益 | memory bench | saved_bytes > 0 且 CPU 不明显退化 |
 
-## Phase 7：Update-after-bind 与 Descriptor Buffer 后端
+  ———
 
-目标：进入最终高性能形态。
+  # 8. 本阶段完成后的验收标准
 
-`update-after-bind` 需要同时满足 pool flag、layout flag、binding flag 和对应 feature。Vulkan Guide 对这三层 flag 的要求写得很明确：descriptor pool 要有 `UPDATE_AFTER_BIND` pool flag，layout 要有对应 create flag，binding 要有 `VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT`。([docs.vulkan.org][5])
+  本阶段完成后，必须满足以下条目。
 
-推荐策略：
+  ## 8.1 compatibility class
 
-```text
-默认:
-  safe-point descriptor update
+  - allocator 有统一 compatibility key
+  - CPU-only 可测
+  - buffer / image 分开处理
+  - memory type / usage / host visibility / format / sample / extent / dedicated requirement 都参与判断
+  - 不可 alias 有明确原因
 
-高端路径:
-  update-after-bind streaming
+  ## 8.2 interval coloring
 
-终极路径:
-  descriptor buffer backend
-```
+  - non-overlap transient resources 可共享 page
+  - overlap resources 不共享
+  - 输出 deterministic plan
+  - 同一 page 内无 lifetime overlap
 
-不要把 update-after-bind 当成 Phase 1 的前提。它是流送优化，不是 bindless 的第一步。
+  ## 8.3 memory pages
 
----
+  - allocation plan 有 page 概念
+  - page 有 size / alignment / compatibility key / resource list
+  - Vulkan backend 能将 transient buffer 绑定到 alias page
+  - Vulkan backend 能将 opt-in transient image 绑定到 alias page
 
-# 11. 最终代码形态示例
+  ## 8.4 alias barrier
 
-## 11.1 新增核心类型
+  - required == true 的实际 alias pair 必须 realized == true
+  - barrier plan / JSON / debug string 可见
+  - Vulkan lowering 发出正确 barrier / dependency
+  - executor 在正确位置执行
 
-```cpp
-enum class BindlessTableKind : uint16_t {
-    sampled_image_2d,
-    sampled_image_cube,
-    sampler,
-    storage_image,
-    storage_buffer,
-};
+  ## 8.5 image alias opt-in
 
-struct BindlessHandle {
-    uint32_t index = 0;
-    uint32_t generation = 0;
-    BindlessTableKind table = BindlessTableKind::sampled_image_2d;
+  - texture 默认不激进 alias
+  - bloom / postprocess / shadow 等明确安全的 graph transient image 可显式 opt-in
+  - depth / MSAA / storage-sensitive image 继续保守
+  - image first use 不继承前一个 aliased image 的 layout/state
 
-    bool IsValid() const noexcept {
-        return generation != 0;
-    }
-};
+  ## 8.6 buffer alias default
 
-struct GpuTextureHandle {
-    uint32_t texture_slot = 0;
-    uint32_t sampler_slot = 0;
-};
-```
+  - device-local transient buffer 默认参与 alias
+  - host-visible / persistently mapped / imported / external / persistent buffer 不参与 alias
+  - external descriptor buffer resolver 不会被误纳入 graph-owned transient alias
 
-## 11.2 Renderer 不再请求 descriptor set
+  ## 8.7 lazy transient attachment
 
-旧：
+  - texture desc 支持 prefer_lazy_memory
+  - Vulkan backend 能报告 lazy requested / realized / unavailable reason
+  - 不支持 lazy 时必须明确诊断，不能假装成功
 
-```cpp
-VkDescriptorSet descriptor_set =
-    AcquireTextureDescriptorSet(frame_index, batch.texture_id);
+  ## 8.8 memory timeline export
 
-vkCmdBindDescriptorSets(..., &descriptor_set, ...);
-```
+  - graph JSON / debug dump 有 transient allocations
+  - runtime diagnostics 有 graph transient memory counters
+  - 至少包含：
+      - logical total bytes
+      - physical total bytes
+      - peak live bytes
+      - saved bytes
+      - alias group / page count
+      - alias barrier count
 
-新：
+  ## 8.9 graph-facing APIs 脱离 RenderTargetPool
 
-```cpp
-// Prepare 阶段
-instance.texture_slot = bindless.ResolveTextureSlot(batch.texture_id).index;
-instance.sampler_slot = bindless.ResolveSamplerSlot(default_sampler).index;
+  - include/vr/render_graph / src/render_graph 无 RenderTargetPool
+  - graph-only scene/feature path 不调用 AcquireTransientTarget
+  - legacy path 可以暂留，但必须与 graph path 隔离
 
-// Record 阶段
-VkDescriptorSet sets[] = {
-    bindless.SampledImageSet(),
-    bindless.SamplerSet(),
-};
+  ## 8.10 场景收益
 
-vkCmdBindDescriptorSets(
-    cmd,
-    VK_PIPELINE_BIND_POINT_GRAPHICS,
-    pipeline_layout,
-    0,
-    2,
-    sets,
-    0,
-    nullptr
-);
-```
+  至少一个 postprocess 或 shadow graph scene 中出现：
 
----
+  alias saved bytes > 0
 
-# 12. 测试与验收清单
+  并且：
 
-| 测试                      | 目的                                         | 通过标准                                |
-| ----------------------- | ------------------------------------------ | ----------------------------------- |
-| Caps 探测测试               | 验证 descriptor indexing feature/property 查询 | 缺失必需 feature 时自动回退旧路径               |
-| Layout support 测试       | 验证 variable descriptor count 容量钳制          | 超容量请求被钳制或拒绝                         |
-| Persistent set 生命周期测试   | 验证 `BeginFrame` 不 reset bindless set       | 多帧后 set 仍有效                         |
-| Slot generation 测试      | 防止 stale handle                            | 旧 generation 被拒绝或映射 placeholder     |
-| Texture recreate 测试     | 验证 slot 稳定                                 | 同 `TextureId` 重建后 slot index 不变     |
-| Texture remove 测试       | 验证 deferred free                           | GPU 完成前不复用 slot                     |
-| Particle2D 集成测试         | 验证第一条路径                                    | descriptor bind 降为 pass 级           |
-| Surface2D 集成测试          | 验证 lighting 共存                             | texture bindless，lighting transient |
-| Surface3D 集成测试          | 验证 texture/sampler slot                    | 删除 binding_key descriptor cache     |
-| GPU-assisted validation | 捕获错误索引/未初始化 descriptor                     | Debug 下可定位 slot/resource            |
-| RenderDoc 检查            | 检查 descriptor table 内容                     | slot 0 placeholder，资源 slot 正确       |
-| 压力测试                    | 大量纹理/频繁替换                                  | 无 use-after-free、无 descriptor 泄漏    |
-| 跨厂商测试                   | NVIDIA/AMD/Intel                           | 结果一致，性能趋势正确                         |
+  - 无 overlap alias bug
+  - validation clean
+  - runtime smoke 全过
 
----
+  ———
 
-# 13. 最重要的设计决策
+  # 9. 本轮不要做什么
 
-## 决策 A：不要每个 renderer 一张 bindless 表
+  为了避免漂移，这一轮明确不要做：
 
-每 renderer 一张表会导致：
+  1. 不做 Phase 10 async compute / transfer advanced scheduling
+  2. 不做 Phase 11 native pass fusion / local read / TBR store elimination
+  3. 不彻底删除 RenderTargetPool
+  4. 不重做 descriptor lowering
+  5. 不把 Vulkan 类型引入 graph frontend
+  6. 不默认激进开启 image alias
+  7. 不做 subresource-level alias
+  8. 不用固定帧数延迟释放 alias page
+  9. 不允许 alias plan realize 失败后静默 fallback
+  10. 不允许为了测试伪造 saved bytes
 
-```text
-TextureHost 无法统一管理 slot
-同一 texture 在多个 renderer 重复占 slot
-资源删除/重建需要广播到多个表
-debug 难度成倍上升
-```
+  ———
 
-应当是：
+  # 10. 如果现在就开工，第一刀先切哪里
 
-```text
-全局 image table
-全局 sampler table
-renderer 只消费 slot
-```
+  > 第一刀先切 alias_allocator：新增 include/vr/render_graph/alias_allocator.hpp、src/render_graph/alias_allocator.cpp、
+  > tests/cases/render_graph_alias_allocator_tests.cpp，把现有 BarrierPlan 里的 alias candidate 逻辑抽成 CPU-only 的
+  > BuildTransientAllocationPlan()，先让 non-overlap transient buffers 通过 interval coloring 共享同一逻辑 memory page，
+  > 并输出 saved bytes / alias barrier decision。
 
-## 决策 B：不要一开始全量 update-after-bind
-
-第一阶段只做 safe-point 更新。理由：
-
-```text
-现有项目已有 frame-in-flight / retire / completed_submit_value 体系；
-safe-point 更新能最大化复用当前生命周期模型；
-update-after-bind 会立刻放大资源销毁、descriptor 写入、pending command 的同步复杂度。
-```
-
-## 决策 C：不要长期使用 combined image sampler 作为最终形态
-
-combined image sampler 适合第一阶段快速落地，但最终应切到：
-
-```text
-texture2D[] + sampler[]
-```
-
-这样能减少 sampler 重复，提高材质系统、3D PBR、IBL 的扩展性。
-
-## 决策 D：旧 DescriptorHost 不删，但降级为 transient descriptor allocator
-
-旧路径仍然有价值：
-
-```text
-per-frame lighting UBO/SSBO
-调试回退路径
-某些小型临时 pass
-不支持 descriptor indexing 的设备
-```
-
-但 renderer 的贴图路径不能再依赖它。
-
----
-
-# 14. 推荐最终里程碑
-
-## 里程碑 A：项目具备 bindless 能力中心
-
-```text
-VulkanContext 能报告 DescriptorIndexingCaps
-DescriptorHost 能创建 persistent bindless table
-slot 0 placeholder 可用
-```
-
-## 里程碑 B：资源 Host 拥有 slot 生命周期
-
-```text
-TextureHost / SurfaceImageHost 上传资源后自动写入 bindless table
-删除资源走 deferred slot free
-```
-
-## 里程碑 C：2D 路径完全 bindless
-
-```text
-ParticleRenderer2D 不再按 texture 绑定 descriptor set
-SurfaceRenderer2D 不再按 image 绑定 descriptor set
-lighting set 暂时保留 transient
-```
-
-## 里程碑 D：3D 路径完全 bindless
-
-```text
-ParticleRenderer3D / SurfaceRenderer3D 删除 frame_texture_sets
-Surface3D texture_id/sampler_id 改为 slot
-```
-
-## 里程碑 E：全项目资源绑定统一
-
-```text
-SkyEnvironment / IBL / ShadowAtlas / Background / Postprocess 接入 bindless
-```
-
-## 里程碑 F：高端后端
-
-```text
-update-after-bind streaming
-descriptor buffer backend
-GPU-driven material/resource indirection
-```
-
----
-
-# 15. 工作量估计
-
-按“不计代价、追求最优终态”估算：
-
-| 阶段       | 工作内容                                           |      估计 |
-| -------- | ---------------------------------------------- | ------: |
-| Phase 0  | Caps、诊断、基准插桩                                   |  2–3 人日 |
-| Phase 1  | DescriptorHost persistent bindless channel     |  5–8 人日 |
-| Phase 2  | TextureHost / SurfaceImageHost slot 接入         |  4–6 人日 |
-| Phase 3  | ParticleRenderer2D 迁移                          |  3–5 人日 |
-| Phase 4  | SurfaceRenderer2D 迁移                           |  5–8 人日 |
-| Phase 5  | Particle3D / Surface3D 迁移                      | 6–10 人日 |
-| Phase 6  | SkyEnvironment / IBL / Shadow / Postprocess 接入 | 8–14 人日 |
-| Phase 7  | update-after-bind + descriptor buffer backend  | 8–15 人日 |
-| 测试与跨厂商验证 | validation、RenderDoc、压力、回归                     | 6–12 人日 |
-
-**完整最优版总量：约 47–81 人日。**
-
-如果只做“2D bindless + 旧路径回退”，可以压到 **18–30 人日**；但这不满足你这次“全面完整彻底”的要求。
-
----
-
-# 16. 最终建议
-
-这次 bindless 重构的核心不是 shader，也不是把 `descriptorCount = 1` 改成 `descriptorCount = 65536`。核心是建立一套新的资源绑定真相源：
-
-```text
-BindlessResourceSystem 是资源绑定唯一真相源。
-TextureHost / SurfaceImageHost 负责资源对象。
-DescriptorHost 负责 Vulkan descriptor 机制。
-Renderer 只消费 slot，不拥有 texture descriptor set。
-Shader 只通过 slot 访问资源。
-```
-
-真正应该推倒的是 renderer 层的 `frame_texture_sets` / `AcquireTextureDescriptorSet` / `binding_key -> descriptor_set` 模型；真正应该保留并增强的是 Host / Runtime / PrepareView 的分层思想。这样改完后，项目会从“传统 descriptor-set 渲染器”升级为“资源索引驱动的现代 Vulkan renderer”，并且为后续 GPU-driven、材质系统、纹理流送、IBL/Shadow 统一绑定和 descriptor buffer 后端留出完整架构空间。
-
+  这是最稳、最干净、解锁最多下游工作的切入点。

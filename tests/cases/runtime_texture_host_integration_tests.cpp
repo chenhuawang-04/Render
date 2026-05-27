@@ -103,6 +103,7 @@ VR_TEST_CASE(RuntimeIntegration_texture_host_upload_cube_and_remove,
 
         vr::asset::TextureCreateInfo texture_create_info{};
         texture_create_info.texture_id = vr::asset::TextureId{1U};
+        VR_CHECK(texture_create_info.texture_id.IsValid());
         texture_create_info.image_flags = VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
         texture_create_info.default_view_type = VK_IMAGE_VIEW_TYPE_CUBE;
         texture_create_info.format = VK_FORMAT_R16G16B16A16_SFLOAT;
@@ -161,6 +162,14 @@ VR_TEST_CASE(RuntimeIntegration_texture_host_upload_cube_and_remove,
                                                    0U));
         runtime.Texture().BeginFrame(runtime.Context(), 0U);
         VR_CHECK(runtime.Texture().FindTexture(vr::asset::TextureId{1U}) == nullptr);
+        VR_CHECK(!runtime.Texture().RemoveTexture(runtime.Context(),
+                                                  vr::asset::TextureId{},
+                                                  0U,
+                                                  0U));
+        VR_CHECK(!runtime.Texture().RemoveTexture(runtime.Context(),
+                                                  vr::asset::TextureId{999U},
+                                                  0U,
+                                                  0U));
 
         runtime.Shutdown();
         runtime_initialized = false;

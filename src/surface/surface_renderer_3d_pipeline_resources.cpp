@@ -302,9 +302,12 @@ void SurfaceRenderer3D::EnsureAppearanceResourcesForFrame(std::uint64_t bindless
 
     EnsureAppearanceDescriptorObjects(*context, *descriptor_host);
 
-    FrameAppearanceResources& frame_resources = frame_appearance_resources[active_frame_index];
+    FrameAppearanceResources& frame_resources =
+        frame_appearance_resources[active_frame_index];
+    const auto& prepared_appearance_source_records =
+        active_prepared_frame_state.artifacts.appearance_source_records;
     const std::uint32_t appearance_record_count =
-        static_cast<std::uint32_t>(appearance_source_record_scratch.size());
+        static_cast<std::uint32_t>(prepared_appearance_source_records.size());
     const std::uint32_t appearance_upload_count = std::max<std::uint32_t>(appearance_record_count, 1U);
     const VkDeviceSize appearance_record_bytes =
         static_cast<VkDeviceSize>(appearance_upload_count) *
@@ -361,7 +364,7 @@ void SurfaceRenderer3D::EnsureAppearanceResourcesForFrame(std::uint64_t bindless
         ecs::AppearanceGpuRecord<ecs::Dim3> encoded_record{};
         if (index < appearance_record_count) {
             render::EncodeAppearanceGpuRecord3DForSampling(
-                appearance_source_record_scratch[index],
+                prepared_appearance_source_records[index],
                 sampled_surface_resolver,
                 encoded_record);
         }

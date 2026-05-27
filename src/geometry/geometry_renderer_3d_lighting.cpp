@@ -42,6 +42,19 @@ void GeometryRenderer3D::EnsureLightingDescriptorObjects(VulkanContext& context_
     lighting_descriptor_layout_id = descriptor_host_.RegisterLayout(context_, layout_desc);
 }
 
+void GeometryRenderer3D::EnsureTemporalMotionDescriptorObjects(
+    VulkanContext& context_,
+    render::DescriptorHost& descriptor_host_) {
+    if (temporal_motion_descriptor_layout_id.IsValid()) {
+        return;
+    }
+
+    const render::DescriptorSetLayoutDesc layout_desc =
+        render::BuildScene3DTemporalMotionBufferLayoutDesc();
+    temporal_motion_descriptor_layout_id =
+        descriptor_host_.RegisterLayout(context_, layout_desc);
+}
+
 GeometryRenderer3D::LightingParamsGpu GeometryRenderer3D::BuildLightingParamsGpu(VkExtent2D extent_) const noexcept {
     LightingParamsGpu params{};
     params.light_count = 0.0F;
@@ -405,6 +418,8 @@ void GeometryRenderer3D::EnsureLightingResourcesForFrame(
     hash_combine(uniform_revision, static_cast<std::uint64_t>(lighting_params.shadow_atlas_sampler_slot));
 
     FrameLightingResources& frame_resources = frame_lighting_resources[active_frame_index];
+    const PreparedFrameArtifacts& prepared_artifacts =
+        active_prepared_frame_state.artifacts;
     frame_resources.light_records = light_shadow_upload_host.UploadLightRecordsRanges(
         context_,
         *upload_host,
@@ -448,7 +463,8 @@ void GeometryRenderer3D::EnsureLightingResourcesForFrame(
     frame_resources.upload_signature = uniform_revision ^ cluster_revision ^ shadow_view_revision;
 
     const std::uint32_t appearance_record_count =
-        static_cast<std::uint32_t>(appearance_source_record_scratch.size());
+        static_cast<std::uint32_t>(
+            prepared_artifacts.appearance_source_records.size());
     const std::uint32_t appearance_upload_count = std::max<std::uint32_t>(appearance_record_count, 1U);
     const VkDeviceSize appearance_record_bytes =
         static_cast<VkDeviceSize>(appearance_upload_count) *
@@ -505,7 +521,7 @@ void GeometryRenderer3D::EnsureLightingResourcesForFrame(
         ecs::AppearanceGpuRecord<ecs::Dim3> encoded_record{};
         if (index < appearance_record_count) {
             render::EncodeAppearanceGpuRecord3DForSampling(
-                appearance_source_record_scratch[index],
+                prepared_artifacts.appearance_source_records[index],
                 sampled_surface_resolver,
                 encoded_record);
         }
@@ -589,25 +605,28 @@ void GeometryRenderer3D::EnsureLightingResourcesForFrame(
     }
     frame_resources.appearance_record_count = appearance_upload_count;
 
-    const GeometrySkeletalPaletteBuildStats skeletal_build_stats =
-        GeometrySkeletalPaletteBuilder::Build(geometry_components,
-                                             component_count,
-                                             skeletal_outputs,
-                                             skeletal_output_count,
-                                             skeletal_component_scratch,
-                                             skeletal_matrix_scratch);
     const std::uint32_t skeletal_component_upload_count =
-        std::max<std::uint32_t>(static_cast<std::uint32_t>(skeletal_component_scratch.size()), 1U);
+        std::max<std::uint32_t>(
+            static_cast<std::uint32_t>(
+                prepared_artifacts.skeletal_components.size()),
+            1U);
     const std::uint32_t skeletal_matrix_upload_count =
-        std::max<std::uint32_t>(static_cast<std::uint32_t>(skeletal_matrix_scratch.size()), 1U);
-    if (skeletal_component_scratch.empty()) {
-        skeletal_component_scratch.resize(1U);
-        skeletal_component_scratch[0U] = {};
-    }
-    if (skeletal_matrix_scratch.empty()) {
-        skeletal_matrix_scratch.resize(1U);
-        skeletal_matrix_scratch[0U].matrix = ecs::spatial_math::IdentityMatrix4x4();
-    }
+        std::max<std::uint32_t>(
+            static_cast<std::uint32_t>(
+                prepared_artifacts.skeletal_matrices.size()),
+            1U);
+    const GeometrySkeletalComponentGpu dummy_skeletal_component{};
+    const GeometrySkeletalMatrixGpu dummy_skeletal_matrix{
+        .matrix = ecs::spatial_math::IdentityMatrix4x4(),
+    };
+    const GeometrySkeletalComponentGpu* skeletal_component_ptr =
+        prepared_artifacts.skeletal_components.empty()
+            ? &dummy_skeletal_component
+            : prepared_artifacts.skeletal_components.data();
+    const GeometrySkeletalMatrixGpu* skeletal_matrix_ptr =
+        prepared_artifacts.skeletal_matrices.empty()
+            ? &dummy_skeletal_matrix
+            : prepared_artifacts.skeletal_matrices.data();
 
     const VkDeviceSize skeletal_component_bytes =
         static_cast<VkDeviceSize>(skeletal_component_upload_count) * sizeof(GeometrySkeletalComponentGpu);
@@ -616,15 +635,60 @@ void GeometryRenderer3D::EnsureLightingResourcesForFrame(
     EnsureStorageBufferCapacity(frame_resources.skeletal_components, skeletal_component_bytes);
     EnsureStorageBufferCapacity(frame_resources.skeletal_matrices, skeletal_matrix_bytes);
     std::memcpy(frame_resources.skeletal_components.mapped_ptr,
-                skeletal_component_scratch.data(),
+                skeletal_component_ptr,
                 static_cast<std::size_t>(skeletal_component_bytes));
     std::memcpy(frame_resources.skeletal_matrices.mapped_ptr,
-                skeletal_matrix_scratch.data(),
+                skeletal_matrix_ptr,
                 static_cast<std::size_t>(skeletal_matrix_bytes));
     frame_resources.skeletal_component_count =
         skeletal_component_upload_count;
     frame_resources.skeletal_matrix_count =
         skeletal_matrix_upload_count;
+
+    const auto& previous_skeletal_components =
+        temporal_motion_previous_skeletal_palette_history.skeletal_components;
+    const auto& previous_skeletal_matrices =
+        temporal_motion_previous_skeletal_palette_history.skeletal_matrices;
+    const std::uint32_t previous_skeletal_component_upload_count =
+        std::max<std::uint32_t>(
+            static_cast<std::uint32_t>(previous_skeletal_components.size()),
+            1U);
+    const std::uint32_t previous_skeletal_matrix_upload_count =
+        std::max<std::uint32_t>(
+            static_cast<std::uint32_t>(previous_skeletal_matrices.size()),
+            1U);
+    const GeometrySkeletalComponentGpu dummy_previous_component{};
+    const GeometrySkeletalMatrixGpu dummy_previous_matrix{
+        .matrix = ecs::spatial_math::IdentityMatrix4x4(),
+    };
+    const GeometrySkeletalComponentGpu* previous_skeletal_component_ptr =
+        previous_skeletal_components.empty()
+            ? &dummy_previous_component
+            : previous_skeletal_components.data();
+    const GeometrySkeletalMatrixGpu* previous_skeletal_matrix_ptr =
+        previous_skeletal_matrices.empty()
+            ? &dummy_previous_matrix
+            : previous_skeletal_matrices.data();
+    const VkDeviceSize previous_skeletal_component_bytes =
+        static_cast<VkDeviceSize>(previous_skeletal_component_upload_count) *
+        sizeof(GeometrySkeletalComponentGpu);
+    const VkDeviceSize previous_skeletal_matrix_bytes =
+        static_cast<VkDeviceSize>(previous_skeletal_matrix_upload_count) *
+        sizeof(GeometrySkeletalMatrixGpu);
+    EnsureStorageBufferCapacity(frame_resources.previous_skeletal_components,
+                                previous_skeletal_component_bytes);
+    EnsureStorageBufferCapacity(frame_resources.previous_skeletal_matrices,
+                                previous_skeletal_matrix_bytes);
+    std::memcpy(frame_resources.previous_skeletal_components.mapped_ptr,
+                previous_skeletal_component_ptr,
+                static_cast<std::size_t>(previous_skeletal_component_bytes));
+    std::memcpy(frame_resources.previous_skeletal_matrices.mapped_ptr,
+                previous_skeletal_matrix_ptr,
+                static_cast<std::size_t>(previous_skeletal_matrix_bytes));
+    frame_resources.previous_skeletal_component_count =
+        previous_skeletal_component_upload_count;
+    frame_resources.previous_skeletal_matrix_count =
+        previous_skeletal_matrix_upload_count;
 
     stats.light_count = resolved_light_count;
     stats.visible_light_count = resolved_visible_light_count;
@@ -636,9 +700,15 @@ void GeometryRenderer3D::EnsureLightingResourcesForFrame(
     stats.light_shadow_linked_count = linked_light_count;
     stats.light_shadow_namespace_drop_count = namespace_drop_count;
     stats.light_shadow_unmapped_count = unmapped_light_count;
-    stats.skeletal_palette_component_count = skeletal_build_stats.skinned_component_count;
-    stats.skeletal_palette_matrix_count = skeletal_build_stats.matrix_count;
-    stats.skeletal_palette_upload_count = (skeletal_build_stats.skinned_component_count > 0U) ? 2U : 0U;
+    stats.skeletal_palette_component_count =
+        prepared_artifacts.skeletal_palette_build_stats.skinned_component_count;
+    stats.skeletal_palette_matrix_count =
+        prepared_artifacts.skeletal_palette_build_stats.matrix_count;
+    stats.skeletal_palette_upload_count =
+        (prepared_artifacts.skeletal_palette_build_stats
+             .skinned_component_count > 0U)
+            ? 2U
+            : 0U;
     stats.light_buffer_upload_count =
         static_cast<std::uint32_t>(frame_resources.light_records.uploaded) +
         static_cast<std::uint32_t>(frame_resources.cluster_headers.uploaded) +

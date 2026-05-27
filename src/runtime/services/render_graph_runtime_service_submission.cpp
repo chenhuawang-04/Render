@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
+#include <sstream>
 
 namespace {
 
@@ -45,9 +47,144 @@ void AppendFrameSubmitWaitUnique(std::vector<vr::render::FrameSubmitWait>& waits
     }
 }
 
+[[nodiscard]] std::uint64_t SteadyClockNowNs() noexcept {
+    return static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch())
+            .count());
+}
+
+void AccumulateRecordStats(vr::render_graph::RenderGraphRecordStats& destination_,
+                           const vr::render_graph::RenderGraphRecordStats& source_) {
+    destination_.pass_count += source_.pass_count;
+    destination_.rendering_scope_count += source_.rendering_scope_count;
+    destination_.command_batch_count += source_.command_batch_count;
+    destination_.memory_barrier_count += source_.memory_barrier_count;
+    destination_.buffer_barrier_count += source_.buffer_barrier_count;
+    destination_.image_barrier_count += source_.image_barrier_count;
+}
+
 } // namespace
 
 namespace vr::runtime::services {
+
+#if VR_ENABLE_DEBUG_OBSERVABILITY
+
+void RenderGraphRuntimeService::ResetRecordedTimingSamples() noexcept {
+    last_recorded_queue_batch_timings.clear();
+    last_recorded_timing_total_duration_ns = 0U;
+}
+
+bool RenderGraphRuntimeService::CollectsTimingOrCapture() const noexcept {
+    return vr::runtime::DiagnosticsCollectsGpuTiming(diagnostics_level) ||
+           vr::runtime::DiagnosticsCollectsCapture(diagnostics_level);
+}
+
+void RenderGraphRuntimeService::AppendRecordedQueueBatchTimingSample(
+    const render_graph::QueueClass effective_queue_,
+    const render_graph::QueueSubmitBatch& queue_batch_,
+    const std::uint32_t batch_index_,
+    const std::uint64_t relative_begin_ns_,
+    const std::uint64_t relative_end_ns_) {
+    vr::runtime::RenderGraphQueueBatchTimingDiagnostics sample{};
+    sample.batch_id = batch_index_;
+    sample.queue = effective_queue_;
+    sample.pass_ids.reserve(queue_batch_.passes.size());
+    sample.pass_debug_names.reserve(queue_batch_.passes.size());
+    sample.wait_dependency_ids.reserve(queue_batch_.wait_dependency_indices.size());
+    sample.signal_dependency_ids.reserve(queue_batch_.signal_dependency_indices.size());
+    sample.barrier_batch_ids.reserve(queue_batch_.barrier_batch_indices.size());
+
+    for (const auto pass_handle_ : queue_batch_.passes) {
+        sample.pass_ids.push_back(pass_handle_.index);
+        sample.pass_debug_names.push_back(ResolvePassDebugName(pass_handle_));
+    }
+    for (const auto dependency_id_ : queue_batch_.wait_dependency_indices) {
+        sample.wait_dependency_ids.push_back(dependency_id_);
+    }
+    for (const auto dependency_id_ : queue_batch_.signal_dependency_indices) {
+        sample.signal_dependency_ids.push_back(dependency_id_);
+    }
+    for (const auto barrier_batch_id_ : queue_batch_.barrier_batch_indices) {
+        sample.barrier_batch_ids.push_back(barrier_batch_id_);
+    }
+
+    std::ostringstream label{};
+    label << "queue_batch[" << batch_index_ << "]/"
+          << vr::runtime::RenderGraphQueueClassName(effective_queue_);
+    if (!sample.pass_debug_names.empty()) {
+        label << '/';
+        if (sample.pass_debug_names.size() == 1U) {
+            label << sample.pass_debug_names.front();
+        } else {
+            label << sample.pass_debug_names.front()
+                  << ".."
+                  << sample.pass_debug_names.back();
+        }
+    }
+    sample.marker_label = label.str();
+    sample.relative_begin_ns = relative_begin_ns_;
+    sample.relative_end_ns = relative_end_ns_;
+    sample.duration_ns = relative_end_ns_ - relative_begin_ns_;
+    sample.resolved = true;
+
+    last_recorded_timing_total_duration_ns += sample.duration_ns;
+    last_recorded_queue_batch_timings.push_back(std::move(sample));
+}
+
+render_graph::RenderGraphRecordStats RenderGraphRuntimeService::RecordSingleQueueGraphByQueueBatch(
+    VulkanContext& device_,
+    render::RenderTargetHost& render_target_host_,
+    render::DescriptorHost* descriptor_host_,
+    const VkCommandBuffer graphics_command_buffer_) {
+    render_graph::GraphCommandContext graph_context{
+        device_,
+        frame_index,
+        graphics_command_buffer_,
+        compiled_graph,
+        physical_resources,
+        render_target_host_,
+        descriptor_host_,
+        lowered_vulkan_barriers,
+        command_ready_vulkan_barriers,
+    };
+    const auto& queue_batches = compiled_graph.PlannedBarriers().queue_batches;
+    if (queue_batches.empty()) {
+        return render_graph::RenderGraphExecutor::Record(graph_context);
+    }
+
+    ResetRecordedTimingSamples();
+    render_graph::RenderGraphRecordStats total_stats{};
+    const std::uint64_t origin_ns = SteadyClockNowNs();
+    for (std::uint32_t batch_index = 0U;
+         batch_index < static_cast<std::uint32_t>(queue_batches.size());
+         ++batch_index) {
+        const auto& queue_batch_ = queue_batches[batch_index];
+        const std::uint64_t begin_ns = SteadyClockNowNs();
+        AccumulateRecordStats(total_stats,
+                              render_graph::RenderGraphExecutor::RecordQueueBatch(
+                                  graph_context,
+                                  queue_batch_,
+                                  nullptr,
+                                  nullptr));
+        const std::uint64_t end_ns = SteadyClockNowNs();
+        AppendRecordedQueueBatchTimingSample(
+            queue_execution_policy.graphics_fallback_active &&
+                    !queue_execution_policy.multi_queue_enabled
+                ? render_graph::QueueClass::graphics
+                : queue_batch_.queue,
+            queue_batch_,
+            batch_index,
+            begin_ns - origin_ns,
+            end_ns - origin_ns);
+    }
+    total_stats.queue_transfer_batch_count =
+        static_cast<std::uint32_t>(
+            command_ready_vulkan_barriers.queue_transfer_batches.size());
+    return total_stats;
+}
+
+#endif
 
 VkResult RenderGraphRuntimeService::SubmitPreparedMultiQueueWork(
     VulkanContext& device_) {
@@ -392,18 +529,16 @@ render_graph::RenderGraphRecordStats RenderGraphRuntimeService::RecordPreparedMu
             consumed = true;
         };
 
-    const auto accumulate_stats =
-        [](render_graph::RenderGraphRecordStats& destination_,
-           const render_graph::RenderGraphRecordStats& source_) {
-            destination_.pass_count += source_.pass_count;
-            destination_.rendering_scope_count += source_.rendering_scope_count;
-            destination_.command_batch_count += source_.command_batch_count;
-            destination_.memory_barrier_count += source_.memory_barrier_count;
-            destination_.buffer_barrier_count += source_.buffer_barrier_count;
-            destination_.image_barrier_count += source_.image_barrier_count;
-        };
-
     render_graph::RenderGraphRecordStats total_stats{};
+#if VR_ENABLE_DEBUG_OBSERVABILITY
+    const bool collect_timing_or_capture = CollectsTimingOrCapture();
+    if (collect_timing_or_capture) {
+        ResetRecordedTimingSamples();
+    }
+    const std::uint64_t origin_ns = collect_timing_or_capture
+        ? SteadyClockNowNs()
+        : 0U;
+#endif
     for (std::uint32_t batch_index = 0U;
          batch_index < static_cast<std::uint32_t>(queue_batches.size());
          ++batch_index) {
@@ -432,12 +567,27 @@ render_graph::RenderGraphRecordStats RenderGraphRuntimeService::RecordPreparedMu
                 lowered_vulkan_barriers,
                 command_ready_vulkan_barriers,
             };
-            accumulate_stats(total_stats,
-                             render_graph::RenderGraphExecutor::RecordQueueBatch(
-                                 graphics_context,
-                                 queue_batch_,
-                                 begin_dependency,
-                                 end_dependency));
+#if VR_ENABLE_DEBUG_OBSERVABILITY
+            const std::uint64_t begin_ns = collect_timing_or_capture
+                ? SteadyClockNowNs()
+                : 0U;
+#endif
+            AccumulateRecordStats(total_stats,
+                                  render_graph::RenderGraphExecutor::RecordQueueBatch(
+                                      graphics_context,
+                                      queue_batch_,
+                                      begin_dependency,
+                                      end_dependency));
+#if VR_ENABLE_DEBUG_OBSERVABILITY
+            if (collect_timing_or_capture) {
+                const std::uint64_t end_ns = SteadyClockNowNs();
+                AppendRecordedQueueBatchTimingSample(queue_batch_.queue,
+                                                     queue_batch_,
+                                                     batch_index,
+                                                     begin_ns - origin_ns,
+                                                     end_ns - origin_ns);
+            }
+#endif
 
             for (const auto dependency_index : queue_batch_.wait_dependency_indices) {
                 if (dependency_index >= barrier_plan.queue_dependencies.size() ||
@@ -481,12 +631,27 @@ render_graph::RenderGraphRecordStats RenderGraphRuntimeService::RecordPreparedMu
             lowered_vulkan_barriers,
             command_ready_vulkan_barriers,
         };
-        accumulate_stats(total_stats,
-                         render_graph::RenderGraphExecutor::RecordQueueBatch(
-                             batch_context,
-                             queue_batch_,
-                             begin_dependency,
-                             end_dependency));
+#if VR_ENABLE_DEBUG_OBSERVABILITY
+        const std::uint64_t begin_ns = collect_timing_or_capture
+            ? SteadyClockNowNs()
+            : 0U;
+#endif
+        AccumulateRecordStats(total_stats,
+                              render_graph::RenderGraphExecutor::RecordQueueBatch(
+                                  batch_context,
+                                  queue_batch_,
+                                  begin_dependency,
+                                  end_dependency));
+#if VR_ENABLE_DEBUG_OBSERVABILITY
+        if (collect_timing_or_capture) {
+            const std::uint64_t end_ns = SteadyClockNowNs();
+            AppendRecordedQueueBatchTimingSample(queue_batch_.queue,
+                                                 queue_batch_,
+                                                 batch_index,
+                                                 begin_ns - origin_ns,
+                                                 end_ns - origin_ns);
+        }
+#endif
         const VkResult end_result = vkEndCommandBuffer(owned_command_buffer);
         if (end_result != VK_SUCCESS) {
             throw std::runtime_error(

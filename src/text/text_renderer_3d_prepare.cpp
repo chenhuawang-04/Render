@@ -79,6 +79,7 @@ void TextRenderer3D::SetSceneData(ecs::Text<ecs::Dim3>* text_components_,
                                   ecs::Camera<ecs::Dim3>* camera_component_,
                                   ecs::Transform<ecs::Dim3>* camera_transform_,
                                   ecs::Bounds<ecs::Dim3>* bounds_components_) noexcept {
+    ClearPendingTransformDirtyHint();
     text_components = text_components_;
     text_transforms = text_transforms_;
     component_count = component_count_;
@@ -122,6 +123,13 @@ void TextRenderer3D::PrepareFrame(const render::TextRenderer3DPrepareView& prepa
     stats = {};
     stats.component_count = component_count;
     culling_stats = {};
+    last_prepare_runtime_rebuild_required = false;
+    last_prepare_instance_rebuild_required = false;
+    last_prepare_pending_transform_dirty_component_count =
+        pending_transform_dirty_component_count;
+    last_prepare_used_pending_transform_dirty =
+        pending_transform_dirty_component_indices != nullptr &&
+        pending_transform_dirty_component_count > 0U;
 
     if (text_components == nullptr ||
         text_transforms == nullptr ||
@@ -146,6 +154,7 @@ void TextRenderer3D::PrepareFrame(const render::TextRenderer3DPrepareView& prepa
         instance_geometry_valid = false;
         contains_billboard_instances = false;
         active_camera_reverse_z = false;
+        ClearPendingTransformDirtyHint();
         ResetPerFrameDrawState(active_frame_index, glyph_atlas_host->PageCount());
         return;
     }
@@ -204,6 +213,7 @@ void TextRenderer3D::PrepareFrame(const render::TextRenderer3DPrepareView& prepa
         AnyTextComponentDirty(text_components, component_count) ||
         visible_mode_changed ||
         visible_set_changed;
+    last_prepare_runtime_rebuild_required = runtime_rebuild_required;
 
     if (runtime_rebuild_required) {
         cached_runtime_stats = ecs::TextRuntimeSystem<ecs::Dim3>::Build(text_components,
@@ -235,11 +245,14 @@ void TextRenderer3D::PrepareFrame(const render::TextRenderer3DPrepareView& prepa
     const bool instance_rebuild_required =
         !instance_geometry_valid ||
         runtime_rebuild_required ||
+        last_prepare_used_pending_transform_dirty ||
         cached_transforms_ptr != text_transforms ||
         cached_camera_component_ptr != camera_component ||
         cached_camera_transform_ptr != camera_transform ||
         transform_signature != cached_transform_signature ||
         (contains_billboard_instances && camera_world_revision != cached_camera_world_revision);
+    last_prepare_instance_rebuild_required = instance_rebuild_required;
+    ClearPendingTransformDirtyHint();
 
     if (instance_rebuild_required) {
         cached_render_stats = ecs::TextRender3DSystem::BuildFromRuntime(text_components,

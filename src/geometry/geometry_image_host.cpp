@@ -99,7 +99,7 @@ void GeometryImageHost::UploadImage(VulkanContext& context_,
     if (!initialized || gpu_memory_host == nullptr) {
         throw std::runtime_error("GeometryImageHost::UploadImage called before Initialize");
     }
-    if (upload_info_.image_id == 0U) {
+    if (!upload_info_.image_id.IsValid()) {
         throw std::invalid_argument("GeometryImageHost::UploadImage image_id must be non-zero");
     }
     if (upload_info_.pixels == nullptr) {
@@ -234,13 +234,13 @@ void GeometryImageHost::UploadImage(VulkanContext& context_,
 }
 
 bool GeometryImageHost::RemoveImage(VulkanContext& context_,
-                                    std::uint32_t image_id_,
+                                    GeometryImageId image_id_,
                                     std::uint64_t last_submitted_value_,
                                     std::uint64_t completed_submit_value_) {
     if (!initialized) {
         throw std::runtime_error("GeometryImageHost::RemoveImage called before Initialize");
     }
-    if (image_id_ == 0U) {
+    if (!image_id_.IsValid()) {
         return false;
     }
 
@@ -275,8 +275,8 @@ bool GeometryImageHost::RemoveImage(VulkanContext& context_,
     return true;
 }
 
-const GeometryImageHost::ImageRecord* GeometryImageHost::FindImage(std::uint32_t image_id_) const noexcept {
-    if (!initialized || image_id_ == 0U) {
+const GeometryImageHost::ImageRecord* GeometryImageHost::FindImage(GeometryImageId image_id_) const noexcept {
+    if (!initialized || !image_id_.IsValid()) {
         return nullptr;
     }
 
@@ -291,7 +291,7 @@ const GeometryImageHost::ImageRecord* GeometryImageHost::FindImage(std::uint32_t
     return &record;
 }
 
-render::BindlessSlot GeometryImageHost::ResolveBindlessImageSlot(std::uint32_t image_id_) const noexcept {
+render::BindlessSlot GeometryImageHost::ResolveBindlessImageSlot(GeometryImageId image_id_) const noexcept {
     const ImageRecord* record = FindImage(image_id_);
     return record != nullptr ? record->bindless.image_slot : render::BindlessSlot{};
 }
@@ -308,7 +308,7 @@ const GeometryImageHostBindlessConfig& GeometryImageHost::BindlessConfig() const
     return bindless_config;
 }
 
-std::size_t GeometryImageHost::LowerBoundImageIndex(std::uint32_t image_id_) const noexcept {
+std::size_t GeometryImageHost::LowerBoundImageIndex(GeometryImageId image_id_) const noexcept {
     std::size_t first = 0U;
     std::size_t count = images.size();
     while (count > 0U) {

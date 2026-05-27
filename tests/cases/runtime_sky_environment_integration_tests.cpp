@@ -148,12 +148,12 @@ public:
         case SkySmokeScenario::cubemap:
         case SkySmokeScenario::cubemap_lazy_bake:
             environment_state.mode = vr::scene::SkyEnvironmentMode::cubemap;
-            environment_state.sky_texture_id = kSkySmokeCubemapTextureId.value;
+            environment_state.sky_texture_id = kSkySmokeCubemapTextureId;
             break;
         case SkySmokeScenario::hdri:
         case SkySmokeScenario::hdri_lazy_bake:
             environment_state.mode = vr::scene::SkyEnvironmentMode::equirectangular_hdr;
-            environment_state.sky_texture_id = kSkySmokeEquirectTextureId.value;
+            environment_state.sky_texture_id = kSkySmokeEquirectTextureId;
             break;
         case SkySmokeScenario::procedural_atmosphere:
             environment_state.mode = vr::scene::SkyEnvironmentMode::procedural_atmosphere;

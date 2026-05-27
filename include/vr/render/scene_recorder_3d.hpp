@@ -7,9 +7,11 @@
 #include "vr/render/light_shadow_link_coordinator.hpp"
 #include "vr/render/render_target_bloom_renderer.hpp"
 #include "vr/render/scene_prepare_views.hpp"
+#include "vr/render/scene_recorder_3d_dirty_scheduler.hpp"
 #include "vr/render/scene_render_stage.hpp"
 #include "vr/render/scene_render_target_set.hpp"
 #include "vr/render/scene_submission.hpp"
+#include "vr/render/scene_temporal_motion_producer_state.hpp"
 #include "vr/render/shadow_atlas_binding_coordinator.hpp"
 #include "vr/render/shadow_frame_coordinator.hpp"
 #include "vr/render_graph/frame_graph_build.hpp"
@@ -17,6 +19,7 @@
 #include "vr/shadow/shadow_renderer_3d.hpp"
 
 #include <cstdint>
+#include <memory>
 
 namespace vr::geometry {
 class GeometryRenderer3D;
@@ -46,6 +49,10 @@ class RenderGraphRuntimeService;
 }
 
 namespace vr::render {
+namespace detail {
+class RenderTargetTemporalMotionRenderer;
+class RenderTargetTemporalResolveRenderer;
+}
 
 template<typename T>
 using SceneRecorder3DMcVector = Center::Memory::mc_vector<T, Center::Memory::Tags::Container>;
@@ -92,8 +99,8 @@ struct SceneRecorder3DStats final {
 
 class SceneRecorder3D final {
 public:
-    SceneRecorder3D() = default;
-    ~SceneRecorder3D() = default;
+    SceneRecorder3D();
+    ~SceneRecorder3D();
 
     SceneRecorder3D(const SceneRecorder3D&) = delete;
     SceneRecorder3D& operator=(const SceneRecorder3D&) = delete;
@@ -198,6 +205,13 @@ private:
                                         SceneRenderStage,
                                         render_graph::ResourceHandle,
                                         render_graph::ResourceHandle);
+    using GraphTemporalMotionRecordFn = void (*)(void*,
+                                                 render_graph::GraphCommandContext&,
+                                                 render_graph::ResourceHandle,
+                                                 render_graph::ResourceHandle);
+    using DescribeGraphTemporalMotionBindingsFn = void (*)(void*,
+                                                           render_graph::RenderGraphBuilder&,
+                                                           render_graph::PassHandle);
     using DescribeGraphBindingsFn = void (*)(void*,
                                              render_graph::RenderGraphBuilder&,
                                              render_graph::PassHandle);
@@ -219,6 +233,11 @@ private:
                                                render::AnimationFrameCoordinator<ecs::Dim3>*);
     using ConfigurePreSceneAnimationFn = void (*)(void*,
                                                   render::AnimationFrameCoordinator<ecs::Dim3>*);
+    using ConfigureTemporalViewProjectionFn = void (*)(void*,
+                                                       const ecs::Matrix4x4*);
+    using ConfigureTemporalMotionProducerStateFn = void (*)(
+        void*,
+        const SceneTemporalMotionProducerState*);
     using GraphOverlayRecordFn = void (*)(void*,
                                           render_graph::GraphCommandContext&,
                                           render_graph::ResourceHandle);
@@ -252,12 +271,25 @@ private:
         std::uint16_t reserved0 = 0U;
         std::uint32_t submission_layer_mask = all_submission_layers;
         PrepareFn prepare_fn = nullptr;
+        SceneRecorder3DDescribeTransformSourceFn
+            describe_transform_dirty_source_fn = nullptr;
+        SceneRecorder3DApplyDirtyHintFn apply_transform_dirty_hint_fn = nullptr;
+        SceneRecorder3DDescribeAppearanceSourceFn
+            describe_appearance_dirty_source_fn = nullptr;
+        SceneRecorder3DApplyDirtyHintFn apply_appearance_dirty_hint_fn = nullptr;
         GraphSceneRecordFn graph_record_fn = nullptr;
+        GraphTemporalMotionRecordFn graph_temporal_motion_record_fn = nullptr;
+        DescribeGraphTemporalMotionBindingsFn
+            describe_graph_temporal_motion_bindings_fn = nullptr;
         DescribeGraphBindingsFn describe_graph_bindings_fn = nullptr;
         RegisterGraphImportedResourcesFn register_graph_imported_resources_fn = nullptr;
         SwapchainRecreatedFn swapchain_recreated_fn = nullptr;
         ConfigureLightingFn configure_lighting_fn = nullptr;
         ConfigureSceneAnimationFn configure_animation_fn = nullptr;
+        ConfigureTemporalViewProjectionFn configure_temporal_view_projection_fn =
+            nullptr;
+        ConfigureTemporalMotionProducerStateFn
+            configure_temporal_motion_producer_state_fn = nullptr;
     };
 
     struct OverlayRendererEntry final {
@@ -287,6 +319,61 @@ private:
 
     template<typename RendererT>
     static constexpr GraphSceneRecordFn ResolveGraphSceneRecordFn() noexcept;
+
+    template<typename RendererT>
+    static void RecordGraphTemporalMotionRenderer(
+        void* renderer_,
+        render_graph::GraphCommandContext& context_,
+        render_graph::ResourceHandle motion_target_,
+        render_graph::ResourceHandle depth_target_);
+
+    template<typename RendererT>
+    static constexpr GraphTemporalMotionRecordFn
+    ResolveGraphTemporalMotionRecordFn() noexcept;
+
+    template<typename RendererT>
+    static void DescribeGraphTemporalMotionBindings(
+        void* renderer_,
+        render_graph::RenderGraphBuilder& builder_,
+        render_graph::PassHandle pass_);
+
+    template<typename RendererT>
+    static constexpr DescribeGraphTemporalMotionBindingsFn
+    ResolveGraphTemporalMotionBindingsFn() noexcept;
+
+    template<typename RendererT>
+    static SceneRecorder3DTransformSourceView DescribeTransformDirtySource(
+        void* renderer_);
+
+    template<typename RendererT>
+    static constexpr SceneRecorder3DDescribeTransformSourceFn
+    ResolveTransformDirtySourceFn() noexcept;
+
+    template<typename RendererT>
+    static void ApplyTransformDirtyHint(void* renderer_,
+                                        const std::uint32_t* dirty_component_indices_,
+                                        std::uint32_t dirty_component_count_) noexcept;
+
+    template<typename RendererT>
+    static constexpr SceneRecorder3DApplyDirtyHintFn
+    ResolveTransformDirtyHintFn() noexcept;
+
+    template<typename RendererT>
+    static SceneRecorder3DAppearanceSourceView DescribeAppearanceDirtySource(
+        void* renderer_);
+
+    template<typename RendererT>
+    static constexpr SceneRecorder3DDescribeAppearanceSourceFn
+    ResolveAppearanceDirtySourceFn() noexcept;
+
+    template<typename RendererT>
+    static void ApplyAppearanceDirtyHint(void* renderer_,
+                                         const std::uint32_t* dirty_component_indices_,
+                                         std::uint32_t dirty_component_count_) noexcept;
+
+    template<typename RendererT>
+    static constexpr SceneRecorder3DApplyDirtyHintFn
+    ResolveAppearanceDirtyHintFn() noexcept;
 
     template<typename RendererT>
     static void RecordGraphOverlayRenderer(void* renderer_,
@@ -346,6 +433,23 @@ private:
         void* renderer_,
         render::AnimationFrameCoordinator<ecs::Dim3>* animation_frame_coordinator_);
 
+    template<typename RendererT>
+    static void ConfigureTemporalViewProjection(void* renderer_,
+                                                const ecs::Matrix4x4* view_projection_);
+
+    template<typename RendererT>
+    static constexpr ConfigureTemporalViewProjectionFn
+    ResolveTemporalViewProjectionFn() noexcept;
+
+    template<typename RendererT>
+    static void ConfigureTemporalMotionProducerState(
+        void* renderer_,
+        const SceneTemporalMotionProducerState* state_);
+
+    template<typename RendererT>
+    static constexpr ConfigureTemporalMotionProducerStateFn
+    ResolveTemporalMotionProducerStateFn() noexcept;
+
     template<typename Fn>
     void ForEachSceneRendererInStageOrder(Fn& fn_) const;
 
@@ -384,6 +488,10 @@ private:
     SceneRecorder3DStats stats{};
     SkyEnvironmentPass sky_environment_pass{};
     RenderTargetBloomRenderer bloom_renderer{};
+    std::unique_ptr<detail::RenderTargetTemporalMotionRenderer>
+        temporal_motion_renderer{};
+    std::unique_ptr<detail::RenderTargetTemporalResolveRenderer>
+        temporal_resolve_renderer{};
     SceneRecorder3DMcVector<PreSceneRendererEntry> pre_scene_renderer_entries{};
     SceneRecorder3DMcVector<SceneRendererEntry> scene_renderer_entries{};
     SceneRecorder3DMcVector<OverlayRendererEntry> overlay_renderer_entries{};
@@ -403,6 +511,7 @@ private:
     std::uint64_t active_view_signature = 0U;
     render::LightShadowLinkCoordinator3D light_shadow_link_coordinator{};
     render::ShadowAtlasBindingCoordinator shadow_atlas_binding_coordinator{};
+    SceneRecorder3DDirtyScheduler dirty_scheduler{};
     bool initialized = false;
 };
 

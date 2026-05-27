@@ -85,7 +85,7 @@ void GeometryResourceHost::UploadMesh(VulkanContext& context_,
     if (!initialized || gpu_memory_host == nullptr) {
         throw std::runtime_error("GeometryResourceHost::UploadMesh called before Initialize");
     }
-    if (upload_info_.geometry_id == 0U) {
+    if (!upload_info_.geometry_id.IsValid()) {
         throw std::invalid_argument("GeometryResourceHost::UploadMesh geometry_id must be non-zero");
     }
     if (upload_info_.vertices == nullptr || upload_info_.vertex_count == 0U) {
@@ -131,13 +131,13 @@ void GeometryResourceHost::UploadMesh(VulkanContext& context_,
 }
 
 bool GeometryResourceHost::RemoveMesh(VulkanContext& context_,
-                                      std::uint32_t geometry_id_,
+                                      GeometryResourceId geometry_id_,
                                       std::uint64_t last_submitted_value_,
                                       std::uint64_t completed_submit_value_) {
     if (!initialized) {
         throw std::runtime_error("GeometryResourceHost::RemoveMesh called before Initialize");
     }
-    if (geometry_id_ == 0U) {
+    if (!geometry_id_.IsValid()) {
         return false;
     }
 
@@ -159,8 +159,8 @@ bool GeometryResourceHost::RemoveMesh(VulkanContext& context_,
     return true;
 }
 
-const GeometryResourceHost::MeshRecord* GeometryResourceHost::FindMesh(std::uint32_t geometry_id_) const noexcept {
-    if (!initialized || geometry_id_ == 0U) {
+const GeometryResourceHost::MeshRecord* GeometryResourceHost::FindMesh(GeometryResourceId geometry_id_) const noexcept {
+    if (!initialized || !geometry_id_.IsValid()) {
         return nullptr;
     }
 
@@ -205,7 +205,7 @@ std::size_t GeometryResourceHost::LowerBoundReusableBufferIndex(
     return first;
 }
 
-std::size_t GeometryResourceHost::LowerBoundMeshIndex(std::uint32_t geometry_id_) const noexcept {
+std::size_t GeometryResourceHost::LowerBoundMeshIndex(GeometryResourceId geometry_id_) const noexcept {
     std::size_t first = 0U;
     std::size_t count = meshes.size();
     while (count > 0U) {

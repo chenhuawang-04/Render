@@ -12,7 +12,7 @@ template<typename RuntimeT>
     using Service = vr::runtime::services::RenderGraphRuntimeService;
     const auto* service = runtime_.Services().template TryGet<Service>();
     return service != nullptr &&
-           service->LastDiagnostics().graph_only_active;
+           service->IsGraphOnlyRecordActive(runtime_.Context());
 }
 
 template<typename RuntimeT>
@@ -20,7 +20,7 @@ template<typename RuntimeT>
     using Service = vr::runtime::services::RenderGraphRuntimeService;
     const auto* service = runtime_.Services().template TryGet<Service>();
     return service != nullptr &&
-           service->LastDiagnostics().graph_only_active;
+           service->IsGraphOnlyRecordActive(runtime_.Context());
 }
 
 [[nodiscard]] inline const render_graph::CompiledPass* FindCompiledPassByName(

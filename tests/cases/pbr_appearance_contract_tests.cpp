@@ -221,6 +221,52 @@ VR_TEST_CASE(PbrAppearanceContract_runtime_bridge_record_encodes_surface_domains
              static_cast<std::uint32_t>(vr::ecs::AppearanceAlphaMode::mask));
 }
 
+VR_TEST_CASE(PbrAppearanceContract_typed_sampled_surface_helpers_preserve_domain_and_storage_ids,
+             "unit;pbr;appearance;contract") {
+    const vr::render::AppearanceSampledSurfaceHandle texture_handle =
+        vr::render::MakeAppearanceTextureHandle(vr::asset::TextureId{41U});
+    const vr::render::AppearanceSampledSurfaceHandle surface_handle =
+        vr::render::MakeAppearanceSurfaceImageHandle(vr::surface::SurfaceImageId{52U});
+    const vr::render::AppearanceSampledSurfaceHandle geometry_handle =
+        vr::render::MakeAppearanceGeometryImageHandle(vr::geometry::GeometryImageId{63U});
+
+    VR_CHECK(texture_handle.surface_id == 41U);
+    VR_CHECK(texture_handle.domain == vr::render::AppearanceSampledSurfaceDomain::asset_texture);
+    VR_CHECK(surface_handle.surface_id == 52U);
+    VR_CHECK(surface_handle.domain == vr::render::AppearanceSampledSurfaceDomain::surface_image);
+    VR_CHECK(geometry_handle.surface_id == 63U);
+    VR_CHECK(geometry_handle.domain == vr::render::AppearanceSampledSurfaceDomain::geometry_image);
+
+    VR_CHECK(vr::render::MakeAppearanceSampledSurfaceHandle(vr::asset::TextureId{71U}).domain ==
+             vr::render::AppearanceSampledSurfaceDomain::asset_texture);
+    VR_CHECK(vr::render::MakeAppearanceSampledSurfaceHandle(vr::surface::SurfaceImageId{72U}).domain ==
+             vr::render::AppearanceSampledSurfaceDomain::surface_image);
+    VR_CHECK(vr::render::MakeAppearanceSampledSurfaceHandle(vr::geometry::GeometryImageId{73U}).domain ==
+             vr::render::AppearanceSampledSurfaceDomain::geometry_image);
+}
+
+VR_TEST_CASE(PbrAppearanceContract_unavailable_sampled_surface_resolver_keeps_safe_unbound_fallback,
+             "unit;pbr;appearance;contract") {
+    const vr::render::AppearanceSampledSurfaceResolver3D resolver{};
+
+    const auto resolved_texture = vr::render::ResolveAppearanceSampledSurfaceBinding3D(
+        resolver,
+        vr::render::MakeAppearanceTextureHandle(vr::asset::TextureId{91U}));
+    const auto resolved_surface = vr::render::ResolveAppearanceSampledSurfaceBinding3D(
+        resolver,
+        vr::render::MakeAppearanceSurfaceImageHandle(vr::surface::SurfaceImageId{92U}));
+    const auto resolved_geometry = vr::render::ResolveAppearanceSampledSurfaceBinding3D(
+        resolver,
+        vr::render::MakeAppearanceGeometryImageHandle(vr::geometry::GeometryImageId{93U}));
+
+    VR_CHECK(!resolved_texture.present);
+    VR_CHECK(!resolved_surface.present);
+    VR_CHECK(!resolved_geometry.present);
+    VR_CHECK(resolved_texture.slot == 0U);
+    VR_CHECK(resolved_surface.slot == 0U);
+    VR_CHECK(resolved_geometry.slot == 0U);
+}
+
 VR_TEST_CASE(PbrAppearanceContract_appearance_binding3d_preserves_sampled_surface_semantics,
              "unit;pbr;appearance;contract") {
     vr::ecs::AppearanceBinding3D binding{};

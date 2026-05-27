@@ -4,6 +4,7 @@
 #include "vr/ecs/system/appearance_system.hpp"
 #include "vr/ecs/system/bounds_system.hpp"
 #include "vr/ecs/system/camera_system.hpp"
+#include "vr/ecs/system/geometry_mesh_system.hpp"
 #include "vr/ecs/system/geometry_system.hpp"
 #include "vr/ecs/system/light_system.hpp"
 #include "vr/ecs/system/shadow_system.hpp"
@@ -11,6 +12,7 @@
 #include "vr/geometry/geometry_image_host.hpp"
 #include "vr/geometry/geometry_appearance_host.hpp"
 #include "vr/geometry/geometry_renderer_3d.hpp"
+#include "vr/render/animation_frame_coordinator.hpp"
 #include "vr/render/light_frame_coordinator.hpp"
 #include "vr/render/render_target_format_utils.hpp"
 #include "vr/runtime/runtime.hpp"
@@ -27,6 +29,91 @@
 #include <cstdint>
 #include <string>
 #include <string_view>
+
+namespace vr::geometry {
+
+struct GeometryRenderer3DTestAccess final {
+    static void BindPrepareFrameRuntime(
+        GeometryRenderer3D& renderer_,
+        const render::GeometryRenderer3DPrepareView& prepare_view_) {
+        renderer_.BindPrepareFrameRuntime(prepare_view_);
+    }
+
+    [[nodiscard]] static auto BuildCpuRuntimeFrameStage(
+        GeometryRenderer3D& renderer_,
+        const render::GeometryRenderer3DPrepareView& prepare_view_)
+        -> GeometryRenderer3D::CpuRuntimeFrameBuildResult {
+        return renderer_.BuildCpuRuntimeFrameStage(prepare_view_);
+    }
+
+    static void ApplyPreparedFrameState(
+        GeometryRenderer3D& renderer_,
+        const render::GeometryRenderer3DPrepareView& prepare_view_,
+        GeometryRenderer3D::CpuRuntimeFrameBuildResult cpu_stage_) {
+        renderer_.ApplyPreparedFrameState(prepare_view_, std::move(cpu_stage_));
+    }
+
+    [[nodiscard]] static const auto& RuntimeStats(
+        const GeometryRenderer3D& renderer_) {
+        return renderer_.runtime_stats;
+    }
+
+    [[nodiscard]] static VkDescriptorSet CurrentLightingDescriptorSet(
+        const GeometryRenderer3D& renderer_) noexcept {
+        if (renderer_.active_frame_index >= renderer_.frame_lighting_resources.size()) {
+            return VK_NULL_HANDLE;
+        }
+        return renderer_.frame_lighting_resources[renderer_.active_frame_index]
+            .descriptor_set;
+    }
+
+    [[nodiscard]] static std::uint64_t TemporalMotionHistoryCaptureId(
+        const GeometryRenderer3D& renderer_) noexcept {
+        return renderer_.temporal_motion_history_capture_id;
+    }
+
+    [[nodiscard]] static VkFormat PipelineColorFormat(
+        const GeometryRenderer3D& renderer_) noexcept {
+        return renderer_.pipeline_color_format;
+    }
+
+    [[nodiscard]] static VkFormat TemporalMotionPipelineColorFormat(
+        const GeometryRenderer3D& renderer_) noexcept {
+        return renderer_.temporal_motion_pipeline_color_format;
+    }
+
+    [[nodiscard]] static std::uint32_t UploadedInstanceCount(
+        const GeometryRenderer3D& renderer_) noexcept {
+        return renderer_.active_frame_runtime_truth.instance_upload_range
+            .element_count;
+    }
+
+    [[nodiscard]] static std::uint32_t UploadedTemporalMotionInstanceCount(
+        const GeometryRenderer3D& renderer_) noexcept {
+        return renderer_.active_frame_runtime_truth
+            .temporal_motion_instance_range.element_count;
+    }
+
+    [[nodiscard]] static std::uint32_t ActivePreparedDrawBatchCount(
+        const GeometryRenderer3D& renderer_) noexcept {
+        return static_cast<std::uint32_t>(
+            renderer_.active_prepared_frame_state.artifacts.draw_batches.size());
+    }
+
+    [[nodiscard]] static std::uint32_t ActivePreparedAppearanceRecordCount(
+        const GeometryRenderer3D& renderer_) noexcept {
+        return static_cast<std::uint32_t>(renderer_.active_prepared_frame_state
+                                              .artifacts.appearance_source_records
+                                              .size());
+    }
+
+    [[nodiscard]] static bool ActivePreparedHasSceneData(
+        const GeometryRenderer3D& renderer_) noexcept {
+        return renderer_.active_prepared_frame_state.artifacts.has_scene_data;
+    }
+};
+
+} // namespace vr::geometry
 
 namespace {
 
@@ -216,10 +303,10 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_end_to_end_smoke, "integrat
     bool geometry_renderer_initialized = false;
 
     std::array<vr::geometry::GeometryMeshVertex, 4U> vertices{
-        vr::geometry::GeometryMeshVertex{.position_x = -0.5F, .position_y = -0.5F, .position_z = 0.0F, .normal_x = 0.0F, .normal_y = 0.0F, .normal_z = 1.0F, .uv_u = 0.0F, .uv_v = 0.0F},
-        vr::geometry::GeometryMeshVertex{.position_x = 0.5F, .position_y = -0.5F, .position_z = 0.0F, .normal_x = 0.0F, .normal_y = 0.0F, .normal_z = 1.0F, .uv_u = 1.0F, .uv_v = 0.0F},
-        vr::geometry::GeometryMeshVertex{.position_x = 0.5F, .position_y = 0.5F, .position_z = 0.0F, .normal_x = 0.0F, .normal_y = 0.0F, .normal_z = 1.0F, .uv_u = 1.0F, .uv_v = 1.0F},
-        vr::geometry::GeometryMeshVertex{.position_x = -0.5F, .position_y = 0.5F, .position_z = 0.0F, .normal_x = 0.0F, .normal_y = 0.0F, .normal_z = 1.0F, .uv_u = 0.0F, .uv_v = 1.0F}
+        vr::geometry::GeometryMeshVertex{.position_x = -0.5F, .position_y = -0.5F, .position_z = 0.0F, .normal_x = 0.0F, .normal_y = 0.0F, .normal_z = 1.0F, .uv_u = 0.0F, .uv_v = 0.0F, .joint_index0 = 0U, .joint_weight0 = 1.0F},
+        vr::geometry::GeometryMeshVertex{.position_x = 0.5F, .position_y = -0.5F, .position_z = 0.0F, .normal_x = 0.0F, .normal_y = 0.0F, .normal_z = 1.0F, .uv_u = 1.0F, .uv_v = 0.0F, .joint_index0 = 0U, .joint_weight0 = 1.0F},
+        vr::geometry::GeometryMeshVertex{.position_x = 0.5F, .position_y = 0.5F, .position_z = 0.0F, .normal_x = 0.0F, .normal_y = 0.0F, .normal_z = 1.0F, .uv_u = 1.0F, .uv_v = 1.0F, .joint_index0 = 0U, .joint_weight0 = 1.0F},
+        vr::geometry::GeometryMeshVertex{.position_x = -0.5F, .position_y = 0.5F, .position_z = 0.0F, .normal_x = 0.0F, .normal_y = 0.0F, .normal_z = 1.0F, .uv_u = 0.0F, .uv_v = 1.0F, .joint_index0 = 0U, .joint_weight0 = 1.0F}
     };
     std::array<std::uint32_t, 6U> indices{0U, 1U, 2U, 2U, 3U, 0U};
     std::array<vr::geometry::GeometrySubmeshRange, 1U> submeshes{
@@ -324,6 +411,7 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_end_to_end_smoke, "integrat
         create_info.render_loop.swapchain.preferred_image_count = 2U;
         create_info.render_loop.commands.initial_primary_per_frame = 2U;
         create_info.render_loop.commands.primary_growth_chunk = 2U;
+        create_info.diagnostics.level = vr::runtime::DiagnosticsLevel::Detailed;
         create_info.poll_events_each_tick = true;
         runtime.Initialize(create_info);
         runtime_initialized = true;
@@ -752,6 +840,7 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_appearance_updates_reuse_de
         create_info.render_loop.swapchain.preferred_image_count = 2U;
         create_info.render_loop.commands.initial_primary_per_frame = 2U;
         create_info.render_loop.commands.primary_growth_chunk = 2U;
+        create_info.diagnostics.level = vr::runtime::DiagnosticsLevel::Detailed;
         create_info.poll_events_each_tick = true;
         runtime.Initialize(create_info);
         runtime_initialized = true;
@@ -878,6 +967,8 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_graph_only_record_path_smok
     vr::geometry::GeometryImageHost geometry_image_host{};
     vr::geometry::GeometryAppearanceHost geometry_appearance_host{};
     vr::render::SceneRecorder3D recorder{};
+    vr::render::AnimationFrameCoordinator<vr::ecs::Dim3>
+        animation_frame_coordinator{};
     vr::geometry::GeometryRenderer3D geometry_renderer{};
 
     bool runtime_initialized = false;
@@ -888,10 +979,10 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_graph_only_record_path_smok
     bool geometry_renderer_initialized = false;
 
     std::array<vr::geometry::GeometryMeshVertex, 4U> vertices{
-        vr::geometry::GeometryMeshVertex{.position_x = -0.5F, .position_y = -0.5F, .position_z = 0.0F, .normal_x = 0.0F, .normal_y = 0.0F, .normal_z = 1.0F, .uv_u = 0.0F, .uv_v = 0.0F},
-        vr::geometry::GeometryMeshVertex{.position_x = 0.5F, .position_y = -0.5F, .position_z = 0.0F, .normal_x = 0.0F, .normal_y = 0.0F, .normal_z = 1.0F, .uv_u = 1.0F, .uv_v = 0.0F},
-        vr::geometry::GeometryMeshVertex{.position_x = 0.5F, .position_y = 0.5F, .position_z = 0.0F, .normal_x = 0.0F, .normal_y = 0.0F, .normal_z = 1.0F, .uv_u = 1.0F, .uv_v = 1.0F},
-        vr::geometry::GeometryMeshVertex{.position_x = -0.5F, .position_y = 0.5F, .position_z = 0.0F, .normal_x = 0.0F, .normal_y = 0.0F, .normal_z = 1.0F, .uv_u = 0.0F, .uv_v = 1.0F}
+        vr::geometry::GeometryMeshVertex{.position_x = -0.5F, .position_y = -0.5F, .position_z = 0.0F, .normal_x = 0.0F, .normal_y = 0.0F, .normal_z = 1.0F, .uv_u = 0.0F, .uv_v = 0.0F, .joint_index0 = 0U, .joint_weight0 = 1.0F},
+        vr::geometry::GeometryMeshVertex{.position_x = 0.5F, .position_y = -0.5F, .position_z = 0.0F, .normal_x = 0.0F, .normal_y = 0.0F, .normal_z = 1.0F, .uv_u = 1.0F, .uv_v = 0.0F, .joint_index0 = 0U, .joint_weight0 = 1.0F},
+        vr::geometry::GeometryMeshVertex{.position_x = 0.5F, .position_y = 0.5F, .position_z = 0.0F, .normal_x = 0.0F, .normal_y = 0.0F, .normal_z = 1.0F, .uv_u = 1.0F, .uv_v = 1.0F, .joint_index0 = 0U, .joint_weight0 = 1.0F},
+        vr::geometry::GeometryMeshVertex{.position_x = -0.5F, .position_y = 0.5F, .position_z = 0.0F, .normal_x = 0.0F, .normal_y = 0.0F, .normal_z = 1.0F, .uv_u = 0.0F, .uv_v = 1.0F, .joint_index0 = 0U, .joint_weight0 = 1.0F}
     };
     std::array<std::uint32_t, 6U> indices{0U, 1U, 2U, 2U, 3U, 0U};
     std::array<vr::geometry::GeometrySubmeshRange, 1U> submeshes{
@@ -931,8 +1022,15 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_graph_only_record_path_smok
                                 false,
                                 vr::ecs::AppearanceShadingModel3D::lit_pbr,
                                 vr::ecs::Rgba8{235U, 208U, 160U, 255U});
+    vr::ecs::GeometryMeshSystem::EnableSkeletalSkinning(geometry_component, true);
+    vr::ecs::GeometryMeshSystem::EnableSkeletalRootMotion(geometry_component, true);
+    vr::ecs::GeometryMeshSystem::EnableVertexDeformShader(geometry_component, true);
+    GeometrySystem3D::SetUserData(geometry_component, 1001U);
     Transform3D transform{};
     TransformSystem3D::Initialize(transform);
+    TransformSystem3D::SetLocalPosition(
+        transform,
+        vr::ecs::Float3{.x = 40.0F, .y = 0.0F, .z = 0.0F});
     TransformSystem3D::UpdateHierarchy(&transform, 1U);
     Bounds3D bounds{};
     BoundsSystem3D::Initialize(bounds);
@@ -952,6 +1050,58 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_graph_only_record_path_smok
     TransformSystem3D::UpdateHierarchy(&camera_transform, 1U);
     CameraSystem3D::MarkViewDirty(camera);
     CameraSystem3D::Update(camera, camera_transform);
+
+    std::array<vr::ecs::SkeletalJointPose<vr::ecs::Dim3>, 1U>
+        skeletal_joint_storage{{
+            {
+                .position = vr::ecs::Float3{.x = 0.0F, .y = 0.0F, .z = 0.0F},
+                .rotation = vr::ecs::Quaternion{
+                    .x = 0.0F,
+                    .y = 0.0F,
+                    .z = 0.0F,
+                    .w = 1.0F,
+                },
+                .scale = vr::ecs::Float3{.x = 1.0F, .y = 1.0F, .z = 1.0F},
+            },
+        }};
+    std::array<vr::ecs::SkeletalJointPose<vr::ecs::Dim3>, 1U>
+        skeletal_bind_pose_storage{{
+            {
+                .position = vr::ecs::Float3{.x = 0.0F, .y = 0.0F, .z = 0.0F},
+                .rotation = vr::ecs::Quaternion{
+                    .x = 0.0F,
+                    .y = 0.0F,
+                    .z = 0.0F,
+                    .w = 1.0F,
+                },
+                .scale = vr::ecs::Float3{.x = 1.0F, .y = 1.0F, .z = 1.0F},
+            },
+        }};
+    std::array<vr::ecs::SkeletalPoseOutputState<vr::ecs::Dim3>, 1U>
+        skeletal_outputs{};
+    skeletal_outputs[0U].joints = skeletal_joint_storage.data();
+    skeletal_outputs[0U].joint_count =
+        static_cast<std::uint32_t>(skeletal_joint_storage.size());
+    skeletal_outputs[0U].sampled_joint_count =
+        static_cast<std::uint32_t>(skeletal_joint_storage.size());
+    skeletal_outputs[0U].revision = 1U;
+    skeletal_outputs[0U].bind_pose_joints =
+        skeletal_bind_pose_storage.data();
+    skeletal_outputs[0U].bind_pose_joint_count =
+        static_cast<std::uint32_t>(skeletal_bind_pose_storage.size());
+
+    std::array<vr::ecs::Float4, 2U> vertex_deform_parameter_storage{{
+        {.x = 0.75F, .y = 0.0F, .z = 1.0F, .w = 0.0F},
+        {.x = 0.0F, .y = 2.0F, .z = 0.0F, .w = 0.05F},
+    }};
+    std::array<vr::ecs::VertexDeformOutputState, 1U> vertex_deform_outputs{};
+    vertex_deform_outputs[0U].parameters =
+        vertex_deform_parameter_storage.data();
+    vertex_deform_outputs[0U].parameter_count =
+        static_cast<std::uint32_t>(vertex_deform_parameter_storage.size());
+    vertex_deform_outputs[0U].sampled_parameter_count =
+        static_cast<std::uint32_t>(vertex_deform_parameter_storage.size());
+    vertex_deform_outputs[0U].revision = 1U;
 
     struct GraphAwareRecorder final {
         vr::render::SceneRecorder3D& inner;
@@ -985,12 +1135,14 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_graph_only_record_path_smok
         create_info.render_loop.swapchain.preferred_image_count = 2U;
         create_info.render_loop.commands.initial_primary_per_frame = 2U;
         create_info.render_loop.commands.primary_growth_chunk = 2U;
+        create_info.diagnostics.level = vr::runtime::DiagnosticsLevel::Detailed;
         create_info.poll_events_each_tick = true;
         runtime.Initialize(create_info);
         runtime_initialized = true;
 
         recorder.Initialize(BuildGeometryRecorderCreateInfo());
         recorder.BindRuntime(runtime);
+        recorder.BindAnimationFrameCoordinator(&animation_frame_coordinator);
 
         vr::geometry::GeometryResourceHostCreateInfo resource_create_info{};
         resource_create_info.reserve_mesh_count = 32U;
@@ -1061,6 +1213,14 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_graph_only_record_path_smok
                                        &camera,
                                        &camera_transform,
                                        &bounds);
+        animation_frame_coordinator.SetAnimationOutputs(skeletal_outputs.data(),
+                                                        1U,
+                                                        vertex_deform_outputs.data(),
+                                                        1U,
+                                                        nullptr,
+                                                        0U,
+                                                        nullptr,
+                                                        0U);
         recorder.RegisterOpaqueSceneRenderer(geometry_renderer, vr::render::SceneRenderPassRole::single);
 
         vr::render::RenderView3D main_view{};
@@ -1079,9 +1239,83 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_graph_only_record_path_smok
         std::uint32_t executed_graph_frames = 0U;
         std::uint32_t max_descriptor_updates = 0U;
         std::uint64_t max_transient_descriptor_updates = 0U;
+        std::uint32_t first_tick_temporal_previous_match_count = 0U;
+        std::uint32_t first_tick_temporal_draw_call_count = 0U;
+        std::uint32_t first_visible_temporal_previous_match_count = 0U;
+        std::uint32_t first_visible_temporal_draw_call_count = 0U;
+        std::uint32_t post_reset_temporal_draw_call_count = 0U;
+        std::uint32_t identity_change_temporal_previous_match_count = 0U;
+        std::uint32_t identity_change_temporal_draw_call_count = 0U;
+        std::uint32_t post_resize_temporal_previous_match_count = 0U;
+        std::uint32_t post_resize_temporal_draw_call_count = 0U;
+        std::uint32_t post_resize_recovery_previous_match_count = 0U;
+        std::uint32_t post_resize_recovery_temporal_draw_call_count = 0U;
+        std::uint32_t max_temporal_previous_match_count = 0U;
+        std::uint32_t max_temporal_draw_call_count = 0U;
+        std::uint32_t max_skeletal_palette_component_count = 0U;
+        std::uint32_t max_vertex_deform_animated_instance_count = 0U;
         bool saw_executable_scene_pass = false;
-        constexpr std::uint32_t max_ticks = 6U;
+        bool saw_temporal_motion_pass = false;
+        bool saw_temporal_overlay_pass = false;
+        bool first_visible_temporal_stats_captured = false;
+        bool post_reset_temporal_stats_captured = false;
+        bool identity_change_temporal_stats_captured = false;
+        bool post_resize_temporal_stats_captured = false;
+        bool post_resize_recovery_temporal_stats_captured = false;
+        constexpr std::uint32_t max_ticks = 10U;
         for (std::uint32_t tick_index = 0U; tick_index < max_ticks && runtime.IsRunning(); ++tick_index) {
+            if (tick_index == 4U) {
+                geometry_renderer.OnSwapchainRecreated(
+                    runtime.Swapchain().ImageCount(),
+                    runtime.Swapchain().Extent(),
+                    runtime.Swapchain().Format());
+                VR_CHECK(!vr::geometry::GeometryRenderer3DTestAccess::
+                             ActivePreparedHasSceneData(geometry_renderer));
+                VR_CHECK(vr::geometry::GeometryRenderer3DTestAccess::
+                             ActivePreparedDrawBatchCount(geometry_renderer) ==
+                         0U);
+                VR_CHECK(vr::geometry::GeometryRenderer3DTestAccess::
+                             ActivePreparedAppearanceRecordCount(
+                                 geometry_renderer) == 0U);
+                VR_CHECK(vr::geometry::GeometryRenderer3DTestAccess::
+                             UploadedInstanceCount(geometry_renderer) == 0U);
+                VR_CHECK(vr::geometry::GeometryRenderer3DTestAccess::
+                             UploadedTemporalMotionInstanceCount(
+                                 geometry_renderer) == 0U);
+            }
+            if (tick_index == 3U) {
+                GeometrySystem3D::SetUserData(geometry_component, 2002U);
+            }
+
+            TransformSystem3D::SetLocalPosition(
+                transform,
+                vr::ecs::Float3{
+                    .x = (tick_index == 0U) ? 40.0F : 0.0F,
+                    .y = 0.0F,
+                    .z = 0.0F});
+            TransformSystem3D::UpdateHierarchy(&transform, 1U);
+            (void)BoundsSystem3D::UpdateAligned(&bounds, &transform, 1U);
+            skeletal_joint_storage[0U].position.y =
+                0.18F * std::sin(static_cast<float>(tick_index) * 0.55F);
+            skeletal_joint_storage[0U].rotation =
+                vr::ecs::spatial_math::QuaternionFromEulerXyz(
+                    0.0F,
+                    0.0F,
+                    0.15F * std::cos(static_cast<float>(tick_index) * 0.40F));
+            skeletal_outputs[0U].revision = tick_index + 2U;
+            vertex_deform_parameter_storage[0U] = vr::ecs::Float4{
+                .x = 0.75F + 0.20F * static_cast<float>(tick_index),
+                .y = 0.0F,
+                .z = ((tick_index & 1U) == 0U) ? 1.0F : 0.0F,
+                .w = ((tick_index & 1U) == 0U) ? 0.0F : 1.0F,
+            };
+            vertex_deform_parameter_storage[1U] = vr::ecs::Float4{
+                .x = 0.10F * static_cast<float>(tick_index),
+                .y = 2.0F + 0.25F * static_cast<float>(tick_index),
+                .z = -0.05F * static_cast<float>(tick_index),
+                .w = 0.05F + 0.02F * static_cast<float>(tick_index),
+            };
+            vertex_deform_outputs[0U].revision = tick_index + 2U;
             vr::render::RefreshExtentBoundWorldSceneSubmission(main_view,
                                                                main_scene_packet,
                                                                camera,
@@ -1098,8 +1332,63 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_graph_only_record_path_smok
                 ++executed_graph_frames;
             }
             const vr::geometry::GeometryRenderer3DStats renderer_stats = geometry_renderer.Stats();
+            if (tick_index == 0U) {
+                first_tick_temporal_previous_match_count =
+                    renderer_stats.temporal_motion_previous_match_count;
+                first_tick_temporal_draw_call_count =
+                    renderer_stats.temporal_motion_draw_call_count;
+            }
+            if (!first_visible_temporal_stats_captured &&
+                renderer_stats.visible_component_count > 0U) {
+                first_visible_temporal_previous_match_count =
+                    renderer_stats.temporal_motion_previous_match_count;
+                first_visible_temporal_draw_call_count =
+                    renderer_stats.temporal_motion_draw_call_count;
+                first_visible_temporal_stats_captured = true;
+            }
+            if (tick_index == 2U) {
+                post_reset_temporal_draw_call_count =
+                    renderer_stats.temporal_motion_draw_call_count;
+                post_reset_temporal_stats_captured = true;
+            }
+            if (tick_index == 3U) {
+                identity_change_temporal_previous_match_count =
+                    renderer_stats.temporal_motion_previous_match_count;
+                identity_change_temporal_draw_call_count =
+                    renderer_stats.temporal_motion_draw_call_count;
+                identity_change_temporal_stats_captured = true;
+            }
+            if (tick_index == 4U) {
+                post_resize_temporal_previous_match_count =
+                    renderer_stats.temporal_motion_previous_match_count;
+                post_resize_temporal_draw_call_count =
+                    renderer_stats.temporal_motion_draw_call_count;
+                post_resize_temporal_stats_captured = true;
+            }
+            if (!post_resize_recovery_temporal_stats_captured &&
+                tick_index >= 5U &&
+                renderer_stats.temporal_motion_previous_match_count > 0U &&
+                renderer_stats.temporal_motion_draw_call_count > 0U) {
+                post_resize_recovery_previous_match_count =
+                    renderer_stats.temporal_motion_previous_match_count;
+                post_resize_recovery_temporal_draw_call_count =
+                    renderer_stats.temporal_motion_draw_call_count;
+                post_resize_recovery_temporal_stats_captured = true;
+            }
             max_descriptor_updates =
                 std::max(max_descriptor_updates, renderer_stats.descriptor_set_update_count);
+            max_temporal_previous_match_count = std::max(
+                max_temporal_previous_match_count,
+                renderer_stats.temporal_motion_previous_match_count);
+            max_temporal_draw_call_count = std::max(
+                max_temporal_draw_call_count,
+                renderer_stats.temporal_motion_draw_call_count);
+            max_skeletal_palette_component_count = std::max(
+                max_skeletal_palette_component_count,
+                renderer_stats.skeletal_palette_component_count);
+            max_vertex_deform_animated_instance_count = std::max(
+                max_vertex_deform_animated_instance_count,
+                renderer_stats.vertex_deform_animated_instance_count);
             max_transient_descriptor_updates = std::max(
                 max_transient_descriptor_updates,
                 runtime.Descriptor().Stats().transient_update_call_count);
@@ -1109,6 +1398,25 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_graph_only_record_path_smok
                 saw_executable_scene_pass = saw_executable_scene_pass ||
                     (compiled_graph->Passes()[0].debug_name == "main_scene_pass" &&
                      compiled_graph->Passes()[0].executable);
+                saw_temporal_motion_pass = saw_temporal_motion_pass ||
+                    std::any_of(
+                        compiled_graph->Passes().begin(),
+                        compiled_graph->Passes().end(),
+                        [](const vr::render_graph::CompiledPass& pass_) {
+                            return pass_.debug_name ==
+                                   "temporal_motion_vector_pass";
+                        });
+                saw_temporal_overlay_pass = saw_temporal_overlay_pass ||
+                    std::any_of(
+                        compiled_graph->Passes().begin(),
+                        compiled_graph->Passes().end(),
+                        [](const vr::render_graph::CompiledPass& pass_) {
+                            return pass_.debug_name ==
+                                   "temporal_object_motion_overlay_pass";
+                        });
+            }
+            if (tick_index == 1U) {
+                service.RequestFrameColorHistoryReset();
             }
             SDL_Delay(1U);
         }
@@ -1117,10 +1425,32 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_graph_only_record_path_smok
         VR_CHECK(executed_graph_frames > 0U);
         VR_CHECK(graph_recorder.legacy_record_count == 0U);
         VR_CHECK(saw_executable_scene_pass);
-        VR_CHECK(service.LastDiagnostics().graph_only_supported);
-        VR_CHECK(service.LastDiagnostics().graph_only_active);
+        VR_CHECK(service.SupportsGraphExecution(runtime.Context()));
+        VR_CHECK(vr::test::IsGraphOnlyScene3DRecordActive(runtime));
         VR_CHECK(max_descriptor_updates == 0U);
         VR_CHECK(max_transient_descriptor_updates > 0U);
+        VR_CHECK(first_tick_temporal_previous_match_count == 0U);
+        VR_CHECK(first_tick_temporal_draw_call_count == 0U);
+        VR_CHECK(first_visible_temporal_stats_captured);
+        VR_CHECK(first_visible_temporal_previous_match_count > 0U);
+        VR_CHECK(first_visible_temporal_draw_call_count > 0U);
+        VR_CHECK(post_reset_temporal_stats_captured);
+        VR_CHECK(identity_change_temporal_stats_captured);
+        VR_CHECK(post_resize_temporal_stats_captured);
+        VR_CHECK(post_resize_recovery_temporal_stats_captured);
+        VR_CHECK(post_reset_temporal_draw_call_count == 0U);
+        VR_CHECK(identity_change_temporal_previous_match_count == 0U);
+        VR_CHECK(identity_change_temporal_draw_call_count == 0U);
+        VR_CHECK(post_resize_temporal_previous_match_count == 0U);
+        VR_CHECK(post_resize_temporal_draw_call_count == 0U);
+        VR_CHECK(post_resize_recovery_previous_match_count > 0U);
+        VR_CHECK(post_resize_recovery_temporal_draw_call_count > 0U);
+        VR_CHECK(max_temporal_previous_match_count > 0U);
+        VR_CHECK(max_temporal_draw_call_count > 0U);
+        VR_CHECK(max_skeletal_palette_component_count > 0U);
+        VR_CHECK(max_vertex_deform_animated_instance_count > 0U);
+        VR_CHECK(saw_temporal_motion_pass);
+        VR_CHECK(saw_temporal_overlay_pass);
     } catch (const std::exception& exception_) {
         if (IsEnvironmentSkipError(exception_.what())) {
             VR_SKIP(exception_.what());
@@ -1145,6 +1475,459 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_graph_only_record_path_smok
     }
     if (runtime_initialized) {
         runtime.Shutdown();
+    }
+}
+
+VR_TEST_CASE(RuntimeIntegration_scene_recorder_3d_geometry_scheduler_and_cpu_seam_regression,
+             "integration;gpu;sdl;runtime;geometry;scene3d;dirty_scheduler") {
+    Runtime runtime{};
+    vr::geometry::GeometryResourceHost geometry_resource_host{};
+    vr::geometry::GeometryUploadHost geometry_upload_host{};
+    vr::geometry::GeometryImageHost geometry_image_host{};
+    vr::geometry::GeometryAppearanceHost geometry_appearance_host{};
+    vr::render::SceneRecorder3D recorder{};
+    vr::geometry::GeometryRenderer3D geometry_renderer{};
+
+    bool runtime_initialized = false;
+    bool recorder_initialized = false;
+    bool geometry_resource_host_initialized = false;
+    bool geometry_upload_host_initialized = false;
+    bool geometry_image_host_initialized = false;
+    bool geometry_appearance_host_initialized = false;
+    bool geometry_renderer_initialized = false;
+
+    std::array<vr::geometry::GeometryMeshVertex, 4U> vertices{
+        vr::geometry::GeometryMeshVertex{.position_x = -0.5F, .position_y = -0.5F, .position_z = 0.0F, .normal_x = 0.0F, .normal_y = 0.0F, .normal_z = 1.0F, .uv_u = 0.0F, .uv_v = 0.0F},
+        vr::geometry::GeometryMeshVertex{.position_x = 0.5F, .position_y = -0.5F, .position_z = 0.0F, .normal_x = 0.0F, .normal_y = 0.0F, .normal_z = 1.0F, .uv_u = 1.0F, .uv_v = 0.0F},
+        vr::geometry::GeometryMeshVertex{.position_x = 0.5F, .position_y = 0.5F, .position_z = 0.0F, .normal_x = 0.0F, .normal_y = 0.0F, .normal_z = 1.0F, .uv_u = 1.0F, .uv_v = 1.0F},
+        vr::geometry::GeometryMeshVertex{.position_x = -0.5F, .position_y = 0.5F, .position_z = 0.0F, .normal_x = 0.0F, .normal_y = 0.0F, .normal_z = 1.0F, .uv_u = 0.0F, .uv_v = 1.0F}
+    };
+    std::array<std::uint32_t, 6U> indices{0U, 1U, 2U, 2U, 3U, 0U};
+    std::array<vr::geometry::GeometrySubmeshRange, 1U> submeshes{
+        vr::geometry::GeometrySubmeshRange{.first_index = 0U, .index_count = 6U, .vertex_offset = 0, .reserved0 = 0U}
+    };
+    std::array<std::uint32_t, 16U> pixels{};
+    for (std::uint32_t y = 0U; y < 4U; ++y) {
+        for (std::uint32_t x = 0U; x < 4U; ++x) {
+            const std::size_t index = static_cast<std::size_t>(y) * 4U + x;
+            pixels[index] = ((x ^ y) & 1U) != 0U ? 0xFFBFA57BU : 0xFFF4E9D0U;
+        }
+    }
+
+    vr::geometry::GeometryMeshUploadInfo mesh_upload_info{};
+    mesh_upload_info.geometry_id = 1U;
+    mesh_upload_info.vertices = vertices.data();
+    mesh_upload_info.vertex_count = static_cast<std::uint32_t>(vertices.size());
+    mesh_upload_info.indices = indices.data();
+    mesh_upload_info.index_count = static_cast<std::uint32_t>(indices.size());
+    mesh_upload_info.submeshes = submeshes.data();
+    mesh_upload_info.submesh_count = static_cast<std::uint32_t>(submeshes.size());
+    mesh_upload_info.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    mesh_upload_info.bounds_min = vr::ecs::Float3{.x = -0.5F, .y = -0.5F, .z = -0.05F};
+    mesh_upload_info.bounds_max = vr::ecs::Float3{.x = 0.5F, .y = 0.5F, .z = 0.05F};
+
+    std::array<Geometry3D, 2U> geometry_components{};
+    std::array<Appearance3D, 2U> appearance_components{};
+    std::array<Transform3D, 2U> transforms{};
+    std::array<Bounds3D, 2U> bounds_components{};
+
+    for (std::uint32_t index = 0U; index < geometry_components.size(); ++index) {
+        InitializeGeometryComponent(geometry_components[index],
+                                    1U,
+                                    11U,
+                                    vr::ecs::Float3{.x = -0.5F, .y = -0.5F, .z = -0.05F},
+                                    vr::ecs::Float3{.x = 0.5F, .y = 0.5F, .z = 0.05F},
+                                    true,
+                                    true,
+                                    false,
+                                    false,
+                                    false,
+                                    vr::ecs::AppearanceShadingModel3D::lit_pbr,
+                                    vr::ecs::Rgba8{235U, 208U, 160U, 255U});
+        GeometrySystem3D::SetUserData(geometry_components[index], 7000U + index);
+
+        AppearanceSystem3D::Initialize(appearance_components[index]);
+        AppearanceSystem3D::SetBaseColor(
+            appearance_components[index],
+            vr::ecs::Rgba8{235U, 208U, 160U, 255U});
+
+        TransformSystem3D::Initialize(transforms[index]);
+        TransformSystem3D::SetLocalPosition(
+            transforms[index],
+            vr::ecs::Float3{
+                .x = (index == 0U) ? -0.9F : 0.9F,
+                .y = 0.0F,
+                .z = 0.0F,
+            });
+
+        BoundsSystem3D::Initialize(bounds_components[index]);
+        BoundsSystem3D::SetLocalAabb(bounds_components[index],
+                                     vr::ecs::Float3{.x = -0.5F, .y = -0.5F, .z = -0.05F},
+                                     vr::ecs::Float3{.x = 0.5F, .y = 0.5F, .z = 0.05F});
+    }
+    TransformSystem3D::UpdateHierarchy(
+        transforms.data(), static_cast<std::uint32_t>(transforms.size()));
+    (void)BoundsSystem3D::UpdateAligned(bounds_components.data(),
+                                        transforms.data(),
+                                        static_cast<std::uint32_t>(bounds_components.size()));
+
+    Camera3D camera{};
+    CameraSystem3D::Initialize(camera);
+    CameraSystem3D::SetAspectRatio(camera, 1280.0F / 720.0F);
+    CameraSystem3D::SetNearFar(camera, 0.05F, 256.0F);
+    CameraSystem3D::SetVerticalFovRadians(
+        camera, 60.0F * 0.01745329251994329577F);
+    Transform3D camera_transform{};
+    TransformSystem3D::Initialize(camera_transform);
+    TransformSystem3D::SetLocalPosition(
+        camera_transform, vr::ecs::Float3{.x = 0.0F, .y = 0.0F, .z = 4.2F});
+    TransformSystem3D::UpdateHierarchy(&camera_transform, 1U);
+    CameraSystem3D::MarkViewDirty(camera);
+    CameraSystem3D::Update(camera, camera_transform);
+
+    try {
+        Runtime::CreateInfo create_info{};
+        create_info.platform.window.title =
+            "vr_tests_scene_recorder_geometry_scheduler_seam";
+        create_info.platform.window.width = 640;
+        create_info.platform.window.height = 360;
+        create_info.platform.window.resizable = true;
+        create_info.platform.window.high_pixel_density = true;
+        create_info.platform.instance.enable_validation = false;
+        create_info.platform.device.required_vulkan13_features.dynamicRendering =
+            VK_TRUE;
+        create_info.platform.device.required_vulkan13_features.synchronization2 =
+            VK_TRUE;
+        create_info.render_loop.swapchain.enable_vsync = false;
+        create_info.render_loop.swapchain.preferred_image_count = 2U;
+        create_info.render_loop.commands.initial_primary_per_frame = 2U;
+        create_info.render_loop.commands.primary_growth_chunk = 2U;
+        create_info.diagnostics.level = vr::runtime::DiagnosticsLevel::Detailed;
+        create_info.poll_events_each_tick = true;
+        runtime.Initialize(create_info);
+        runtime_initialized = true;
+
+        recorder.Initialize(BuildGeometryRecorderCreateInfo());
+        recorder_initialized = true;
+        recorder.BindRuntime(runtime);
+
+        vr::geometry::GeometryResourceHostCreateInfo resource_create_info{};
+        resource_create_info.reserve_mesh_count = 8U;
+        resource_create_info.reserve_submesh_count = 8U;
+        geometry_resource_host.Initialize(runtime.Context(),
+                                          runtime.GpuMemory(),
+                                          resource_create_info);
+        geometry_resource_host_initialized = true;
+
+        vr::geometry::GeometryUploadHostCreateInfo upload_create_info{};
+        upload_create_info.frames_in_flight = 2U;
+        upload_create_info.initial_3d_instance_buffer_bytes = 128U * 1024U;
+        geometry_upload_host.Initialize(runtime.Context(),
+                                        runtime.GpuMemory(),
+                                        upload_create_info);
+        geometry_upload_host_initialized = true;
+
+        vr::geometry::GeometryImageHostCreateInfo image_create_info{};
+        image_create_info.reserve_image_count = 8U;
+        image_create_info.reserve_retired_image_count = 8U;
+        geometry_image_host.Initialize(runtime.Context(),
+                                       runtime.GpuMemory(),
+                                       image_create_info);
+        geometry_image_host_initialized = true;
+
+        vr::geometry::GeometryAppearanceHostCreateInfo appearance_create_info{};
+        appearance_create_info.reserve_appearance_count = 8U;
+        geometry_appearance_host.Initialize(appearance_create_info);
+        geometry_appearance_host_initialized = true;
+
+        runtime.Upload().BeginFrame(runtime.Context(), 0U);
+        geometry_resource_host.UploadMesh(runtime.Context(),
+                                          runtime.Upload(),
+                                          0U,
+                                          0U,
+                                          0U,
+                                          mesh_upload_info);
+
+        vr::geometry::GeometryImageUploadInfo image_upload_info{};
+        image_upload_info.image_id = 101U;
+        image_upload_info.pixels = pixels.data();
+        image_upload_info.width = 4U;
+        image_upload_info.height = 4U;
+        image_upload_info.format = VK_FORMAT_R8G8B8A8_UNORM;
+        image_upload_info.bytes_per_pixel = 4U;
+        image_upload_info.usage =
+            VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        image_upload_info.shader_read_layout =
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        image_upload_info.aspect_mask = VK_IMAGE_ASPECT_COLOR_BIT;
+        geometry_image_host.UploadImage(runtime.Context(),
+                                        runtime.Upload(),
+                                        0U,
+                                        0U,
+                                        0U,
+                                        image_upload_info);
+        const auto upload_end =
+            runtime.Upload().EndFrameAndSubmit(runtime.Context(), 0U);
+        if (upload_end.submitted) {
+            runtime.Upload().WaitFrame(runtime.Context(), 0U);
+        }
+        geometry_resource_host.BeginFrame(runtime.Context(), 0U);
+        geometry_image_host.BeginFrame(runtime.Context(), 0U);
+
+        vr::geometry::GeometryAppearanceDesc appearance_desc{};
+        appearance_desc.appearance_id = 11U;
+        appearance_desc.sampled_surface_binding.base_color_surface.surface_id =
+            101U;
+        geometry_appearance_host.UpsertAppearance(appearance_desc);
+
+        vr::geometry::GeometryRenderer3DCreateInfo renderer_create_info{};
+        renderer_create_info.reserve_component_count =
+            static_cast<std::uint32_t>(geometry_components.size());
+        renderer_create_info.reserve_instance_count = 8U;
+        renderer_create_info.enable_depth = true;
+        geometry_renderer.Initialize(renderer_create_info);
+        geometry_renderer_initialized = true;
+        geometry_renderer.SetHosts(&geometry_resource_host, &geometry_upload_host);
+        geometry_renderer.SetAppearanceHosts(&geometry_appearance_host,
+                                             &geometry_image_host);
+        geometry_renderer.SetSceneData(geometry_components.data(),
+                                       transforms.data(),
+                                       static_cast<std::uint32_t>(
+                                           geometry_components.size()),
+                                       &camera,
+                                       &camera_transform,
+                                       bounds_components.data());
+        geometry_renderer.SetAppearanceData(
+            appearance_components.data(),
+            static_cast<std::uint32_t>(appearance_components.size()));
+
+        recorder.RegisterOpaqueSceneRenderer(
+            geometry_renderer, vr::render::SceneRenderPassRole::single);
+
+        vr::render::RenderView3D main_view{};
+        vr::render::RenderScenePacket3D main_scene_packet{};
+        vr::render::RefreshExtentBoundWorldSceneSubmission(
+            main_view,
+            main_scene_packet,
+            camera,
+            camera_transform,
+            runtime.Swapchain().Extent(),
+            0U);
+        recorder.SetFramePacket(&main_scene_packet);
+
+        const vr::render::SceneRecorder3DPrepareView prepare_view{
+            .device = runtime.Context(),
+            .gpu_memory = &runtime.GpuMemory(),
+            .texture = &runtime.Texture(),
+            .bindless = &runtime.BindlessResources(),
+            .upload = &runtime.Upload(),
+            .descriptor = &runtime.Descriptor(),
+            .ibl = &runtime.Ibl(),
+            .pipeline = &runtime.Pipeline(),
+            .render_target = runtime.RenderTarget(),
+            .sampler = &runtime.Sampler(),
+            .frame =
+                vr::render::FrameStaticContext{
+                    .frame_index = 0U,
+                    .swapchain_extent = runtime.Swapchain().Extent(),
+                    .swapchain_format = runtime.Swapchain().Format(),
+                },
+            .progress = {},
+        };
+        const auto geometry_prepare_view =
+            vr::render::MakeGeometryRenderer3DPrepareView(prepare_view);
+
+        runtime.Upload().BeginFrame(runtime.Context(), 0U);
+        vr::geometry::GeometryRenderer3DTestAccess::BindPrepareFrameRuntime(
+            geometry_renderer, geometry_prepare_view);
+        const std::uint32_t upload_count_before_cpu_stage =
+            geometry_upload_host.Stats().upload_count;
+        const std::uint64_t descriptor_updates_before_cpu_stage =
+            runtime.Descriptor().Stats().transient_update_call_count;
+        const auto cpu_build_result =
+            vr::geometry::GeometryRenderer3DTestAccess::BuildCpuRuntimeFrameStage(
+                geometry_renderer, geometry_prepare_view);
+        const auto& cpu_payload = cpu_build_result.dispatch_payload;
+        const auto& prepared_artifacts = cpu_build_result.prepared_artifacts;
+
+        VR_CHECK(cpu_payload.has_scene_data);
+        VR_CHECK(cpu_payload.upload_instances);
+        VR_CHECK(!cpu_payload.upload_temporal_motion_instances);
+        VR_CHECK(cpu_payload.publish_temporal_history);
+        VR_CHECK(cpu_payload.prepare_pipeline_objects);
+        VR_CHECK(cpu_payload.instance_upload_revision != 0U);
+        VR_CHECK(cpu_payload.temporal_motion_capture_id == 1U);
+        VR_CHECK(geometry_upload_host.Stats().upload_count ==
+                 upload_count_before_cpu_stage);
+        VR_CHECK(runtime.Descriptor().Stats().transient_update_call_count ==
+                 descriptor_updates_before_cpu_stage);
+        VR_CHECK(vr::geometry::GeometryRenderer3DTestAccess::
+                     UploadedInstanceCount(geometry_renderer) == 0U);
+        VR_CHECK(vr::geometry::GeometryRenderer3DTestAccess::
+                     UploadedTemporalMotionInstanceCount(geometry_renderer) == 0U);
+        VR_CHECK(vr::geometry::GeometryRenderer3DTestAccess::
+                     CurrentLightingDescriptorSet(geometry_renderer) ==
+                 VK_NULL_HANDLE);
+        VR_CHECK(vr::geometry::GeometryRenderer3DTestAccess::
+                     PipelineColorFormat(geometry_renderer) ==
+                 VK_FORMAT_UNDEFINED);
+        VR_CHECK(vr::geometry::GeometryRenderer3DTestAccess::
+                     TemporalMotionPipelineColorFormat(geometry_renderer) ==
+                 VK_FORMAT_UNDEFINED);
+        VR_CHECK(vr::geometry::GeometryRenderer3DTestAccess::
+                     TemporalMotionHistoryCaptureId(geometry_renderer) == 0U);
+        VR_CHECK(prepared_artifacts.has_scene_data);
+        VR_CHECK(!prepared_artifacts.instance_upload_source.empty());
+        VR_CHECK(!prepared_artifacts.draw_batches.empty());
+
+        vr::geometry::GeometryRenderer3DTestAccess::ApplyPreparedFrameState(
+            geometry_renderer, geometry_prepare_view, cpu_build_result);
+        VR_CHECK(geometry_upload_host.Stats().upload_count >
+                 upload_count_before_cpu_stage);
+        VR_CHECK(vr::geometry::GeometryRenderer3DTestAccess::
+                     UploadedInstanceCount(geometry_renderer) > 0U);
+        VR_CHECK(vr::geometry::GeometryRenderer3DTestAccess::
+                     TemporalMotionHistoryCaptureId(geometry_renderer) > 0U);
+        VR_CHECK(vr::geometry::GeometryRenderer3DTestAccess::
+                     PipelineColorFormat(geometry_renderer) !=
+                 VK_FORMAT_UNDEFINED);
+        VR_CHECK(
+            vr::geometry::GeometryRenderer3DTestAccess::ActivePreparedHasSceneData(
+                geometry_renderer));
+        VR_CHECK(vr::geometry::GeometryRenderer3DTestAccess::
+                     ActivePreparedDrawBatchCount(geometry_renderer) > 0U);
+        VR_CHECK(vr::geometry::GeometryRenderer3DTestAccess::
+                     ActivePreparedAppearanceRecordCount(geometry_renderer) >
+                 0U);
+        const auto apply_upload_end =
+            runtime.Upload().EndFrameAndSubmit(runtime.Context(), 0U);
+        if (apply_upload_end.submitted) {
+            runtime.Upload().WaitFrame(runtime.Context(), 0U);
+        }
+
+        const auto first_tick = runtime.Tick(recorder);
+        VR_CHECK(first_tick.render.code == vr::render::TickCode::Submitted ||
+                 first_tick.render.code ==
+                     vr::render::TickCode::RecreateRequested);
+
+        TransformSystem3D::SetLocalPosition(
+            transforms[1U], vr::ecs::Float3{.x = 1.4F, .y = 0.35F, .z = 0.0F});
+        TransformSystem3D::UpdateHierarchy(
+            transforms.data(), static_cast<std::uint32_t>(transforms.size()));
+        (void)BoundsSystem3D::UpdateAligned(bounds_components.data(),
+                                            transforms.data(),
+                                            static_cast<std::uint32_t>(
+                                                bounds_components.size()));
+        vr::render::RefreshExtentBoundWorldSceneSubmission(
+            main_view,
+            main_scene_packet,
+            camera,
+            camera_transform,
+            runtime.Swapchain().Extent(),
+            1U);
+        recorder.SetFramePacket(&main_scene_packet);
+
+        const auto second_tick = runtime.Tick(recorder);
+        VR_CHECK(second_tick.render.code == vr::render::TickCode::Submitted ||
+                 second_tick.render.code ==
+                     vr::render::TickCode::RecreateRequested);
+
+        VR_CHECK(vr::geometry::GeometryRenderer3DTestAccess::RuntimeStats(
+                     geometry_renderer)
+                     .transform_update_from_dirty_hint);
+
+        geometry_renderer.SetSceneData(nullptr, nullptr, 0U, &camera, &camera_transform, nullptr);
+        VR_CHECK(!vr::geometry::GeometryRenderer3DTestAccess::
+                     ActivePreparedHasSceneData(geometry_renderer));
+        VR_CHECK(vr::geometry::GeometryRenderer3DTestAccess::
+                     ActivePreparedDrawBatchCount(geometry_renderer) == 0U);
+        VR_CHECK(vr::geometry::GeometryRenderer3DTestAccess::
+                     ActivePreparedAppearanceRecordCount(geometry_renderer) ==
+                 0U);
+        VR_CHECK(vr::geometry::GeometryRenderer3DTestAccess::
+                     UploadedInstanceCount(geometry_renderer) == 0U);
+        VR_CHECK(vr::geometry::GeometryRenderer3DTestAccess::
+                     UploadedTemporalMotionInstanceCount(geometry_renderer) == 0U);
+        runtime.Upload().BeginFrame(runtime.Context(), 0U);
+        vr::geometry::GeometryRenderer3DTestAccess::BindPrepareFrameRuntime(
+            geometry_renderer, geometry_prepare_view);
+        const auto empty_cpu_build_result =
+            vr::geometry::GeometryRenderer3DTestAccess::BuildCpuRuntimeFrameStage(
+                geometry_renderer, geometry_prepare_view);
+        VR_CHECK(!empty_cpu_build_result.dispatch_payload.has_scene_data);
+        VR_CHECK(!empty_cpu_build_result.prepared_artifacts.has_scene_data);
+        VR_CHECK(geometry_upload_host.Stats().upload_count >
+                 upload_count_before_cpu_stage);
+        vr::geometry::GeometryRenderer3DTestAccess::ApplyPreparedFrameState(
+            geometry_renderer, geometry_prepare_view, empty_cpu_build_result);
+        const auto empty_upload_end =
+            runtime.Upload().EndFrameAndSubmit(runtime.Context(), 0U);
+        if (empty_upload_end.submitted) {
+            runtime.Upload().WaitFrame(runtime.Context(), 0U);
+        }
+        VR_CHECK(!vr::geometry::GeometryRenderer3DTestAccess::ActivePreparedHasSceneData(
+            geometry_renderer));
+        VR_CHECK(vr::geometry::GeometryRenderer3DTestAccess::
+                     ActivePreparedDrawBatchCount(geometry_renderer) == 0U);
+        VR_CHECK(vr::geometry::GeometryRenderer3DTestAccess::
+                     ActivePreparedAppearanceRecordCount(geometry_renderer) == 0U);
+        VR_CHECK(vr::geometry::GeometryRenderer3DTestAccess::
+                     UploadedInstanceCount(geometry_renderer) == 0U);
+        VR_CHECK(vr::geometry::GeometryRenderer3DTestAccess::
+                     UploadedTemporalMotionInstanceCount(geometry_renderer) == 0U);
+
+        recorder.Shutdown(runtime.Context());
+        recorder_initialized = false;
+        geometry_renderer.Shutdown(runtime.Context());
+        geometry_renderer_initialized = false;
+        geometry_appearance_host.Shutdown();
+        geometry_appearance_host_initialized = false;
+        geometry_image_host.Shutdown(runtime.Context());
+        geometry_image_host_initialized = false;
+        geometry_upload_host.Shutdown(runtime.Context());
+        geometry_upload_host_initialized = false;
+        geometry_resource_host.Shutdown(runtime.Context());
+        geometry_resource_host_initialized = false;
+        runtime.Shutdown();
+        runtime_initialized = false;
+    } catch (const std::exception& exception_) {
+        if (recorder_initialized && runtime_initialized && runtime.IsInitialized()) {
+            recorder.Shutdown(runtime.Context());
+            recorder_initialized = false;
+        }
+        if (geometry_renderer_initialized && runtime_initialized &&
+            runtime.IsInitialized()) {
+            geometry_renderer.Shutdown(runtime.Context());
+            geometry_renderer_initialized = false;
+        }
+        if (geometry_appearance_host_initialized) {
+            geometry_appearance_host.Shutdown();
+            geometry_appearance_host_initialized = false;
+        }
+        if (geometry_image_host_initialized && runtime_initialized &&
+            runtime.IsInitialized()) {
+            geometry_image_host.Shutdown(runtime.Context());
+            geometry_image_host_initialized = false;
+        }
+        if (geometry_upload_host_initialized && runtime_initialized &&
+            runtime.IsInitialized()) {
+            geometry_upload_host.Shutdown(runtime.Context());
+            geometry_upload_host_initialized = false;
+        }
+        if (geometry_resource_host_initialized && runtime_initialized &&
+            runtime.IsInitialized()) {
+            geometry_resource_host.Shutdown(runtime.Context());
+            geometry_resource_host_initialized = false;
+        }
+        if (runtime_initialized && runtime.IsInitialized()) {
+            runtime.Shutdown();
+            runtime_initialized = false;
+        }
+
+        if (IsEnvironmentSkipError(exception_.what())) {
+            VR_SKIP(exception_.what());
+        }
+        throw;
     }
 }
 
@@ -1299,6 +2082,7 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_bloom_post_stack_smoke,
         create_info.render_loop.swapchain.preferred_image_count = 2U;
         create_info.render_loop.commands.initial_primary_per_frame = 2U;
         create_info.render_loop.commands.primary_growth_chunk = 2U;
+        create_info.diagnostics.level = vr::runtime::DiagnosticsLevel::Detailed;
         create_info.poll_events_each_tick = true;
         runtime.Initialize(create_info);
         runtime_initialized = true;
@@ -1504,9 +2288,6 @@ VR_TEST_CASE(RuntimeIntegration_geometry_renderer_3d_bloom_post_stack_smoke,
             (void)BoundsSystem3D::UpdateAligned(bounds_components.data(),
                                                 transforms.data(),
                                                 static_cast<std::uint32_t>(bounds_components.size()));
-            const std::uint32_t dirty_index = 0U;
-            light_frame_coordinator.SetTransformDirtyHint(&dirty_index, 1U);
-            shadow_renderer.SetTransformDirtyHint(&dirty_index, 1U);
             vr::render::RefreshExtentBoundWorldSceneSubmission(main_view,
                                                                main_scene_packet,
                                                                camera,

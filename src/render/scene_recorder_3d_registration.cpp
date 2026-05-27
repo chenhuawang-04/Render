@@ -6,6 +6,10 @@ namespace vr::render {
 
 void SceneRecorder3D::BindLightFrameCoordinator(
     render::LightFrameCoordinator<ecs::Dim3>* light_frame_coordinator_) noexcept {
+    if (light_frame_coordinator != light_frame_coordinator_) {
+        dirty_scheduler.InvalidateAll(
+            SceneRecorder3DDirtyInvalidationReason::binding_changed);
+    }
     light_frame_coordinator = light_frame_coordinator_;
     light_shadow_link_coordinator.Reset();
     RefreshFramePacketBinding();
@@ -20,6 +24,10 @@ void SceneRecorder3D::BindAnimationFrameCoordinator(
 
 void SceneRecorder3D::BindShadowRuntime(render::ShadowFrameCoordinator<ecs::Dim3>* shadow_frame_coordinator_,
                                         shadow::ShadowAtlasHost* shadow_atlas_host_) noexcept {
+    if (shadow_frame_coordinator != shadow_frame_coordinator_) {
+        dirty_scheduler.InvalidateAll(
+            SceneRecorder3DDirtyInvalidationReason::binding_changed);
+    }
     shadow_frame_coordinator = shadow_frame_coordinator_;
     shadow_atlas_host = shadow_atlas_host_;
     light_shadow_link_coordinator.Reset();
@@ -77,6 +85,7 @@ void SceneRecorder3D::ClearPreSceneRenderers() noexcept {
 
 void SceneRecorder3D::ClearSceneRenderers() noexcept {
     scene_renderer_entries.clear();
+    dirty_scheduler.ClearSceneRendererStates();
     RefreshRendererCounts();
 }
 
@@ -89,6 +98,8 @@ void SceneRecorder3D::ClearRendererRegistrations() noexcept {
     ClearPreSceneRenderers();
     ClearSceneRenderers();
     ClearOverlayRenderers();
+    dirty_scheduler.InvalidateAll(
+        SceneRecorder3DDirtyInvalidationReason::scheduler_reset);
 }
 
 void SceneRecorder3D::UpsertPreSceneRendererEntry(const PreSceneRendererEntry& entry_) {

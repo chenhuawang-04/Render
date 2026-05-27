@@ -1,0 +1,508 @@
+{
+  "options": {
+    "filter": "RenderGraph*Consumer*",
+    "shuffle": false,
+    "shuffle_seed": 0,
+    "repeat_suite": 1,
+    "stop_on_failure": false,
+    "iterations": 0,
+    "min_calibrated_iterations": 8,
+    "warmup_runs": 1,
+    "measured_runs": 3,
+    "min_duration_ms": 5,
+    "baseline_json": "",
+    "baseline_metric": "mean_ns_per_iteration",
+    "fail_on_regression_ratio": -1.000000,
+    "require_baseline_match": false,
+    "fail_on_empty_selection": false
+  },
+  "summary": {
+    "selected_count": 9,
+    "executed_count": 9,
+    "completed_count": 9,
+    "failed_count": 0,
+    "skipped_count": 0,
+    "regression_fail_count": 0,
+    "baseline_missing_count": 0,
+    "total_duration_ms": 348.243
+  },
+  "results": [
+    {
+      "name": "RenderGraphLevelPredicateConsumer_levels",
+      "outcome": "completed",
+      "message": "",
+      "metrics": {
+        "iterations": 261365,
+        "min_ms": 6.347800,
+        "max_ms": 6.573700,
+        "mean_ms": 6.489900,
+        "median_ms": 6.548200,
+        "p95_ms": 6.573700,
+        "stddev_ms": 0.101018,
+        "min_ns_per_iteration": 24.287108,
+        "max_ns_per_iteration": 25.151417,
+        "mean_ns_per_iteration": 24.830792,
+        "median_ns_per_iteration": 25.053852,
+        "p95_ns_per_iteration": 25.151417,
+        "stddev_ns_per_iteration": 0.386501,
+        "items_per_second": 40272577.389,
+        "bytes_per_second": 40272577.389
+      },
+      "baseline": {
+        "status": "not_checked",
+        "metric_kind": "mean_ns_per_iteration",
+        "has_baseline": false,
+        "baseline_mean_ms": 0.000000,
+        "current_mean_ms": 0.000000,
+        "baseline_metric_value": 0.000000,
+        "current_metric_value": 0.000000,
+        "delta_ratio": 0.000000
+      },
+      "tags": ["consumer", "core", "cpu", "diagnostics", "phase13", "render_graph", "runtime"],
+      "samples": [
+        {
+          "duration_ms": 6.347800,
+          "iterations": 261365,
+          "items_processed": 261365,
+          "bytes_processed": 261365
+        },
+        {
+          "duration_ms": 6.548200,
+          "iterations": 261365,
+          "items_processed": 261365,
+          "bytes_processed": 261365
+        },
+        {
+          "duration_ms": 6.573700,
+          "iterations": 261365,
+          "items_processed": 261365,
+          "bytes_processed": 261365
+        }
+      ]
+    },
+    {
+      "name": "RenderGraphNativePassDiagnosticsConsumer_fused_scene",
+      "outcome": "completed",
+      "message": "",
+      "metrics": {
+        "iterations": 754148,
+        "min_ms": 4.940300,
+        "max_ms": 5.222200,
+        "mean_ms": 5.078500,
+        "median_ms": 5.073000,
+        "p95_ms": 5.222200,
+        "stddev_ms": 0.115151,
+        "min_ns_per_iteration": 6.550836,
+        "max_ns_per_iteration": 6.924635,
+        "mean_ns_per_iteration": 6.734089,
+        "median_ns_per_iteration": 6.726796,
+        "p95_ns_per_iteration": 6.924635,
+        "stddev_ns_per_iteration": 0.152690,
+        "items_per_second": 148498178.596,
+        "bytes_per_second": 106918688589.150
+      },
+      "baseline": {
+        "status": "not_checked",
+        "metric_kind": "mean_ns_per_iteration",
+        "has_baseline": false,
+        "baseline_mean_ms": 0.000000,
+        "current_mean_ms": 0.000000,
+        "baseline_metric_value": 0.000000,
+        "current_metric_value": 0.000000,
+        "delta_ratio": 0.000000
+      },
+      "tags": ["core", "cpu", "diagnostics", "native_pass", "phase11", "render_graph", "runtime"],
+      "samples": [
+        {
+          "duration_ms": 5.073000,
+          "iterations": 754148,
+          "items_processed": 754148,
+          "bytes_processed": 542986560
+        },
+        {
+          "duration_ms": 5.222200,
+          "iterations": 754148,
+          "items_processed": 754148,
+          "bytes_processed": 542986560
+        },
+        {
+          "duration_ms": 4.940300,
+          "iterations": 754148,
+          "items_processed": 754148,
+          "bytes_processed": 542986560
+        }
+      ]
+    },
+    {
+      "name": "RenderGraphQueueTimelineConsumer_compute_enabled",
+      "outcome": "completed",
+      "message": "",
+      "metrics": {
+        "iterations": 80,
+        "min_ms": 5.124600,
+        "max_ms": 5.254900,
+        "mean_ms": 5.202333,
+        "median_ms": 5.227500,
+        "p95_ms": 5.254900,
+        "stddev_ms": 0.056092,
+        "min_ns_per_iteration": 64057.500000,
+        "max_ns_per_iteration": 65686.250000,
+        "mean_ns_per_iteration": 65029.166667,
+        "median_ns_per_iteration": 65343.750000,
+        "p95_ns_per_iteration": 65686.250000,
+        "stddev_ns_per_iteration": 701.155544,
+        "items_per_second": 15377.715,
+        "bytes_per_second": 28541039.277
+      },
+      "baseline": {
+        "status": "not_checked",
+        "metric_kind": "mean_ns_per_iteration",
+        "has_baseline": false,
+        "baseline_mean_ms": 0.000000,
+        "current_mean_ms": 0.000000,
+        "baseline_metric_value": 0.000000,
+        "current_metric_value": 0.000000,
+        "delta_ratio": 0.000000
+      },
+      "tags": ["core", "cpu", "diagnostics", "phase10", "queue", "render_graph", "runtime"],
+      "samples": [
+        {
+          "duration_ms": 5.124600,
+          "iterations": 80,
+          "items_processed": 80,
+          "bytes_processed": 148480
+        },
+        {
+          "duration_ms": 5.254900,
+          "iterations": 80,
+          "items_processed": 80,
+          "bytes_processed": 148480
+        },
+        {
+          "duration_ms": 5.227500,
+          "iterations": 80,
+          "items_processed": 80,
+          "bytes_processed": 148480
+        }
+      ]
+    },
+    {
+      "name": "RenderGraphQueueTimelineConsumer_graphics_fallback",
+      "outcome": "completed",
+      "message": "",
+      "metrics": {
+        "iterations": 164,
+        "min_ms": 5.857900,
+        "max_ms": 6.232200,
+        "mean_ms": 6.038033,
+        "median_ms": 6.024000,
+        "p95_ms": 6.232200,
+        "stddev_ms": 0.153129,
+        "min_ns_per_iteration": 35718.902439,
+        "max_ns_per_iteration": 38001.219512,
+        "mean_ns_per_iteration": 36817.276423,
+        "median_ns_per_iteration": 36731.707317,
+        "p95_ns_per_iteration": 38001.219512,
+        "stddev_ns_per_iteration": 933.714574,
+        "items_per_second": 27161.162,
+        "bytes_per_second": 29008120.746
+      },
+      "baseline": {
+        "status": "not_checked",
+        "metric_kind": "mean_ns_per_iteration",
+        "has_baseline": false,
+        "baseline_mean_ms": 0.000000,
+        "current_mean_ms": 0.000000,
+        "baseline_metric_value": 0.000000,
+        "current_metric_value": 0.000000,
+        "delta_ratio": 0.000000
+      },
+      "tags": ["core", "cpu", "diagnostics", "phase10", "queue", "render_graph", "runtime"],
+      "samples": [
+        {
+          "duration_ms": 6.024000,
+          "iterations": 164,
+          "items_processed": 164,
+          "bytes_processed": 175152
+        },
+        {
+          "duration_ms": 6.232200,
+          "iterations": 164,
+          "items_processed": 164,
+          "bytes_processed": 175152
+        },
+        {
+          "duration_ms": 5.857900,
+          "iterations": 164,
+          "items_processed": 164,
+          "bytes_processed": 175152
+        }
+      ]
+    },
+    {
+      "name": "RenderGraphQueueTimelineConsumer_multi_graphics_compute_enabled",
+      "outcome": "completed",
+      "message": "",
+      "metrics": {
+        "iterations": 56,
+        "min_ms": 6.473100,
+        "max_ms": 7.935800,
+        "mean_ms": 7.200633,
+        "median_ms": 7.193000,
+        "p95_ms": 7.935800,
+        "stddev_ms": 0.597169,
+        "min_ns_per_iteration": 115591.071429,
+        "max_ns_per_iteration": 141710.714286,
+        "mean_ns_per_iteration": 128582.738095,
+        "median_ns_per_iteration": 128446.428571,
+        "p95_ns_per_iteration": 141710.714286,
+        "stddev_ns_per_iteration": 10663.735148,
+        "items_per_second": 7777.094,
+        "bytes_per_second": 21013707.128
+      },
+      "baseline": {
+        "status": "not_checked",
+        "metric_kind": "mean_ns_per_iteration",
+        "has_baseline": false,
+        "baseline_mean_ms": 0.000000,
+        "current_mean_ms": 0.000000,
+        "baseline_metric_value": 0.000000,
+        "current_metric_value": 0.000000,
+        "delta_ratio": 0.000000
+      },
+      "tags": ["core", "cpu", "diagnostics", "phase10", "queue", "render_graph", "runtime"],
+      "samples": [
+        {
+          "duration_ms": 6.473100,
+          "iterations": 56,
+          "items_processed": 56,
+          "bytes_processed": 151312
+        },
+        {
+          "duration_ms": 7.935800,
+          "iterations": 56,
+          "items_processed": 56,
+          "bytes_processed": 151312
+        },
+        {
+          "duration_ms": 7.193000,
+          "iterations": 56,
+          "items_processed": 56,
+          "bytes_processed": 151312
+        }
+      ]
+    },
+    {
+      "name": "RenderGraphQueueTimelineConsumer_transfer_compute_enabled",
+      "outcome": "completed",
+      "message": "",
+      "metrics": {
+        "iterations": 69,
+        "min_ms": 7.546500,
+        "max_ms": 8.319600,
+        "mean_ms": 7.886533,
+        "median_ms": 7.793500,
+        "p95_ms": 8.319600,
+        "stddev_ms": 0.322400,
+        "min_ns_per_iteration": 109369.565217,
+        "max_ns_per_iteration": 120573.913043,
+        "mean_ns_per_iteration": 114297.584541,
+        "median_ns_per_iteration": 112949.275362,
+        "p95_ns_per_iteration": 120573.913043,
+        "stddev_ns_per_iteration": 4672.458723,
+        "items_per_second": 8749.091,
+        "bytes_per_second": 23500059.173
+      },
+      "baseline": {
+        "status": "not_checked",
+        "metric_kind": "mean_ns_per_iteration",
+        "has_baseline": false,
+        "baseline_mean_ms": 0.000000,
+        "current_mean_ms": 0.000000,
+        "baseline_metric_value": 0.000000,
+        "current_metric_value": 0.000000,
+        "delta_ratio": 0.000000
+      },
+      "tags": ["core", "cpu", "diagnostics", "phase10", "queue", "render_graph", "runtime"],
+      "samples": [
+        {
+          "duration_ms": 8.319600,
+          "iterations": 69,
+          "items_processed": 69,
+          "bytes_processed": 185334
+        },
+        {
+          "duration_ms": 7.546500,
+          "iterations": 69,
+          "items_processed": 69,
+          "bytes_processed": 185334
+        },
+        {
+          "duration_ms": 7.793500,
+          "iterations": 69,
+          "items_processed": 69,
+          "bytes_processed": 185334
+        }
+      ]
+    },
+    {
+      "name": "RenderGraphQueueTimelineConsumer_transfer_enabled",
+      "outcome": "completed",
+      "message": "",
+      "metrics": {
+        "iterations": 85,
+        "min_ms": 5.699600,
+        "max_ms": 6.012200,
+        "mean_ms": 5.875200,
+        "median_ms": 5.913800,
+        "p95_ms": 6.012200,
+        "stddev_ms": 0.130505,
+        "min_ns_per_iteration": 67054.117647,
+        "max_ns_per_iteration": 70731.764706,
+        "mean_ns_per_iteration": 69120.000000,
+        "median_ns_per_iteration": 69574.117647,
+        "p95_ns_per_iteration": 70731.764706,
+        "stddev_ns_per_iteration": 1535.347757,
+        "items_per_second": 14467.593,
+        "bytes_per_second": 26982060.185
+      },
+      "baseline": {
+        "status": "not_checked",
+        "metric_kind": "mean_ns_per_iteration",
+        "has_baseline": false,
+        "baseline_mean_ms": 0.000000,
+        "current_mean_ms": 0.000000,
+        "baseline_metric_value": 0.000000,
+        "current_metric_value": 0.000000,
+        "delta_ratio": 0.000000
+      },
+      "tags": ["core", "cpu", "diagnostics", "phase10", "queue", "render_graph", "runtime"],
+      "samples": [
+        {
+          "duration_ms": 5.913800,
+          "iterations": 85,
+          "items_processed": 85,
+          "bytes_processed": 158525
+        },
+        {
+          "duration_ms": 6.012200,
+          "iterations": 85,
+          "items_processed": 85,
+          "bytes_processed": 158525
+        },
+        {
+          "duration_ms": 5.699600,
+          "iterations": 85,
+          "items_processed": 85,
+          "bytes_processed": 158525
+        }
+      ]
+    },
+    {
+      "name": "RenderGraphTimingCaptureDiagnosticsConsumer_queue_batches",
+      "outcome": "completed",
+      "message": "",
+      "metrics": {
+        "iterations": 19684,
+        "min_ms": 6.778700,
+        "max_ms": 8.971700,
+        "mean_ms": 7.548467,
+        "median_ms": 6.895000,
+        "p95_ms": 8.971700,
+        "stddev_ms": 1.007497,
+        "min_ns_per_iteration": 344.376143,
+        "max_ns_per_iteration": 455.786426,
+        "mean_ns_per_iteration": 383.482355,
+        "median_ns_per_iteration": 350.284495,
+        "p95_ns_per_iteration": 455.786426,
+        "stddev_ns_per_iteration": 51.183566,
+        "items_per_second": 2607681.913,
+        "bytes_per_second": 33636488999.973
+      },
+      "baseline": {
+        "status": "not_checked",
+        "metric_kind": "mean_ns_per_iteration",
+        "has_baseline": false,
+        "baseline_mean_ms": 0.000000,
+        "current_mean_ms": 0.000000,
+        "baseline_metric_value": 0.000000,
+        "current_metric_value": 0.000000,
+        "delta_ratio": 0.000000
+      },
+      "tags": ["capture", "core", "cpu", "diagnostics", "phase12", "render_graph", "runtime", "timing"],
+      "samples": [
+        {
+          "duration_ms": 6.778700,
+          "iterations": 19684,
+          "items_processed": 19684,
+          "bytes_processed": 253903916
+        },
+        {
+          "duration_ms": 6.895000,
+          "iterations": 19684,
+          "items_processed": 19684,
+          "bytes_processed": 253903916
+        },
+        {
+          "duration_ms": 8.971700,
+          "iterations": 19684,
+          "items_processed": 19684,
+          "bytes_processed": 253903916
+        }
+      ]
+    },
+    {
+      "name": "RenderGraphTransientSummaryConsumer_aliasing_summary",
+      "outcome": "completed",
+      "message": "",
+      "metrics": {
+        "iterations": 276940,
+        "min_ms": 6.788000,
+        "max_ms": 7.042800,
+        "mean_ms": 6.892067,
+        "median_ms": 6.845400,
+        "p95_ms": 7.042800,
+        "stddev_ms": 0.109130,
+        "min_ns_per_iteration": 24.510724,
+        "max_ns_per_iteration": 25.430779,
+        "mean_ns_per_iteration": 24.886498,
+        "median_ns_per_iteration": 24.717989,
+        "p95_ns_per_iteration": 25.430779,
+        "stddev_ns_per_iteration": 0.394057,
+        "items_per_second": 40182431.975,
+        "bytes_per_second": 28931351021.948
+      },
+      "baseline": {
+        "status": "not_checked",
+        "metric_kind": "mean_ns_per_iteration",
+        "has_baseline": false,
+        "baseline_mean_ms": 0.000000,
+        "current_mean_ms": 0.000000,
+        "baseline_metric_value": 0.000000,
+        "current_metric_value": 0.000000,
+        "delta_ratio": 0.000000
+      },
+      "tags": ["aliasing", "consumer", "core", "cpu", "diagnostics", "liveness", "phase13", "render_graph", "runtime", "transient"],
+      "samples": [
+        {
+          "duration_ms": 6.788000,
+          "iterations": 276940,
+          "items_processed": 276940,
+          "bytes_processed": 199396800
+        },
+        {
+          "duration_ms": 7.042800,
+          "iterations": 276940,
+          "items_processed": 276940,
+          "bytes_processed": 199396800
+        },
+        {
+          "duration_ms": 6.845400,
+          "iterations": 276940,
+          "items_processed": 276940,
+          "bytes_processed": 199396800
+        }
+      ]
+    }
+  ]
+}

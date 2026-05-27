@@ -39,7 +39,7 @@ public:
                                           const ViewType* views_,
                                           std::uint32_t view_count_,
                                           std::uint32_t active_view_index_ = 0U,
-                                          std::uint64_t submission_id_ = 0U,
+                                          render::SceneSubmissionId submission_id_ = {},
                                           render::RenderScenePacketKind kind_ =
                                               render::RenderScenePacketKind::world) noexcept {
         PacketType packet = render::MakeScenePacketFromViewRange(views_,
@@ -47,7 +47,11 @@ public:
                                                                  active_view_index_,
                                                                  submission_id_,
                                                                  kind_);
-        packet.extra.background = ResolveBackground(scene_, packet.ActiveView());
+        render::ApplySceneSubmissionPayload(
+            packet,
+            render::SceneSubmissionPayload<ecs::Dim2>{
+                .background = ResolveBackground(scene_, packet.ActiveView()),
+            });
         render::RefreshRenderScenePacketSignature(packet);
         return packet;
     }
@@ -96,7 +100,7 @@ public:
                                           const ViewType* views_,
                                           std::uint32_t view_count_,
                                           std::uint32_t active_view_index_ = 0U,
-                                          std::uint64_t submission_id_ = 0U,
+                                          render::SceneSubmissionId submission_id_ = {},
                                           render::RenderScenePacketKind kind_ =
                                               render::RenderScenePacketKind::world) noexcept {
         PacketType packet = render::MakeScenePacketFromViewRange(views_,
@@ -105,8 +109,12 @@ public:
                                                                  submission_id_,
                                                                  kind_);
         const ResolvedEnvironment resolved = ResolveEnvironment(scene_, packet.ActiveView());
-        packet.extra.environment = resolved.state;
-        packet.extra.environment_gpu = resolved.gpu;
+        render::ApplySceneSubmissionPayload(
+            packet,
+            render::SceneSubmissionPayload<ecs::Dim3>{
+                .environment = resolved.state,
+                .environment_gpu = resolved.gpu,
+            });
         render::RefreshRenderScenePacketSignature(packet);
         return packet;
     }

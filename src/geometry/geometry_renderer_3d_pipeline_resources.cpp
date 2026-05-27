@@ -6,6 +6,8 @@
 #include "vr/ecs/system/transparency_render_policy.hpp"
 #include "vr/geometry/geometry_appearance_resolver.hpp"
 #include "vr/geometry/generated/geometry_3d_frag_spv.hpp"
+#include "vr/geometry/generated/geometry_3d_temporal_motion_frag_spv.hpp"
+#include "vr/geometry/generated/geometry_3d_temporal_motion_vert_spv.hpp"
 #include "vr/geometry/generated/geometry_3d_vert_spv.hpp"
 #include "vr/render/bindless_resource_system.hpp"
 #include "vr/render/ibl_host.hpp"
@@ -251,6 +253,320 @@ render::GraphicsPipelineId GeometryRenderer3D::EnsurePipelineForMode(VulkanConte
     return pipeline_id;
 }
 
+void GeometryRenderer3D::EnsureTemporalMotionPipelineObjects(
+    VulkanContext& context_,
+    render::PipelineHost& pipeline_host_,
+    const VkFormat motion_format_,
+    const VkFormat depth_format_) {
+    if (context_.EnabledVulkan13Features().dynamicRendering != VK_TRUE) {
+        throw std::runtime_error(
+            "GeometryRenderer3D temporal motion requires Vulkan 1.3 dynamicRendering");
+    }
+    if (descriptor_host == nullptr) {
+        throw std::runtime_error(
+            "GeometryRenderer3D temporal motion requires DescriptorHost");
+    }
+
+    EnsureTemporalMotionDescriptorObjects(context_, *descriptor_host);
+
+    if (!temporal_motion_shader_vertex_id.IsValid()) {
+        render::ShaderModuleCreateInfo shader_info{};
+        shader_info.code_words =
+            generated::k_geometry_3d_temporal_motion_vert_spv;
+        shader_info.word_count =
+            generated::k_geometry_3d_temporal_motion_vert_spv_word_count;
+        temporal_motion_shader_vertex_id =
+            pipeline_host_.RegisterShaderModule(context_, shader_info);
+    }
+    if (!temporal_motion_shader_fragment_id.IsValid()) {
+        render::ShaderModuleCreateInfo shader_info{};
+        shader_info.code_words =
+            generated::k_geometry_3d_temporal_motion_frag_spv;
+        shader_info.word_count =
+            generated::k_geometry_3d_temporal_motion_frag_spv_word_count;
+        temporal_motion_shader_fragment_id =
+            pipeline_host_.RegisterShaderModule(context_, shader_info);
+    }
+    if (!temporal_motion_pipeline_layout_id.IsValid()) {
+        const VkDescriptorSetLayout temporal_motion_layout =
+            descriptor_host->GetLayout(temporal_motion_descriptor_layout_id);
+        if (temporal_motion_layout == VK_NULL_HANDLE) {
+            throw std::runtime_error(
+                "GeometryRenderer3D temporal motion requires valid descriptor layout");
+        }
+
+        render::PipelineLayoutDesc layout_desc{};
+        layout_desc.set_layouts.push_back(temporal_motion_layout);
+        layout_desc.push_constant_ranges.push_back({
+            .stage_flags = VK_SHADER_STAGE_VERTEX_BIT |
+                           VK_SHADER_STAGE_FRAGMENT_BIT,
+            .offset = 0U,
+            .size = sizeof(TemporalMotionPushConstants),
+        });
+        temporal_motion_pipeline_layout_id =
+            pipeline_host_.RegisterPipelineLayout(context_, layout_desc);
+    }
+
+    if (temporal_motion_pipeline_color_format != motion_format_ ||
+        temporal_motion_pipeline_depth_format != depth_format_) {
+        for (auto& depth_pipelines : temporal_motion_pipeline_ids) {
+            for (auto& topology_pipelines : depth_pipelines) {
+                for (auto& pipeline_id : topology_pipelines) {
+                    pipeline_id = {};
+                }
+            }
+        }
+        temporal_motion_pipeline_color_format = motion_format_;
+        temporal_motion_pipeline_depth_format = depth_format_;
+    }
+}
+
+render::GraphicsPipelineId GeometryRenderer3D::EnsureTemporalMotionPipelineForMode(
+    VulkanContext& context_,
+    render::PipelineHost& pipeline_host_,
+    const VkFormat motion_format_,
+    const VkFormat depth_format_,
+    const TemporalMotionDepthMode depth_mode_,
+    const TopologyMode topology_mode_,
+    const CullMode cull_mode_) {
+    const std::size_t depth_index = TemporalMotionDepthModeIndex(depth_mode_);
+    const std::size_t topology_index = TopologyModeIndex(topology_mode_);
+    const std::size_t cull_index = CullModeIndex(cull_mode_);
+    if (temporal_motion_pipeline_ids[depth_index][topology_index][cull_index]
+            .IsValid()) {
+        return temporal_motion_pipeline_ids[depth_index][topology_index]
+                                          [cull_index];
+    }
+
+    EnsureTemporalMotionPipelineObjects(
+        context_,
+        pipeline_host_,
+        motion_format_,
+        depth_format_);
+
+    const bool use_depth = depth_mode_ == TemporalMotionDepthMode::depth_test;
+    const bool cull_back = cull_mode_ == CullMode::back;
+
+    render::GraphicsPipelineDesc desc{};
+    desc.layout =
+        pipeline_host_.GetPipelineLayout(temporal_motion_pipeline_layout_id);
+    desc.use_dynamic_rendering = true;
+    desc.rendering.color_attachment_formats.push_back(motion_format_);
+    desc.rendering.depth_attachment_format =
+        use_depth ? depth_format_ : VK_FORMAT_UNDEFINED;
+
+    desc.shader_stages.push_back({
+        .stage = VK_SHADER_STAGE_VERTEX_BIT,
+        .module = pipeline_host_.GetShaderModule(
+            temporal_motion_shader_vertex_id),
+        .entry_name = "main",
+        .flags = 0U,
+        .specialization = {},
+    });
+    desc.shader_stages.push_back({
+        .stage = VK_SHADER_STAGE_FRAGMENT_BIT,
+        .module = pipeline_host_.GetShaderModule(
+            temporal_motion_shader_fragment_id),
+        .entry_name = "main",
+        .flags = 0U,
+        .specialization = {},
+    });
+
+    desc.vertex_input.bindings.push_back({
+        .binding = 0U,
+        .stride = static_cast<std::uint32_t>(sizeof(GeometryMeshVertex)),
+        .inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
+    });
+    desc.vertex_input.bindings.push_back({
+        .binding = 1U,
+        .stride =
+            static_cast<std::uint32_t>(sizeof(ecs::Geometry3DGpuInstance)),
+        .inputRate = VK_VERTEX_INPUT_RATE_INSTANCE,
+    });
+    desc.vertex_input.bindings.push_back({
+        .binding = 2U,
+        .stride = static_cast<std::uint32_t>(
+            sizeof(Geometry3DTemporalMotionInstance)),
+        .inputRate = VK_VERTEX_INPUT_RATE_INSTANCE,
+    });
+    desc.vertex_input.attributes.push_back({
+        .location = 0U,
+        .binding = 0U,
+        .format = VK_FORMAT_R32G32B32_SFLOAT,
+        .offset = static_cast<std::uint32_t>(
+            offsetof(GeometryMeshVertex, position_x)),
+    });
+    desc.vertex_input.attributes.push_back({
+        .location = 12U,
+        .binding = 0U,
+        .format = VK_FORMAT_R32G32B32_SFLOAT,
+        .offset = static_cast<std::uint32_t>(
+            offsetof(GeometryMeshVertex, normal_x)),
+    });
+    desc.vertex_input.attributes.push_back({
+        .location = 17U,
+        .binding = 0U,
+        .format = VK_FORMAT_R32G32B32A32_UINT,
+        .offset = static_cast<std::uint32_t>(
+            offsetof(GeometryMeshVertex, joint_index0)),
+    });
+    desc.vertex_input.attributes.push_back({
+        .location = 18U,
+        .binding = 0U,
+        .format = VK_FORMAT_R32G32B32A32_SFLOAT,
+        .offset = static_cast<std::uint32_t>(
+            offsetof(GeometryMeshVertex, joint_weight0)),
+    });
+    desc.vertex_input.attributes.push_back({
+        .location = 1U,
+        .binding = 1U,
+        .format = VK_FORMAT_R32G32B32A32_SFLOAT,
+        .offset = static_cast<std::uint32_t>(
+            offsetof(ecs::Geometry3DGpuInstance, world_m00)),
+    });
+    desc.vertex_input.attributes.push_back({
+        .location = 2U,
+        .binding = 1U,
+        .format = VK_FORMAT_R32G32B32A32_SFLOAT,
+        .offset = static_cast<std::uint32_t>(
+            offsetof(ecs::Geometry3DGpuInstance, world_m10)),
+    });
+    desc.vertex_input.attributes.push_back({
+        .location = 3U,
+        .binding = 1U,
+        .format = VK_FORMAT_R32G32B32A32_SFLOAT,
+        .offset = static_cast<std::uint32_t>(
+            offsetof(ecs::Geometry3DGpuInstance, world_m20)),
+    });
+    desc.vertex_input.attributes.push_back({
+        .location = 4U,
+        .binding = 1U,
+        .format = VK_FORMAT_R32G32B32A32_SFLOAT,
+        .offset = static_cast<std::uint32_t>(
+            offsetof(ecs::Geometry3DGpuInstance, world_m30)),
+    });
+    desc.vertex_input.attributes.push_back({
+        .location = 13U,
+        .binding = 1U,
+        .format = VK_FORMAT_R32G32B32A32_SFLOAT,
+        .offset = static_cast<std::uint32_t>(
+            offsetof(ecs::Geometry3DGpuInstance, deform_param0_x)),
+    });
+    desc.vertex_input.attributes.push_back({
+        .location = 14U,
+        .binding = 1U,
+        .format = VK_FORMAT_R32G32B32A32_SFLOAT,
+        .offset = static_cast<std::uint32_t>(
+            offsetof(ecs::Geometry3DGpuInstance, deform_param1_x)),
+    });
+    desc.vertex_input.attributes.push_back({
+        .location = 5U,
+        .binding = 2U,
+        .format = VK_FORMAT_R32G32B32A32_SFLOAT,
+        .offset = static_cast<std::uint32_t>(
+            offsetof(Geometry3DTemporalMotionInstance, previous_world_m00)),
+    });
+    desc.vertex_input.attributes.push_back({
+        .location = 6U,
+        .binding = 2U,
+        .format = VK_FORMAT_R32G32B32A32_SFLOAT,
+        .offset = static_cast<std::uint32_t>(
+            offsetof(Geometry3DTemporalMotionInstance, previous_world_m10)),
+    });
+    desc.vertex_input.attributes.push_back({
+        .location = 7U,
+        .binding = 2U,
+        .format = VK_FORMAT_R32G32B32A32_SFLOAT,
+        .offset = static_cast<std::uint32_t>(
+            offsetof(Geometry3DTemporalMotionInstance, previous_world_m20)),
+    });
+    desc.vertex_input.attributes.push_back({
+        .location = 8U,
+        .binding = 2U,
+        .format = VK_FORMAT_R32G32B32A32_SFLOAT,
+        .offset = static_cast<std::uint32_t>(
+            offsetof(Geometry3DTemporalMotionInstance, previous_world_m30)),
+    });
+    desc.vertex_input.attributes.push_back({
+        .location = 15U,
+        .binding = 2U,
+        .format = VK_FORMAT_R32G32B32A32_SFLOAT,
+        .offset = static_cast<std::uint32_t>(
+            offsetof(Geometry3DTemporalMotionInstance,
+                     previous_deform_param0_x)),
+    });
+    desc.vertex_input.attributes.push_back({
+        .location = 16U,
+        .binding = 2U,
+        .format = VK_FORMAT_R32G32B32A32_SFLOAT,
+        .offset = static_cast<std::uint32_t>(
+            offsetof(Geometry3DTemporalMotionInstance,
+                     previous_deform_param1_x)),
+    });
+    desc.vertex_input.attributes.push_back({
+        .location = 9U,
+        .binding = 2U,
+        .format = VK_FORMAT_R32_SFLOAT,
+        .offset = static_cast<std::uint32_t>(
+            offsetof(Geometry3DTemporalMotionInstance, confidence_seed)),
+    });
+    desc.vertex_input.attributes.push_back({
+        .location = 10U,
+        .binding = 1U,
+        .format = VK_FORMAT_R32_UINT,
+        .offset = static_cast<std::uint32_t>(
+            offsetof(ecs::Geometry3DGpuInstance, component_index)),
+    });
+    desc.vertex_input.attributes.push_back({
+        .location = 11U,
+        .binding = 2U,
+        .format = VK_FORMAT_R32_UINT,
+        .offset = static_cast<std::uint32_t>(
+            offsetof(Geometry3DTemporalMotionInstance,
+                     previous_skeletal_component_index)),
+    });
+
+    switch (topology_mode_) {
+    case TopologyMode::triangles:
+        desc.input_assembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+        break;
+    case TopologyMode::lines:
+        desc.input_assembly.topology = VK_PRIMITIVE_TOPOLOGY_LINE_LIST;
+        break;
+    case TopologyMode::points:
+        desc.input_assembly.topology = VK_PRIMITIVE_TOPOLOGY_POINT_LIST;
+        break;
+    default:
+        desc.input_assembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+        break;
+    }
+    desc.input_assembly.primitive_restart_enable = false;
+
+    desc.viewport.viewport_count = 1U;
+    desc.viewport.scissor_count = 1U;
+    desc.dynamic.states.push_back(VK_DYNAMIC_STATE_VIEWPORT);
+    desc.dynamic.states.push_back(VK_DYNAMIC_STATE_SCISSOR);
+
+    desc.rasterization.cull_mode =
+        cull_back ? VK_CULL_MODE_BACK_BIT : VK_CULL_MODE_NONE;
+    desc.rasterization.front_face = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    desc.rasterization.polygon_mode = VK_POLYGON_MODE_FILL;
+    desc.rasterization.line_width = 1.0F;
+
+    desc.multisample.rasterization_samples = VK_SAMPLE_COUNT_1_BIT;
+    desc.depth_stencil.depth_test_enable = use_depth;
+    desc.depth_stencil.depth_write_enable = false;
+    desc.depth_stencil.depth_compare_op = VK_COMPARE_OP_LESS_OR_EQUAL;
+    desc.color_blend.attachments.push_back(
+        render::BuildColorBlendAttachment(render::ColorBlendPreset::disabled));
+
+    const render::GraphicsPipelineId pipeline_id =
+        pipeline_host_.RegisterGraphicsPipeline(context_, desc);
+    temporal_motion_pipeline_ids[depth_index][topology_index][cull_index] =
+        pipeline_id;
+    return pipeline_id;
+}
+
 void GeometryRenderer3D::PrewarmCommonPipelines(VulkanContext& context_,
                                                 render::PipelineHost& pipeline_host_,
                                                 VkFormat color_format_,
@@ -309,12 +625,13 @@ void GeometryRenderer3D::CompileRequiredPipelinesForCurrentFrame(VulkanContext& 
                                                                  render::PipelineHost& pipeline_host_,
                                                                  VkFormat color_format_,
                                                                  VkFormat depth_format_) {
-    if (runtime_scratch.draw_batches.empty()) {
+    const auto& draw_batches = active_prepared_frame_state.artifacts.draw_batches;
+    if (draw_batches.empty()) {
         return;
     }
 
     const bool use_depth = depth_format_ != VK_FORMAT_UNDEFINED;
-    for (const ecs::Geometry3DDrawBatch& batch : runtime_scratch.draw_batches) {
+    for (const ecs::Geometry3DDrawBatch& batch : draw_batches) {
         if (batch.instance_count == 0U) {
             continue;
         }

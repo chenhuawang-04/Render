@@ -961,8 +961,10 @@ void RenderTargetHost::RefreshStats() noexcept {
 }
 
 bool RenderTargetHost::SupportsBindlessSampling(const TargetRecord& record_) const noexcept {
+    constexpr VkImageAspectFlags k_supported_bindless_sampled_aspects =
+        VK_IMAGE_ASPECT_COLOR_BIT | VK_IMAGE_ASPECT_DEPTH_BIT;
     return (record_.usage & VK_IMAGE_USAGE_SAMPLED_BIT) != 0U &&
-           (record_.aspect & VK_IMAGE_ASPECT_COLOR_BIT) != 0U;
+           (record_.aspect & k_supported_bindless_sampled_aspects) != 0U;
 }
 
 VkImageView RenderTargetHost::ResolveDefaultImageView(const TargetRecord& record_) const noexcept {

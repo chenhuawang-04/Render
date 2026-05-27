@@ -45,6 +45,7 @@ void GeometryUploadHost::Shutdown(VulkanContext& context_) {
     for (auto& frame : frames) {
         DestroyStreamBuffer(context_, frame.primitives_2d);
         DestroyStreamBuffer(context_, frame.instances_3d);
+        DestroyStreamBuffer(context_, frame.temporal_motion_instances_3d);
     }
     frames.clear();
     DestroyRetiredBuffers(context_);
@@ -76,6 +77,10 @@ void GeometryUploadHost::BeginFrame(VulkanContext& context_,
     if (frame.instances_3d.buffer.buffer != VK_NULL_HANDLE &&
         frame.instances_3d.capacity_bytes == 0U) {
         DestroyStreamBuffer(context_, frame.instances_3d);
+    }
+    if (frame.temporal_motion_instances_3d.buffer.buffer != VK_NULL_HANDLE &&
+        frame.temporal_motion_instances_3d.capacity_bytes == 0U) {
+        DestroyStreamBuffer(context_, frame.temporal_motion_instances_3d);
     }
 }
 
@@ -121,6 +126,30 @@ GeometryUploadRange GeometryUploadHost::Upload3DInstances(
                           instance_count_,
                           revision_,
                           create_info_cache.initial_3d_instance_buffer_bytes);
+}
+
+GeometryUploadRange GeometryUploadHost::Upload3DTemporalMotionInstances(
+    VulkanContext& context_,
+    render::UploadHost& upload_host_,
+    std::uint32_t frame_index_,
+    const Geometry3DTemporalMotionInstance* instances_,
+    std::uint32_t instance_count_,
+    std::uint64_t revision_) {
+    FrameState& frame = FrameAt(frame_index_);
+    const VkDeviceSize size_bytes =
+        static_cast<VkDeviceSize>(instance_count_) *
+        sizeof(Geometry3DTemporalMotionInstance);
+
+    return UploadToStream(
+        context_,
+        upload_host_,
+        frame_index_,
+        frame.temporal_motion_instances_3d,
+        instances_,
+        size_bytes,
+        instance_count_,
+        revision_,
+        create_info_cache.initial_3d_temporal_motion_buffer_bytes);
 }
 
 bool GeometryUploadHost::IsInitialized() const noexcept {

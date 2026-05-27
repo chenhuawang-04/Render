@@ -130,7 +130,7 @@ VR_TEST_CASE(RenderGraphDescriptor_pass_bindings_compile_into_compiled_graph,
     VR_CHECK(compiled.DescriptorPlan().bindless_allocations[1U].table_id == 12U);
 
     const std::string json = compiled.BuildJson();
-    VR_CHECK(json.find("\"descriptorBindings\"") != std::string::npos);
+    VR_CHECK(json.find("\"topology\": {") != std::string::npos);
     VR_CHECK(json.find("\"descriptorPlan\"") != std::string::npos);
     VR_CHECK(json.find("\"passLayouts\"") != std::string::npos);
     VR_CHECK(json.find("\"writeBatches\"") != std::string::npos);

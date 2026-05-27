@@ -245,8 +245,8 @@ void SkyEnvironmentPass::PrepareFrame(const SkyEnvironmentPassPrepareView& prepa
             throw std::runtime_error(
                 "SkyEnvironmentPass::PrepareFrame cubemap mode requires initialized BindlessResourceSystem and TextureHost");
         }
-        const IblEnvironmentId environment_id{prepare_view_.ibl_environment_id};
-        const asset::TextureId brdf_lut_texture_id{prepare_view_.ibl_brdf_lut_texture_id};
+        const IblEnvironmentId environment_id = prepare_view_.ibl_environment_id;
+        const asset::TextureId brdf_lut_texture_id = prepare_view_.ibl_brdf_lut_texture_id;
         if (environment_id.IsValid() || brdf_lut_texture_id.IsValid()) {
             ibl_host->PrepareEnvironmentFrame(MakeIblHostPrepareView(prepare_view_),
                                               environment_id,
@@ -274,7 +274,7 @@ void SkyEnvironmentPass::PrepareFrame(const SkyEnvironmentPassPrepareView& prepa
             throw std::runtime_error(
                 "SkyEnvironmentPass::PrepareFrame equirect mode requires initialized BindlessResourceSystem and TextureHost");
         }
-        const asset::TextureId texture_id{state_.sky_texture_id};
+        const asset::TextureId texture_id = state_.sky_texture_id;
         const asset::TextureHost::TextureRecord* texture_record =
             texture_host->FindTexture(texture_id);
         if (texture_record != nullptr &&

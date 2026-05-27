@@ -520,19 +520,19 @@ bool SkyEnvironmentGpuHost::ApplyBakeResult(scene::SkyEnvironmentGpuHandle handl
     EnvironmentRecord& record = environments[index];
     bool changed = false;
 
-    if (result_.irradiance_texture_id != 0U &&
-        record.ibl.irradiance_texture.value != result_.irradiance_texture_id) {
-        record.ibl.irradiance_texture.value = result_.irradiance_texture_id;
+    if (result_.irradiance_texture_id.IsValid() &&
+        record.ibl.irradiance_texture != result_.irradiance_texture_id) {
+        record.ibl.irradiance_texture = result_.irradiance_texture_id;
         changed = true;
     }
-    if (result_.prefiltered_texture_id != 0U &&
-        record.ibl.prefiltered_texture.value != result_.prefiltered_texture_id) {
-        record.ibl.prefiltered_texture.value = result_.prefiltered_texture_id;
+    if (result_.prefiltered_texture_id.IsValid() &&
+        record.ibl.prefiltered_texture != result_.prefiltered_texture_id) {
+        record.ibl.prefiltered_texture = result_.prefiltered_texture_id;
         changed = true;
     }
-    if (result_.brdf_lut_texture_id != 0U &&
-        record.ibl.brdf_lut_texture.value != result_.brdf_lut_texture_id) {
-        record.ibl.brdf_lut_texture.value = result_.brdf_lut_texture_id;
+    if (result_.brdf_lut_texture_id.IsValid() &&
+        record.ibl.brdf_lut_texture != result_.brdf_lut_texture_id) {
+        record.ibl.brdf_lut_texture = result_.brdf_lut_texture_id;
         changed = true;
     }
 
@@ -564,7 +564,7 @@ bool SkyEnvironmentGpuHost::TryBakePendingEnvironment(scene::SkyEnvironmentGpuHa
         return false;
     }
 
-    const asset::TextureId source_texture_id{record.bake_desc.source_texture_id};
+    const asset::TextureId source_texture_id = record.bake_desc.source_texture_id;
     const auto* snapshot = texture_host->FindCpuFloatBaseLevelSnapshot(source_texture_id);
     if (snapshot == nullptr) {
         return false;
@@ -644,7 +644,7 @@ IblEnvironmentId SkyEnvironmentGpuHost::EnsureIblEnvironment(
     EnvironmentRecord& record = environments[index];
     asset::TextureId specular_texture = record.ibl.prefiltered_texture;
     if (!specular_texture.IsValid() && record.state.mode == scene::SkyEnvironmentMode::cubemap) {
-        specular_texture.value = record.state.sky_texture_id;
+        specular_texture = record.state.sky_texture_id;
     }
     const bool has_meaningful_sh9 = HasMeaningfulIblSh9(record.params);
     if (!specular_texture.IsValid() && !has_meaningful_sh9) {
@@ -659,8 +659,9 @@ IblEnvironmentId SkyEnvironmentGpuHost::EnsureIblEnvironment(
     IblEnvironmentAssetDesc desc{};
     desc.environment_id = record.ibl_environment;
     desc.specular_cube = specular_texture;
-    if (record.state.mode == scene::SkyEnvironmentMode::cubemap && record.state.sky_texture_id != 0U) {
-        desc.skybox_cube.value = record.state.sky_texture_id;
+    if (record.state.mode == scene::SkyEnvironmentMode::cubemap &&
+        record.state.sky_texture_id.IsValid()) {
+        desc.skybox_cube = record.state.sky_texture_id;
     }
     desc.intensity = specular_texture.IsValid()
         ? record.state.specular_ibl_intensity
@@ -808,12 +809,12 @@ SkyEnvironmentIblData SkyEnvironmentGpuHost::BuildIblData(
     bool has_bake_desc = false;
     SkyEnvironmentBakeDesc bake_desc{};
 
-    ibl.irradiance_texture.value = state_.irradiance_texture_id;
-    ibl.prefiltered_texture.value = state_.prefiltered_texture_id;
-    ibl.brdf_lut_texture.value = state_.brdf_lut_texture_id;
-    ibl.has_explicit_ibl = (state_.irradiance_texture_id != 0U ||
-                            state_.prefiltered_texture_id != 0U ||
-                            state_.brdf_lut_texture_id != 0U)
+    ibl.irradiance_texture = state_.irradiance_texture_id;
+    ibl.prefiltered_texture = state_.prefiltered_texture_id;
+    ibl.brdf_lut_texture = state_.brdf_lut_texture_id;
+    ibl.has_explicit_ibl = (state_.irradiance_texture_id.IsValid() ||
+                            state_.prefiltered_texture_id.IsValid() ||
+                            state_.brdf_lut_texture_id.IsValid())
         ? 1U
         : 0U;
 

@@ -30,8 +30,8 @@ struct GeometryRenderer3DPrepareView final {
     asset::TextureHost* texture = nullptr;
     BindlessResourceSystem* bindless = nullptr;
     RenderTargetHost* render_target = nullptr;
-    std::uint32_t ibl_environment_id = 0U;
-    std::uint32_t ibl_brdf_lut_texture_id = 0U;
+    IblEnvironmentId ibl_environment_id{};
+    asset::TextureId ibl_brdf_lut_texture_id{};
     FrameStaticContext frame{};
     FrameGpuProgressContext progress{};
 };
@@ -47,8 +47,8 @@ struct SurfaceRenderer3DPrepareView final {
     asset::TextureHost* texture = nullptr;
     BindlessResourceSystem* bindless = nullptr;
     RenderTargetHost* render_target = nullptr;
-    std::uint32_t ibl_environment_id = 0U;
-    std::uint32_t ibl_brdf_lut_texture_id = 0U;
+    IblEnvironmentId ibl_environment_id{};
+    asset::TextureId ibl_brdf_lut_texture_id{};
     FrameStaticContext frame{};
     FrameGpuProgressContext progress{};
 };

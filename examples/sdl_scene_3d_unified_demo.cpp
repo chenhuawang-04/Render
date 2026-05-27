@@ -70,9 +70,10 @@ using CameraSystem3D = vr::ecs::CameraSystem<vr::ecs::Dim3>;
 using GeometryMeshSystem3D = vr::ecs::GeometryMeshSystem;
 
 constexpr float k_pi = 3.14159265358979323846F;
-constexpr std::uint32_t k_geometry_appearance_id = 1101U;
-constexpr std::uint32_t k_geometry_image_id = 2101U;
-constexpr std::uint32_t k_surface_image_id = 3101U;
+constexpr vr::geometry::GeometryResourceId k_geometry_resource_id{1U};
+constexpr vr::geometry::GeometryAppearanceId k_geometry_appearance_id{1101U};
+constexpr vr::geometry::GeometryImageId k_geometry_image_id{2101U};
+constexpr vr::surface::SurfaceImageId k_surface_image_id{3101U};
 constexpr std::uint32_t k_text_font_id = 1U;
 constexpr std::uint32_t k_text_appearance_id = 4101U;
 constexpr vr::asset::TextureId k_sky_environment_texture_id{5101U};
@@ -305,7 +306,7 @@ void UploadHdrEnvironmentTexture(Runtime& runtime_,
 void InitializeGeometryComponent(Geometry3D& component_,
                                  Appearance3D& appearance_) {
     GeometrySystem3D::Initialize(component_);
-    GeometrySystem3D::SetRuntimeRoute(component_, 1U, k_geometry_appearance_id, 0U);
+    GeometrySystem3D::SetRuntimeRoute(component_, k_geometry_resource_id, k_geometry_appearance_id, 0U);
     GeometrySystem3D::SetBounds(component_,
                                 vr::ecs::Float3{.x = -0.5F, .y = -0.5F, .z = -0.05F},
                                 vr::ecs::Float3{.x = 0.5F, .y = 0.5F, .z = 0.05F});
@@ -431,12 +432,13 @@ void InitializeTextComponent(Text3D& component_,
 
 void ApplySceneSkyEnvironment(vr::render::RenderScenePacket3D& packet_,
                               vr::asset::TextureId sky_texture_id_) {
-    packet_.extra.environment_gpu = {};
-    packet_.extra.ibl_environment_id = 0U;
-    auto& environment = packet_.extra.environment;
+    auto& payload = packet_.Payload();
+    payload.environment_gpu = {};
+    payload.ibl_environment_id = {};
+    auto& environment = payload.environment;
     environment = {};
     environment.mode = vr::scene::SkyEnvironmentMode::equirectangular_hdr;
-    environment.sky_texture_id = sky_texture_id_.value;
+    environment.sky_texture_id = sky_texture_id_;
     environment.zenith_color = vr::ecs::Float4{.x = 0.06F, .y = 0.10F, .z = 0.18F, .w = 1.0F};
     environment.horizon_color = vr::ecs::Float4{.x = 0.24F, .y = 0.20F, .z = 0.18F, .w = 1.0F};
     environment.ground_color = vr::ecs::Float4{.x = 0.03F, .y = 0.03F, .z = 0.04F, .w = 1.0F};
@@ -582,7 +584,7 @@ int main(int argc_,
         runtime.Upload().BeginFrame(runtime.Context(), 0U);
 
         vr::geometry::GeometryMeshUploadInfo mesh_upload_info{};
-        mesh_upload_info.geometry_id = 1U;
+        mesh_upload_info.geometry_id = k_geometry_resource_id;
         mesh_upload_info.vertices = mesh_vertices.data();
         mesh_upload_info.vertex_count = static_cast<std::uint32_t>(mesh_vertices.size());
         mesh_upload_info.indices = mesh_indices.data();
@@ -649,7 +651,8 @@ int main(int argc_,
 
         vr::geometry::GeometryAppearanceDesc geometry_appearance_desc{};
         geometry_appearance_desc.appearance_id = k_geometry_appearance_id;
-        geometry_appearance_desc.sampled_surface_binding.base_color_surface.surface_id = k_geometry_image_id;
+        geometry_appearance_desc.sampled_surface_binding.base_color_surface =
+            vr::render::MakeAppearanceGeometryImageHandle(k_geometry_image_id);
         geometry_appearance_desc.uv_scale_u = 1.0F;
         geometry_appearance_desc.uv_scale_v = 1.0F;
         geometry_appearance_host.UpsertAppearance(geometry_appearance_desc);
@@ -1032,9 +1035,6 @@ int main(int argc_,
             geometry_bounds = bounds_batch[0U];
             surface_bounds = bounds_batch[1U];
             text_bounds = bounds_batch[2U];
-            const std::uint32_t dirty_index = 0U;
-            light_frame_coordinator.SetTransformDirtyHint(&dirty_index, 1U);
-            shadow_renderer.SetTransformDirtyHint(&dirty_index, 1U);
             vr::render::RefreshExtentBoundWorldSceneSubmission(main_view,
                                                                main_scene_packet,
                                                                camera,

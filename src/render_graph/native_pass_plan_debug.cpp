@@ -134,32 +134,18 @@ using namespace native_pass_detail;
 
 std::string BuildNativePassPlanDebugString(
     const CompiledRenderGraph& compiled_graph_) {
+#if !VR_ENABLE_DEBUG_OBSERVABILITY
+    (void)compiled_graph_;
+    return {};
+#else
     const auto& plan = compiled_graph_.NativePasses();
     std::ostringstream oss{};
-    oss << "logical_raster_passes=" << plan.summary.logical_raster_pass_count
-        << '\n';
-    oss << "native_pass_groups=" << plan.groups.size() << '\n';
-    oss << "fused_raster_passes=" << plan.summary.fused_raster_pass_count
-        << '\n';
-    oss << "native_pass_store_elisions=" << plan.summary.store_elision_count
-        << '\n';
-    oss << "native_pass_load_inferences=" << plan.summary.load_inference_count
-        << '\n';
-    oss << "native_pass_effective_clears="
-        << plan.summary.clear_attachment_count << '\n';
-    oss << "native_pass_local_read requested="
-        << (plan.local_read.requested ? 1 : 0)
-        << " supported=" << (plan.local_read.supported ? 1 : 0)
-        << " device_enabled=" << (plan.local_read.device_enabled ? 1 : 0)
-        << " candidates=" << plan.summary.local_read_candidate_count
-        << " status=" << NativePassLocalReadStatusName(plan.local_read.status)
-        << " reason=" << NativePassLocalReadReasonName(plan.local_read.reason)
-        << '\n';
+    oss << "native_pass_attachment_groups=" << plan.groups.size() << '\n';
     for (std::size_t group_index = 0U;
          group_index < plan.groups.size();
          ++group_index) {
         const auto& group_ = plan.groups[group_index];
-        oss << "native_pass_group[" << group_index << "]"
+        oss << "native_pass_attachment_group[" << group_index << "]"
             << " queue=" << QueueClassToString(group_.queue)
             << " first=" << group_.first_pass_order
             << " last=" << group_.last_pass_order
@@ -237,36 +223,16 @@ std::string BuildNativePassPlanDebugString(
         }
         oss << " layer_count=" << group_.attachments.layer_count << '\n';
     }
-
-    oss << "native_pass_boundaries=" << plan.boundaries.size() << '\n';
-    for (std::size_t boundary_index = 0U;
-         boundary_index < plan.boundaries.size();
-         ++boundary_index) {
-        const auto& boundary_ = plan.boundaries[boundary_index];
-        oss << "native_pass_boundary[" << boundary_index << "] "
-            << ResolvePassName(compiled_graph_, boundary_.previous_pass_order)
-            << " -> "
-            << ResolvePassName(compiled_graph_, boundary_.next_pass_order)
-            << " fused=" << (boundary_.fused ? 1 : 0)
-            << " reason="
-            << NativePassFusionBlockReasonName(boundary_.block_reason);
-        if (boundary_.local_read.candidate) {
-            oss << " local_read_candidate=1"
-                << " local_read_status="
-                << NativePassLocalReadStatusName(boundary_.local_read.status)
-                << " local_read_reason="
-                << NativePassLocalReadReasonName(boundary_.local_read.reason);
-        }
-        if (!boundary_.detail.empty()) {
-            oss << " detail=" << boundary_.detail;
-        }
-        oss << '\n';
-    }
     return oss.str();
+#endif
 }
 
 std::string BuildNativePassPlanJson(
     const CompiledRenderGraph& compiled_graph_) {
+#if !VR_ENABLE_DEBUG_OBSERVABILITY
+    (void)compiled_graph_;
+    return {};
+#else
     const auto& plan = compiled_graph_.NativePasses();
     std::ostringstream oss{};
     oss << "{\n";
@@ -417,6 +383,7 @@ std::string BuildNativePassPlanJson(
     oss << "    ]\n";
     oss << "  }";
     return oss.str();
+#endif
 }
 
 } // namespace vr::render_graph

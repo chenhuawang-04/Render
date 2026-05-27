@@ -1,6 +1,7 @@
 #pragma once
 
 #include "vr/runtime/frame_prepare_context.hpp"
+#include "vr/runtime/runtime_ingress_ids.hpp"
 
 #include <cstdint>
 #include <stdexcept>
@@ -95,8 +96,8 @@ struct SceneRecorder3DPrepareView final {
     text::GlyphUploadHost* glyph_upload = nullptr;
     particle::ParticleUploadHost* particle_upload = nullptr;
     particle::ParticleSimulationHost* particle_simulation = nullptr;
-    std::uint32_t ibl_environment_id = 0U;
-    std::uint32_t ibl_brdf_lut_texture_id = 0U;
+    IblEnvironmentId ibl_environment_id{};
+    asset::TextureId ibl_brdf_lut_texture_id{};
     bool render_graph_upload_active = false;
     bool render_graph_compute_active = false;
     FrameStaticContext frame{};
@@ -159,8 +160,8 @@ struct SkyEnvironmentPassPrepareView final {
     PipelineHost& pipeline;
     RenderTargetHost& render_target;
     resource::SamplerHost* sampler = nullptr;
-    std::uint32_t ibl_environment_id = 0U;
-    std::uint32_t ibl_brdf_lut_texture_id = 0U;
+    IblEnvironmentId ibl_environment_id{};
+    asset::TextureId ibl_brdf_lut_texture_id{};
     FrameStaticContext frame{};
     FrameGpuProgressContext progress{};
 };

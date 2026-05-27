@@ -36,6 +36,9 @@ struct RuntimeDirectGraphBuildView;
 struct FrameRecordContext;
 class UploadHost;
 class IblHost;
+namespace detail {
+struct SceneRecorder3DDirtySchedulingAccess;
+}
 }
 
 namespace vr::render_graph {
@@ -48,6 +51,8 @@ class GpuMemoryHost;
 }
 
 namespace vr::surface {
+
+struct SurfaceRenderer3DTestAccess;
 
 template<typename T>
 using SurfaceRenderer3DMcVector = Center::Memory::mc_vector<T, Center::Memory::Tags::Container>;
@@ -136,6 +141,8 @@ public:
     void SetAppearanceDirtyHint(const std::uint32_t* dirty_component_indices_,
                                 std::uint32_t dirty_component_count_) noexcept;
     void SetAppearanceCoordinator(render::AppearanceFrameCoordinator<ecs::Dim3>* appearance_frame_coordinator_) noexcept;
+    void SetFrameViewProjectionOverride(const ecs::Matrix4x4& view_projection_) noexcept;
+    void ClearFrameViewProjectionOverride() noexcept;
     void PrepareFrame(const render::SurfaceRenderer3DPrepareView& prepare_view_);
     void BuildDirectRuntimeGraph(const render::RuntimeDirectGraphBuildView& graph_view_);
     void DescribeGraphDescriptorBindings(render_graph::RenderGraphBuilder& builder_,
@@ -157,6 +164,9 @@ public:
     [[nodiscard]] const SurfaceRenderer3DStats& Stats() const noexcept;
 
 private:
+    friend struct render::detail::SceneRecorder3DDirtySchedulingAccess;
+    friend struct SurfaceRenderer3DTestAccess;
+
     struct PushConstants final {
         ecs::Matrix4x4 view_projection;
         ecs::Float4 camera_position;
@@ -205,6 +215,46 @@ private:
         std::uint64_t descriptor_buffer_signature = 0U;
     };
 
+    enum class UploadDispatchMode : std::uint8_t {
+        none = 0U,
+        full = 1U,
+        partial = 2U
+    };
+
+    struct CpuRuntimeFrameDispatchPayload final {
+        std::uint64_t bindless_revision = 0U;
+        std::uint64_t instance_upload_revision = 0U;
+        ecs::Surface3DRuntimeBuildStats runtime_stats{};
+        ecs::SurfaceUploadPlanStats upload_plan{};
+        UploadDispatchMode upload_mode = UploadDispatchMode::none;
+        bool has_scene_data = false;
+    };
+
+    struct PreparedFrameArtifacts final {
+        SurfaceRenderer3DMcVector<ecs::Surface3DGpuInstance> instance_upload_source{};
+        SurfaceRenderer3DMcVector<ecs::Surface3DDrawBatch> draw_batches{};
+        SurfaceRenderer3DMcVector<ecs::AppearanceGpuRecord<ecs::Dim3>>
+            appearance_source_records{};
+        SurfaceRenderer3DMcVector<ecs::SurfaceUploadPatchRange>
+            upload_patch_ranges{};
+        bool has_scene_data = false;
+    };
+
+    struct CpuRuntimeFrameBuildResult final {
+        CpuRuntimeFrameDispatchPayload dispatch_payload{};
+        PreparedFrameArtifacts prepared_artifacts{};
+    };
+
+    struct ActivePreparedFrameState final {
+        CpuRuntimeFrameDispatchPayload dispatch_payload{};
+        PreparedFrameArtifacts artifacts{};
+    };
+
+    struct ActiveFrameRuntimeTruth final {
+        SurfaceUploadRange instance_upload_range{};
+        std::uint32_t frame_index = 0U;
+    };
+
     static_assert(sizeof(PushConstants) == 96U);
 
     [[nodiscard]] static bool IsDepthFormatSupported(VulkanContext& context_, VkFormat format_) noexcept;
@@ -227,6 +277,13 @@ private:
         const ecs::Surface3DRuntimeBuildStats& runtime_stats_,
         std::uint32_t image_revision_) noexcept;
     void BuildAppearanceRecordsAndAssignIndices();
+    void BindPrepareFrameRuntime(
+        const render::SurfaceRenderer3DPrepareView& prepare_view_);
+    [[nodiscard]] CpuRuntimeFrameBuildResult BuildCpuRuntimeFrameStage(
+        const render::SurfaceRenderer3DPrepareView& prepare_view_);
+    void ApplyPreparedFrameState(
+        const render::SurfaceRenderer3DPrepareView& prepare_view_,
+        CpuRuntimeFrameBuildResult&& cpu_build_result_);
 
     void EnsurePipelineObjects(VulkanContext& context_,
                                render::BindlessResourceSystem& bindless_resources_,
@@ -252,6 +309,11 @@ private:
     void EnsureDepthResources(VulkanContext& context_,
                               std::uint32_t image_count_,
                               VkExtent2D extent_);
+    static void ClearPreparedFrameArtifacts(
+        PreparedFrameArtifacts& artifacts_) noexcept;
+    void ResetActiveFrameRuntimeTruth() noexcept;
+    void ResetActivePreparedFrameState() noexcept;
+    void ReclaimPreparedFrameArtifactScratchStorage() noexcept;
     void RetireDepthResources(std::uint64_t retire_value_);
     void CollectRetiredDepthResources(VulkanContext& context_,
                                       std::uint64_t completed_value_);
@@ -270,6 +332,7 @@ private:
     ecs::Surface<ecs::Dim3>* surface_components = nullptr;
     ecs::Transform<ecs::Dim3>* transforms = nullptr;
     std::uint32_t component_count = 0U;
+    ecs::Appearance<ecs::Dim3>* appearance_components = nullptr;
     std::uint32_t appearance_component_count = 0U;
     ecs::Camera<ecs::Dim3>* camera_component = nullptr;
     ecs::Transform<ecs::Dim3>* camera_transform = nullptr;
@@ -283,6 +346,8 @@ private:
     bool appearance_build_invoked = false;
     ecs::CullingScratch<ecs::Dim3> culling_scratch{};
     ecs::CullingBuildStats culling_stats{};
+    ActivePreparedFrameState active_prepared_frame_state{};
+    ActiveFrameRuntimeTruth active_frame_runtime_truth{};
     Surface3DRuntimeUploadResult last_upload_result{};
 
     SurfaceUploadHost* surface_upload_host = nullptr;
@@ -333,6 +398,8 @@ private:
 
     const std::uint32_t* pending_dirty_component_indices = nullptr;
     std::uint32_t pending_dirty_component_count = 0U;
+    ecs::Matrix4x4 frame_view_projection_override{};
+    bool frame_view_projection_override_active = false;
     bool initialized = false;
 };
 

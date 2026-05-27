@@ -6,6 +6,8 @@
 #include "vr/ecs/system/spatial_math.hpp"
 #include "vr/ecs/system/transparency_render_policy.hpp"
 #include "vr/particle/generated/particle_3d_frag_spv.hpp"
+#include "vr/particle/generated/particle_3d_temporal_motion_frag_spv.hpp"
+#include "vr/particle/generated/particle_3d_temporal_motion_vert_spv.hpp"
 #include "vr/particle/generated/particle_3d_vert_spv.hpp"
 #include "vr/particle/particle_simulation_host.hpp"
 #include "vr/render/bindless_resource_system.hpp"
@@ -32,6 +34,23 @@ namespace vr::particle {
 namespace {
 
 constexpr VkPrimitiveTopology k_particle_topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+[[nodiscard]] VkPipelineColorBlendAttachmentState
+BuildTemporalMotionBlendAttachment() noexcept {
+    VkPipelineColorBlendAttachmentState blend_state{};
+    blend_state.blendEnable = VK_TRUE;
+    blend_state.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+    blend_state.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
+    blend_state.colorBlendOp = VK_BLEND_OP_ADD;
+    blend_state.srcAlphaBlendFactor = VK_BLEND_FACTOR_DST_ALPHA;
+    blend_state.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+    blend_state.alphaBlendOp = VK_BLEND_OP_ADD;
+    blend_state.colorWriteMask = VK_COLOR_COMPONENT_R_BIT |
+                                 VK_COLOR_COMPONENT_G_BIT |
+                                 VK_COLOR_COMPONENT_B_BIT |
+                                 VK_COLOR_COMPONENT_A_BIT;
+    return blend_state;
+}
 
 } // namespace
 
@@ -254,6 +273,209 @@ render::GraphicsPipelineId ParticleRenderer3D::EnsurePipelineForMode(
     cached_pipeline_id = pipeline_host_.RegisterGraphicsPipeline(context_, pipeline_desc);
     pipeline_color_format = color_format_;
     pipeline_depth_format = depth_format_;
+    return cached_pipeline_id;
+}
+
+void ParticleRenderer3D::EnsureTemporalMotionPipelineObjects(
+    VulkanContext& context_,
+    render::PipelineHost& pipeline_host_,
+    const VkFormat motion_format_,
+    const VkFormat depth_format_) {
+    if (context_.EnabledVulkan13Features().dynamicRendering != VK_TRUE ||
+        context_.EnabledVulkan13Features().synchronization2 != VK_TRUE) {
+        throw std::runtime_error(
+            "ParticleRenderer3D temporal motion requires Vulkan 1.3 dynamicRendering + synchronization2");
+    }
+
+    const render::PipelineHostStats pipeline_stats = pipeline_host_.Stats();
+    if (temporal_motion_shader_vertex_id.IsValid() &&
+        pipeline_stats.shader_module_count < temporal_motion_shader_vertex_id.value) {
+        temporal_motion_shader_vertex_id = {};
+    }
+    if (temporal_motion_shader_fragment_id.IsValid() &&
+        pipeline_stats.shader_module_count < temporal_motion_shader_fragment_id.value) {
+        temporal_motion_shader_fragment_id = {};
+    }
+    if (temporal_motion_pipeline_layout_id.IsValid() &&
+        pipeline_stats.pipeline_layout_count < temporal_motion_pipeline_layout_id.value) {
+        temporal_motion_pipeline_layout_id = {};
+    }
+    for (auto& pipeline_id : temporal_motion_pipeline_ids) {
+        if (pipeline_id.IsValid() &&
+            pipeline_stats.graphics_pipeline_count < pipeline_id.value) {
+            pipeline_id = {};
+        }
+    }
+
+    if (!temporal_motion_shader_vertex_id.IsValid()) {
+        render::ShaderModuleCreateInfo shader_create_info{};
+        shader_create_info.code_words =
+            generated::k_particle_3d_temporal_motion_vert_spv;
+        shader_create_info.word_count =
+            std::size(generated::k_particle_3d_temporal_motion_vert_spv);
+        temporal_motion_shader_vertex_id =
+            pipeline_host_.RegisterShaderModule(context_, shader_create_info);
+    }
+    if (!temporal_motion_shader_fragment_id.IsValid()) {
+        render::ShaderModuleCreateInfo shader_create_info{};
+        shader_create_info.code_words =
+            generated::k_particle_3d_temporal_motion_frag_spv;
+        shader_create_info.word_count =
+            std::size(generated::k_particle_3d_temporal_motion_frag_spv);
+        temporal_motion_shader_fragment_id =
+            pipeline_host_.RegisterShaderModule(context_, shader_create_info);
+    }
+
+    if (!temporal_motion_pipeline_layout_id.IsValid()) {
+        render::PipelineLayoutDesc pipeline_layout_desc{};
+        pipeline_layout_desc.push_constant_ranges.push_back({
+            .stage_flags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+            .offset = 0U,
+            .size = sizeof(TemporalMotionPushConstants),
+        });
+        temporal_motion_pipeline_layout_id =
+            pipeline_host_.RegisterPipelineLayout(context_, pipeline_layout_desc);
+    }
+
+    if (temporal_motion_pipeline_color_format != motion_format_ ||
+        temporal_motion_pipeline_depth_format != depth_format_) {
+        for (auto& pipeline_id : temporal_motion_pipeline_ids) {
+            pipeline_id = {};
+        }
+        temporal_motion_pipeline_color_format = motion_format_;
+        temporal_motion_pipeline_depth_format = depth_format_;
+    }
+}
+
+render::GraphicsPipelineId ParticleRenderer3D::EnsureTemporalMotionPipelineForMode(
+    VulkanContext& context_,
+    render::PipelineHost& pipeline_host_,
+    const VkFormat motion_format_,
+    const VkFormat depth_format_,
+    const TemporalMotionDepthMode depth_mode_) {
+    EnsureTemporalMotionPipelineObjects(
+        context_,
+        pipeline_host_,
+        motion_format_,
+        depth_format_);
+
+    render::GraphicsPipelineId& cached_pipeline_id =
+        temporal_motion_pipeline_ids[TemporalMotionDepthModeIndex(depth_mode_)];
+    if (cached_pipeline_id.IsValid() &&
+        temporal_motion_pipeline_color_format == motion_format_ &&
+        temporal_motion_pipeline_depth_format == depth_format_) {
+        return cached_pipeline_id;
+    }
+
+    const bool use_depth = depth_mode_ != TemporalMotionDepthMode::no_depth;
+    const bool reverse_z =
+        depth_mode_ == TemporalMotionDepthMode::depth_test_reverse_z;
+
+    render::GraphicsPipelineDesc pipeline_desc{};
+    pipeline_desc.layout =
+        pipeline_host_.GetPipelineLayout(temporal_motion_pipeline_layout_id);
+    pipeline_desc.use_dynamic_rendering = true;
+    pipeline_desc.rendering.color_attachment_formats.push_back(motion_format_);
+    pipeline_desc.rendering.depth_attachment_format = depth_format_;
+
+    pipeline_desc.shader_stages.push_back({
+        .stage = VK_SHADER_STAGE_VERTEX_BIT,
+        .module = pipeline_host_.GetShaderModule(temporal_motion_shader_vertex_id),
+        .entry_name = "main",
+        .flags = 0U,
+        .specialization = {}
+    });
+    pipeline_desc.shader_stages.push_back({
+        .stage = VK_SHADER_STAGE_FRAGMENT_BIT,
+        .module = pipeline_host_.GetShaderModule(temporal_motion_shader_fragment_id),
+        .entry_name = "main",
+        .flags = 0U,
+        .specialization = {}
+    });
+
+    pipeline_desc.vertex_input.bindings.push_back({
+        .binding = 0U,
+        .stride = static_cast<std::uint32_t>(sizeof(ecs::Particle3DGpuInstance)),
+        .inputRate = VK_VERTEX_INPUT_RATE_INSTANCE
+    });
+    pipeline_desc.vertex_input.attributes.push_back({
+        .location = 0U,
+        .binding = 0U,
+        .format = VK_FORMAT_R32G32B32_SFLOAT,
+        .offset = static_cast<std::uint32_t>(offsetof(ecs::Particle3DGpuInstance, position_x))
+    });
+    pipeline_desc.vertex_input.attributes.push_back({
+        .location = 1U,
+        .binding = 0U,
+        .format = VK_FORMAT_R32G32_SFLOAT,
+        .offset = static_cast<std::uint32_t>(offsetof(ecs::Particle3DGpuInstance, size_x))
+    });
+    pipeline_desc.vertex_input.attributes.push_back({
+        .location = 2U,
+        .binding = 0U,
+        .format = VK_FORMAT_R32_SFLOAT,
+        .offset = static_cast<std::uint32_t>(offsetof(ecs::Particle3DGpuInstance, rotation_radians))
+    });
+    pipeline_desc.vertex_input.attributes.push_back({
+        .location = 3U,
+        .binding = 0U,
+        .format = VK_FORMAT_R32_SFLOAT,
+        .offset = static_cast<std::uint32_t>(offsetof(ecs::Particle3DGpuInstance, stretch_factor))
+    });
+    pipeline_desc.vertex_input.attributes.push_back({
+        .location = 4U,
+        .binding = 0U,
+        .format = VK_FORMAT_R8G8B8A8_UNORM,
+        .offset = static_cast<std::uint32_t>(offsetof(ecs::Particle3DGpuInstance, color_rgba8))
+    });
+    pipeline_desc.vertex_input.attributes.push_back({
+        .location = 5U,
+        .binding = 0U,
+        .format = VK_FORMAT_R32G32B32_SFLOAT,
+        .offset = static_cast<std::uint32_t>(offsetof(ecs::Particle3DGpuInstance, velocity_x))
+    });
+    pipeline_desc.vertex_input.attributes.push_back({
+        .location = 6U,
+        .binding = 0U,
+        .format = VK_FORMAT_R32_UINT,
+        .offset = static_cast<std::uint32_t>(offsetof(ecs::Particle3DGpuInstance, texture_slot))
+    });
+    pipeline_desc.vertex_input.attributes.push_back({
+        .location = 7U,
+        .binding = 0U,
+        .format = VK_FORMAT_R32_UINT,
+        .offset = static_cast<std::uint32_t>(offsetof(ecs::Particle3DGpuInstance, sampler_slot))
+    });
+
+    pipeline_desc.input_assembly.topology = k_particle_topology;
+    pipeline_desc.input_assembly.primitive_restart_enable = false;
+    pipeline_desc.viewport.viewport_count = 1U;
+    pipeline_desc.viewport.scissor_count = 1U;
+    pipeline_desc.dynamic.states.push_back(VK_DYNAMIC_STATE_VIEWPORT);
+    pipeline_desc.dynamic.states.push_back(VK_DYNAMIC_STATE_SCISSOR);
+    pipeline_desc.rasterization.cull_mode = VK_CULL_MODE_NONE;
+    pipeline_desc.rasterization.front_face = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    pipeline_desc.rasterization.polygon_mode = VK_POLYGON_MODE_FILL;
+    pipeline_desc.rasterization.line_width = 1.0F;
+    pipeline_desc.multisample.rasterization_samples = VK_SAMPLE_COUNT_1_BIT;
+
+    pipeline_desc.depth_stencil.depth_test_enable = use_depth;
+    pipeline_desc.depth_stencil.depth_write_enable = false;
+    pipeline_desc.depth_stencil.depth_compare_op =
+        reverse_z ? VK_COMPARE_OP_GREATER_OR_EQUAL
+                  : VK_COMPARE_OP_LESS_OR_EQUAL;
+    pipeline_desc.depth_stencil.depth_bounds_test_enable = false;
+    pipeline_desc.depth_stencil.stencil_test_enable = false;
+    pipeline_desc.depth_stencil.min_depth_bounds = 0.0F;
+    pipeline_desc.depth_stencil.max_depth_bounds = 1.0F;
+
+    pipeline_desc.color_blend.attachments.push_back(
+        BuildTemporalMotionBlendAttachment());
+
+    cached_pipeline_id =
+        pipeline_host_.RegisterGraphicsPipeline(context_, pipeline_desc);
+    temporal_motion_pipeline_color_format = motion_format_;
+    temporal_motion_pipeline_depth_format = depth_format_;
     return cached_pipeline_id;
 }
 

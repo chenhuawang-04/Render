@@ -182,6 +182,11 @@ std::size_t ParticleRenderer3D::DepthPipelineModeIndex(DepthPipelineMode mode_) 
     return static_cast<std::size_t>(mode_);
 }
 
+std::size_t ParticleRenderer3D::TemporalMotionDepthModeIndex(
+    TemporalMotionDepthMode mode_) noexcept {
+    return static_cast<std::size_t>(mode_);
+}
+
 ParticleRenderer3D::BlendModeKind ParticleRenderer3D::DecodeBlendModeKind(
     std::uint32_t pipeline_state_) noexcept {
     switch (static_cast<ecs::RuntimeBlendPreset>(
@@ -252,6 +257,22 @@ ParticleRenderer3D::DepthPipelineMode ParticleRenderer3D::ResolveDepthPipelineMo
         : DepthPipelineMode::depth_test;
 }
 
+ParticleRenderer3D::TemporalMotionDepthMode
+ParticleRenderer3D::ResolveTemporalMotionDepthMode(
+    const DepthPipelineMode mode_) noexcept {
+    switch (mode_) {
+    case DepthPipelineMode::depth_test_reverse_z:
+    case DepthPipelineMode::depth_test_write_reverse_z:
+        return TemporalMotionDepthMode::depth_test_reverse_z;
+    case DepthPipelineMode::depth_test:
+    case DepthPipelineMode::depth_test_write:
+        return TemporalMotionDepthMode::depth_test;
+    case DepthPipelineMode::no_depth:
+    default:
+        return TemporalMotionDepthMode::no_depth;
+    }
+}
+
 void ParticleRenderer3D::Initialize(const ParticleRenderer3DCreateInfo& create_info_) {
     create_info_cache = create_info_;
     if (create_info_cache.reserve_component_count > 0U ||
@@ -275,6 +296,14 @@ void ParticleRenderer3D::Initialize(const ParticleRenderer3DCreateInfo& create_i
     }
     pipeline_color_format = VK_FORMAT_UNDEFINED;
     pipeline_depth_format = VK_FORMAT_UNDEFINED;
+    temporal_motion_pipeline_layout_id = {};
+    temporal_motion_shader_vertex_id = {};
+    temporal_motion_shader_fragment_id = {};
+    for (auto& pipeline_id : temporal_motion_pipeline_ids) {
+        pipeline_id = {};
+    }
+    temporal_motion_pipeline_color_format = VK_FORMAT_UNDEFINED;
+    temporal_motion_pipeline_depth_format = VK_FORMAT_UNDEFINED;
 
     depth_format = VK_FORMAT_UNDEFINED;
     depth_images.clear();
@@ -370,6 +399,14 @@ void ParticleRenderer3D::Shutdown(VulkanContext& context_) {
     }
     pipeline_color_format = VK_FORMAT_UNDEFINED;
     pipeline_depth_format = VK_FORMAT_UNDEFINED;
+    temporal_motion_pipeline_layout_id = {};
+    temporal_motion_shader_vertex_id = {};
+    temporal_motion_shader_fragment_id = {};
+    for (auto& pipeline_id : temporal_motion_pipeline_ids) {
+        pipeline_id = {};
+    }
+    temporal_motion_pipeline_color_format = VK_FORMAT_UNDEFINED;
+    temporal_motion_pipeline_depth_format = VK_FORMAT_UNDEFINED;
     depth_format = VK_FORMAT_UNDEFINED;
     culling_stats = {};
     last_runtime_build_stats = {};
@@ -479,6 +516,16 @@ ecs::Float3 ParticleRenderer3D::ResolveCameraForward() const noexcept {
                                          ecs::Float3{.x = 0.0F, .y = 0.0F, .z = -1.0F});
 }
 
+ecs::Matrix4x4 ParticleRenderer3D::ResolveActiveViewProjection() const noexcept {
+    if (frame_view_projection_override_active) {
+        return frame_view_projection_override;
+    }
+    if (camera_component != nullptr) {
+        return camera_component->runtime.view_projection_matrix;
+    }
+    return ecs::spatial_math::IdentityMatrix4x4();
+}
+
 void ParticleRenderer3D::OnSwapchainRecreated(std::uint32_t image_count_,
                                               VkExtent2D extent_,
                                               VkFormat format_) {
@@ -514,4 +561,3 @@ const ParticleRenderer3DStats& ParticleRenderer3D::Stats() const noexcept {
 }
 
 } // namespace vr::particle
-

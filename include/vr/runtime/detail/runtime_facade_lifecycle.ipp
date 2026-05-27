@@ -119,11 +119,14 @@
         tick_state.upload_cross_queue_wait = upload_flush.cross_queue_wait;
         frame.token.transfer_wait_value = upload_flush.transfer_wait_value;
 
+        auto* graph_service =
+            host.Services().template TryGet<services::RenderGraphRuntimeService>();
+        if (graph_service != nullptr) {
+            graph_service->SetDiagnosticsLevel(host.Config().diagnostics.level);
+        }
         phase_driver.OnPreRecord(frame.token.frame_index,
                                  host.Loop().Sync().LastSubmittedValue(),
                                  host.Loop().Sync().CompletedSubmitValue());
-        auto* graph_service =
-            host.Services().template TryGet<services::RenderGraphRuntimeService>();
         if (graph_service != nullptr &&
             upload_flush.extra_wait_count != 0U &&
             upload_flush.extra_wait.semaphore != VK_NULL_HANDLE) {

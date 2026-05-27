@@ -39,6 +39,8 @@ constexpr VkBufferUsageFlags k_graph_particle_indirect_commands_imported_usage =
     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
     VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
     VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+constexpr float k_temporal_motion_responsive_begin_pixels = 1.0F;
+constexpr float k_temporal_motion_responsive_end_pixels = 12.0F;
 
 [[nodiscard]] render::BindlessTableId ResolveSampledImageTableId(
     const render::BindlessResourceSystem* bindless_resources_) noexcept {
@@ -68,6 +70,16 @@ constexpr VkBufferUsageFlags k_graph_particle_indirect_commands_imported_usage =
 }
 
 } // namespace
+
+void ParticleRenderer3D::SetFrameViewProjectionOverride(
+    const ecs::Matrix4x4& view_projection_) noexcept {
+    frame_view_projection_override = view_projection_;
+    frame_view_projection_override_active = true;
+}
+
+void ParticleRenderer3D::ClearFrameViewProjectionOverride() noexcept {
+    frame_view_projection_override_active = false;
+}
 
 void ParticleRenderer3D::BuildDirectRuntimeGraph(
     const render::RuntimeDirectGraphBuildView& graph_view_) {
@@ -249,6 +261,18 @@ void ParticleRenderer3D::DescribeGraphDescriptorBindings(render_graph::RenderGra
                                      render_graph::shader_stage_fragment_flag);
 }
 
+void ParticleRenderer3D::DescribeGraphTemporalMotionBindings(
+    render_graph::RenderGraphBuilder& builder_,
+    const render_graph::PassHandle pass_) const {
+    if (!initialized) {
+        throw std::runtime_error(
+            "ParticleRenderer3D::DescribeGraphTemporalMotionBindings called before Initialize");
+    }
+
+    const_cast<ParticleRenderer3D*>(this)->ScheduleGraphComputeBuild(builder_,
+                                                                     pass_);
+}
+
 void ParticleRenderer3D::RegisterGraphImportedResources(
     runtime::services::RenderGraphRuntimeService& graph_runtime_service_) const {
     if (!graph_compute_pass_owned ||
@@ -395,6 +419,201 @@ void ParticleRenderer3D::RecordGraphSceneStage(render_graph::GraphCommandContext
                         depth_target_);
 }
 
+void ParticleRenderer3D::RecordGraphTemporalMotion(
+    render_graph::GraphCommandContext& context_,
+    render_graph::ResourceHandle motion_target_,
+    render_graph::ResourceHandle depth_target_) {
+    if (!initialized) {
+        throw std::runtime_error(
+            "ParticleRenderer3D::RecordGraphTemporalMotion called before Initialize");
+    }
+    if (context == nullptr || pipeline_host == nullptr) {
+        throw std::runtime_error(
+            "ParticleRenderer3D::RecordGraphTemporalMotion called before PrepareFrame");
+    }
+    if (context_.CommandBuffer() == VK_NULL_HANDLE) {
+        throw std::runtime_error(
+            "ParticleRenderer3D::RecordGraphTemporalMotion requires valid command buffer");
+    }
+
+    const auto resolved_motion = context_.ResolveTextureView(motion_target_);
+    const VkExtent2D render_extent{resolved_motion.extent.width,
+                                   resolved_motion.extent.height};
+    if (render_extent.width == 0U || render_extent.height == 0U) {
+        throw std::runtime_error(
+            "ParticleRenderer3D::RecordGraphTemporalMotion resolved zero-sized render extent");
+    }
+
+    const bool use_depth_attachment =
+        render_graph::IsValidResourceHandle(depth_target_);
+    const VkFormat active_depth_format = use_depth_attachment
+        ? context_.ResolveTextureView(depth_target_).format
+        : VK_FORMAT_UNDEFINED;
+
+    EnsureTemporalMotionPipelineObjects(*context,
+                                        *pipeline_host,
+                                        resolved_motion.format,
+                                        active_depth_format);
+
+    if (gpu_build_active &&
+        particle_simulation_host != nullptr &&
+        !graph_compute_pass_owned) {
+        particle_simulation_host->RecordBuild3D(*context,
+                                                *pipeline_host,
+                                                active_frame_index,
+                                                ResolveCameraPosition(),
+                                                ResolveCameraForward(),
+                                                context_.CommandBuffer());
+    }
+
+    VkViewport viewport{};
+    viewport.x = 0.0F;
+    viewport.y = 0.0F;
+    viewport.width = static_cast<float>(render_extent.width);
+    viewport.height = static_cast<float>(render_extent.height);
+    viewport.minDepth = 0.0F;
+    viewport.maxDepth = 1.0F;
+    vkCmdSetViewport(context_.CommandBuffer(), 0U, 1U, &viewport);
+
+    VkRect2D scissor{};
+    scissor.offset = VkOffset2D{0, 0};
+    scissor.extent = render_extent;
+    vkCmdSetScissor(context_.CommandBuffer(), 0U, 1U, &scissor);
+
+    if (!((gpu_build_active &&
+           last_gpu_build_result.resources.draw_instances.buffer != VK_NULL_HANDLE) ||
+          (last_upload_result.upload.buffer != VK_NULL_HANDLE)) ||
+        runtime_scratch.draw_batches.empty()) {
+        return;
+    }
+
+    const VkBuffer vertex_buffer = gpu_build_active
+        ? last_gpu_build_result.resources.draw_instances.buffer
+        : last_upload_result.upload.buffer;
+    const VkDeviceSize vertex_offset = gpu_build_active
+        ? 0U
+        : last_upload_result.upload.offset;
+    vkCmdBindVertexBuffers(context_.CommandBuffer(),
+                           0U,
+                           1U,
+                           &vertex_buffer,
+                           &vertex_offset);
+    const VkPipelineLayout pipeline_layout =
+        pipeline_host->GetPipelineLayout(temporal_motion_pipeline_layout_id);
+
+    TemporalMotionPushConstants push_constants{};
+    push_constants.view_projection = ResolveActiveViewProjection();
+    const ecs::Float3 camera_right = ResolveCameraRight();
+    const ecs::Float3 camera_up = ResolveCameraUp();
+    push_constants.camera_right = ecs::Float4{
+        .x = camera_right.x,
+        .y = camera_right.y,
+        .z = camera_right.z,
+        .w = 0.0F};
+    push_constants.camera_up = ecs::Float4{
+        .x = camera_up.x,
+        .y = camera_up.y,
+        .z = camera_up.z,
+        .w = 0.0F};
+    const float configured_delta_time =
+        create_info_cache.runtime_upload_options.runtime_build.delta_time_s > 0.0F
+        ? create_info_cache.runtime_upload_options.runtime_build.delta_time_s
+        : create_info_cache.runtime_upload_options.runtime_build.fixed_step_s;
+    push_constants.delta_time_s = (std::max)(configured_delta_time, 0.0F);
+    push_constants.responsive_velocity_begin_pixels =
+        k_temporal_motion_responsive_begin_pixels;
+    push_constants.responsive_velocity_end_pixels =
+        (std::max)(k_temporal_motion_responsive_end_pixels,
+                   k_temporal_motion_responsive_begin_pixels);
+    push_constants.target_width = render_extent.width;
+    push_constants.target_height = render_extent.height;
+    push_constants.params = 0U;
+    push_constants.reserved0 = 0U;
+    push_constants.reserved1 = 0U;
+
+    render::GraphicsPipelineId bound_pipeline{};
+    std::uint32_t bound_push_params =
+        (std::numeric_limits<std::uint32_t>::max)();
+    std::uint32_t batch_index = 0U;
+    for (const ecs::ParticleDrawBatch& batch : runtime_scratch.draw_batches) {
+        if (batch.instance_count == 0U) {
+            ++batch_index;
+            continue;
+        }
+
+        const ecs::ParticleRenderMode render_mode =
+            DecodeRenderMode(batch.pipeline_state);
+        if (render_mode == ecs::ParticleRenderMode::mesh ||
+            render_mode == ecs::ParticleRenderMode::trail) {
+            ++batch_index;
+            continue;
+        }
+
+        const DepthPipelineMode depth_mode = ResolveDepthPipelineMode(
+            batch.pipeline_state,
+            active_depth_format != VK_FORMAT_UNDEFINED,
+            active_camera_reverse_z);
+        const render::GraphicsPipelineId pipeline_id =
+            EnsureTemporalMotionPipelineForMode(
+                *context,
+                *pipeline_host,
+                resolved_motion.format,
+                active_depth_format,
+                ResolveTemporalMotionDepthMode(depth_mode));
+        if (!pipeline_id.IsValid()) {
+            ++batch_index;
+            continue;
+        }
+
+        const std::uint32_t push_params =
+            (static_cast<std::uint32_t>(render_mode) & 0xFFU) |
+            ((static_cast<std::uint32_t>(
+                  DecodeFacingMode(batch.pipeline_state)) &
+              0xFFU)
+             << 8U);
+
+        if (bound_pipeline.value != pipeline_id.value) {
+            vkCmdBindPipeline(context_.CommandBuffer(),
+                              VK_PIPELINE_BIND_POINT_GRAPHICS,
+                              pipeline_host->GetGraphicsPipeline(pipeline_id));
+            bound_pipeline = pipeline_id;
+            bound_push_params =
+                (std::numeric_limits<std::uint32_t>::max)();
+        }
+
+        if (bound_push_params != push_params) {
+            push_constants.params = push_params;
+            vkCmdPushConstants(context_.CommandBuffer(),
+                               pipeline_layout,
+                               VK_SHADER_STAGE_VERTEX_BIT |
+                                   VK_SHADER_STAGE_FRAGMENT_BIT,
+                               0U,
+                               sizeof(TemporalMotionPushConstants),
+                               &push_constants);
+            bound_push_params = push_params;
+        }
+
+        if (gpu_build_active) {
+            const VkDeviceSize indirect_offset =
+                static_cast<VkDeviceSize>(batch_index) *
+                sizeof(ParticleGpuIndirectCommand);
+            vkCmdDrawIndirect(context_.CommandBuffer(),
+                              last_gpu_build_result.resources.indirect_commands
+                                  .buffer,
+                              indirect_offset,
+                              1U,
+                              sizeof(ParticleGpuIndirectCommand));
+        } else {
+            vkCmdDraw(context_.CommandBuffer(),
+                      6U,
+                      batch.instance_count,
+                      0U,
+                      batch.instance_begin);
+        }
+        ++batch_index;
+    }
+}
+
 void ParticleRenderer3D::RecordGraphInternal(render_graph::GraphCommandContext& context_,
                                              std::uint32_t pass_bucket_,
                                              bool filter_by_pass_bucket_,
@@ -473,11 +692,7 @@ void ParticleRenderer3D::RecordGraphInternal(render_graph::GraphCommandContext& 
         const VkPipelineLayout pipeline_layout = pipeline_host->GetPipelineLayout(pipeline_layout_id);
 
         PushConstants push_constants{};
-        if (camera_component != nullptr) {
-            push_constants.view_projection = camera_component->runtime.view_projection_matrix;
-        } else {
-            push_constants.view_projection = ecs::spatial_math::IdentityMatrix4x4();
-        }
+        push_constants.view_projection = ResolveActiveViewProjection();
         const ecs::Float3 camera_right = ResolveCameraRight();
         const ecs::Float3 camera_up = ResolveCameraUp();
         const ecs::Float3 camera_forward = ResolveCameraForward();

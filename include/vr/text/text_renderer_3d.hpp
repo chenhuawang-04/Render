@@ -26,6 +26,9 @@ struct TextRenderer3DPrepareView;
 struct RuntimeDirectGraphBuildView;
 struct FrameRecordContext;
 class UploadHost;
+namespace detail {
+struct SceneRecorder3DDirtySchedulingAccess;
+}
 }
 
 namespace vr::render_graph {
@@ -34,6 +37,8 @@ class RenderGraphBuilder;
 }
 
 namespace vr::text {
+
+struct TextRenderer3DTestAccess;
 
 template<typename T>
 using TextRenderer3DMcVector = Center::Memory::mc_vector<T, Center::Memory::Tags::Container>;
@@ -106,6 +111,8 @@ public:
                       ecs::Camera<ecs::Dim3>* camera_component_,
                       ecs::Transform<ecs::Dim3>* camera_transform_,
                       ecs::Bounds<ecs::Dim3>* bounds_components_ = nullptr) noexcept;
+    void SetFrameViewProjectionOverride(const ecs::Matrix4x4& view_projection_) noexcept;
+    void ClearFrameViewProjectionOverride() noexcept;
     void PrepareFrame(const render::TextRenderer3DPrepareView& prepare_view_);
     void BuildDirectRuntimeGraph(const render::RuntimeDirectGraphBuildView& graph_view_);
     void DescribeGraphDescriptorBindings(render_graph::RenderGraphBuilder& builder_,
@@ -127,6 +134,9 @@ public:
     [[nodiscard]] const TextRenderer3DStats& Stats() const noexcept;
 
 private:
+    friend struct render::detail::SceneRecorder3DDirtySchedulingAccess;
+    friend struct TextRenderer3DTestAccess;
+
     struct PushConstants final {
         ecs::Matrix4x4 view_projection;
         ecs::Float4 shading_params{};
@@ -215,6 +225,7 @@ private:
     void EnsureDepthResources(VulkanContext& context_,
                               std::uint32_t image_count_,
                               VkExtent2D extent_);
+    void ClearPendingTransformDirtyHint() noexcept;
     void RecordGraphInternal(render_graph::GraphCommandContext& context_,
                              std::uint32_t pass_bucket_,
                              bool filter_by_pass_bucket_,
@@ -280,10 +291,18 @@ private:
     std::uint64_t runtime_geometry_revision = 1U;
     std::uint64_t last_submitted_value_seen = 0U;
     std::uint64_t completed_submit_value_seen = 0U;
+    const std::uint32_t* pending_transform_dirty_component_indices = nullptr;
+    std::uint32_t pending_transform_dirty_component_count = 0U;
+    std::uint32_t last_prepare_pending_transform_dirty_component_count = 0U;
+    bool last_prepare_runtime_rebuild_required = false;
+    bool last_prepare_instance_rebuild_required = false;
+    bool last_prepare_used_pending_transform_dirty = false;
     bool runtime_geometry_valid = false;
     bool instance_geometry_valid = false;
     bool contains_billboard_instances = false;
     bool active_camera_reverse_z = false;
+    ecs::Matrix4x4 frame_view_projection_override{};
+    bool frame_view_projection_override_active = false;
     bool initialized = false;
 };
 

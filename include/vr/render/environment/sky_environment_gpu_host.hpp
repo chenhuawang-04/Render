@@ -37,7 +37,7 @@ struct SkyEnvironmentGpuHostCreateInfo final {
 };
 
 struct SkyEnvironmentBakeDesc final {
-    std::uint32_t source_texture_id = 0U;
+    asset::TextureId source_texture_id{};
     scene::SkyEnvironmentMode source_mode = scene::SkyEnvironmentMode::equirectangular_hdr;
 
     std::uint32_t irradiance_size = 32U;
@@ -50,9 +50,9 @@ struct SkyEnvironmentBakeDesc final {
 };
 
 struct SkyEnvironmentBakeResult final {
-    std::uint32_t irradiance_texture_id = 0U;
-    std::uint32_t prefiltered_texture_id = 0U;
-    std::uint32_t brdf_lut_texture_id = 0U;
+    asset::TextureId irradiance_texture_id{};
+    asset::TextureId prefiltered_texture_id{};
+    asset::TextureId brdf_lut_texture_id{};
     std::uint32_t revision = 0U;
 };
 

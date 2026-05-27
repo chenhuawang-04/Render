@@ -7,6 +7,7 @@
 #include "vr/ecs/system/geometry_runtime_system.hpp"
 #include "vr/ecs/system/geometry_system.hpp"
 #include "vr/ecs/system/transform_system.hpp"
+#include "vr/geometry/geometry_temporal_motion_builder.hpp"
 
 #include <array>
 #include <cstdint>
@@ -347,6 +348,1408 @@ VR_TEST_CASE(EcsGeometryRuntimeSystem_dim3_updates_transform_without_rebuild, "u
     VR_CHECK(stats2.cache_key_matched);
     VR_CHECK(stats2.cache_epoch == cache_epoch0);
     VR_CHECK(stats2.transform_rewritten_instance_count == 0U);
+}
+
+VR_TEST_CASE(EcsGeometryTemporalMotionBuilder_dim3_rigid_previous_world_handoff_explicitly_falls_back_for_unmapped_or_non_rigid_instances,
+             "unit;core;ecs;geometry;temporal") {
+    using Geometry3D = vr::ecs::Geometry<vr::ecs::Dim3>;
+    using GeometrySystem3D = vr::ecs::GeometrySystem<vr::ecs::Dim3>;
+    using MeshSystem = vr::ecs::GeometryMeshSystem;
+    using RuntimeSystem3D = vr::ecs::GeometryRuntimeSystem<vr::ecs::Dim3>;
+    using Transform3D = vr::ecs::Transform<vr::ecs::Dim3>;
+    using TransformSystem3D = vr::ecs::TransformSystem<vr::ecs::Dim3>;
+
+    std::array<Geometry3D, 3U> components{};
+    std::array<Transform3D, 3U> transforms{};
+    for (std::uint32_t i = 0U; i < components.size(); ++i) {
+        MeshSystem::Initialize(components[i]);
+        MeshSystem::SetMeshRoute(components[i], 301U, 0U, 0U);
+        GeometrySystem3D::SetAuthoringVisualResourceId(components[i], 17U);
+
+        TransformSystem3D::Initialize(transforms[i]);
+        TransformSystem3D::SetLocalPosition(
+            transforms[i],
+            vr::ecs::Float3{
+                .x = static_cast<float>(10U + i),
+                .y = 0.0F,
+                .z = 2.0F,
+            });
+    }
+    MeshSystem::EnableVertexDeformShader(components[2U], true);
+    TransformSystem3D::UpdateHierarchy(
+        transforms.data(),
+        static_cast<std::uint32_t>(transforms.size()));
+
+    vr::ecs::Geometry3DRuntimeScratch scratch{};
+    const auto runtime_stats = RuntimeSystem3D::Build(
+        components.data(),
+        transforms.data(),
+        static_cast<std::uint32_t>(components.size()),
+        scratch,
+        {});
+    VR_REQUIRE(runtime_stats.emitted_instance_count == 3U);
+    VR_REQUIRE(scratch.instances.size() == 3U);
+
+    vr::geometry::Geometry3DTemporalRuntimeWorldHistory previous_history{};
+    previous_history.component_world_matrices.resize(components.size());
+    previous_history.component_previous_available.resize(components.size(), 1U);
+    previous_history.component_world_matrices[0U] =
+        vr::ecs::spatial_math::IdentityMatrix4x4();
+    previous_history.component_world_matrices[0U].m[12U] = 1.5F;
+    previous_history.component_world_matrices[1U] =
+        vr::ecs::spatial_math::IdentityMatrix4x4();
+    previous_history.component_world_matrices[1U].m[12U] = 2.5F;
+    previous_history.component_world_matrices[2U] =
+        vr::ecs::spatial_math::IdentityMatrix4x4();
+    previous_history.component_world_matrices[2U].m[12U] = 3.5F;
+    previous_history.component_previous_available[1U] = 0U;
+    previous_history.runtime_world_signature = 17U;
+    previous_history.available = true;
+
+    vr::geometry::GeometryTemporalMotionMcVector<
+        vr::geometry::Geometry3DTemporalMotionInstance>
+        temporal_instances{};
+    const auto temporal_stats =
+        vr::geometry::BuildGeometry3DTemporalMotionInstances(
+            components.data(),
+            static_cast<std::uint32_t>(components.size()),
+            scratch.instances,
+            previous_history,
+            vr::geometry::Geometry3DTemporalSkeletalPaletteView{},
+            vr::geometry::Geometry3DTemporalSkeletalPaletteHistory{},
+            {},
+            temporal_instances);
+
+    VR_CHECK(temporal_stats.rigid_candidate_count == 2U);
+    VR_CHECK(temporal_stats.previous_match_count == 1U);
+    VR_CHECK(temporal_stats.fallback_count == 2U);
+    VR_REQUIRE(temporal_instances.size() == scratch.instances.size());
+
+    VR_CHECK(temporal_instances[0U].previous_world_m30 == 1.5F);
+    VR_CHECK(temporal_instances[0U].confidence_seed == 1.0F);
+    VR_CHECK((temporal_instances[0U].flags &
+              vr::geometry::geometry_3d_temporal_motion_flag_previous_valid) !=
+             0U);
+
+    VR_CHECK(temporal_instances[1U].previous_world_m30 ==
+             scratch.instances[1U].world_m30);
+    VR_CHECK(temporal_instances[1U].confidence_seed == 0.0F);
+    VR_CHECK(temporal_instances[1U].flags == 0U);
+
+    VR_CHECK(temporal_instances[2U].previous_world_m30 ==
+             scratch.instances[2U].world_m30);
+    VR_CHECK(temporal_instances[2U].confidence_seed == 0.0F);
+    VR_CHECK(!vr::geometry::IsGeometry3DTemporalRigidEligible(components[2U]));
+}
+
+VR_TEST_CASE(EcsGeometryTemporalRuntimeWorldHistory_dim3_captures_rigid_hierarchy_and_root_motion_worlds_and_reset,
+             "unit;core;ecs;geometry;temporal") {
+    using Geometry3D = vr::ecs::Geometry<vr::ecs::Dim3>;
+    using GeometrySystem3D = vr::ecs::GeometrySystem<vr::ecs::Dim3>;
+    using MeshSystem = vr::ecs::GeometryMeshSystem;
+    using SkeletalOutputState3D = vr::ecs::SkeletalPoseOutputState<vr::ecs::Dim3>;
+    using Transform3D = vr::ecs::Transform<vr::ecs::Dim3>;
+    using TransformSystem3D = vr::ecs::TransformSystem<vr::ecs::Dim3>;
+
+    std::array<Geometry3D, 2U> components{};
+    std::array<Transform3D, 2U> transforms{};
+    for (std::uint32_t i = 0U; i < components.size(); ++i) {
+        MeshSystem::Initialize(components[i]);
+        MeshSystem::SetMeshRoute(components[i], 401U, 0U, 0U);
+        GeometrySystem3D::SetAuthoringVisualResourceId(components[i], 31U);
+        GeometrySystem3D::SetUserData(components[i], 501U + i);
+        TransformSystem3D::Initialize(transforms[i]);
+    }
+
+    MeshSystem::EnableSkeletalSkinning(components[1U], true);
+    MeshSystem::EnableSkeletalRootMotion(components[1U], true);
+    GeometrySystem3D::SetVisible(components[0U], false);
+    TransformSystem3D::SetLocalPosition(
+        transforms[0U],
+        vr::ecs::Float3{.x = 5.0F, .y = 0.0F, .z = 0.0F});
+    TransformSystem3D::SetLocalPosition(
+        transforms[1U],
+        vr::ecs::Float3{.x = 1.5F, .y = 0.0F, .z = -2.0F});
+    VR_REQUIRE(TransformSystem3D::AttachChild(transforms.data(),
+                                              static_cast<std::uint32_t>(
+                                                  transforms.size()),
+                                              1U,
+                                              0U));
+    TransformSystem3D::UpdateHierarchy(
+        transforms.data(),
+        static_cast<std::uint32_t>(transforms.size()));
+
+    std::array<vr::ecs::SkeletalJointPose<vr::ecs::Dim3>, 1U> bind_pose{{
+        {
+            .position = vr::ecs::Float3{.x = 0.0F, .y = 0.0F, .z = 0.0F},
+            .rotation = vr::ecs::Quaternion{
+                .x = 0.0F,
+                .y = 0.0F,
+                .z = 0.0F,
+                .w = 1.0F},
+            .scale = vr::ecs::Float3{.x = 1.0F, .y = 1.0F, .z = 1.0F},
+        },
+    }};
+    std::array<vr::ecs::SkeletalJointPose<vr::ecs::Dim3>, 1U> animated_root{{
+        {
+            .position = vr::ecs::Float3{.x = 0.75F, .y = 0.5F, .z = 0.0F},
+            .rotation = vr::ecs::Quaternion{
+                .x = 0.0F,
+                .y = 0.0F,
+                .z = 0.0F,
+                .w = 1.0F},
+            .scale = vr::ecs::Float3{.x = 1.0F, .y = 1.0F, .z = 1.0F},
+        },
+    }};
+    std::array<SkeletalOutputState3D, 2U> outputs{};
+    outputs[1U].joints = animated_root.data();
+    outputs[1U].joint_count = 1U;
+    outputs[1U].sampled_joint_count = 1U;
+    outputs[1U].revision = 19U;
+    outputs[1U].bind_pose_joints = bind_pose.data();
+    outputs[1U].bind_pose_joint_count = 1U;
+
+    vr::geometry::Geometry3DTemporalRuntimeWorldHistory history{};
+    vr::geometry::CaptureGeometry3DTemporalRuntimeWorldHistory(
+        components.data(),
+        transforms.data(),
+        static_cast<std::uint32_t>(transforms.size()),
+        outputs.data(),
+        static_cast<std::uint32_t>(outputs.size()),
+        history,
+        41U);
+
+    VR_CHECK(history.available);
+    VR_REQUIRE(history.component_world_matrices.size() == transforms.size());
+    VR_REQUIRE(history.component_previous_available.size() == transforms.size());
+    VR_REQUIRE(history.component_identity_keys.size() == transforms.size());
+    VR_REQUIRE(history.component_explicit_identity_available.size() ==
+               transforms.size());
+    VR_CHECK(history.component_previous_available[0U] == 1U);
+    VR_CHECK(history.component_previous_available[1U] == 1U);
+    VR_CHECK(history.component_explicit_identity_available[0U] == 1U);
+    VR_CHECK(history.component_explicit_identity_available[1U] == 1U);
+    VR_CHECK(history.component_identity_keys[0U] == 501U);
+    VR_CHECK(history.component_identity_keys[1U] == 502U);
+    VR_CHECK(history.runtime_world_signature != 0U);
+    VR_CHECK(history.capture_id == 41U);
+    VR_CHECK(history.component_world_matrices[0U].m[12U] == 5.0F);
+    VR_CHECK(history.component_world_matrices[1U].m[12U] == 7.25F);
+    VR_CHECK(history.component_world_matrices[1U].m[13U] == 0.5F);
+    VR_CHECK(history.component_world_matrices[1U].m[14U] == -2.0F);
+
+    vr::geometry::ResetGeometry3DTemporalRuntimeWorldHistory(history);
+    VR_CHECK(!history.available);
+    VR_CHECK(history.runtime_world_signature == 0U);
+    VR_CHECK(history.capture_id == 0U);
+    VR_CHECK(history.component_world_matrices.empty());
+    VR_CHECK(history.component_previous_available.empty());
+    VR_CHECK(history.component_identity_keys.empty());
+    VR_CHECK(history.component_explicit_identity_available.empty());
+}
+
+VR_TEST_CASE(EcsGeometryTemporalVertexDeformHistory_dim3_captures_and_resets_previous_params,
+             "unit;core;ecs;geometry;temporal") {
+    using Geometry3D = vr::ecs::Geometry<vr::ecs::Dim3>;
+    using GeometrySystem3D = vr::ecs::GeometrySystem<vr::ecs::Dim3>;
+    using MeshSystem = vr::ecs::GeometryMeshSystem;
+
+    std::array<Geometry3D, 2U> components{};
+    for (std::uint32_t i = 0U; i < components.size(); ++i) {
+        MeshSystem::Initialize(components[i]);
+        MeshSystem::SetMeshRoute(components[i], 411U, 0U, 0U);
+        GeometrySystem3D::SetAuthoringVisualResourceId(components[i], 71U + i);
+    }
+    MeshSystem::EnableVertexDeformShader(components[0U], true);
+
+    std::array<vr::ecs::VertexDeformOutputState, 2U> outputs{};
+    std::array<vr::ecs::Float4, 2U> parameters{{
+        {.x = 1.5F, .y = 0.0F, .z = 1.0F, .w = 0.0F},
+        {.x = 0.25F, .y = 3.0F, .z = -0.5F, .w = 0.15F},
+    }};
+    outputs[0U].parameters = parameters.data();
+    outputs[0U].parameter_count =
+        static_cast<std::uint32_t>(parameters.size());
+    outputs[0U].sampled_parameter_count =
+        static_cast<std::uint32_t>(parameters.size());
+    outputs[0U].revision = 7U;
+
+    vr::geometry::Geometry3DTemporalVertexDeformHistory history{};
+    vr::geometry::CaptureGeometry3DTemporalVertexDeformHistory(
+        components.data(),
+        static_cast<std::uint32_t>(components.size()),
+        outputs.data(),
+        static_cast<std::uint32_t>(outputs.size()),
+        history,
+        13U);
+
+    VR_CHECK(history.available);
+    VR_CHECK(history.capture_id == 13U);
+    VR_CHECK(history.deform_signature != 0U);
+    VR_REQUIRE(history.component_deform_param0.size() == components.size());
+    VR_REQUIRE(history.component_deform_param1.size() == components.size());
+    VR_REQUIRE(history.component_previous_available.size() ==
+               components.size());
+    VR_CHECK(history.component_previous_available[0U] == 1U);
+    VR_CHECK(history.component_previous_available[1U] == 0U);
+    VR_CHECK(history.component_deform_param0[0U].x == 1.5F);
+    VR_CHECK(history.component_deform_param0[0U].z == 1.0F);
+    VR_CHECK(history.component_deform_param1[0U].y == 3.0F);
+    VR_CHECK(history.component_deform_param1[0U].w == 0.15F);
+    VR_CHECK(history.component_deform_param0[1U].x == 0.0F);
+    VR_CHECK(history.component_deform_param1[1U].w == 0.0F);
+
+    vr::geometry::ResetGeometry3DTemporalVertexDeformHistory(history);
+    VR_CHECK(!history.available);
+    VR_CHECK(history.deform_signature == 0U);
+    VR_CHECK(history.capture_id == 0U);
+    VR_CHECK(history.component_deform_param0.empty());
+    VR_CHECK(history.component_deform_param1.empty());
+    VR_CHECK(history.component_previous_available.empty());
+}
+
+VR_TEST_CASE(EcsGeometryTemporalMotionBuilder_dim3_explicit_identity_remaps_and_invalidates_previous_world,
+             "unit;core;ecs;geometry;temporal") {
+    using Geometry3D = vr::ecs::Geometry<vr::ecs::Dim3>;
+    using GeometrySystem3D = vr::ecs::GeometrySystem<vr::ecs::Dim3>;
+    using MeshSystem = vr::ecs::GeometryMeshSystem;
+    using RuntimeSystem3D = vr::ecs::GeometryRuntimeSystem<vr::ecs::Dim3>;
+    using Transform3D = vr::ecs::Transform<vr::ecs::Dim3>;
+    using TransformSystem3D = vr::ecs::TransformSystem<vr::ecs::Dim3>;
+
+    std::array<Geometry3D, 2U> components{};
+    std::array<Transform3D, 2U> transforms{};
+    for (std::uint32_t i = 0U; i < components.size(); ++i) {
+        MeshSystem::Initialize(components[i]);
+        MeshSystem::SetMeshRoute(components[i], 451U, 0U, 0U);
+        GeometrySystem3D::SetAuthoringVisualResourceId(components[i], 61U + i);
+        TransformSystem3D::Initialize(transforms[i]);
+        TransformSystem3D::SetLocalPosition(
+            transforms[i],
+            vr::ecs::Float3{
+                .x = 10.0F + static_cast<float>(i),
+                .y = 0.0F,
+                .z = 2.0F,
+            });
+    }
+    GeometrySystem3D::SetUserData(components[0U], 22U);
+    GeometrySystem3D::SetUserData(components[1U], 11U);
+    auto previous_components = components;
+    GeometrySystem3D::SetUserData(previous_components[0U], 11U);
+    GeometrySystem3D::SetUserData(previous_components[1U], 22U);
+    TransformSystem3D::UpdateHierarchy(
+        transforms.data(),
+        static_cast<std::uint32_t>(transforms.size()));
+
+    vr::ecs::Geometry3DRuntimeScratch scratch{};
+    const auto runtime_stats = RuntimeSystem3D::Build(
+        components.data(),
+        transforms.data(),
+        static_cast<std::uint32_t>(components.size()),
+        scratch,
+        {});
+    VR_REQUIRE(runtime_stats.emitted_instance_count == 2U);
+    VR_REQUIRE(scratch.instances.size() == 2U);
+
+    vr::geometry::Geometry3DTemporalRuntimeWorldHistory previous_history{};
+    previous_history.component_world_matrices.resize(components.size());
+    previous_history.component_previous_available.resize(components.size(), 1U);
+    previous_history.component_identity_keys.resize(components.size());
+    previous_history.component_explicit_identity_available.resize(
+        components.size(),
+        1U);
+    previous_history.component_world_matrices[0U] =
+        vr::ecs::spatial_math::IdentityMatrix4x4();
+    previous_history.component_world_matrices[0U].m[12U] = 1.5F;
+    previous_history.component_world_matrices[1U] =
+        vr::ecs::spatial_math::IdentityMatrix4x4();
+    previous_history.component_world_matrices[1U].m[12U] = 2.5F;
+    previous_history.component_identity_keys[0U] = 11U;
+    previous_history.component_identity_keys[1U] = 22U;
+    previous_history.runtime_world_signature = 29U;
+    previous_history.capture_id = 5U;
+    previous_history.available = true;
+
+    vr::geometry::GeometryTemporalMotionMcVector<
+        vr::geometry::Geometry3DTemporalMotionInstance>
+        temporal_instances{};
+    const auto remapped_stats =
+        vr::geometry::BuildGeometry3DTemporalMotionInstances(
+            components.data(),
+            static_cast<std::uint32_t>(components.size()),
+            scratch.instances,
+            previous_history,
+            vr::geometry::Geometry3DTemporalSkeletalPaletteView{},
+            vr::geometry::Geometry3DTemporalSkeletalPaletteHistory{},
+            {},
+            temporal_instances);
+
+    VR_CHECK(remapped_stats.rigid_candidate_count == 2U);
+    VR_CHECK(remapped_stats.previous_match_count == 2U);
+    VR_CHECK(remapped_stats.fallback_count == 0U);
+    VR_REQUIRE(temporal_instances.size() == 2U);
+    VR_CHECK(temporal_instances[0U].previous_world_m30 == 2.5F);
+    VR_CHECK(temporal_instances[1U].previous_world_m30 == 1.5F);
+    VR_CHECK(temporal_instances[0U].confidence_seed == 1.0F);
+    VR_CHECK(temporal_instances[1U].confidence_seed == 1.0F);
+    VR_CHECK((temporal_instances[0U].flags &
+              vr::geometry::geometry_3d_temporal_motion_flag_previous_valid) !=
+             0U);
+    VR_CHECK((temporal_instances[1U].flags &
+              vr::geometry::geometry_3d_temporal_motion_flag_previous_valid) !=
+             0U);
+
+    GeometrySystem3D::SetUserData(components[0U], 33U);
+    const auto invalidated_runtime_stats = RuntimeSystem3D::Build(
+        components.data(),
+        transforms.data(),
+        static_cast<std::uint32_t>(components.size()),
+        scratch,
+        {});
+    VR_REQUIRE(invalidated_runtime_stats.emitted_instance_count == 2U);
+
+    const auto invalidated_stats =
+        vr::geometry::BuildGeometry3DTemporalMotionInstances(
+            components.data(),
+            static_cast<std::uint32_t>(components.size()),
+            scratch.instances,
+            previous_history,
+            vr::geometry::Geometry3DTemporalSkeletalPaletteView{},
+            vr::geometry::Geometry3DTemporalSkeletalPaletteHistory{},
+            {},
+            temporal_instances);
+    VR_CHECK(invalidated_stats.rigid_candidate_count == 2U);
+    VR_CHECK(invalidated_stats.previous_match_count == 1U);
+    VR_CHECK(invalidated_stats.fallback_count == 1U);
+    VR_CHECK(temporal_instances[0U].previous_world_m30 ==
+             scratch.instances[0U].world_m30);
+    VR_CHECK(temporal_instances[0U].confidence_seed == 0.0F);
+    VR_CHECK(temporal_instances[0U].flags == 0U);
+    VR_CHECK(temporal_instances[1U].previous_world_m30 == 1.5F);
+    VR_CHECK(temporal_instances[1U].confidence_seed == 1.0F);
+}
+
+VR_TEST_CASE(EcsGeometryTemporalMotionBuilder_dim3_vertex_deform_previous_handoff_remaps_and_invalidates,
+             "unit;core;ecs;geometry;temporal") {
+    using Geometry3D = vr::ecs::Geometry<vr::ecs::Dim3>;
+    using GeometrySystem3D = vr::ecs::GeometrySystem<vr::ecs::Dim3>;
+    using MeshSystem = vr::ecs::GeometryMeshSystem;
+    using RuntimeSystem3D = vr::ecs::GeometryRuntimeSystem<vr::ecs::Dim3>;
+    using Transform3D = vr::ecs::Transform<vr::ecs::Dim3>;
+    using TransformSystem3D = vr::ecs::TransformSystem<vr::ecs::Dim3>;
+
+    std::array<Geometry3D, 2U> components{};
+    std::array<Geometry3D, 2U> previous_components{};
+    std::array<Transform3D, 2U> transforms{};
+    for (std::uint32_t i = 0U; i < components.size(); ++i) {
+        MeshSystem::Initialize(components[i]);
+        MeshSystem::SetMeshRoute(components[i], 461U, 0U, 0U);
+        MeshSystem::EnableVertexDeformShader(components[i], true);
+        GeometrySystem3D::SetAuthoringVisualResourceId(components[i], 101U + i);
+        TransformSystem3D::Initialize(transforms[i]);
+        TransformSystem3D::SetLocalPosition(
+            transforms[i],
+            vr::ecs::Float3{
+                .x = 10.0F + static_cast<float>(i),
+                .y = 0.0F,
+                .z = 2.0F,
+            });
+    }
+    GeometrySystem3D::SetUserData(components[0U], 22U);
+    GeometrySystem3D::SetUserData(components[1U], 11U);
+    previous_components = components;
+    GeometrySystem3D::SetUserData(previous_components[0U], 11U);
+    GeometrySystem3D::SetUserData(previous_components[1U], 22U);
+    TransformSystem3D::UpdateHierarchy(
+        transforms.data(),
+        static_cast<std::uint32_t>(transforms.size()));
+
+    std::array<vr::ecs::VertexDeformOutputState, 2U> current_outputs{};
+    std::array<vr::ecs::Float4, 4U> current_parameters{{
+        {.x = 1.25F, .y = 0.0F, .z = 1.0F, .w = 0.0F},
+        {.x = 0.15F, .y = 2.0F, .z = 0.25F, .w = 0.05F},
+        {.x = 2.50F, .y = 0.0F, .z = 0.0F, .w = 1.0F},
+        {.x = 0.35F, .y = 4.0F, .z = -0.10F, .w = 0.20F},
+    }};
+    current_outputs[0U].parameters = current_parameters.data();
+    current_outputs[0U].parameter_count = 2U;
+    current_outputs[0U].sampled_parameter_count = 2U;
+    current_outputs[0U].revision = 5U;
+    current_outputs[1U].parameters = current_parameters.data() + 2U;
+    current_outputs[1U].parameter_count = 2U;
+    current_outputs[1U].sampled_parameter_count = 2U;
+    current_outputs[1U].revision = 6U;
+
+    std::array<vr::ecs::VertexDeformOutputState, 2U> previous_outputs{};
+    std::array<vr::ecs::Float4, 4U> previous_parameters{{
+        {.x = 3.50F, .y = 1.0F, .z = 0.0F, .w = 0.0F},
+        {.x = 0.40F, .y = 1.5F, .z = 0.30F, .w = 0.10F},
+        {.x = 4.50F, .y = 0.0F, .z = 0.0F, .w = 1.0F},
+        {.x = 0.60F, .y = 5.0F, .z = -0.25F, .w = 0.45F},
+    }};
+    previous_outputs[0U].parameters = previous_parameters.data();
+    previous_outputs[0U].parameter_count = 2U;
+    previous_outputs[0U].sampled_parameter_count = 2U;
+    previous_outputs[0U].revision = 15U;
+    previous_outputs[1U].parameters = previous_parameters.data() + 2U;
+    previous_outputs[1U].parameter_count = 2U;
+    previous_outputs[1U].sampled_parameter_count = 2U;
+    previous_outputs[1U].revision = 16U;
+
+    vr::ecs::Geometry3DRuntimeScratch scratch{};
+    vr::ecs::Geometry3DRuntimeBuildHint hint{};
+    hint.vertex_deform_outputs = current_outputs.data();
+    hint.vertex_deform_output_count =
+        static_cast<std::uint32_t>(current_outputs.size());
+    const auto runtime_stats = RuntimeSystem3D::Build(
+        components.data(),
+        transforms.data(),
+        static_cast<std::uint32_t>(components.size()),
+        scratch,
+        {},
+        hint);
+    VR_REQUIRE(runtime_stats.emitted_instance_count == 2U);
+    VR_REQUIRE(scratch.instances.size() == 2U);
+
+    vr::geometry::Geometry3DTemporalRuntimeWorldHistory previous_history{};
+    previous_history.component_world_matrices.resize(components.size());
+    previous_history.component_previous_available.resize(components.size(), 1U);
+    previous_history.component_identity_keys.resize(components.size());
+    previous_history.component_explicit_identity_available.resize(
+        components.size(),
+        1U);
+    previous_history.component_world_matrices[0U] =
+        vr::ecs::spatial_math::IdentityMatrix4x4();
+    previous_history.component_world_matrices[0U].m[12U] = 1.5F;
+    previous_history.component_world_matrices[1U] =
+        vr::ecs::spatial_math::IdentityMatrix4x4();
+    previous_history.component_world_matrices[1U].m[12U] = 2.5F;
+    previous_history.component_identity_keys[0U] = 11U;
+    previous_history.component_identity_keys[1U] = 22U;
+    previous_history.runtime_world_signature = 41U;
+    previous_history.capture_id = 31U;
+    previous_history.available = true;
+
+    vr::geometry::Geometry3DTemporalVertexDeformHistory
+        previous_vertex_deform_history{};
+    vr::geometry::CaptureGeometry3DTemporalVertexDeformHistory(
+        previous_components.data(),
+        static_cast<std::uint32_t>(previous_components.size()),
+        previous_outputs.data(),
+        static_cast<std::uint32_t>(previous_outputs.size()),
+        previous_vertex_deform_history,
+        31U);
+
+    vr::geometry::GeometryTemporalMotionMcVector<
+        vr::geometry::Geometry3DTemporalMotionInstance>
+        temporal_instances{};
+    const auto remapped_stats =
+        vr::geometry::BuildGeometry3DTemporalMotionInstances(
+            components.data(),
+            static_cast<std::uint32_t>(components.size()),
+            scratch.instances,
+            previous_history,
+            vr::geometry::Geometry3DTemporalSkeletalPaletteView{},
+            vr::geometry::Geometry3DTemporalSkeletalPaletteHistory{},
+            previous_vertex_deform_history,
+            temporal_instances);
+
+    VR_CHECK(remapped_stats.rigid_candidate_count == 0U);
+    VR_CHECK(remapped_stats.previous_match_count == 2U);
+    VR_CHECK(remapped_stats.fallback_count == 0U);
+    VR_REQUIRE(temporal_instances.size() == 2U);
+    VR_CHECK(temporal_instances[0U].previous_world_m30 == 2.5F);
+    VR_CHECK(temporal_instances[1U].previous_world_m30 == 1.5F);
+    VR_CHECK(temporal_instances[0U].previous_deform_param0_x == 4.50F);
+    VR_CHECK(temporal_instances[0U].previous_deform_param1_w == 0.45F);
+    VR_CHECK(temporal_instances[1U].previous_deform_param0_x == 3.50F);
+    VR_CHECK(temporal_instances[1U].previous_deform_param1_w == 0.10F);
+    VR_CHECK(temporal_instances[0U].confidence_seed == 1.0F);
+    VR_CHECK(temporal_instances[1U].confidence_seed == 1.0F);
+    VR_CHECK((temporal_instances[0U].flags &
+              vr::geometry::geometry_3d_temporal_motion_flag_previous_valid) !=
+             0U);
+
+    const auto missing_previous_stats =
+        vr::geometry::BuildGeometry3DTemporalMotionInstances(
+            components.data(),
+            static_cast<std::uint32_t>(components.size()),
+            scratch.instances,
+            previous_history,
+            vr::geometry::Geometry3DTemporalSkeletalPaletteView{},
+            vr::geometry::Geometry3DTemporalSkeletalPaletteHistory{},
+            {},
+            temporal_instances);
+    VR_CHECK(missing_previous_stats.previous_match_count == 0U);
+    VR_CHECK(missing_previous_stats.fallback_count == 2U);
+    VR_CHECK(temporal_instances[0U].previous_world_m30 ==
+             scratch.instances[0U].world_m30);
+    VR_CHECK(temporal_instances[0U].previous_deform_param0_x ==
+             scratch.instances[0U].deform_param0_x);
+    VR_CHECK(temporal_instances[0U].confidence_seed == 0.0F);
+    VR_CHECK(temporal_instances[0U].flags == 0U);
+
+    previous_vertex_deform_history.capture_id = 32U;
+    const auto misaligned_stats =
+        vr::geometry::BuildGeometry3DTemporalMotionInstances(
+            components.data(),
+            static_cast<std::uint32_t>(components.size()),
+            scratch.instances,
+            previous_history,
+            vr::geometry::Geometry3DTemporalSkeletalPaletteView{},
+            vr::geometry::Geometry3DTemporalSkeletalPaletteHistory{},
+            previous_vertex_deform_history,
+            temporal_instances);
+    VR_CHECK(misaligned_stats.previous_match_count == 0U);
+    VR_CHECK(misaligned_stats.fallback_count == 2U);
+    VR_CHECK(temporal_instances[1U].confidence_seed == 0.0F);
+
+    previous_vertex_deform_history.capture_id = 31U;
+    GeometrySystem3D::SetUserData(components[0U], 33U);
+    const auto invalidated_runtime_stats = RuntimeSystem3D::Build(
+        components.data(),
+        transforms.data(),
+        static_cast<std::uint32_t>(components.size()),
+        scratch,
+        {},
+        hint);
+    VR_REQUIRE(invalidated_runtime_stats.emitted_instance_count == 2U);
+    const auto identity_mismatch_stats =
+        vr::geometry::BuildGeometry3DTemporalMotionInstances(
+            components.data(),
+            static_cast<std::uint32_t>(components.size()),
+            scratch.instances,
+            previous_history,
+            vr::geometry::Geometry3DTemporalSkeletalPaletteView{},
+            vr::geometry::Geometry3DTemporalSkeletalPaletteHistory{},
+            previous_vertex_deform_history,
+            temporal_instances);
+    VR_CHECK(identity_mismatch_stats.previous_match_count == 1U);
+    VR_CHECK(identity_mismatch_stats.fallback_count == 1U);
+    VR_CHECK(temporal_instances[0U].previous_deform_param0_x ==
+             scratch.instances[0U].deform_param0_x);
+    VR_CHECK(temporal_instances[0U].confidence_seed == 0.0F);
+    VR_CHECK(temporal_instances[1U].previous_deform_param0_x == 3.50F);
+    VR_CHECK(temporal_instances[1U].confidence_seed == 1.0F);
+}
+
+VR_TEST_CASE(EcsGeometryTemporalSkeletalPaletteHistory_dim3_captures_and_resets_skinned_palette,
+             "unit;core;ecs;geometry;temporal") {
+    using Geometry3D = vr::ecs::Geometry<vr::ecs::Dim3>;
+    using GeometrySystem3D = vr::ecs::GeometrySystem<vr::ecs::Dim3>;
+    using MeshSystem = vr::ecs::GeometryMeshSystem;
+
+    Geometry3D component{};
+    MeshSystem::Initialize(component);
+    MeshSystem::SetMeshRoute(component, 402U, 0U, 0U);
+    MeshSystem::EnableSkeletalSkinning(component, true);
+    GeometrySystem3D::SetAuthoringVisualResourceId(component, 32U);
+
+    std::array<vr::ecs::SkeletalJointPose<vr::ecs::Dim3>, 1U> animated_joints{{
+        {
+            .position = vr::ecs::Float3{.x = 1.5F, .y = 0.0F, .z = 0.0F},
+            .rotation = vr::ecs::Quaternion{.x = 0.0F,
+                                            .y = 0.0F,
+                                            .z = 0.0F,
+                                            .w = 1.0F},
+            .scale = vr::ecs::Float3{.x = 1.0F, .y = 1.0F, .z = 1.0F},
+        },
+    }};
+    std::array<vr::ecs::SkeletalJointPose<vr::ecs::Dim3>, 1U> bind_pose_joints{{
+        {
+            .position = vr::ecs::Float3{.x = 0.0F, .y = 0.0F, .z = 0.0F},
+            .rotation = vr::ecs::Quaternion{.x = 0.0F,
+                                            .y = 0.0F,
+                                            .z = 0.0F,
+                                            .w = 1.0F},
+            .scale = vr::ecs::Float3{.x = 1.0F, .y = 1.0F, .z = 1.0F},
+        },
+    }};
+    std::array<vr::ecs::SkeletalPoseOutputState<vr::ecs::Dim3>, 1U> outputs{};
+    outputs[0U].joints = animated_joints.data();
+    outputs[0U].joint_count = 1U;
+    outputs[0U].sampled_joint_count = 1U;
+    outputs[0U].revision = 1U;
+    outputs[0U].bind_pose_joints = bind_pose_joints.data();
+    outputs[0U].bind_pose_joint_count = 1U;
+
+    vr::geometry::GeometryMcVector<vr::geometry::GeometrySkeletalComponentGpu>
+        skeletal_components{};
+    vr::geometry::GeometryMcVector<vr::geometry::GeometrySkeletalMatrixGpu>
+        skeletal_matrices{};
+    const auto build_stats = vr::geometry::GeometrySkeletalPaletteBuilder::Build(
+        &component,
+        1U,
+        outputs.data(),
+        1U,
+        skeletal_components,
+        skeletal_matrices);
+
+    vr::geometry::Geometry3DTemporalSkeletalPaletteHistory history{};
+    vr::geometry::CaptureGeometry3DTemporalSkeletalPaletteHistory(
+        build_stats,
+        skeletal_components,
+        skeletal_matrices,
+        history,
+        7U);
+
+    VR_CHECK(history.available);
+    VR_CHECK(history.palette_signature != 0U);
+    VR_CHECK(history.capture_id == 7U);
+    VR_REQUIRE(history.skeletal_components.size() == 1U);
+    VR_REQUIRE(history.skeletal_matrices.size() == 1U);
+    VR_CHECK((history.skeletal_components[0U].flags &
+              vr::geometry::geometry_skeletal_component_enabled_flag) != 0U);
+    VR_CHECK(history.skeletal_components[0U].joint_count == 1U);
+    VR_CHECK(history.skeletal_matrices[0U].matrix.m[12U] == 1.5F);
+
+    vr::geometry::ResetGeometry3DTemporalSkeletalPaletteHistory(history);
+    VR_CHECK(!history.available);
+    VR_CHECK(history.palette_signature == 0U);
+    VR_CHECK(history.capture_id == 0U);
+    VR_CHECK(history.skeletal_components.empty());
+    VR_CHECK(history.skeletal_matrices.empty());
+}
+
+VR_TEST_CASE(EcsGeometryTemporalMotionBuilder_dim3_skinned_explicit_identity_remaps_previous_palette_handoff_across_slots,
+             "unit;core;ecs;geometry;temporal") {
+    using Geometry3D = vr::ecs::Geometry<vr::ecs::Dim3>;
+    using GeometrySystem3D = vr::ecs::GeometrySystem<vr::ecs::Dim3>;
+    using MeshSystem = vr::ecs::GeometryMeshSystem;
+    using RuntimeSystem3D = vr::ecs::GeometryRuntimeSystem<vr::ecs::Dim3>;
+    using Transform3D = vr::ecs::Transform<vr::ecs::Dim3>;
+    using TransformSystem3D = vr::ecs::TransformSystem<vr::ecs::Dim3>;
+
+    std::array<Geometry3D, 2U> components{};
+    std::array<Transform3D, 2U> transforms{};
+    for (std::uint32_t i = 0U; i < components.size(); ++i) {
+        MeshSystem::Initialize(components[i]);
+        MeshSystem::SetMeshRoute(components[i], 471U, 0U, 0U);
+        MeshSystem::EnableSkeletalSkinning(components[i], true);
+        GeometrySystem3D::SetAuthoringVisualResourceId(components[i], 81U + i);
+        TransformSystem3D::Initialize(transforms[i]);
+        TransformSystem3D::SetLocalPosition(
+            transforms[i],
+            vr::ecs::Float3{
+                .x = 4.0F + 2.0F * static_cast<float>(i),
+                .y = 0.0F,
+                .z = 2.0F,
+            });
+    }
+    GeometrySystem3D::SetUserData(components[0U], 22U);
+    GeometrySystem3D::SetUserData(components[1U], 11U);
+    auto previous_components = components;
+    GeometrySystem3D::SetUserData(previous_components[0U], 11U);
+    GeometrySystem3D::SetUserData(previous_components[1U], 22U);
+    TransformSystem3D::UpdateHierarchy(
+        transforms.data(),
+        static_cast<std::uint32_t>(transforms.size()));
+
+    std::array<vr::ecs::SkeletalJointPose<vr::ecs::Dim3>, 2U> bind_pose_joints{{
+        {
+            .position = vr::ecs::Float3{.x = 0.0F, .y = 0.0F, .z = 0.0F},
+            .rotation = vr::ecs::Quaternion{
+                .x = 0.0F,
+                .y = 0.0F,
+                .z = 0.0F,
+                .w = 1.0F},
+            .scale = vr::ecs::Float3{.x = 1.0F, .y = 1.0F, .z = 1.0F},
+        },
+        {
+            .position = vr::ecs::Float3{.x = 0.0F, .y = 0.0F, .z = 0.0F},
+            .rotation = vr::ecs::Quaternion{
+                .x = 0.0F,
+                .y = 0.0F,
+                .z = 0.0F,
+                .w = 1.0F},
+            .scale = vr::ecs::Float3{.x = 1.0F, .y = 1.0F, .z = 1.0F},
+        },
+    }};
+    std::array<vr::ecs::SkeletalJointPose<vr::ecs::Dim3>, 2U> previous_joints{{
+        {
+            .position = vr::ecs::Float3{.x = -0.25F, .y = 0.0F, .z = 0.0F},
+            .rotation = vr::ecs::Quaternion{
+                .x = 0.0F,
+                .y = 0.0F,
+                .z = 0.0F,
+                .w = 1.0F},
+            .scale = vr::ecs::Float3{.x = 1.0F, .y = 1.0F, .z = 1.0F},
+        },
+        {
+            .position = vr::ecs::Float3{.x = 2.25F, .y = 0.0F, .z = 0.0F},
+            .rotation = vr::ecs::Quaternion{
+                .x = 0.0F,
+                .y = 0.0F,
+                .z = 0.0F,
+                .w = 1.0F},
+            .scale = vr::ecs::Float3{.x = 1.0F, .y = 1.0F, .z = 1.0F},
+        },
+    }};
+    std::array<vr::ecs::SkeletalJointPose<vr::ecs::Dim3>, 2U> current_joints{{
+        {
+            .position = vr::ecs::Float3{.x = 0.50F, .y = 0.0F, .z = 0.0F},
+            .rotation = vr::ecs::Quaternion{
+                .x = 0.0F,
+                .y = 0.0F,
+                .z = 0.0F,
+                .w = 1.0F},
+            .scale = vr::ecs::Float3{.x = 1.0F, .y = 1.0F, .z = 1.0F},
+        },
+        {
+            .position = vr::ecs::Float3{.x = -0.75F, .y = 0.0F, .z = 0.0F},
+            .rotation = vr::ecs::Quaternion{
+                .x = 0.0F,
+                .y = 0.0F,
+                .z = 0.0F,
+                .w = 1.0F},
+            .scale = vr::ecs::Float3{.x = 1.0F, .y = 1.0F, .z = 1.0F},
+        },
+    }};
+
+    std::array<vr::ecs::SkeletalPoseOutputState<vr::ecs::Dim3>, 2U>
+        current_outputs{};
+    std::array<vr::ecs::SkeletalPoseOutputState<vr::ecs::Dim3>, 2U>
+        previous_outputs{};
+    for (std::uint32_t i = 0U; i < components.size(); ++i) {
+        current_outputs[i].joints = current_joints.data() + i;
+        current_outputs[i].joint_count = 1U;
+        current_outputs[i].sampled_joint_count = 1U;
+        current_outputs[i].revision = 10U + i;
+        current_outputs[i].bind_pose_joints = bind_pose_joints.data() + i;
+        current_outputs[i].bind_pose_joint_count = 1U;
+
+        previous_outputs[i].joints = previous_joints.data() + i;
+        previous_outputs[i].joint_count = 1U;
+        previous_outputs[i].sampled_joint_count = 1U;
+        previous_outputs[i].revision = 20U + i;
+        previous_outputs[i].bind_pose_joints = bind_pose_joints.data() + i;
+        previous_outputs[i].bind_pose_joint_count = 1U;
+    }
+
+    vr::ecs::Geometry3DRuntimeScratch scratch{};
+    vr::ecs::Geometry3DRuntimeBuildHint hint{};
+    hint.skeletal_outputs = current_outputs.data();
+    hint.skeletal_output_count =
+        static_cast<std::uint32_t>(current_outputs.size());
+    const auto runtime_stats = RuntimeSystem3D::Build(
+        components.data(),
+        transforms.data(),
+        static_cast<std::uint32_t>(components.size()),
+        scratch,
+        {},
+        hint);
+    VR_REQUIRE(runtime_stats.emitted_instance_count == 2U);
+    VR_REQUIRE(scratch.instances.size() == 2U);
+
+    vr::geometry::GeometryMcVector<vr::geometry::GeometrySkeletalComponentGpu>
+        current_skeletal_components{};
+    vr::geometry::GeometryMcVector<vr::geometry::GeometrySkeletalMatrixGpu>
+        current_skeletal_matrices{};
+    const auto current_build_stats =
+        vr::geometry::GeometrySkeletalPaletteBuilder::Build(
+            components.data(),
+            static_cast<std::uint32_t>(components.size()),
+            current_outputs.data(),
+            static_cast<std::uint32_t>(current_outputs.size()),
+            current_skeletal_components,
+            current_skeletal_matrices);
+
+    vr::geometry::GeometryMcVector<vr::geometry::GeometrySkeletalComponentGpu>
+        previous_skeletal_components{};
+    vr::geometry::GeometryMcVector<vr::geometry::GeometrySkeletalMatrixGpu>
+        previous_skeletal_matrices{};
+    const auto previous_build_stats =
+        vr::geometry::GeometrySkeletalPaletteBuilder::Build(
+            previous_components.data(),
+            static_cast<std::uint32_t>(previous_components.size()),
+            previous_outputs.data(),
+            static_cast<std::uint32_t>(previous_outputs.size()),
+            previous_skeletal_components,
+            previous_skeletal_matrices);
+
+    vr::geometry::Geometry3DTemporalRuntimeWorldHistory
+        previous_runtime_world_history{};
+    previous_runtime_world_history.component_world_matrices.resize(
+        components.size());
+    previous_runtime_world_history.component_previous_available.resize(
+        components.size(),
+        1U);
+    previous_runtime_world_history.component_identity_keys.resize(
+        components.size());
+    previous_runtime_world_history.component_explicit_identity_available.resize(
+        components.size(),
+        1U);
+    previous_runtime_world_history.component_world_matrices[0U] =
+        vr::ecs::spatial_math::IdentityMatrix4x4();
+    previous_runtime_world_history.component_world_matrices[0U].m[12U] = 1.25F;
+    previous_runtime_world_history.component_world_matrices[1U] =
+        vr::ecs::spatial_math::IdentityMatrix4x4();
+    previous_runtime_world_history.component_world_matrices[1U].m[12U] = 2.75F;
+    previous_runtime_world_history.component_identity_keys[0U] = 11U;
+    previous_runtime_world_history.component_identity_keys[1U] = 22U;
+    previous_runtime_world_history.runtime_world_signature = 77U;
+    previous_runtime_world_history.capture_id = 55U;
+    previous_runtime_world_history.available = true;
+
+    vr::geometry::Geometry3DTemporalSkeletalPaletteHistory previous_palette_history{};
+    vr::geometry::CaptureGeometry3DTemporalSkeletalPaletteHistory(
+        previous_build_stats,
+        previous_skeletal_components,
+        previous_skeletal_matrices,
+        previous_palette_history,
+        55U);
+
+    vr::geometry::GeometryTemporalMotionMcVector<
+        vr::geometry::Geometry3DTemporalMotionInstance>
+        temporal_instances{};
+    const auto remapped_stats =
+        vr::geometry::BuildGeometry3DTemporalMotionInstances(
+            components.data(),
+            static_cast<std::uint32_t>(components.size()),
+            scratch.instances,
+            previous_runtime_world_history,
+            vr::geometry::MakeGeometry3DTemporalSkeletalPaletteView(
+                current_skeletal_components,
+                current_skeletal_matrices,
+                current_build_stats.skinned_component_count > 0U),
+            previous_palette_history,
+            {},
+            temporal_instances);
+
+    VR_CHECK(remapped_stats.rigid_candidate_count == 0U);
+    VR_CHECK(remapped_stats.previous_match_count == 2U);
+    VR_CHECK(remapped_stats.fallback_count == 0U);
+    VR_REQUIRE(temporal_instances.size() == 2U);
+    VR_CHECK(temporal_instances[0U].previous_world_m30 == 2.75F);
+    VR_CHECK(temporal_instances[1U].previous_world_m30 == 1.25F);
+    VR_CHECK(temporal_instances[0U].previous_skeletal_component_index == 1U);
+    VR_CHECK(temporal_instances[1U].previous_skeletal_component_index == 0U);
+    VR_CHECK(temporal_instances[0U].confidence_seed == 1.0F);
+    VR_CHECK(temporal_instances[1U].confidence_seed == 1.0F);
+}
+
+VR_TEST_CASE(EcsGeometryTemporalMotionBuilder_dim3_skinned_vertex_deform_previous_handoff_requires_aligned_palette_and_deform_history,
+             "unit;core;ecs;geometry;temporal") {
+    using Geometry3D = vr::ecs::Geometry<vr::ecs::Dim3>;
+    using GeometrySystem3D = vr::ecs::GeometrySystem<vr::ecs::Dim3>;
+    using MeshSystem = vr::ecs::GeometryMeshSystem;
+    using RuntimeSystem3D = vr::ecs::GeometryRuntimeSystem<vr::ecs::Dim3>;
+    using Transform3D = vr::ecs::Transform<vr::ecs::Dim3>;
+    using TransformSystem3D = vr::ecs::TransformSystem<vr::ecs::Dim3>;
+
+    Geometry3D component{};
+    MeshSystem::Initialize(component);
+    MeshSystem::SetMeshRoute(component, 483U, 0U, 0U);
+    MeshSystem::EnableSkeletalSkinning(component, true);
+    MeshSystem::EnableVertexDeformShader(component, true);
+    GeometrySystem3D::SetAuthoringVisualResourceId(component, 91U);
+
+    Transform3D transform{};
+    TransformSystem3D::Initialize(transform);
+    TransformSystem3D::SetLocalPosition(
+        transform,
+        vr::ecs::Float3{.x = 3.0F, .y = 0.0F, .z = 2.0F});
+    TransformSystem3D::UpdateHierarchy(&transform, 1U);
+
+    std::array<vr::ecs::SkeletalJointPose<vr::ecs::Dim3>, 1U> bind_pose_joints{{
+        {
+            .position = vr::ecs::Float3{.x = 0.0F, .y = 0.0F, .z = 0.0F},
+            .rotation = vr::ecs::Quaternion{.x = 0.0F,
+                                            .y = 0.0F,
+                                            .z = 0.0F,
+                                            .w = 1.0F},
+            .scale = vr::ecs::Float3{.x = 1.0F, .y = 1.0F, .z = 1.0F},
+        },
+    }};
+    std::array<vr::ecs::SkeletalJointPose<vr::ecs::Dim3>, 1U> previous_joints{{
+        {
+            .position = vr::ecs::Float3{.x = -0.25F, .y = 0.0F, .z = 0.0F},
+            .rotation = vr::ecs::Quaternion{.x = 0.0F,
+                                            .y = 0.0F,
+                                            .z = 0.0F,
+                                            .w = 1.0F},
+            .scale = vr::ecs::Float3{.x = 1.0F, .y = 1.0F, .z = 1.0F},
+        },
+    }};
+    std::array<vr::ecs::SkeletalJointPose<vr::ecs::Dim3>, 1U> current_joints{{
+        {
+            .position = vr::ecs::Float3{.x = 0.50F, .y = 0.0F, .z = 0.0F},
+            .rotation = vr::ecs::Quaternion{.x = 0.0F,
+                                            .y = 0.0F,
+                                            .z = 0.0F,
+                                            .w = 1.0F},
+            .scale = vr::ecs::Float3{.x = 1.0F, .y = 1.0F, .z = 1.0F},
+        },
+    }};
+    std::array<vr::ecs::SkeletalPoseOutputState<vr::ecs::Dim3>, 1U>
+        current_outputs{};
+    current_outputs[0U].joints = current_joints.data();
+    current_outputs[0U].joint_count = 1U;
+    current_outputs[0U].sampled_joint_count = 1U;
+    current_outputs[0U].revision = 2U;
+    current_outputs[0U].bind_pose_joints = bind_pose_joints.data();
+    current_outputs[0U].bind_pose_joint_count = 1U;
+    std::array<vr::ecs::SkeletalPoseOutputState<vr::ecs::Dim3>, 1U>
+        previous_outputs{};
+    previous_outputs[0U].joints = previous_joints.data();
+    previous_outputs[0U].joint_count = 1U;
+    previous_outputs[0U].sampled_joint_count = 1U;
+    previous_outputs[0U].revision = 1U;
+    previous_outputs[0U].bind_pose_joints = bind_pose_joints.data();
+    previous_outputs[0U].bind_pose_joint_count = 1U;
+
+    std::array<vr::ecs::VertexDeformOutputState, 1U> current_vertex_outputs{};
+    std::array<vr::ecs::Float4, 2U> current_vertex_parameters{{
+        {.x = 1.25F, .y = 0.0F, .z = 1.0F, .w = 0.0F},
+        {.x = 0.10F, .y = 3.0F, .z = -0.25F, .w = 0.05F},
+    }};
+    current_vertex_outputs[0U].parameters = current_vertex_parameters.data();
+    current_vertex_outputs[0U].parameter_count = 2U;
+    current_vertex_outputs[0U].sampled_parameter_count = 2U;
+    current_vertex_outputs[0U].revision = 4U;
+
+    std::array<vr::ecs::VertexDeformOutputState, 1U> previous_vertex_outputs{};
+    std::array<vr::ecs::Float4, 2U> previous_vertex_parameters{{
+        {.x = 2.75F, .y = 1.0F, .z = 0.0F, .w = 0.0F},
+        {.x = 0.40F, .y = 1.5F, .z = 0.50F, .w = 0.20F},
+    }};
+    previous_vertex_outputs[0U].parameters =
+        previous_vertex_parameters.data();
+    previous_vertex_outputs[0U].parameter_count = 2U;
+    previous_vertex_outputs[0U].sampled_parameter_count = 2U;
+    previous_vertex_outputs[0U].revision = 3U;
+
+    vr::ecs::Geometry3DRuntimeScratch scratch{};
+    vr::ecs::Geometry3DRuntimeBuildHint hint{};
+    hint.skeletal_outputs = current_outputs.data();
+    hint.skeletal_output_count = 1U;
+    hint.vertex_deform_outputs = current_vertex_outputs.data();
+    hint.vertex_deform_output_count = 1U;
+    const auto runtime_stats =
+        RuntimeSystem3D::Build(&component, &transform, 1U, scratch, {}, hint);
+    VR_REQUIRE(runtime_stats.emitted_instance_count == 1U);
+    VR_REQUIRE(scratch.instances.size() == 1U);
+
+    vr::geometry::GeometryMcVector<vr::geometry::GeometrySkeletalComponentGpu>
+        current_skeletal_components{};
+    vr::geometry::GeometryMcVector<vr::geometry::GeometrySkeletalMatrixGpu>
+        current_skeletal_matrices{};
+    const auto current_build_stats =
+        vr::geometry::GeometrySkeletalPaletteBuilder::Build(
+            &component,
+            1U,
+            current_outputs.data(),
+            1U,
+            current_skeletal_components,
+            current_skeletal_matrices);
+
+    vr::geometry::GeometryMcVector<vr::geometry::GeometrySkeletalComponentGpu>
+        previous_skeletal_components{};
+    vr::geometry::GeometryMcVector<vr::geometry::GeometrySkeletalMatrixGpu>
+        previous_skeletal_matrices{};
+    const auto previous_build_stats =
+        vr::geometry::GeometrySkeletalPaletteBuilder::Build(
+            &component,
+            1U,
+            previous_outputs.data(),
+            1U,
+            previous_skeletal_components,
+            previous_skeletal_matrices);
+
+    vr::geometry::Geometry3DTemporalRuntimeWorldHistory
+        previous_runtime_world_history{};
+    previous_runtime_world_history.component_world_matrices.resize(1U);
+    previous_runtime_world_history.component_previous_available.resize(1U, 1U);
+    previous_runtime_world_history.component_world_matrices[0U] =
+        vr::ecs::spatial_math::IdentityMatrix4x4();
+    previous_runtime_world_history.component_world_matrices[0U].m[12U] = 1.25F;
+    previous_runtime_world_history.runtime_world_signature = 77U;
+    previous_runtime_world_history.capture_id = 11U;
+    previous_runtime_world_history.available = true;
+
+    vr::geometry::Geometry3DTemporalSkeletalPaletteHistory
+        previous_palette_history{};
+    vr::geometry::CaptureGeometry3DTemporalSkeletalPaletteHistory(
+        previous_build_stats,
+        previous_skeletal_components,
+        previous_skeletal_matrices,
+        previous_palette_history,
+        11U);
+
+    vr::geometry::Geometry3DTemporalVertexDeformHistory
+        previous_vertex_deform_history{};
+    vr::geometry::CaptureGeometry3DTemporalVertexDeformHistory(
+        &component,
+        1U,
+        previous_vertex_outputs.data(),
+        1U,
+        previous_vertex_deform_history,
+        11U);
+
+    vr::geometry::GeometryTemporalMotionMcVector<
+        vr::geometry::Geometry3DTemporalMotionInstance>
+        temporal_instances{};
+    const auto available_stats =
+        vr::geometry::BuildGeometry3DTemporalMotionInstances(
+            &component,
+            1U,
+            scratch.instances,
+            previous_runtime_world_history,
+            vr::geometry::MakeGeometry3DTemporalSkeletalPaletteView(
+                current_skeletal_components,
+                current_skeletal_matrices,
+                current_build_stats.skinned_component_count > 0U),
+            previous_palette_history,
+            previous_vertex_deform_history,
+            temporal_instances);
+
+    VR_CHECK(available_stats.rigid_candidate_count == 0U);
+    VR_CHECK(available_stats.previous_match_count == 1U);
+    VR_CHECK(available_stats.fallback_count == 0U);
+    VR_REQUIRE(temporal_instances.size() == 1U);
+    VR_CHECK(temporal_instances[0U].previous_world_m30 == 1.25F);
+    VR_CHECK(temporal_instances[0U].previous_deform_param0_x == 2.75F);
+    VR_CHECK(temporal_instances[0U].previous_deform_param1_w == 0.20F);
+    VR_CHECK(temporal_instances[0U].confidence_seed == 1.0F);
+    VR_CHECK((temporal_instances[0U].flags &
+              vr::geometry::geometry_3d_temporal_motion_flag_previous_valid) !=
+             0U);
+
+    vr::geometry::ResetGeometry3DTemporalVertexDeformHistory(
+        previous_vertex_deform_history);
+    const auto missing_previous_deform_stats =
+        vr::geometry::BuildGeometry3DTemporalMotionInstances(
+            &component,
+            1U,
+            scratch.instances,
+            previous_runtime_world_history,
+            vr::geometry::MakeGeometry3DTemporalSkeletalPaletteView(
+                current_skeletal_components,
+                current_skeletal_matrices,
+                current_build_stats.skinned_component_count > 0U),
+            previous_palette_history,
+            previous_vertex_deform_history,
+            temporal_instances);
+    VR_CHECK(missing_previous_deform_stats.previous_match_count == 0U);
+    VR_CHECK(missing_previous_deform_stats.fallback_count == 1U);
+    VR_CHECK(temporal_instances[0U].previous_deform_param0_x ==
+             scratch.instances[0U].deform_param0_x);
+    VR_CHECK(temporal_instances[0U].confidence_seed == 0.0F);
+    VR_CHECK(temporal_instances[0U].flags == 0U);
+
+    vr::geometry::CaptureGeometry3DTemporalVertexDeformHistory(
+        &component,
+        1U,
+        previous_vertex_outputs.data(),
+        1U,
+        previous_vertex_deform_history,
+        11U);
+    previous_vertex_deform_history.capture_id = 12U;
+    const auto misaligned_previous_deform_stats =
+        vr::geometry::BuildGeometry3DTemporalMotionInstances(
+            &component,
+            1U,
+            scratch.instances,
+            previous_runtime_world_history,
+            vr::geometry::MakeGeometry3DTemporalSkeletalPaletteView(
+                current_skeletal_components,
+                current_skeletal_matrices,
+                current_build_stats.skinned_component_count > 0U),
+            previous_palette_history,
+            previous_vertex_deform_history,
+            temporal_instances);
+    VR_CHECK(misaligned_previous_deform_stats.previous_match_count == 0U);
+    VR_CHECK(misaligned_previous_deform_stats.fallback_count == 1U);
+    VR_CHECK(temporal_instances[0U].confidence_seed == 0.0F);
+}
+
+VR_TEST_CASE(EcsGeometryTemporalMotionBuilder_dim3_skinned_previous_palette_handoff_requires_compatible_current_and_previous_palette,
+             "unit;core;ecs;geometry;temporal") {
+    using Geometry3D = vr::ecs::Geometry<vr::ecs::Dim3>;
+    using GeometrySystem3D = vr::ecs::GeometrySystem<vr::ecs::Dim3>;
+    using MeshSystem = vr::ecs::GeometryMeshSystem;
+    using RuntimeSystem3D = vr::ecs::GeometryRuntimeSystem<vr::ecs::Dim3>;
+    using Transform3D = vr::ecs::Transform<vr::ecs::Dim3>;
+    using TransformSystem3D = vr::ecs::TransformSystem<vr::ecs::Dim3>;
+
+    Geometry3D component{};
+    MeshSystem::Initialize(component);
+    MeshSystem::SetMeshRoute(component, 403U, 0U, 0U);
+    MeshSystem::EnableSkeletalSkinning(component, true);
+    GeometrySystem3D::SetAuthoringVisualResourceId(component, 33U);
+
+    Transform3D transform{};
+    TransformSystem3D::Initialize(transform);
+    TransformSystem3D::SetLocalPosition(
+        transform,
+        vr::ecs::Float3{.x = 3.0F, .y = 0.0F, .z = 2.0F});
+    TransformSystem3D::UpdateHierarchy(&transform, 1U);
+
+    std::array<vr::ecs::SkeletalJointPose<vr::ecs::Dim3>, 1U> bind_pose_joints{{
+        {
+            .position = vr::ecs::Float3{.x = 0.0F, .y = 0.0F, .z = 0.0F},
+            .rotation = vr::ecs::Quaternion{.x = 0.0F,
+                                            .y = 0.0F,
+                                            .z = 0.0F,
+                                            .w = 1.0F},
+            .scale = vr::ecs::Float3{.x = 1.0F, .y = 1.0F, .z = 1.0F},
+        },
+    }};
+    std::array<vr::ecs::SkeletalJointPose<vr::ecs::Dim3>, 1U> previous_joints{{
+        {
+            .position = vr::ecs::Float3{.x = -0.25F, .y = 0.0F, .z = 0.0F},
+            .rotation = vr::ecs::Quaternion{.x = 0.0F,
+                                            .y = 0.0F,
+                                            .z = 0.0F,
+                                            .w = 1.0F},
+            .scale = vr::ecs::Float3{.x = 1.0F, .y = 1.0F, .z = 1.0F},
+        },
+    }};
+    std::array<vr::ecs::SkeletalJointPose<vr::ecs::Dim3>, 1U> current_joints{{
+        {
+            .position = vr::ecs::Float3{.x = 0.50F, .y = 0.0F, .z = 0.0F},
+            .rotation = vr::ecs::Quaternion{.x = 0.0F,
+                                            .y = 0.0F,
+                                            .z = 0.0F,
+                                            .w = 1.0F},
+            .scale = vr::ecs::Float3{.x = 1.0F, .y = 1.0F, .z = 1.0F},
+        },
+    }};
+    std::array<vr::ecs::SkeletalPoseOutputState<vr::ecs::Dim3>, 1U>
+        current_outputs{};
+    current_outputs[0U].joints = current_joints.data();
+    current_outputs[0U].joint_count = 1U;
+    current_outputs[0U].sampled_joint_count = 1U;
+    current_outputs[0U].revision = 2U;
+    current_outputs[0U].bind_pose_joints = bind_pose_joints.data();
+    current_outputs[0U].bind_pose_joint_count = 1U;
+    std::array<vr::ecs::SkeletalPoseOutputState<vr::ecs::Dim3>, 1U>
+        previous_outputs{};
+    previous_outputs[0U].joints = previous_joints.data();
+    previous_outputs[0U].joint_count = 1U;
+    previous_outputs[0U].sampled_joint_count = 1U;
+    previous_outputs[0U].revision = 1U;
+    previous_outputs[0U].bind_pose_joints = bind_pose_joints.data();
+    previous_outputs[0U].bind_pose_joint_count = 1U;
+
+    vr::ecs::Geometry3DRuntimeScratch scratch{};
+    vr::ecs::Geometry3DRuntimeBuildHint hint{};
+    hint.skeletal_outputs = current_outputs.data();
+    hint.skeletal_output_count = 1U;
+    const auto runtime_stats =
+        RuntimeSystem3D::Build(&component, &transform, 1U, scratch, {}, hint);
+    VR_REQUIRE(runtime_stats.emitted_instance_count == 1U);
+    VR_REQUIRE(scratch.instances.size() == 1U);
+
+    vr::geometry::GeometryMcVector<vr::geometry::GeometrySkeletalComponentGpu>
+        current_skeletal_components{};
+    vr::geometry::GeometryMcVector<vr::geometry::GeometrySkeletalMatrixGpu>
+        current_skeletal_matrices{};
+    const auto current_build_stats =
+        vr::geometry::GeometrySkeletalPaletteBuilder::Build(
+            &component,
+            1U,
+            current_outputs.data(),
+            1U,
+            current_skeletal_components,
+            current_skeletal_matrices);
+
+    vr::geometry::GeometryMcVector<vr::geometry::GeometrySkeletalComponentGpu>
+        previous_skeletal_components{};
+    vr::geometry::GeometryMcVector<vr::geometry::GeometrySkeletalMatrixGpu>
+        previous_skeletal_matrices{};
+    const auto previous_build_stats =
+        vr::geometry::GeometrySkeletalPaletteBuilder::Build(
+            &component,
+            1U,
+            previous_outputs.data(),
+            1U,
+            previous_skeletal_components,
+            previous_skeletal_matrices);
+
+    vr::geometry::Geometry3DTemporalRuntimeWorldHistory
+        previous_runtime_world_history{};
+    previous_runtime_world_history.component_world_matrices.resize(1U);
+    previous_runtime_world_history.component_previous_available.resize(1U, 1U);
+    previous_runtime_world_history.component_world_matrices[0U] =
+        vr::ecs::spatial_math::IdentityMatrix4x4();
+    previous_runtime_world_history.component_world_matrices[0U].m[12U] = 1.25F;
+    previous_runtime_world_history.runtime_world_signature = 77U;
+    previous_runtime_world_history.capture_id = 11U;
+    previous_runtime_world_history.available = true;
+
+    vr::geometry::Geometry3DTemporalSkeletalPaletteHistory previous_palette_history{};
+    vr::geometry::CaptureGeometry3DTemporalSkeletalPaletteHistory(
+        previous_build_stats,
+        previous_skeletal_components,
+        previous_skeletal_matrices,
+        previous_palette_history,
+        11U);
+
+    vr::geometry::GeometryTemporalMotionMcVector<
+        vr::geometry::Geometry3DTemporalMotionInstance>
+        temporal_instances{};
+    const auto available_stats =
+        vr::geometry::BuildGeometry3DTemporalMotionInstances(
+            &component,
+            1U,
+            scratch.instances,
+            previous_runtime_world_history,
+            vr::geometry::MakeGeometry3DTemporalSkeletalPaletteView(
+                current_skeletal_components,
+                current_skeletal_matrices,
+                current_build_stats.skinned_component_count > 0U),
+            previous_palette_history,
+            {},
+            temporal_instances);
+
+    VR_CHECK(available_stats.rigid_candidate_count == 0U);
+    VR_CHECK(available_stats.previous_match_count == 1U);
+    VR_CHECK(available_stats.fallback_count == 0U);
+    VR_REQUIRE(temporal_instances.size() == 1U);
+    VR_CHECK(temporal_instances[0U].previous_world_m30 == 1.25F);
+    VR_CHECK(temporal_instances[0U].confidence_seed == 1.0F);
+    VR_CHECK((temporal_instances[0U].flags &
+              vr::geometry::geometry_3d_temporal_motion_flag_previous_valid) !=
+             0U);
+
+    vr::geometry::ResetGeometry3DTemporalSkeletalPaletteHistory(
+        previous_palette_history);
+    const auto missing_previous_stats =
+        vr::geometry::BuildGeometry3DTemporalMotionInstances(
+            &component,
+            1U,
+            scratch.instances,
+            previous_runtime_world_history,
+            vr::geometry::MakeGeometry3DTemporalSkeletalPaletteView(
+                current_skeletal_components,
+                current_skeletal_matrices,
+                current_build_stats.skinned_component_count > 0U),
+            previous_palette_history,
+            {},
+            temporal_instances);
+    VR_CHECK(missing_previous_stats.previous_match_count == 0U);
+    VR_CHECK(missing_previous_stats.fallback_count == 1U);
+    VR_CHECK(temporal_instances[0U].confidence_seed == 0.0F);
+    VR_CHECK(temporal_instances[0U].flags == 0U);
+
+    vr::geometry::CaptureGeometry3DTemporalSkeletalPaletteHistory(
+        previous_build_stats,
+        previous_skeletal_components,
+        previous_skeletal_matrices,
+        previous_palette_history,
+        11U);
+    const auto missing_current_stats =
+        vr::geometry::BuildGeometry3DTemporalMotionInstances(
+            &component,
+            1U,
+            scratch.instances,
+            previous_runtime_world_history,
+            vr::geometry::MakeGeometry3DTemporalSkeletalPaletteView(
+                current_skeletal_components,
+                current_skeletal_matrices,
+                false),
+            previous_palette_history,
+            {},
+            temporal_instances);
+    VR_CHECK(missing_current_stats.previous_match_count == 0U);
+    VR_CHECK(missing_current_stats.fallback_count == 1U);
+    VR_CHECK(temporal_instances[0U].confidence_seed == 0.0F);
+
+    MeshSystem::EnableSkeletalRootMotion(component, true);
+    vr::ecs::Geometry3DRuntimeScratch root_motion_scratch{};
+    vr::ecs::Geometry3DRuntimeBuildHint root_motion_hint{};
+    root_motion_hint.skeletal_outputs = current_outputs.data();
+    root_motion_hint.skeletal_output_count = 1U;
+    const auto root_motion_runtime_stats = RuntimeSystem3D::Build(
+        &component,
+        &transform,
+        1U,
+        root_motion_scratch,
+        {},
+        root_motion_hint);
+    VR_REQUIRE(root_motion_runtime_stats.emitted_instance_count == 1U);
+
+    vr::geometry::GeometryMcVector<vr::geometry::GeometrySkeletalComponentGpu>
+        current_root_motion_skeletal_components{};
+    vr::geometry::GeometryMcVector<vr::geometry::GeometrySkeletalMatrixGpu>
+        current_root_motion_skeletal_matrices{};
+    const auto current_root_motion_build_stats =
+        vr::geometry::GeometrySkeletalPaletteBuilder::Build(
+            &component,
+            1U,
+            current_outputs.data(),
+            1U,
+            current_root_motion_skeletal_components,
+            current_root_motion_skeletal_matrices);
+
+    vr::geometry::GeometryMcVector<vr::geometry::GeometrySkeletalComponentGpu>
+        previous_root_motion_skeletal_components{};
+    vr::geometry::GeometryMcVector<vr::geometry::GeometrySkeletalMatrixGpu>
+        previous_root_motion_skeletal_matrices{};
+    const auto previous_root_motion_build_stats =
+        vr::geometry::GeometrySkeletalPaletteBuilder::Build(
+            &component,
+            1U,
+            previous_outputs.data(),
+            1U,
+            previous_root_motion_skeletal_components,
+            previous_root_motion_skeletal_matrices);
+
+    vr::geometry::Geometry3DTemporalRuntimeWorldHistory
+        previous_root_motion_runtime_world_history{};
+    vr::geometry::CaptureGeometry3DTemporalRuntimeWorldHistory(
+        &component,
+        &transform,
+        1U,
+        previous_outputs.data(),
+        1U,
+        previous_root_motion_runtime_world_history,
+        21U);
+    vr::geometry::Geometry3DTemporalSkeletalPaletteHistory
+        previous_root_motion_palette_history{};
+    vr::geometry::CaptureGeometry3DTemporalSkeletalPaletteHistory(
+        previous_root_motion_build_stats,
+        previous_root_motion_skeletal_components,
+        previous_root_motion_skeletal_matrices,
+        previous_root_motion_palette_history,
+        21U);
+
+    const auto root_motion_stats =
+        vr::geometry::BuildGeometry3DTemporalMotionInstances(
+            &component,
+            1U,
+            root_motion_scratch.instances,
+            previous_root_motion_runtime_world_history,
+            vr::geometry::MakeGeometry3DTemporalSkeletalPaletteView(
+                current_root_motion_skeletal_components,
+                current_root_motion_skeletal_matrices,
+                current_root_motion_build_stats.skinned_component_count > 0U),
+            previous_root_motion_palette_history,
+            {},
+            temporal_instances);
+    VR_CHECK(root_motion_stats.previous_match_count == 1U);
+    VR_CHECK(root_motion_stats.fallback_count == 0U);
+    VR_CHECK(temporal_instances[0U].previous_world_m30 == 2.75F);
+    VR_CHECK(temporal_instances[0U].confidence_seed == 1.0F);
+
+    previous_root_motion_palette_history.capture_id = 22U;
+    const auto misaligned_root_motion_stats =
+        vr::geometry::BuildGeometry3DTemporalMotionInstances(
+            &component,
+            1U,
+            root_motion_scratch.instances,
+            previous_root_motion_runtime_world_history,
+            vr::geometry::MakeGeometry3DTemporalSkeletalPaletteView(
+                current_root_motion_skeletal_components,
+                current_root_motion_skeletal_matrices,
+                current_root_motion_build_stats.skinned_component_count > 0U),
+            previous_root_motion_palette_history,
+            {},
+            temporal_instances);
+    VR_CHECK(misaligned_root_motion_stats.previous_match_count == 0U);
+    VR_CHECK(misaligned_root_motion_stats.fallback_count == 1U);
+    VR_CHECK(temporal_instances[0U].confidence_seed == 0.0F);
 }
 
 VR_TEST_CASE(EcsGeometryRuntimeSystem_dim3_unlinked_appearance_bridge_drives_authored_appearance_state,

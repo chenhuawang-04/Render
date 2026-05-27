@@ -458,7 +458,7 @@ VR_TEST_CASE(RenderScenePacket_single_view_exposes_active_view_without_allocatio
     VR_CHECK(packet.view_count == 1U);
     VR_CHECK(packet.ActiveView() == &view);
     VR_CHECK(packet.render_layer_mask == view.layer_mask);
-    VR_CHECK(packet.submission_id == 42U);
+    VR_CHECK(packet.submission_id.value == 42U);
     VR_CHECK(packet.signature != 0U);
 }
 
@@ -588,6 +588,117 @@ VR_TEST_CASE(RenderScenePacket_resolved_selection_ui_only_has_overlay_without_sc
     VR_CHECK(selection.overlay_view == &views[0U]);
     VR_CHECK(selection.scene_view_index == vr::render::invalid_scene_view_index);
     VR_CHECK(selection.overlay_view_index == 0U);
+}
+
+VR_TEST_CASE(RenderScenePacket_schema_exposes_canonical_metadata_selection_and_payload,
+             "unit;core;render_target;contract") {
+    std::array<vr::render::RenderView3D, 2U> views{};
+    views[0U].kind = vr::render::RenderViewKind::world;
+    views[0U].flags = vr::render::render_view_lighting_enabled_flag;
+    views[0U].layer_mask = 0x3U;
+    vr::render::RefreshRenderViewSignature(views[0U]);
+    views[1U].kind = vr::render::RenderViewKind::ui;
+    views[1U].flags = vr::render::render_view_overlay_enabled_flag;
+    views[1U].layer_mask = 0x4U;
+    vr::render::RefreshRenderViewSignature(views[1U]);
+
+    auto packet = vr::render::MakeScenePacketFromViewRange(views.data(),
+                                                           static_cast<std::uint32_t>(views.size()),
+                                                           0U,
+                                                           vr::render::SceneSubmissionId{444U},
+                                                           vr::render::RenderScenePacketKind::mixed);
+    packet.flags = vr::render::render_scene_packet_allow_shadow_flag |
+                   vr::render::render_scene_packet_allow_overlay_flag;
+    packet.debug_flags = vr::render::render_view_debug_wireframe_flag;
+    packet.postprocess_policy = vr::render::RenderPostProcessPolicy::disabled;
+    packet.Payload().environment.mode = vr::scene::SkyEnvironmentMode::cubemap;
+    packet.Payload().environment.sky_texture_id = vr::asset::TextureId{701U};
+    packet.Payload().environment.revision = 12U;
+    packet.Payload().environment_gpu = vr::scene::SkyEnvironmentGpuHandle{.index = 8U, .generation = 2U};
+    packet.Payload().ibl_environment_id = vr::render::IblEnvironmentId{91U};
+    vr::render::RefreshRenderScenePacketSignature(packet);
+
+    const vr::render::SceneSubmissionSchema<vr::ecs::Dim3> schema =
+        vr::render::MakeSceneSubmissionSchema(packet);
+
+    static_assert(std::is_same_v<decltype(schema.metadata.submission_id),
+                                 vr::render::SceneSubmissionId>);
+    static_assert(std::is_same_v<decltype(schema.payload.ibl_environment_id),
+                                 vr::render::IblEnvironmentId>);
+    static_assert(std::is_same_v<decltype(schema.payload.environment.sky_texture_id),
+                                 vr::asset::TextureId>);
+
+    VR_CHECK(schema.metadata.kind == vr::render::RenderScenePacketKind::mixed);
+    VR_CHECK(schema.metadata.flags == packet.flags);
+    VR_CHECK(schema.metadata.render_layer_mask == packet.render_layer_mask);
+    VR_CHECK(schema.metadata.debug_flags == packet.debug_flags);
+    VR_CHECK(schema.metadata.postprocess_policy == vr::render::RenderPostProcessPolicy::disabled);
+    VR_CHECK(schema.metadata.submission_id.value == 444U);
+    VR_CHECK(schema.selection.active_view_index == 0U);
+    VR_CHECK(schema.selection.scene_view_index == 0U);
+    VR_CHECK(schema.selection.overlay_view_index == 1U);
+    VR_CHECK(schema.payload.environment.mode == vr::scene::SkyEnvironmentMode::cubemap);
+    VR_CHECK(schema.payload.environment.sky_texture_id == vr::asset::TextureId{701U});
+    VR_CHECK(schema.payload.environment_gpu.index == 8U);
+    VR_CHECK(schema.payload.ibl_environment_id == vr::render::IblEnvironmentId{91U});
+}
+
+VR_TEST_CASE(RenderScenePacket_schema_helpers_bind_views_and_apply_envelope_consistently,
+             "unit;core;render_target;contract") {
+    std::array<vr::render::RenderView2D, 2U> views{};
+    views[0U].kind = vr::render::RenderViewKind::world;
+    views[0U].layer_mask = 0x11U;
+    vr::render::RefreshRenderViewSignature(views[0U]);
+    views[1U].kind = vr::render::RenderViewKind::ui;
+    views[1U].layer_mask = 0x22U;
+    vr::render::RefreshRenderViewSignature(views[1U]);
+
+    vr::render::RenderScenePacket2D packet{};
+    vr::render::BindSceneSubmissionViews(packet,
+                                         views.data(),
+                                         static_cast<std::uint32_t>(views.size()),
+                                         0U);
+    VR_CHECK(vr::render::ComputeSceneSubmissionViewLayerMask(
+                 views.data(),
+                 static_cast<std::uint32_t>(views.size())) == (0x11U | 0x22U));
+
+    const vr::render::SceneSubmissionSchema<vr::ecs::Dim2> schema{
+        .metadata = {
+            .kind = vr::render::RenderScenePacketKind::mixed,
+            .flags = vr::render::render_scene_packet_allow_overlay_flag,
+            .render_layer_mask = 0x33U,
+            .debug_flags = vr::render::render_view_debug_bounds_flag,
+            .postprocess_policy = vr::render::RenderPostProcessPolicy::disabled,
+            .submission_id = vr::render::SceneSubmissionId{818U},
+        },
+        .selection = {
+            .active_view_index = 1U,
+            .scene_view_index = 0U,
+            .overlay_view_index = 1U,
+        },
+        .payload = {
+            .background = {
+                .mode = vr::scene::Background2DMode::gradient,
+                .image_id = vr::surface::SurfaceImageId{401U},
+                .revision = 17U,
+            },
+        },
+    };
+
+    vr::render::ApplySceneSubmissionSchema(packet, schema);
+    vr::render::RefreshRenderScenePacketSignature(packet);
+
+    VR_CHECK(packet.ActiveView() == &views[1U]);
+    VR_CHECK(packet.Metadata().kind == vr::render::RenderScenePacketKind::mixed);
+    VR_CHECK(packet.Metadata().submission_id == vr::render::SceneSubmissionId{818U});
+    VR_CHECK(packet.render_layer_mask == 0x33U);
+    VR_CHECK(packet.Payload().background.mode == vr::scene::Background2DMode::gradient);
+    VR_CHECK(packet.Payload().background.image_id == vr::surface::SurfaceImageId{401U});
+    const auto resolved = vr::render::MakeSceneSubmissionSchema(packet);
+    VR_CHECK(resolved.selection.active_view_index == 1U);
+    VR_CHECK(resolved.selection.scene_view_index == 0U);
+    VR_CHECK(resolved.selection.overlay_view_index == 1U);
+    VR_CHECK(resolved.payload.background.revision == 17U);
 }
 
 VR_TEST_CASE(SceneRenderTargetSet_bind_scene_renderer_preserves_role,

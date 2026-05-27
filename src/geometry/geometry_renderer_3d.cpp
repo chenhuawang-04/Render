@@ -160,6 +160,11 @@ std::size_t GeometryRenderer3D::BlendModeIndex(BlendMode mode_) noexcept {
     return static_cast<std::size_t>(mode_);
 }
 
+std::size_t GeometryRenderer3D::TemporalMotionDepthModeIndex(
+    const TemporalMotionDepthMode mode_) noexcept {
+    return static_cast<std::size_t>(mode_);
+}
+
 std::size_t GeometryRenderer3D::LowerBoundResolvedAppearanceIndex(
     const GeometryRenderer3DMcVector<ResolvedAppearanceEntry>& entries_,
     std::uint32_t appearance_id_) noexcept {
@@ -178,16 +183,85 @@ std::size_t GeometryRenderer3D::LowerBoundResolvedAppearanceIndex(
     return first;
 }
 
-std::uint64_t GeometryRenderer3D::ApplyAppearanceStateOverrides() {
+void GeometryRenderer3D::ClearPreparedFrameArtifacts(
+    PreparedFrameArtifacts& artifacts_) noexcept {
+    artifacts_.instance_upload_source.clear();
+    artifacts_.draw_batches.clear();
+    artifacts_.appearance_source_records.clear();
+    artifacts_.skeletal_components.clear();
+    artifacts_.skeletal_matrices.clear();
+    artifacts_.skeletal_palette_build_stats = {};
+    artifacts_.temporal_motion_instances.clear();
+    artifacts_.temporal_motion_build_stats = {};
+    artifacts_.has_scene_data = false;
+}
+
+void GeometryRenderer3D::ResetActiveFrameRuntimeTruth() noexcept {
+    active_frame_runtime_truth = {};
+}
+
+void GeometryRenderer3D::PreserveActivePreparedFrameArtifactsForReclaim()
+    noexcept {
+    PreparedFrameArtifacts& active_artifacts =
+        active_prepared_frame_state.artifacts;
+    const bool has_reclaim_source = active_artifacts.has_scene_data ||
+                                    !active_artifacts.instance_upload_source.empty() ||
+                                    !active_artifacts.draw_batches.empty() ||
+                                    !active_artifacts.appearance_source_records.empty() ||
+                                    !active_artifacts.skeletal_components.empty() ||
+                                    !active_artifacts.skeletal_matrices.empty() ||
+                                    !active_artifacts.temporal_motion_instances.empty();
+    if (!has_reclaim_source) {
+        return;
+    }
+
+    reclaimable_prepared_frame_artifacts = std::move(active_artifacts);
+    prepared_frame_artifact_reclaim_pending = true;
+}
+
+void GeometryRenderer3D::ResetActivePreparedFrameState() noexcept {
+    active_prepared_frame_state.dispatch_payload = {};
+    ClearPreparedFrameArtifacts(active_prepared_frame_state.artifacts);
+}
+
+void GeometryRenderer3D::ReclaimPreparedFrameArtifactScratchStorage() noexcept {
+    PreparedFrameArtifacts* reclaim_source =
+        prepared_frame_artifact_reclaim_pending
+            ? &reclaimable_prepared_frame_artifacts
+            : &active_prepared_frame_state.artifacts;
+    runtime_scratch.instances.clear();
+    runtime_scratch.draw_batches.clear();
     appearance_source_record_scratch.clear();
+    skeletal_component_scratch.clear();
+    skeletal_matrix_scratch.clear();
+
+    runtime_scratch.instances.swap(reclaim_source->instance_upload_source);
+    runtime_scratch.draw_batches.swap(reclaim_source->draw_batches);
+    appearance_source_record_scratch.swap(
+        reclaim_source->appearance_source_records);
+    skeletal_component_scratch.swap(reclaim_source->skeletal_components);
+    skeletal_matrix_scratch.swap(reclaim_source->skeletal_matrices);
+
+    reclaim_source->temporal_motion_instances.clear();
+    ClearPreparedFrameArtifacts(*reclaim_source);
+    if (prepared_frame_artifact_reclaim_pending) {
+        prepared_frame_artifact_reclaim_pending = false;
+    }
+    active_prepared_frame_state.dispatch_payload = {};
+}
+
+std::uint64_t GeometryRenderer3D::ApplyAppearanceStateOverrides(
+    PreparedFrameArtifacts& prepared_artifacts_) {
+    prepared_artifacts_.appearance_source_records.clear();
 
     const auto& appearance_runtime_scratch = appearance_prepare_bridge.RuntimeScratch();
     const std::uint32_t linked_record_count =
         static_cast<std::uint32_t>(appearance_runtime_scratch.gpu_records.size());
     if (linked_record_count > 0U) {
-        appearance_source_record_scratch.resize(linked_record_count);
+        prepared_artifacts_.appearance_source_records.resize(linked_record_count);
         for (std::uint32_t index = 0U; index < linked_record_count; ++index) {
-            appearance_source_record_scratch[index] = appearance_runtime_scratch.gpu_records[index];
+            prepared_artifacts_.appearance_source_records[index] =
+                appearance_runtime_scratch.gpu_records[index];
         }
     }
 
@@ -258,8 +332,10 @@ std::uint64_t GeometryRenderer3D::ApplyAppearanceStateOverrides() {
             }
 
             instance.appearance_record_index =
-                static_cast<std::uint32_t>(appearance_source_record_scratch.size());
-            appearance_source_record_scratch.push_back(synthesized_record);
+                static_cast<std::uint32_t>(
+                    prepared_artifacts_.appearance_source_records.size());
+            prepared_artifacts_.appearance_source_records.push_back(
+                synthesized_record);
         }
 
         HashCombine64(appearance_override_signature,
@@ -451,6 +527,52 @@ render_graph::ExternalBufferBindingPayload GeometryRenderer3D::ResolveSkeletalMa
         static_cast<VkDeviceSize>(frame.skeletal_matrix_count) * sizeof(GeometrySkeletalMatrixGpu));
 }
 
+render_graph::ExternalBufferBindingPayload
+GeometryRenderer3D::ResolvePreviousSkeletalComponentsExternalBufferBinding(
+    const void* user_data_) {
+    const auto* renderer = static_cast<const GeometryRenderer3D*>(user_data_);
+    if (renderer == nullptr ||
+        renderer->active_frame_index >= renderer->frame_lighting_resources.size()) {
+        throw std::runtime_error(
+            "GeometryRenderer3D graph previous skeletal-component resolver requires prepared frame resources");
+    }
+    const FrameLightingResources& frame =
+        renderer->frame_lighting_resources[renderer->active_frame_index];
+    if (frame.previous_skeletal_components.buffer == VK_NULL_HANDLE ||
+        frame.previous_skeletal_component_count == 0U) {
+        throw std::runtime_error(
+            "GeometryRenderer3D graph previous skeletal-component resolver requires uploaded previous skeletal components");
+    }
+    return MakeExternalBufferBindingPayload(
+        frame.previous_skeletal_components.buffer,
+        0U,
+        static_cast<VkDeviceSize>(frame.previous_skeletal_component_count) *
+            sizeof(GeometrySkeletalComponentGpu));
+}
+
+render_graph::ExternalBufferBindingPayload
+GeometryRenderer3D::ResolvePreviousSkeletalMatricesExternalBufferBinding(
+    const void* user_data_) {
+    const auto* renderer = static_cast<const GeometryRenderer3D*>(user_data_);
+    if (renderer == nullptr ||
+        renderer->active_frame_index >= renderer->frame_lighting_resources.size()) {
+        throw std::runtime_error(
+            "GeometryRenderer3D graph previous skeletal-matrix resolver requires prepared frame resources");
+    }
+    const FrameLightingResources& frame =
+        renderer->frame_lighting_resources[renderer->active_frame_index];
+    if (frame.previous_skeletal_matrices.buffer == VK_NULL_HANDLE ||
+        frame.previous_skeletal_matrix_count == 0U) {
+        throw std::runtime_error(
+            "GeometryRenderer3D graph previous skeletal-matrix resolver requires uploaded previous skeletal matrices");
+    }
+    return MakeExternalBufferBindingPayload(
+        frame.previous_skeletal_matrices.buffer,
+        0U,
+        static_cast<VkDeviceSize>(frame.previous_skeletal_matrix_count) *
+            sizeof(GeometrySkeletalMatrixGpu));
+}
+
 render_graph::ExternalBufferBindingPayload GeometryRenderer3D::ResolveAppearanceExternalBufferBinding(
     const void* user_data_) {
     const auto* renderer = static_cast<const GeometryRenderer3D*>(user_data_);
@@ -506,6 +628,7 @@ void GeometryRenderer3D::Initialize(const GeometryRenderer3DCreateInfo& create_i
     geometry_components = nullptr;
     transforms = nullptr;
     component_count = 0U;
+    appearance_components = nullptr;
     appearance_component_count = 0U;
     camera_component = nullptr;
     camera_transform = nullptr;
@@ -534,6 +657,7 @@ void GeometryRenderer3D::Initialize(const GeometryRenderer3DCreateInfo& create_i
     sampler_host = nullptr;
 
     lighting_descriptor_layout_id = {};
+    temporal_motion_descriptor_layout_id = {};
     pipeline_layout_id = {};
     shader_vertex_id = {};
     shader_fragment_id = {};
@@ -548,12 +672,24 @@ void GeometryRenderer3D::Initialize(const GeometryRenderer3DCreateInfo& create_i
     }
     pipeline_color_format = VK_FORMAT_UNDEFINED;
     pipeline_depth_format = VK_FORMAT_UNDEFINED;
+    temporal_motion_pipeline_layout_id = {};
+    temporal_motion_shader_vertex_id = {};
+    temporal_motion_shader_fragment_id = {};
+    for (auto& depth_pipelines : temporal_motion_pipeline_ids) {
+        for (auto& topology_pipelines : depth_pipelines) {
+            for (auto& pipeline_id : topology_pipelines) {
+                pipeline_id = {};
+            }
+        }
+    }
+    temporal_motion_pipeline_color_format = VK_FORMAT_UNDEFINED;
+    temporal_motion_pipeline_depth_format = VK_FORMAT_UNDEFINED;
     depth_format = VK_FORMAT_UNDEFINED;
 
     swapchain_extent = {};
     swapchain_format = VK_FORMAT_UNDEFINED;
     active_frame_index = 0U;
-    instance_range = {};
+    ResetActiveFrameRuntimeTruth();
     bindless_revision_seen = 0U;
     appearance_record_bindless_revision_seen = 0U;
     appearance_record_texture_host_revision_seen = 0U;
@@ -570,6 +706,16 @@ void GeometryRenderer3D::Initialize(const GeometryRenderer3DCreateInfo& create_i
     skeletal_matrix_scratch.clear();
     descriptor_buffer_write_scratch.clear();
     descriptor_texel_write_scratch.clear();
+    ResetGeometry3DTemporalRuntimeWorldHistory(
+        temporal_motion_previous_runtime_world_history);
+    ResetGeometry3DTemporalSkeletalPaletteHistory(
+        temporal_motion_previous_skeletal_palette_history);
+    ResetGeometry3DTemporalVertexDeformHistory(
+        temporal_motion_previous_vertex_deform_history);
+    temporal_motion_history_capture_id = 0U;
+    ClearPreparedFrameArtifacts(reclaimable_prepared_frame_artifacts);
+    prepared_frame_artifact_reclaim_pending = false;
+    ResetActivePreparedFrameState();
 
     if (create_info_cache.reserve_appearance_set_count > 0U) {
         resolved_appearances.reserve(create_info_cache.reserve_appearance_set_count);
@@ -599,6 +745,8 @@ void GeometryRenderer3D::Initialize(const GeometryRenderer3DCreateInfo& create_i
     last_submitted_value_seen = 0U;
     completed_submit_value_seen = 0U;
     appearance_host_revision_seen = 0U;
+    pending_transform_dirty_component_indices = nullptr;
+    pending_transform_dirty_component_count = 0U;
     light_frame_coordinator = nullptr;
     ibl_host = nullptr;
     light_shadow_link_coordinator = nullptr;
@@ -607,6 +755,8 @@ void GeometryRenderer3D::Initialize(const GeometryRenderer3DCreateInfo& create_i
     local_shadow_atlas_binding_coordinator.Reset();
     shadow_frame_coordinator = nullptr;
     shadow_atlas_host = nullptr;
+    temporal_motion_producer_state = {};
+    temporal_motion_producer_state_active = false;
     stats = {};
     initialized = true;
 }
@@ -629,6 +779,8 @@ void GeometryRenderer3D::Shutdown(VulkanContext& context_) {
         DestroyStorageBuffer(frame_resources.appearance_records);
         DestroyStorageBuffer(frame_resources.skeletal_components);
         DestroyStorageBuffer(frame_resources.skeletal_matrices);
+        DestroyStorageBuffer(frame_resources.previous_skeletal_components);
+        DestroyStorageBuffer(frame_resources.previous_skeletal_matrices);
     }
 
     depth_images.clear();
@@ -642,8 +794,19 @@ void GeometryRenderer3D::Shutdown(VulkanContext& context_) {
     skeletal_matrix_scratch.clear();
     descriptor_buffer_write_scratch.clear();
     descriptor_texel_write_scratch.clear();
+    ResetGeometry3DTemporalRuntimeWorldHistory(
+        temporal_motion_previous_runtime_world_history);
+    ResetGeometry3DTemporalSkeletalPaletteHistory(
+        temporal_motion_previous_skeletal_palette_history);
+    ResetGeometry3DTemporalVertexDeformHistory(
+        temporal_motion_previous_vertex_deform_history);
+    temporal_motion_history_capture_id = 0U;
+    ClearPreparedFrameArtifacts(reclaimable_prepared_frame_artifacts);
+    prepared_frame_artifact_reclaim_pending = false;
+    ResetActivePreparedFrameState();
 
     lighting_descriptor_layout_id = {};
+    temporal_motion_descriptor_layout_id = {};
     pipeline_layout_id = {};
     shader_vertex_id = {};
     shader_fragment_id = {};
@@ -658,11 +821,24 @@ void GeometryRenderer3D::Shutdown(VulkanContext& context_) {
     }
     pipeline_color_format = VK_FORMAT_UNDEFINED;
     pipeline_depth_format = VK_FORMAT_UNDEFINED;
+    temporal_motion_pipeline_layout_id = {};
+    temporal_motion_shader_vertex_id = {};
+    temporal_motion_shader_fragment_id = {};
+    for (auto& depth_pipelines : temporal_motion_pipeline_ids) {
+        for (auto& topology_pipelines : depth_pipelines) {
+            for (auto& pipeline_id : topology_pipelines) {
+                pipeline_id = {};
+            }
+        }
+    }
+    temporal_motion_pipeline_color_format = VK_FORMAT_UNDEFINED;
+    temporal_motion_pipeline_depth_format = VK_FORMAT_UNDEFINED;
     depth_format = VK_FORMAT_UNDEFINED;
 
     geometry_components = nullptr;
     transforms = nullptr;
     component_count = 0U;
+    appearance_components = nullptr;
     appearance_component_count = 0U;
     camera_component = nullptr;
     camera_transform = nullptr;
@@ -699,7 +875,7 @@ void GeometryRenderer3D::Shutdown(VulkanContext& context_) {
     active_frame_index = 0U;
     swapchain_extent = {};
     swapchain_format = VK_FORMAT_UNDEFINED;
-    instance_range = {};
+    ResetActiveFrameRuntimeTruth();
     bindless_revision_seen = 0U;
     appearance_record_bindless_revision_seen = 0U;
     appearance_record_texture_host_revision_seen = 0U;
@@ -720,11 +896,15 @@ void GeometryRenderer3D::Shutdown(VulkanContext& context_) {
     culling_scratch.visible_indices.clear();
     culling_scratch.visibility_stamps.clear();
     culling_stats = {};
+    temporal_motion_producer_state = {};
+    temporal_motion_producer_state_active = false;
     stats = {};
 
     last_submitted_value_seen = 0U;
     completed_submit_value_seen = 0U;
     appearance_host_revision_seen = 0U;
+    pending_transform_dirty_component_indices = nullptr;
+    pending_transform_dirty_component_count = 0U;
     initialized = false;
 }
 
@@ -750,12 +930,30 @@ void GeometryRenderer3D::SetSceneData(ecs::Geometry<ecs::Dim3>* geometry_compone
                                       ecs::Camera<ecs::Dim3>* camera_component_,
                                       ecs::Transform<ecs::Dim3>* camera_transform_,
                                       ecs::Bounds<ecs::Dim3>* bounds_components_) noexcept {
+    const bool scene_data_changed =
+        geometry_components != geometry_components_ ||
+        transforms != transforms_ ||
+        component_count != component_count_;
     geometry_components = geometry_components_;
     transforms = transforms_;
     component_count = component_count_;
     camera_component = camera_component_;
     camera_transform = camera_transform_;
     bounds_components = bounds_components_;
+    if (scene_data_changed) {
+        PreserveActivePreparedFrameArtifactsForReclaim();
+        ResetActivePreparedFrameState();
+        ResetActiveFrameRuntimeTruth();
+        pending_transform_dirty_component_indices = nullptr;
+        pending_transform_dirty_component_count = 0U;
+        ResetGeometry3DTemporalRuntimeWorldHistory(
+            temporal_motion_previous_runtime_world_history);
+        ResetGeometry3DTemporalSkeletalPaletteHistory(
+            temporal_motion_previous_skeletal_palette_history);
+        ResetGeometry3DTemporalVertexDeformHistory(
+            temporal_motion_previous_vertex_deform_history);
+        temporal_motion_history_capture_id = 0U;
+    }
     if (component_count_ > 0U) {
         ecs::CullingSystem<ecs::Dim3>::Reserve(culling_scratch, component_count_);
     }
@@ -763,6 +961,7 @@ void GeometryRenderer3D::SetSceneData(ecs::Geometry<ecs::Dim3>* geometry_compone
 
 void GeometryRenderer3D::SetAppearanceData(ecs::Appearance<ecs::Dim3>* appearance_components_,
                                            std::uint32_t appearance_component_count_) noexcept {
+    appearance_components = appearance_components_;
     appearance_component_count = appearance_component_count_;
     appearance_prepare_bridge.SetAppearanceData(appearance_components_,
                                                 appearance_component_count_);
@@ -874,6 +1073,18 @@ void GeometryRenderer3D::OnSwapchainRecreated(std::uint32_t image_count_,
 
     swapchain_extent = extent_;
     swapchain_format = format_;
+    PreserveActivePreparedFrameArtifactsForReclaim();
+    ResetActivePreparedFrameState();
+    ResetActiveFrameRuntimeTruth();
+    ResetGeometry3DTemporalRuntimeWorldHistory(
+        temporal_motion_previous_runtime_world_history);
+    ResetGeometry3DTemporalSkeletalPaletteHistory(
+        temporal_motion_previous_skeletal_palette_history);
+    ResetGeometry3DTemporalVertexDeformHistory(
+        temporal_motion_previous_vertex_deform_history);
+    temporal_motion_producer_state = {};
+    temporal_motion_producer_state_active = false;
+    temporal_motion_history_capture_id = 0U;
 }
 
 bool GeometryRenderer3D::IsInitialized() const noexcept {

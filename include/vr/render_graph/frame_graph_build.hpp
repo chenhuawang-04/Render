@@ -4,6 +4,7 @@
 #include "vr/render_graph/graph_command_context.hpp"
 #include "vr/render_graph/render_graph_builder.hpp"
 
+#include <algorithm>
 #include <type_traits>
 
 namespace vr::render_graph {
@@ -21,15 +22,25 @@ struct MinimalFrameGraphBuildResult final {
     ResourceHandle present_target{};
     ResourceHandle scene_color{};
     ResourceHandle scene_depth{};
+    ResourceHandle final_color{};
+    ResourceVersionHandle final_color_version{};
 };
 
 namespace detail {
 
-inline void RecordMinimalPresentCopyPass(GraphCommandContext& context_,
-                                         const ResourceHandle source_color_,
-                                         const ResourceHandle present_target_) {
-    const auto source = context_.ResolveTextureView(source_color_);
-    const auto target = context_.ResolveTextureView(present_target_);
+[[nodiscard]] constexpr ResourceHandle ResourceHandleFromVersion(
+    const ResourceVersionHandle version_) noexcept {
+    return ResourceHandle{
+        .index = version_.resource_index,
+        .generation = 1U,
+    };
+}
+
+inline void RecordTextureCopyOrBlit(GraphCommandContext& context_,
+                                    const ResourceHandle source_texture_,
+                                    const ResourceHandle target_texture_) {
+    const auto source = context_.ResolveTextureView(source_texture_);
+    const auto target = context_.ResolveTextureView(target_texture_);
     if (source.image == VK_NULL_HANDLE || target.image == VK_NULL_HANDLE) {
         return;
     }
@@ -88,6 +99,39 @@ inline void RecordMinimalPresentCopyPass(GraphCommandContext& context_,
                    VK_FILTER_NEAREST);
 }
 
+inline void RecordTextureCopy(GraphCommandContext& context_,
+                              const ResourceHandle source_texture_,
+                              const ResourceHandle target_texture_,
+                              const VkImageAspectFlags aspect_mask_) {
+    const auto source = context_.ResolveTextureView(source_texture_);
+    const auto target = context_.ResolveTextureView(target_texture_);
+    if (source.image == VK_NULL_HANDLE || target.image == VK_NULL_HANDLE) {
+        return;
+    }
+
+    VkImageCopy copy_region{};
+    copy_region.srcSubresource.aspectMask = aspect_mask_;
+    copy_region.srcSubresource.mipLevel = 0U;
+    copy_region.srcSubresource.baseArrayLayer = 0U;
+    copy_region.srcSubresource.layerCount = 1U;
+    copy_region.dstSubresource.aspectMask = aspect_mask_;
+    copy_region.dstSubresource.mipLevel = 0U;
+    copy_region.dstSubresource.baseArrayLayer = 0U;
+    copy_region.dstSubresource.layerCount = 1U;
+    copy_region.extent = VkExtent3D{
+        (std::min)(source.extent.width, target.extent.width),
+        (std::min)(source.extent.height, target.extent.height),
+        (std::min)(source.extent.depth, target.extent.depth),
+    };
+    vkCmdCopyImage(context_.CommandBuffer(),
+                   source.image,
+                   VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                   target.image,
+                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                   1U,
+                   &copy_region);
+}
+
 template<ecs::DimensionTag DimensionT>
 [[nodiscard]] TextureFormat ResolveSceneColorFormat() noexcept {
     if constexpr (std::is_same_v<DimensionT, ecs::Dim3>) {
@@ -142,11 +186,63 @@ template<ecs::DimensionTag DimensionT>
         .dimension = TextureDimension::image_2d,
         .format = TextureFormat::d32_sfloat,
         .extent = ResolveGraphExtent(snapshot_.reference_extent),
-        .usage = texture_usage_depth_stencil_attachment_flag,
+        .usage = texture_usage_depth_stencil_attachment_flag |
+                 texture_usage_sampled_flag |
+                 texture_usage_transfer_src_flag,
         .mip_level_count = 1U,
         .array_layer_count = 1U,
         .sample_count = SampleCount::x1,
         .prefer_lazy_memory = true,
+    };
+}
+
+template<ecs::DimensionTag DimensionT>
+[[nodiscard]] TextureDesc MakeFrameColorHistoryDesc(
+    const FrameSnapshot<DimensionT>& snapshot_) noexcept {
+    return TextureDesc{
+        .dimension = TextureDimension::image_2d,
+        .format = ResolveSceneColorFormat<DimensionT>(),
+        .extent = ResolveGraphExtent(snapshot_.reference_extent),
+        .usage = texture_usage_color_attachment_flag |
+                 texture_usage_sampled_flag |
+                 texture_usage_transfer_src_flag |
+                 texture_usage_transfer_dst_flag,
+        .mip_level_count = 1U,
+        .array_layer_count = 1U,
+        .sample_count = SampleCount::x1,
+    };
+}
+
+template<ecs::DimensionTag DimensionT>
+[[nodiscard]] TextureDesc MakeFrameDepthHistoryDesc(
+    const FrameSnapshot<DimensionT>& snapshot_) noexcept {
+    return TextureDesc{
+        .dimension = TextureDimension::image_2d,
+        .format = TextureFormat::d32_sfloat,
+        .extent = ResolveGraphExtent(snapshot_.reference_extent),
+        .usage = texture_usage_sampled_flag |
+                 texture_usage_transfer_src_flag |
+                 texture_usage_transfer_dst_flag,
+        .mip_level_count = 1U,
+        .array_layer_count = 1U,
+        .sample_count = SampleCount::x1,
+    };
+}
+
+template<ecs::DimensionTag DimensionT>
+[[nodiscard]] TextureDesc MakeFrameMotionHistoryDesc(
+    const FrameSnapshot<DimensionT>& snapshot_) noexcept {
+    return TextureDesc{
+        .dimension = TextureDimension::image_2d,
+        .format = TextureFormat::r16g16b16a16_sfloat,
+        .extent = ResolveGraphExtent(snapshot_.reference_extent),
+        .usage = texture_usage_color_attachment_flag |
+                 texture_usage_sampled_flag |
+                 texture_usage_transfer_src_flag |
+                 texture_usage_transfer_dst_flag,
+        .mip_level_count = 1U,
+        .array_layer_count = 1U,
+        .sample_count = SampleCount::x1,
     };
 }
 
@@ -290,12 +386,17 @@ template<ecs::DimensionTag DimensionT, typename ExtendFnT>
                                               result.present_target,
                                               AccessDesc{.access = AccessKind::transfer_write});
         if (IsValidResourceHandle(result.scene_color)) {
-            builder_.SetExecuteCallback(result.present_pass,
-                                        [source = result.scene_color,
-                                         present = result.present_target](GraphCommandContext& context_) {
-                                            detail::RecordMinimalPresentCopyPass(context_, source, present);
+        builder_.SetExecuteCallback(result.present_pass,
+                                    [source = result.scene_color,
+                                     present = result.present_target](GraphCommandContext& context_) {
+                                            detail::RecordTextureCopyOrBlit(context_, source, present);
                                         });
         }
+    }
+
+    if (IsValidResourceVersionHandle(color_chain)) {
+        result.final_color_version = color_chain;
+        result.final_color = detail::ResourceHandleFromVersion(color_chain);
     }
 
     result.present_transition_pass = builder_.AddPass("present_transition", true);

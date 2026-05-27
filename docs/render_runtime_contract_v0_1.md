@@ -1,116 +1,136 @@
-# Render Runtime v0.1 Contract
+# Render Runtime Contract v0.1
 
-本文件只描述当前仓库中已经稳定下来的 **runtime / recorder / renderer** 约定，不涉及资产导入、UI、上层引擎调度。
+本文件记录 runtime consumption layer 当前的 **ingress contract** 基线。
+范围只覆盖 runtime 如何消费已经编译/准备好的资源与场景数据；**不**覆盖 importer、decoder、外部 asset compile pipeline。
 
-## 1. 所有权边界
+## 1. 边界与责任
 
-- `RenderRuntimeHost` 拥有：
-  - platform window/surface
-  - `VulkanContext`
-  - `SwapchainHost`
-  - `RenderLoopHost`
-  - `GpuMemoryHost`
-  - `UploadHost`
-  - `DescriptorHost`
-  - `PipelineHost`
-  - `RenderTargetHost`
-  - `RenderTargetPool`
-  - `SamplerHost`
-  - `FreeTypeHost`
-  - `GlyphAtlasHost`
-  - `GlyphUploadHost`
+runtime 直接消费的主入口对象：
 
-- 各类 renderer/recorder：
-  - **不拥有** `VulkanContext`
-  - **不拥有** runtime host 内部模块
-  - 只在 `PrepareFrame/Record` 阶段借用 runtime 提供的上下文和模块指针
+- `vr::asset::TextureHost`
+- `vr::geometry::GeometryResourceHost`
+- `vr::geometry::GeometryImageHost`
+- `vr::surface::SurfaceImageHost`
+- `vr::geometry::GeometryAppearanceHost`
+- `vr::render::RenderScenePacket2D/3D`
 
-## 2. 生命周期顺序
+R1 的目标不是扩张入口数量，而是把这些入口的 **ownership / handle / invalid-reference / submission handoff** 语义统一。
 
-稳定调用顺序：
+## 2. Canonical ingress ids
 
-1. `runtime.Initialize(...)`
-2. `renderer.Initialize(...)`
-3. 每帧 `runtime.Tick(recorder_or_renderer)`
-4. `renderer.Shutdown(runtime.Context())`
-5. `runtime.Shutdown()`
+统一入口定义在 `include/vr/runtime/runtime_ingress_ids.hpp`：
 
-必须满足：
+- `vr::asset::TextureId`
+- `vr::geometry::GeometryResourceId`
+- `vr::geometry::GeometryImageId`
+- `vr::surface::SurfaceImageId`
+- `vr::geometry::GeometryAppearanceId`
+- `vr::render::IblEnvironmentId`
+- `vr::render::SceneSubmissionId`
 
-- renderer 的 `Shutdown(...)` **先于** runtime 的 `Shutdown()`
-- runtime 关闭后，不可再访问任何 runtime 子模块引用
+约束：
 
-## 3. Text runtime feature contract
+- `0` 永远表示 invalid
+- 非零才表示可提交给 runtime host 的 candidate handle
+- wrapper 必须保持 trivial / standard-layout / 与底层整数同宽
+- 不引入长期双轨兼容；runtime-facing host API 直接以这些 canonical ids 为准
 
-当前 `TextRenderer2D / TextRenderer3D` 明确要求：
+## 3. Ownership 与生命周期
 
-- `required_vulkan13_features.dynamicRendering = VK_TRUE`
-- `required_vulkan13_features.synchronization2 = VK_TRUE`
+### 3.1 caller-owned authoring data
 
-推荐入口：
+调用方向 runtime 提交的 upload/create 描述符只描述一次 ingress：
 
-```cpp
-vr::render::RenderRuntimeHost<...>::CreateInfo create_info{};
-vr::text::ApplyTextRuntimeFeatureContract(create_info);
-```
+- `TextureUploadInfo`
+- `GeometryMeshUploadInfo`
+- `GeometryImageUploadInfo`
+- `SurfaceImageUploadInfo`
+- `GeometryAppearanceDesc`
 
-或：
+这些描述符本身不拥有 runtime GPU 资源；runtime host 复制/上传后，自行管理 GPU 生命周期。
 
-```cpp
-auto create_info =
-    vr::text::MakeDefaultTextRuntimeCreateInfo<
-        vr::render::RenderRuntimeHost<...>::CreateInfo>();
-```
+### 3.2 runtime-owned records
 
-## 4. Text runtime module contract
+runtime host 内部 record 是 canonical runtime state：
 
-`TextRenderer2D / TextRenderer3D` 在 `PrepareFrame(...)` 阶段要求以下模块全部启用：
+- `TextureHost::TextureRecord`
+- `GeometryResourceHost::MeshRecord`
+- `GeometryImageHost::ImageRecord`
+- `SurfaceImageHost::ImageRecord`
+- `GeometryAppearanceHost::AppearanceRecord`
 
-- `UploadHost`
-- `DescriptorHost`
-- `PipelineHost`
-- `GpuMemoryHost`
-- `FreeTypeHost`
-- `GlyphAtlasHost`
-- `GlyphUploadHost`
+删除/替换语义：
 
-缺少模块或缺少 Vulkan 1.3 feature 时，会在 `PrepareFrame(...)` 直接抛出明确异常。
+- `Upload*` / `Upsert*` 针对同 id 视为更新
+- `Remove*` 针对 invalid id 必须安全返回 `false`
+- 已移除或未找到的 id 不得被解释为隐式创建
 
-## 5. Submission contract
+## 4. Appearance / material ingress
 
-- ECS 只保存世界数据
-- `RenderView / RenderScenePacket / SceneRecorder2D / SceneRecorder3D` 属于 runtime submission 层
-- multi-view packet 当前已稳定支持：
-  - `active_view`
-  - `scene_view`
-  - `overlay_view`
-  - explicit scene/overlay targets
+`AppearanceSampledSurfaceHandle` 是一个 **domain-tagged runtime ingress handle**：
 
-## 6. Upload contract
+- `asset_texture`
+- `surface_image`
+- `geometry_image`
 
-`UploadHost` 当前采用：
+canonical helper：
 
-- per-frame command buffer
-- persistent staging pages
-- 可选 staging page growth
+- `MakeAppearanceTextureHandle(TextureId)`
+- `MakeAppearanceSurfaceImageHandle(SurfaceImageId)`
+- `MakeAppearanceGeometryImageHandle(GeometryImageId)`
 
-默认行为：
+以及等价重载：
 
-- 先使用基础 staging page
-- 空间不足时，若允许增长，则自动补 staging page
-- 若达到 page 上限，抛出带容量明细的异常
+- `MakeAppearanceSampledSurfaceHandle(TextureId)`
+- `MakeAppearanceSampledSurfaceHandle(SurfaceImageId)`
+- `MakeAppearanceSampledSurfaceHandle(GeometryImageId)`
 
-## 7. Diagnostics contract
+语义：
 
-`RenderRuntimeHost::CreateInfo::diagnostics.enable_frame_diagnostics = true` 时，
-`RuntimeTickResult` 会回填：
+- domain 决定 runtime 应向哪个 host 解引用
+- 若未绑定、host 不可用或 id 不存在，resolver 必须保持安全 fallback，而不是制造悬空资源访问
 
-- swapchain generation / image count / extent / format / present mode
-- frame index / image index / submit values
-- upload stats
-- descriptor stats
-- pipeline stats
-- render target stats
-- glyph atlas / glyph upload stats
+## 5. Scene handoff / submission
 
-默认关闭，关闭时不做 per-tick 诊断快照填充。
+`RenderScenePacket2D/3D::submission_id` 使用 `SceneSubmissionId`。
+
+这表示：
+
+- scene handoff 的身份属于 runtime submission contract，而不是 ECS 内部状态
+- scene packet / frame snapshot 使用同一 canonical submission identity
+- 调用方可以把 submission id 当作 frame-level handoff token，而不是任意裸整数字段
+
+scene/package ????? runtime-facing resource identity ???? typed contract?
+
+- `SpriteBackground::image_id` / `Background2DRenderState::image_id` ?? `SurfaceImageId`
+- `SkyEnvironment::sky_texture_id` / `SkyEnvironmentRenderState::*texture_id` ?? `TextureId`
+- `SkyEnvironment::sky_appearance_id` ?? `GeometryAppearanceId`
+- `RenderScenePacket3D::extra.ibl_environment_id` ?? `IblEnvironmentId`
+- `SceneRecorder3DPrepareView` ??? renderer / environment pass ??? prepare-view ???? `IblEnvironmentId` / `TextureId`
+
+?????? runtime ingress contract???? runtime ???????? `uint32_t` ???scene handoff?packet snapshot ? prepare-view ?????????????
+
+
+## 6. Canonical 入口示例
+
+推荐参考：
+
+- `tests/cases/runtime_scene_3d_unified_integration_tests.cpp`
+- `examples/sdl_scene_3d_unified_demo.cpp`
+
+这两个入口展示了：
+
+- typed ingress ids
+- appearance typed helpers
+- scene packet / submission handoff
+
+## 7. 非目标
+
+以下内容不属于 v0.1 ingress contract：
+
+- glTF / FBX / Assimp / PNG / KTX2 importer
+- 外部 compile package schema
+- editor / graph viewer / timeline viewer
+- TAA / SSAO / SSR / DOF
+- Hi-Z / occlusion / LOD / streaming / indirect draw
+- 多后端扩张

@@ -115,7 +115,7 @@ void SceneRecorder2D::BuildRenderGraph(
         if (has_background_pass || !visible_scene_entries.empty()) {
             const RenderView2D captured_view = has_background_pass ? *scene_view : RenderView2D{};
             const scene::Background2DRenderState captured_background =
-                has_background_pass ? frame_packet->extra.background
+                has_background_pass ? frame_packet->Payload().background
                                     : scene::Background2DRenderState{};
             const auto scene_color = build_result_.scene_color;
             builder_.SetExecuteCallback(
@@ -219,9 +219,9 @@ void SceneRecorder2D::BuildRenderGraph(
             builder_.SetExecuteCallback(
                 scene_consumer_copyback_pass,
                 [scene_consumer_output, scene_color = build_result_.scene_color](render_graph::GraphCommandContext& context_) {
-                    render_graph::detail::RecordMinimalPresentCopyPass(context_,
-                                                                       scene_consumer_output,
-                                                                       scene_color);
+                    render_graph::detail::RecordTextureCopyOrBlit(context_,
+                                                                  scene_consumer_output,
+                                                                  scene_color);
                 });
         }
     }

@@ -239,6 +239,8 @@ set(VR_GEOMETRY_2D_VERT_HEADER "${VR_GENERATED_GEOMETRY_SHADER_DIR}/geometry_2d_
 set(VR_GEOMETRY_2D_FRAG_HEADER "${VR_GENERATED_GEOMETRY_SHADER_DIR}/geometry_2d_frag_spv.hpp")
 set(VR_GEOMETRY_3D_VERT_HEADER "${VR_GENERATED_GEOMETRY_SHADER_DIR}/geometry_3d_vert_spv.hpp")
 set(VR_GEOMETRY_3D_FRAG_HEADER "${VR_GENERATED_GEOMETRY_SHADER_DIR}/geometry_3d_frag_spv.hpp")
+set(VR_GEOMETRY_3D_TEMPORAL_MOTION_VERT_HEADER "${VR_GENERATED_GEOMETRY_SHADER_DIR}/geometry_3d_temporal_motion_vert_spv.hpp")
+set(VR_GEOMETRY_3D_TEMPORAL_MOTION_FRAG_HEADER "${VR_GENERATED_GEOMETRY_SHADER_DIR}/geometry_3d_temporal_motion_frag_spv.hpp")
 set(VR_SURFACE_2D_VERT_HEADER "${VR_GENERATED_SURFACE_SHADER_DIR}/surface_2d_vert_spv.hpp")
 set(VR_SURFACE_2D_FRAG_HEADER "${VR_GENERATED_SURFACE_SHADER_DIR}/surface_2d_frag_spv.hpp")
 set(VR_SURFACE_3D_VERT_HEADER "${VR_GENERATED_SURFACE_SHADER_DIR}/surface_3d_vert_spv.hpp")
@@ -247,6 +249,8 @@ set(VR_PARTICLE_2D_VERT_HEADER "${VR_GENERATED_PARTICLE_SHADER_DIR}/particle_2d_
 set(VR_PARTICLE_2D_FRAG_HEADER "${VR_GENERATED_PARTICLE_SHADER_DIR}/particle_2d_frag_spv.hpp")
 set(VR_PARTICLE_3D_VERT_HEADER "${VR_GENERATED_PARTICLE_SHADER_DIR}/particle_3d_vert_spv.hpp")
 set(VR_PARTICLE_3D_FRAG_HEADER "${VR_GENERATED_PARTICLE_SHADER_DIR}/particle_3d_frag_spv.hpp")
+set(VR_PARTICLE_3D_TEMPORAL_MOTION_VERT_HEADER "${VR_GENERATED_PARTICLE_SHADER_DIR}/particle_3d_temporal_motion_vert_spv.hpp")
+set(VR_PARTICLE_3D_TEMPORAL_MOTION_FRAG_HEADER "${VR_GENERATED_PARTICLE_SHADER_DIR}/particle_3d_temporal_motion_frag_spv.hpp")
 set(VR_PARTICLE_UPDATE_2D_COMP_HEADER "${VR_GENERATED_PARTICLE_SHADER_DIR}/particle_update_2d_comp_spv.hpp")
 set(VR_PARTICLE_UPDATE_3D_COMP_HEADER "${VR_GENERATED_PARTICLE_SHADER_DIR}/particle_update_3d_comp_spv.hpp")
 set(VR_PARTICLE_BUILD_2D_COMP_HEADER "${VR_GENERATED_PARTICLE_SHADER_DIR}/particle_build_2d_comp_spv.hpp")
@@ -265,6 +269,8 @@ set(VR_SKY_ENVIRONMENT_ATMOSPHERE_FRAG_HEADER "${VR_GENERATED_RENDER_SHADER_DIR}
 set(VR_RENDER_TARGET_BLOOM_PREFILTER_FRAG_HEADER "${VR_GENERATED_RENDER_SHADER_DIR}/render_target_bloom_prefilter_frag_spv.hpp")
 set(VR_RENDER_TARGET_BLOOM_BLUR_FRAG_HEADER "${VR_GENERATED_RENDER_SHADER_DIR}/render_target_bloom_blur_frag_spv.hpp")
 set(VR_RENDER_TARGET_BLOOM_COMBINE_FRAG_HEADER "${VR_GENERATED_RENDER_SHADER_DIR}/render_target_bloom_combine_frag_spv.hpp")
+set(VR_RENDER_TARGET_TEMPORAL_MOTION_FRAG_HEADER "${VR_GENERATED_RENDER_SHADER_DIR}/render_target_temporal_motion_frag_spv.hpp")
+set(VR_RENDER_TARGET_TEMPORAL_RESOLVE_FRAG_HEADER "${VR_GENERATED_RENDER_SHADER_DIR}/render_target_temporal_resolve_frag_spv.hpp")
 
 vr_compile_shader_to_header("${VR_SHADER_SOURCE_DIR}/text_2d.vert"
                             "vert"
@@ -295,6 +301,16 @@ vr_compile_shader_to_header("${VR_SHADER_SOURCE_DIR}/geometry_3d.frag"
                             "frag"
                             "k_geometry_3d_frag_spv"
                             "${VR_GEOMETRY_3D_FRAG_HEADER}"
+                            "vr::geometry::generated")
+vr_compile_shader_to_header("${VR_SHADER_SOURCE_DIR}/geometry_3d_temporal_motion.vert"
+                            "vert"
+                            "k_geometry_3d_temporal_motion_vert_spv"
+                            "${VR_GEOMETRY_3D_TEMPORAL_MOTION_VERT_HEADER}"
+                            "vr::geometry::generated")
+vr_compile_shader_to_header("${VR_SHADER_SOURCE_DIR}/geometry_3d_temporal_motion.frag"
+                            "frag"
+                            "k_geometry_3d_temporal_motion_frag_spv"
+                            "${VR_GEOMETRY_3D_TEMPORAL_MOTION_FRAG_HEADER}"
                             "vr::geometry::generated")
 vr_compile_shader_to_header("${VR_SHADER_SOURCE_DIR}/geometry_2d.vert"
                             "vert"
@@ -345,6 +361,16 @@ vr_compile_shader_to_header("${VR_SHADER_SOURCE_DIR}/particle_3d.frag"
                             "frag"
                             "k_particle_3d_frag_spv"
                             "${VR_PARTICLE_3D_FRAG_HEADER}"
+                            "vr::particle::generated")
+vr_compile_shader_to_header("${VR_SHADER_SOURCE_DIR}/particle_3d_temporal_motion.vert"
+                            "vert"
+                            "k_particle_3d_temporal_motion_vert_spv"
+                            "${VR_PARTICLE_3D_TEMPORAL_MOTION_VERT_HEADER}"
+                            "vr::particle::generated")
+vr_compile_shader_to_header("${VR_SHADER_SOURCE_DIR}/particle_3d_temporal_motion.frag"
+                            "frag"
+                            "k_particle_3d_temporal_motion_frag_spv"
+                            "${VR_PARTICLE_3D_TEMPORAL_MOTION_FRAG_HEADER}"
                             "vr::particle::generated")
 vr_compile_shader_to_header("${VR_SHADER_SOURCE_DIR}/particle_update_2d.comp"
                             "comp"
@@ -436,6 +462,16 @@ vr_compile_shader_to_header("${VR_SHADER_SOURCE_DIR}/render_target_bloom_combine
                             "k_render_target_bloom_combine_frag_spv"
                             "${VR_RENDER_TARGET_BLOOM_COMBINE_FRAG_HEADER}"
                             "vr::render::generated")
+vr_compile_shader_to_header("${VR_SHADER_SOURCE_DIR}/render_target_temporal_motion.frag"
+                            "frag"
+                            "k_render_target_temporal_motion_frag_spv"
+                            "${VR_RENDER_TARGET_TEMPORAL_MOTION_FRAG_HEADER}"
+                            "vr::render::generated")
+vr_compile_shader_to_header("${VR_SHADER_SOURCE_DIR}/render_target_temporal_resolve.frag"
+                            "frag"
+                            "k_render_target_temporal_resolve_frag_spv"
+                            "${VR_RENDER_TARGET_TEMPORAL_RESOLVE_FRAG_HEADER}"
+                            "vr::render::generated")
 
 add_custom_target(vr_generated_shaders
     DEPENDS
@@ -447,6 +483,8 @@ add_custom_target(vr_generated_shaders
         "${VR_GEOMETRY_2D_FRAG_HEADER}"
         "${VR_GEOMETRY_3D_VERT_HEADER}"
         "${VR_GEOMETRY_3D_FRAG_HEADER}"
+        "${VR_GEOMETRY_3D_TEMPORAL_MOTION_VERT_HEADER}"
+        "${VR_GEOMETRY_3D_TEMPORAL_MOTION_FRAG_HEADER}"
         "${VR_SURFACE_2D_VERT_HEADER}"
         "${VR_SURFACE_2D_FRAG_HEADER}"
         "${VR_SURFACE_3D_VERT_HEADER}"
@@ -455,6 +493,8 @@ add_custom_target(vr_generated_shaders
         "${VR_PARTICLE_2D_FRAG_HEADER}"
         "${VR_PARTICLE_3D_VERT_HEADER}"
         "${VR_PARTICLE_3D_FRAG_HEADER}"
+        "${VR_PARTICLE_3D_TEMPORAL_MOTION_VERT_HEADER}"
+        "${VR_PARTICLE_3D_TEMPORAL_MOTION_FRAG_HEADER}"
         "${VR_PARTICLE_UPDATE_2D_COMP_HEADER}"
         "${VR_PARTICLE_UPDATE_3D_COMP_HEADER}"
         "${VR_PARTICLE_BUILD_2D_COMP_HEADER}"
@@ -472,6 +512,8 @@ add_custom_target(vr_generated_shaders
         "${VR_RENDER_TARGET_BLOOM_PREFILTER_FRAG_HEADER}"
         "${VR_RENDER_TARGET_BLOOM_BLUR_FRAG_HEADER}"
         "${VR_RENDER_TARGET_BLOOM_COMBINE_FRAG_HEADER}"
+        "${VR_RENDER_TARGET_TEMPORAL_MOTION_FRAG_HEADER}"
+        "${VR_RENDER_TARGET_TEMPORAL_RESOLVE_FRAG_HEADER}"
         ${VR_SHADER_REFLECTION_OUTPUTS}
         ${VR_SHADER_CONTRACT_OUTPUTS}
 )
@@ -514,6 +556,7 @@ add_library(vulkan_init STATIC
     src/render_graph/render_graph_builder_compile.cpp
     src/render_graph/render_graph_builder_mutation.cpp
     src/render_graph/compiled_render_graph_debug.cpp
+    src/render_graph/compiled_render_graph_observability.cpp
     src/render_graph/render_graph_executor.cpp
     src/render_graph/vulkan_barrier_plan.cpp
     src/render_graph/vulkan_resource_table.cpp
@@ -537,6 +580,8 @@ add_library(vulkan_init STATIC
     src/render/background_pass_2d.cpp
     src/render/render_target_composite_renderer.cpp
     src/render/render_target_bloom_renderer.cpp
+    src/render/render_target_temporal_motion_renderer.cpp
+    src/render/render_target_temporal_resolve_renderer.cpp
     src/render/scene_recorder_2d.cpp
     src/render/scene_recorder_2d_registration.cpp
     src/render/scene_recorder_2d_prepare.cpp
@@ -613,6 +658,7 @@ target_include_directories(vulkan_init
 target_compile_definitions(vulkan_init
     PUBLIC
         VR_ENABLE_DESCRIPTOR_VALIDATION=$<IF:$<BOOL:${VR_ENABLE_DESCRIPTOR_VALIDATION}>,1,0>
+        VR_ENABLE_DEBUG_OBSERVABILITY=$<IF:$<CONFIG:Release>,0,1>
 )
 
 target_link_libraries(vulkan_init

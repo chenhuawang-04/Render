@@ -5,6 +5,7 @@
 #include "vr/render/retire_bus.hpp"
 #include "vr/render/upload_host.hpp"
 #include "vr/resource/image_host.hpp"
+#include "vr/runtime/runtime_ingress_ids.hpp"
 #include "vr/vulkan_context.hpp"
 
 #include <cstdint>
@@ -29,7 +30,7 @@ struct GeometryImageHostCreateInfo {
 };
 
 struct GeometryImageUploadInfo {
-    std::uint32_t image_id = 0U;
+    GeometryImageId image_id{};
     const void* pixels = nullptr;
     std::uint32_t width = 0U;
     std::uint32_t height = 0U;
@@ -77,7 +78,7 @@ public:
             std::uint64_t retire_value = 0U;
         };
 
-        std::uint32_t image_id = 0U;
+        GeometryImageId image_id{};
         std::uint32_t width = 0U;
         std::uint32_t height = 0U;
         VkFormat format = VK_FORMAT_UNDEFINED;
@@ -118,18 +119,18 @@ public:
                      const GeometryImageUploadInfo& upload_info_);
 
     [[nodiscard]] bool RemoveImage(VulkanContext& context_,
-                                   std::uint32_t image_id_,
+                                   GeometryImageId image_id_,
                                    std::uint64_t last_submitted_value_,
                                    std::uint64_t completed_submit_value_);
 
-    [[nodiscard]] const ImageRecord* FindImage(std::uint32_t image_id_) const noexcept;
-    [[nodiscard]] render::BindlessSlot ResolveBindlessImageSlot(std::uint32_t image_id_) const noexcept;
+    [[nodiscard]] const ImageRecord* FindImage(GeometryImageId image_id_) const noexcept;
+    [[nodiscard]] render::BindlessSlot ResolveBindlessImageSlot(GeometryImageId image_id_) const noexcept;
     [[nodiscard]] bool IsInitialized() const noexcept;
     [[nodiscard]] const GeometryImageHostStats& Stats() const noexcept;
     [[nodiscard]] const GeometryImageHostBindlessConfig& BindlessConfig() const noexcept;
 
 private:
-    [[nodiscard]] std::size_t LowerBoundImageIndex(std::uint32_t image_id_) const noexcept;
+    [[nodiscard]] std::size_t LowerBoundImageIndex(GeometryImageId image_id_) const noexcept;
     void RetireImage(ImageRecord& record_,
                      std::uint64_t retire_value_);
     void CollectRetiredImages(VulkanContext& context_,

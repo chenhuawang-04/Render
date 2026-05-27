@@ -186,16 +186,17 @@ struct ResolvedAppearanceSampledSurfaceBinding3D final {
     }
 
     switch (handle_.domain) {
-    case AppearanceSampledSurfaceDomain::surface_image:
+    case AppearanceSampledSurfaceDomain::surface_image: {
         if (resolver_.surface_image_host == nullptr || !resolver_.surface_image_host->IsInitialized()) {
             return resolved;
         }
-        if (resolver_.surface_image_host->FindImage(handle_.surface_id) == nullptr) {
+        const surface::SurfaceImageId surface_image_id{handle_.surface_id};
+        if (resolver_.surface_image_host->FindImage(surface_image_id) == nullptr) {
             return resolved;
         }
         {
             const BindlessSlot slot =
-                resolver_.surface_image_host->ResolveBindlessImageSlot(handle_.surface_id);
+                resolver_.surface_image_host->ResolveBindlessImageSlot(surface_image_id);
             if (!slot.IsValid()) {
                 return resolved;
             }
@@ -203,16 +204,18 @@ struct ResolvedAppearanceSampledSurfaceBinding3D final {
             resolved.present = true;
             return resolved;
         }
-    case AppearanceSampledSurfaceDomain::geometry_image:
+    }
+    case AppearanceSampledSurfaceDomain::geometry_image: {
         if (resolver_.geometry_image_host == nullptr || !resolver_.geometry_image_host->IsInitialized()) {
             return resolved;
         }
-        if (resolver_.geometry_image_host->FindImage(handle_.surface_id) == nullptr) {
+        const geometry::GeometryImageId geometry_image_id{handle_.surface_id};
+        if (resolver_.geometry_image_host->FindImage(geometry_image_id) == nullptr) {
             return resolved;
         }
         {
             const BindlessSlot slot =
-                resolver_.geometry_image_host->ResolveBindlessImageSlot(handle_.surface_id);
+                resolver_.geometry_image_host->ResolveBindlessImageSlot(geometry_image_id);
             if (!slot.IsValid()) {
                 return resolved;
             }
@@ -220,6 +223,7 @@ struct ResolvedAppearanceSampledSurfaceBinding3D final {
             resolved.present = true;
             return resolved;
         }
+    }
     case AppearanceSampledSurfaceDomain::asset_texture:
     default:
         break;

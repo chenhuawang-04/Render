@@ -49,6 +49,11 @@ namespace {
 
 } // namespace
 
+void TextRenderer3D::ClearPendingTransformDirtyHint() noexcept {
+    pending_transform_dirty_component_indices = nullptr;
+    pending_transform_dirty_component_count = 0U;
+}
+
 bool TextRenderer3D::IsDepthFormatSupported(VulkanContext& context_,
                                             VkFormat format_) noexcept {
     if (format_ == VK_FORMAT_UNDEFINED || context_.PhysicalDevice() == VK_NULL_HANDLE) {
@@ -174,6 +179,11 @@ void TextRenderer3D::Initialize(const TextRenderer3DCreateInfo& create_info_) {
     instance_geometry_valid = false;
     contains_billboard_instances = false;
     active_camera_reverse_z = false;
+    ClearPendingTransformDirtyHint();
+    last_prepare_pending_transform_dirty_component_count = 0U;
+    last_prepare_used_pending_transform_dirty = false;
+    last_prepare_runtime_rebuild_required = false;
+    last_prepare_instance_rebuild_required = false;
     stats = {};
 
     for (auto& pipeline_id : graphics_pipeline_ids) {
@@ -273,6 +283,11 @@ void TextRenderer3D::Shutdown(VulkanContext& context_) {
     runtime_geometry_revision = 1U;
     last_submitted_value_seen = 0U;
     completed_submit_value_seen = 0U;
+    ClearPendingTransformDirtyHint();
+    last_prepare_pending_transform_dirty_component_count = 0U;
+    last_prepare_used_pending_transform_dirty = false;
+    last_prepare_runtime_rebuild_required = false;
+    last_prepare_instance_rebuild_required = false;
     runtime_geometry_valid = false;
     instance_geometry_valid = false;
     contains_billboard_instances = false;
@@ -323,4 +338,3 @@ const TextRenderer3DStats& TextRenderer3D::Stats() const noexcept {
 }
 
 } // namespace vr::text
-

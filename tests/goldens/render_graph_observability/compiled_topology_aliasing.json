@@ -1,0 +1,320 @@
+{
+  "topologySummary": {
+    "executionOrderCount": 4,
+    "passCount": 4,
+    "executablePassCount": 0,
+    "culledPassCount": 4,
+    "resourceCount": 2,
+    "livenessRangeCount": 4,
+    "queueBatchCount": 1,
+    "queueDependencyCount": 0,
+    "queueBatchHostBoundaryCount": 0,
+    "queueDependencyHostBoundaryCount": 0,
+    "barrierBatchCount": 3,
+    "barrierCount": 3,
+    "aliasCandidateCount": 1,
+    "aliasBarrierCount": 1,
+    "nativePassGroupCount": 0,
+    "nativePassBoundaryCount": 0,
+    "logicalRasterPassCount": 0,
+    "fusedRasterPassCount": 0,
+    "storeElisionCount": 0,
+    "loadInferenceCount": 0,
+    "effectiveClearAttachmentCount": 0,
+    "localReadCandidateCount": 0
+  },
+  "executionOrder": [0, 1, 2, 3],
+  "resources": [
+    {
+      "resourceId": 0,
+      "name": "temp_a",
+      "kind": "buffer",
+      "lifetime": "transient"
+    },
+    {
+      "resourceId": 1,
+      "name": "temp_b",
+      "kind": "buffer",
+      "lifetime": "transient"
+    }
+  ],
+  "passes": [
+    {
+      "passId": 0,
+      "name": "pass_a",
+      "sideEffect": false,
+      "executable": false,
+      "queue": "graphics",
+      "compileHints": {"forceNativePassSplit": false},
+      "raster": {"enabled": false, "colorAttachmentCount": 0, "hasDepthAttachment": false},
+      "dependencyPassIds": [],
+      "dependencyPassNames": [],
+      "reads": [],
+      "writes": [{"resourceIndex": 0, "version": 1, "resourceName": "temp_a#v1", "resourceKind": "buffer", "access": "shader_storage_write", "bufferRange": {"offsetBytes": 0, "sizeBytes": 0}}],
+      "descriptorBindingCount": 0
+    },
+    {
+      "passId": 1,
+      "name": "pass_b",
+      "sideEffect": true,
+      "executable": false,
+      "queue": "graphics",
+      "compileHints": {"forceNativePassSplit": false},
+      "raster": {"enabled": false, "colorAttachmentCount": 0, "hasDepthAttachment": false},
+      "dependencyPassIds": [0],
+      "dependencyPassNames": ["pass_a"],
+      "reads": [{"resourceIndex": 0, "version": 1, "resourceName": "temp_a#v1", "resourceKind": "buffer", "access": "shader_storage_read", "bufferRange": {"offsetBytes": 0, "sizeBytes": 0}}],
+      "writes": [],
+      "descriptorBindingCount": 0
+    },
+    {
+      "passId": 2,
+      "name": "pass_c",
+      "sideEffect": false,
+      "executable": false,
+      "queue": "graphics",
+      "compileHints": {"forceNativePassSplit": false},
+      "raster": {"enabled": false, "colorAttachmentCount": 0, "hasDepthAttachment": false},
+      "dependencyPassIds": [],
+      "dependencyPassNames": [],
+      "reads": [],
+      "writes": [{"resourceIndex": 1, "version": 1, "resourceName": "temp_b#v1", "resourceKind": "buffer", "access": "shader_storage_write", "bufferRange": {"offsetBytes": 0, "sizeBytes": 0}}],
+      "descriptorBindingCount": 0
+    },
+    {
+      "passId": 3,
+      "name": "pass_d",
+      "sideEffect": true,
+      "executable": false,
+      "queue": "graphics",
+      "compileHints": {"forceNativePassSplit": false},
+      "raster": {"enabled": false, "colorAttachmentCount": 0, "hasDepthAttachment": false},
+      "dependencyPassIds": [2],
+      "dependencyPassNames": ["pass_c"],
+      "reads": [{"resourceIndex": 1, "version": 1, "resourceName": "temp_b#v1", "resourceKind": "buffer", "access": "shader_storage_read", "bufferRange": {"offsetBytes": 0, "sizeBytes": 0}}],
+      "writes": [],
+      "descriptorBindingCount": 0
+    }
+  ],
+  "livenessRanges": [
+    {
+      "resourceIndex": 0,
+      "version": 0,
+      "name": "temp_a#v0",
+      "kind": "buffer",
+      "lifetime": "transient",
+      "firstPassOrder": 0,
+      "lastPassOrder": 0
+    },
+    {
+      "resourceIndex": 0,
+      "version": 1,
+      "name": "temp_a#v1",
+      "kind": "buffer",
+      "lifetime": "transient",
+      "firstPassOrder": 0,
+      "lastPassOrder": 1
+    },
+    {
+      "resourceIndex": 1,
+      "version": 0,
+      "name": "temp_b#v0",
+      "kind": "buffer",
+      "lifetime": "transient",
+      "firstPassOrder": 2,
+      "lastPassOrder": 2
+    },
+    {
+      "resourceIndex": 1,
+      "version": 1,
+      "name": "temp_b#v1",
+      "kind": "buffer",
+      "lifetime": "transient",
+      "firstPassOrder": 2,
+      "lastPassOrder": 3
+    }
+  ],
+  "transientMemory": {
+    "summary": {
+      "logicalTotalBytes": 8192,
+      "physicalTotalBytes": 4096,
+      "peakLogicalLiveBytes": 4096,
+      "peakLiveBytes": 4096,
+      "savedBytes": 4096,
+      "transientResourceCount": 2,
+      "eligibleResourceCount": 2,
+      "aliasedResourceCount": 2,
+      "pageCount": 1,
+      "aliasCandidateCount": 1,
+      "aliasBarrierCount": 1,
+      "timelineSampleCount": 4
+    },
+    "records": [
+      {
+        "resourceId": 0,
+        "name": "temp_a",
+        "kind": "buffer",
+        "lifetime": "transient",
+        "footprint": {
+          "sizeBytes": 4096,
+          "alignmentBytes": 1,
+          "memoryTypeBits": 4294967295,
+          "usageFlags": 8,
+          "dedicatedRequired": false,
+          "dedicatedPreferred": false,
+          "hostVisible": false,
+          "persistentlyMapped": false,
+          "lazyMemoryRequested": false
+        },
+        "firstPassOrder": 0,
+        "lastPassOrder": 1,
+        "pageIndex": 0,
+        "pageOffsetBytes": 0,
+        "aliasGroup": 0,
+        "eligible": true,
+        "aliased": true,
+        "rejectionReason": ""
+      },
+      {
+        "resourceId": 1,
+        "name": "temp_b",
+        "kind": "buffer",
+        "lifetime": "transient",
+        "footprint": {
+          "sizeBytes": 4096,
+          "alignmentBytes": 1,
+          "memoryTypeBits": 4294967295,
+          "usageFlags": 8,
+          "dedicatedRequired": false,
+          "dedicatedPreferred": false,
+          "hostVisible": false,
+          "persistentlyMapped": false,
+          "lazyMemoryRequested": false
+        },
+        "firstPassOrder": 2,
+        "lastPassOrder": 3,
+        "pageIndex": 0,
+        "pageOffsetBytes": 0,
+        "aliasGroup": 0,
+        "eligible": true,
+        "aliased": true,
+        "rejectionReason": ""
+      }
+    ],
+    "pages": [
+      {
+        "pageIndex": 0,
+        "kind": "buffer",
+        "sizeBytes": 4096,
+        "alignmentBytes": 1,
+        "lazyMemoryRequested": false,
+        "resourceIds": [0, 1],
+        "resourceNames": ["temp_a", "temp_b"]
+      }
+    ],
+    "timelineSamples": [
+      {
+        "passOrder": 0,
+        "logicalLiveBytes": 4096,
+        "physicalLiveBytes": 4096,
+        "livePageCount": 1
+      },
+      {
+        "passOrder": 1,
+        "logicalLiveBytes": 4096,
+        "physicalLiveBytes": 4096,
+        "livePageCount": 1
+      },
+      {
+        "passOrder": 2,
+        "logicalLiveBytes": 4096,
+        "physicalLiveBytes": 4096,
+        "livePageCount": 1
+      },
+      {
+        "passOrder": 3,
+        "logicalLiveBytes": 4096,
+        "physicalLiveBytes": 4096,
+        "livePageCount": 1
+      }
+    ],
+    "aliasCandidates": [
+      {
+        "firstResourceId": 0,
+        "firstName": "temp_a",
+        "secondResourceId": 1,
+        "secondName": "temp_b",
+        "kind": "buffer",
+        "sameCompatibilityClass": true,
+        "overlappingLiveness": false,
+        "aliasable": true,
+        "nonAliasReason": ""
+      }
+    ],
+    "aliasBarriers": [
+      {
+        "previousResourceId": 0,
+        "previousName": "temp_a",
+        "nextResourceId": 1,
+        "nextName": "temp_b",
+        "pageIndex": 0,
+        "previousLastPassOrder": 1,
+        "nextFirstPassOrder": 2,
+        "required": true,
+        "realized": false
+      }
+    ]
+  },
+  "queueBatches": [
+    {
+      "queueBatchId": 0,
+      "queue": "graphics",
+      "passIds": [0, 1, 2, 3],
+      "passNames": ["pass_a", "pass_b", "pass_c", "pass_d"],
+      "waitDependencyIds": [],
+      "signalDependencyIds": [],
+      "barrierBatchIds": [0, 1, 2],
+      "containsHostBoundary": false
+    }
+  ],
+  "queueDependencies": [
+  ],
+  "barrierBatches": [
+    {
+      "barrierBatchId": 0,
+      "passId": 1,
+      "passName": "pass_b",
+      "queue": "graphics",
+      "barriers": [{"resourceIndex": 0, "version": 1, "name": "temp_a#v1", "kind": "buffer", "before": "shader_storage_write", "after": "shader_storage_read", "srcQueue": "graphics", "dstQueue": "graphics", "srcPassId": 0, "dstPassId": 1, "srcPass": "pass_a", "dstPass": "pass_b", "srcPassOrder": 0, "dstPassOrder": 1, "queueTransfer": false, "hostBoundary": false, "aliasing": false, "uavOrdering": true, "bufferRange": {"offsetBytes": 0, "sizeBytes": 0}}]
+    },
+    {
+      "barrierBatchId": 1,
+      "passId": 2,
+      "passName": "pass_c",
+      "queue": "graphics",
+      "barriers": [{"resourceIndex": 1, "version": 1, "name": "temp_b#v1", "kind": "buffer", "before": "shader_storage_read", "after": "shader_storage_write", "srcQueue": "graphics", "dstQueue": "graphics", "srcPassId": 1, "dstPassId": 2, "srcPass": "pass_b", "dstPass": "pass_c", "srcPassOrder": 1, "dstPassOrder": 2, "queueTransfer": false, "hostBoundary": false, "aliasing": true, "uavOrdering": false, "bufferRange": {"offsetBytes": 0, "sizeBytes": 0}}]
+    },
+    {
+      "barrierBatchId": 2,
+      "passId": 3,
+      "passName": "pass_d",
+      "queue": "graphics",
+      "barriers": [{"resourceIndex": 1, "version": 1, "name": "temp_b#v1", "kind": "buffer", "before": "shader_storage_write", "after": "shader_storage_read", "srcQueue": "graphics", "dstQueue": "graphics", "srcPassId": 2, "dstPassId": 3, "srcPass": "pass_c", "dstPass": "pass_d", "srcPassOrder": 2, "dstPassOrder": 3, "queueTransfer": false, "hostBoundary": false, "aliasing": false, "uavOrdering": true, "bufferRange": {"offsetBytes": 0, "sizeBytes": 0}}]
+    }
+  ],
+  "nativePassTopology": {
+    "localRead": {
+      "requested": false,
+      "supported": false,
+      "deviceEnabled": false,
+      "candidate": false,
+      "status": "not_applicable",
+      "reason": "no_candidate_boundary",
+      "detail": "no sampled attachment boundary qualified for local-read/TBR evaluation"
+    },
+    "groups": [
+    ],
+    "boundaries": [
+    ]
+  }
+}

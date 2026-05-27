@@ -5,45 +5,6 @@
 
 namespace {
 
-[[nodiscard]] std::string_view QueueClassName(
-    const vr::render_graph::QueueClass queue_) noexcept {
-    switch (queue_) {
-    case vr::render_graph::QueueClass::graphics:
-        return "graphics";
-    case vr::render_graph::QueueClass::compute:
-        return "compute";
-    case vr::render_graph::QueueClass::transfer:
-        return "transfer";
-    default:
-        break;
-    }
-    return "unknown";
-}
-
-void AppendIndexListToStream(std::ostringstream& oss_,
-                             const std::vector<std::uint32_t>& values_) {
-    oss_ << '[';
-    for (std::size_t index = 0U; index < values_.size(); ++index) {
-        if (index != 0U) {
-            oss_ << ',';
-        }
-        oss_ << values_[index];
-    }
-    oss_ << ']';
-}
-
-void AppendStringListToStream(std::ostringstream& oss_,
-                              const std::vector<std::string>& values_) {
-    oss_ << '[';
-    for (std::size_t index = 0U; index < values_.size(); ++index) {
-        if (index != 0U) {
-            oss_ << ',';
-        }
-        oss_ << values_[index];
-    }
-    oss_ << ']';
-}
-
 [[nodiscard]] bool BarrierPlanContainsHostBoundary(
     const vr::render_graph::BarrierPlan& barrier_plan_) noexcept {
     return std::any_of(
@@ -55,9 +16,29 @@ void AppendStringListToStream(std::ostringstream& oss_,
            std::any_of(
                barrier_plan_.queue_dependencies.begin(),
                barrier_plan_.queue_dependencies.end(),
-               [](const vr::render_graph::QueueDependencyPlan& dependency_) {
-                   return dependency_.host_boundary;
-               });
+                [](const vr::render_graph::QueueDependencyPlan& dependency_) {
+                    return dependency_.host_boundary;
+                });
+}
+
+[[nodiscard]] std::string BuildQueueBatchMarkerLabel(
+    const vr::render_graph::QueueClass queue_,
+    const std::uint32_t batch_index_,
+    const std::vector<std::string>& pass_debug_names_) {
+    std::ostringstream label{};
+    label << "queue_batch[" << batch_index_ << "]/"
+          << vr::runtime::RenderGraphQueueClassName(queue_);
+    if (!pass_debug_names_.empty()) {
+        label << '/';
+        if (pass_debug_names_.size() == 1U) {
+            label << pass_debug_names_.front();
+        } else {
+            label << pass_debug_names_.front()
+                  << ".."
+                  << pass_debug_names_.back();
+        }
+    }
+    return label.str();
 }
 
 } // namespace
@@ -96,7 +77,8 @@ RenderGraphRuntimeService::TryFindPreparedSubmitBatch(
 }
 
 void RenderGraphRuntimeService::BuildEffectiveQueueDiagnostics(
-    vr::runtime::RenderGraphRuntimeDiagnostics& diagnostics_) const {
+    vr::runtime::RenderGraphRuntimeDiagnostics& diagnostics_,
+    const bool include_detailed_) const {
     diagnostics_.graphics_submit_wait_count = static_cast<std::uint32_t>(
         prepared_multi_queue_submission.graphics_waits.size());
     diagnostics_.non_graphics_submit_batch_count = static_cast<std::uint32_t>(
@@ -116,136 +98,169 @@ void RenderGraphRuntimeService::BuildEffectiveQueueDiagnostics(
         (queue_execution_policy.multi_queue_enabled ||
          preserve_host_boundary_fallback_topology) &&
         !barrier_plan.queue_batches.empty();
-    const auto resolve_effective_queue_name =
-        [&](const render_graph::QueueClass queue_) -> std::string {
+    const auto resolve_effective_queue =
+        [&](const render_graph::QueueClass queue_) noexcept {
             return preserve_host_boundary_fallback_topology
-                ? std::string("graphics")
-                : std::string(QueueClassName(queue_));
+                ? render_graph::QueueClass::graphics
+                : queue_;
         };
 
     if (preserve_effective_queue_topology) {
-        diagnostics_.effective_queue_batches.reserve(barrier_plan.queue_batches.size());
-        diagnostics_.effective_queue_dependencies.reserve(barrier_plan.queue_dependencies.size());
+        if (include_detailed_) {
+            diagnostics_.effective_queue_batches.reserve(
+                barrier_plan.queue_batches.size());
+            diagnostics_.effective_queue_dependencies.reserve(
+                barrier_plan.queue_dependencies.size());
+        }
 
         for (std::uint32_t dependency_index = 0U;
              dependency_index < static_cast<std::uint32_t>(barrier_plan.queue_dependencies.size());
              ++dependency_index) {
             const auto& dependency_ = barrier_plan.queue_dependencies[dependency_index];
-            diagnostics_.effective_queue_dependencies.push_back(
-                vr::runtime::RenderGraphQueueDependencyDiagnostics{
-                    .dependency_index = dependency_index,
-                    .source_queue_name = resolve_effective_queue_name(dependency_.source_queue),
-                    .target_queue_name = resolve_effective_queue_name(dependency_.target_queue),
-                    .source_batch_index = dependency_.source_batch_index,
-                    .target_batch_index = dependency_.target_batch_index,
-                    .source_pass_index = dependency_.source_pass.index,
-                    .target_pass_index = dependency_.target_pass.index,
-                    .source_pass_debug_name = ResolvePassDebugName(dependency_.source_pass),
-                    .target_pass_debug_name = ResolvePassDebugName(dependency_.target_pass),
-                    .resource_count = static_cast<std::uint32_t>(dependency_.resources.size()),
-                    .queue_transfer = dependency_.queue_transfer,
-                    .host_boundary = dependency_.host_boundary,
-                });
+            const auto source_queue = resolve_effective_queue(
+                dependency_.source_queue);
+            const auto target_queue = resolve_effective_queue(
+                dependency_.target_queue);
+
+            ++diagnostics_.effective_queue_dependency_count;
+            if (dependency_.queue_transfer || source_queue != target_queue) {
+                ++diagnostics_.effective_cross_queue_dependency_count;
+            }
+
+            if (include_detailed_) {
+                diagnostics_.effective_queue_dependencies.push_back(
+                    vr::runtime::RenderGraphQueueDependencyDiagnostics{
+                        .dependency_id = dependency_index,
+                        .source_queue = source_queue,
+                        .target_queue = target_queue,
+                        .source_batch_id = dependency_.source_batch_index,
+                        .target_batch_id = dependency_.target_batch_index,
+                        .source_pass_id = dependency_.source_pass.index,
+                        .target_pass_id = dependency_.target_pass.index,
+                        .source_pass_debug_name =
+                            ResolvePassDebugName(dependency_.source_pass),
+                        .target_pass_debug_name =
+                            ResolvePassDebugName(dependency_.target_pass),
+                        .resource_count = static_cast<std::uint32_t>(
+                            dependency_.resources.size()),
+                        .queue_transfer = dependency_.queue_transfer,
+                        .host_boundary = dependency_.host_boundary,
+                    });
+            }
         }
 
         for (std::uint32_t batch_index = 0U;
              batch_index < static_cast<std::uint32_t>(barrier_plan.queue_batches.size());
              ++batch_index) {
             const auto& batch_ = barrier_plan.queue_batches[batch_index];
-            vr::runtime::RenderGraphQueueBatchDiagnostics batch_diagnostics{};
-            batch_diagnostics.batch_index = batch_index;
-            batch_diagnostics.queue_name = resolve_effective_queue_name(batch_.queue);
-            batch_diagnostics.wait_dependency_indices = batch_.wait_dependency_indices;
-            batch_diagnostics.signal_dependency_indices = batch_.signal_dependency_indices;
-            batch_diagnostics.barrier_batch_indices = batch_.barrier_batch_indices;
-            batch_diagnostics.contains_host_boundary = batch_.contains_host_boundary;
-            batch_diagnostics.pass_indices.reserve(batch_.passes.size());
-            batch_diagnostics.pass_debug_names.reserve(batch_.passes.size());
-            for (const auto pass_handle_ : batch_.passes) {
-                batch_diagnostics.pass_indices.push_back(pass_handle_.index);
-                batch_diagnostics.pass_debug_names.push_back(
-                    ResolvePassDebugName(pass_handle_));
+            const auto effective_queue = resolve_effective_queue(batch_.queue);
+            ++diagnostics_.effective_queue_batch_count;
+            switch (effective_queue) {
+            case render_graph::QueueClass::graphics:
+                ++diagnostics_.effective_graphics_queue_batch_count;
+                break;
+            case render_graph::QueueClass::compute:
+                ++diagnostics_.effective_compute_queue_batch_count;
+                break;
+            case render_graph::QueueClass::transfer:
+                ++diagnostics_.effective_transfer_queue_batch_count;
+                break;
             }
+
+            vr::runtime::RenderGraphQueueBatchDiagnostics batch_diagnostics{};
+            if (include_detailed_) {
+                batch_diagnostics.batch_id = batch_index;
+                batch_diagnostics.queue = effective_queue;
+                batch_diagnostics.wait_dependency_ids.reserve(
+                    batch_.wait_dependency_indices.size());
+                batch_diagnostics.signal_dependency_ids.reserve(
+                    batch_.signal_dependency_indices.size());
+                batch_diagnostics.barrier_batch_ids.reserve(
+                    batch_.barrier_batch_indices.size());
+                batch_diagnostics.contains_host_boundary =
+                    batch_.contains_host_boundary;
+                batch_diagnostics.pass_ids.reserve(batch_.passes.size());
+                batch_diagnostics.pass_debug_names.reserve(batch_.passes.size());
+                for (const auto dependency_id :
+                     batch_.wait_dependency_indices) {
+                    batch_diagnostics.wait_dependency_ids.push_back(
+                        dependency_id);
+                }
+                for (const auto dependency_id :
+                     batch_.signal_dependency_indices) {
+                    batch_diagnostics.signal_dependency_ids.push_back(
+                        dependency_id);
+                }
+                for (const auto barrier_batch_id :
+                     batch_.barrier_batch_indices) {
+                    batch_diagnostics.barrier_batch_ids.push_back(
+                        barrier_batch_id);
+                }
+                for (const auto pass_handle_ : batch_.passes) {
+                    batch_diagnostics.pass_ids.push_back(pass_handle_.index);
+                    batch_diagnostics.pass_debug_names.push_back(
+                        ResolvePassDebugName(pass_handle_));
+                }
+            }
+
+            std::uint32_t submit_wait_count = 0U;
+            std::uint32_t submit_signal_count = 0U;
+            bool submitted_on_owned_queue = false;
 
             if (!preserve_host_boundary_fallback_topology) {
                 if (const auto* prepared_batch = TryFindPreparedSubmitBatch(batch_index);
                     prepared_batch != nullptr) {
-                    batch_diagnostics.submit_wait_count =
+                    submit_wait_count =
                         static_cast<std::uint32_t>(prepared_batch->wait_semaphores.size());
-                    batch_diagnostics.submit_signal_count =
+                    submit_signal_count =
                         static_cast<std::uint32_t>(prepared_batch->signal_semaphores.size());
-                    batch_diagnostics.submitted_on_owned_queue = true;
+                    submitted_on_owned_queue = true;
                 } else if (batch_index == prepared_multi_queue_submission.graphics_batch_index) {
-                    batch_diagnostics.submit_wait_count = diagnostics_.graphics_submit_wait_count;
+                    submit_wait_count = diagnostics_.graphics_submit_wait_count;
                 }
             }
 
-            diagnostics_.effective_queue_batches.push_back(std::move(batch_diagnostics));
+            diagnostics_.effective_total_submit_wait_count += submit_wait_count;
+            diagnostics_.effective_total_submit_signal_count += submit_signal_count;
+            if (submitted_on_owned_queue) {
+                ++diagnostics_.effective_owned_submit_batch_count;
+            }
+
+            if (include_detailed_) {
+                batch_diagnostics.submit_wait_count = submit_wait_count;
+                batch_diagnostics.submit_signal_count = submit_signal_count;
+                batch_diagnostics.submitted_on_owned_queue =
+                    submitted_on_owned_queue;
+                diagnostics_.effective_queue_batches.push_back(
+                    std::move(batch_diagnostics));
+            }
         }
     } else {
         vr::runtime::RenderGraphQueueBatchDiagnostics batch_diagnostics{};
-        batch_diagnostics.batch_index = 0U;
-        batch_diagnostics.queue_name = "graphics";
+        std::uint32_t executable_pass_count = 0U;
+        if (include_detailed_) {
+            batch_diagnostics.batch_id = 0U;
+            batch_diagnostics.queue = render_graph::QueueClass::graphics;
+        }
         for (const auto& pass_ : compiled_graph.Passes()) {
             if (!pass_.executable) {
                 continue;
             }
-            batch_diagnostics.pass_indices.push_back(pass_.handle.index);
-            batch_diagnostics.pass_debug_names.push_back(pass_.debug_name);
+            ++executable_pass_count;
+            if (include_detailed_) {
+                batch_diagnostics.pass_ids.push_back(pass_.handle.index);
+                batch_diagnostics.pass_debug_names.push_back(pass_.debug_name);
+            }
         }
-        if (!batch_diagnostics.pass_indices.empty()) {
-            diagnostics_.effective_queue_batches.push_back(std::move(batch_diagnostics));
+        if (executable_pass_count != 0U) {
+            diagnostics_.effective_queue_batch_count = 1U;
+            diagnostics_.effective_graphics_queue_batch_count = 1U;
+            if (include_detailed_) {
+                diagnostics_.effective_queue_batches.push_back(
+                    std::move(batch_diagnostics));
+            }
         }
     }
-
-    diagnostics_.effective_queue_batch_count = static_cast<std::uint32_t>(
-        diagnostics_.effective_queue_batches.size());
-    diagnostics_.effective_queue_dependency_count = static_cast<std::uint32_t>(
-        diagnostics_.effective_queue_dependencies.size());
-}
-
-std::string RenderGraphRuntimeService::BuildEffectiveQueueTimelineDebugString(
-    const vr::runtime::RenderGraphRuntimeDiagnostics& diagnostics_) const {
-    std::ostringstream oss{};
-    oss << "requested transfer=" << (diagnostics_.transfer_queue_requested ? 1 : 0)
-        << " compute=" << (diagnostics_.compute_queue_requested ? 1 : 0)
-        << " multi=" << (diagnostics_.multi_queue_requested ? 1 : 0) << '\n';
-    oss << "enabled transfer=" << (diagnostics_.transfer_queue_enabled ? 1 : 0)
-        << " compute=" << (diagnostics_.compute_queue_enabled ? 1 : 0)
-        << " multi=" << (diagnostics_.multi_queue_enabled ? 1 : 0)
-        << " graphics_fallback=" << (diagnostics_.graphics_fallback_active ? 1 : 0)
-        << '\n';
-    oss << "effective_batches=" << diagnostics_.effective_queue_batch_count
-        << " effective_dependencies=" << diagnostics_.effective_queue_dependency_count
-        << " graphics_submit_waits=" << diagnostics_.graphics_submit_wait_count
-        << " owned_submit_batches=" << diagnostics_.non_graphics_submit_batch_count
-        << '\n';
-    for (const auto& batch_ : diagnostics_.effective_queue_batches) {
-        oss << "batch[" << batch_.batch_index << "] queue=" << batch_.queue_name
-            << " passes=";
-        AppendStringListToStream(oss, batch_.pass_debug_names);
-        oss << " wait_deps=";
-        AppendIndexListToStream(oss, batch_.wait_dependency_indices);
-        oss << " signal_deps=";
-        AppendIndexListToStream(oss, batch_.signal_dependency_indices);
-        oss << " submit_waits=" << batch_.submit_wait_count
-            << " submit_signals=" << batch_.submit_signal_count
-            << " host_boundary=" << (batch_.contains_host_boundary ? 1 : 0)
-            << " owned_submit=" << (batch_.submitted_on_owned_queue ? 1 : 0)
-            << '\n';
-    }
-    for (const auto& dependency_ : diagnostics_.effective_queue_dependencies) {
-        oss << "dependency[" << dependency_.dependency_index << "] "
-            << dependency_.source_queue_name << '[' << dependency_.source_batch_index << ']'
-            << " -> " << dependency_.target_queue_name << '[' << dependency_.target_batch_index << ']'
-            << " source_pass=" << dependency_.source_pass_debug_name
-            << " target_pass=" << dependency_.target_pass_debug_name
-            << " resources=" << dependency_.resource_count
-            << " queue_transfer=" << (dependency_.queue_transfer ? 1 : 0)
-            << " host_boundary=" << (dependency_.host_boundary ? 1 : 0)
-            << '\n';
-    }
-    return oss.str();
 }
 
 std::string RenderGraphRuntimeService::ResolveUnsupportedMultiQueueTopologyReason(
@@ -294,14 +309,26 @@ void RenderGraphRuntimeService::ApplyGraphicsFallback(
 }
 
 void RenderGraphRuntimeService::RefreshDiagnostics(const VulkanContext& device_) {
+#if !VR_ENABLE_DEBUG_OBSERVABILITY
+    (void)device_;
+    return;
+#else
+    if (diagnostics_level == vr::runtime::DiagnosticsLevel::Off) {
+        last_diagnostics = {};
+        return;
+    }
+
+    const bool include_detailed =
+        vr::runtime::DiagnosticsCollectsDetailedData(diagnostics_level);
+    const bool include_gpu_timing =
+        vr::runtime::DiagnosticsCollectsGpuTiming(diagnostics_level);
+    const bool include_capture =
+        vr::runtime::DiagnosticsCollectsCapture(diagnostics_level);
     vr::runtime::RenderGraphRuntimeDiagnostics diagnostics{};
     diagnostics.available = has_compiled_graph;
     diagnostics.frame_compiled = has_compiled_graph && !compiled_graph.Empty();
     diagnostics.graph_only_supported = SupportsGraphExecution(device_);
-    diagnostics.graph_only_active =
-        diagnostics.graph_only_supported &&
-        CanExecuteGraphRecord(device_) &&
-        record_stats.pass_count > 0U;
+    diagnostics.graph_only_active = IsGraphOnlyRecordActive(device_);
     diagnostics.transfer_queue_requested = queue_execution_policy.transfer_requested;
     diagnostics.compute_queue_requested = queue_execution_policy.compute_requested;
     diagnostics.multi_queue_requested = queue_execution_policy.multi_queue_requested;
@@ -346,12 +373,10 @@ void RenderGraphRuntimeService::RefreshDiagnostics(const VulkanContext& device_)
             compiled_graph.NativePasses().local_read.supported;
         diagnostics.dynamic_rendering_local_read_enabled =
             compiled_graph.NativePasses().local_read.device_enabled;
-        diagnostics.dynamic_rendering_local_read_status = std::string(
-            render_graph::NativePassLocalReadStatusName(
-                compiled_graph.NativePasses().local_read.status));
-        diagnostics.dynamic_rendering_local_read_reason = std::string(
-            render_graph::NativePassLocalReadReasonName(
-                compiled_graph.NativePasses().local_read.reason));
+        diagnostics.dynamic_rendering_local_read_status =
+            compiled_graph.NativePasses().local_read.status;
+        diagnostics.dynamic_rendering_local_read_reason =
+            compiled_graph.NativePasses().local_read.reason;
         const auto& timeline = compiled_graph.TransientAllocations().timeline;
         diagnostics.transient_logical_total_bytes = timeline.logical_total_bytes;
         diagnostics.transient_physical_total_bytes = timeline.physical_total_bytes;
@@ -359,13 +384,6 @@ void RenderGraphRuntimeService::RefreshDiagnostics(const VulkanContext& device_)
         diagnostics.transient_saved_bytes = timeline.saved_bytes;
         diagnostics.transient_page_count = timeline.page_count;
         diagnostics.alias_barrier_count = timeline.alias_barrier_count;
-    } else {
-        diagnostics.dynamic_rendering_local_read_status = std::string(
-            render_graph::NativePassLocalReadStatusName(
-                render_graph::NativePassLocalReadStatus::not_applicable));
-        diagnostics.dynamic_rendering_local_read_reason = std::string(
-            render_graph::NativePassLocalReadReasonName(
-                render_graph::NativePassLocalReadReason::none));
     }
     diagnostics.recorded_pass_count = record_stats.pass_count;
     diagnostics.recorded_rendering_scope_count =
@@ -380,24 +398,153 @@ void RenderGraphRuntimeService::RefreshDiagnostics(const VulkanContext& device_)
         physical_resources.Stats().lazy_memory_realized_count;
     diagnostics.lazy_memory_unavailable_count =
         physical_resources.Stats().lazy_memory_unavailable_count;
-    diagnostics.lazy_memory_resources.reserve(
-        physical_resources.LazyMemoryResolutions().size());
-    for (const auto& resolution_ : physical_resources.LazyMemoryResolutions()) {
-        diagnostics.lazy_memory_resources.push_back(
-            vr::runtime::RenderGraphLazyMemoryResourceDiagnostics{
-                .logical_resource_index = resolution_.logical.index,
-                .debug_name = resolution_.debug_name,
-                .requested = resolution_.requested,
-                .realized = resolution_.realized,
-                .unavailable_reason = resolution_.unavailable_reason,
-            });
+    if (include_detailed) {
+        diagnostics.lazy_memory_resources.reserve(
+            physical_resources.LazyMemoryResolutions().size());
+        for (const auto& resolution_ : physical_resources.LazyMemoryResolutions()) {
+            diagnostics.lazy_memory_resources.push_back(
+                vr::runtime::RenderGraphLazyMemoryResourceDiagnostics{
+                    .logical_resource_id = resolution_.logical.index,
+                    .debug_name = resolution_.debug_name,
+                    .requested = resolution_.requested,
+                    .realized = resolution_.realized,
+                    .unavailable_reason = resolution_.unavailable_reason,
+                });
+        }
+        if (has_compiled_graph &&
+            vr::render_graph::CompiledRenderGraphObservabilityAvailableInBuild()) {
+            auto topology_view =
+                vr::render_graph::BuildCompiledRenderGraphTopologyView(
+                    compiled_graph);
+            diagnostics.compile_liveness_ranges =
+                std::move(topology_view.liveness_ranges);
+            diagnostics.compile_transient_memory =
+                std::move(topology_view.transient_memory);
+        }
     }
-    BuildEffectiveQueueDiagnostics(diagnostics);
-    diagnostics.effective_queue_timeline_debug_string =
-        BuildEffectiveQueueTimelineDebugString(diagnostics);
-    diagnostics.effective_queue_timeline_json =
-        vr::runtime::BuildRenderGraphQueueTimelineJson(diagnostics);
+    BuildEffectiveQueueDiagnostics(diagnostics, include_detailed);
+    diagnostics.frame_color_history = {
+        .desc = frame_color_history.desc,
+        .previous =
+            {
+                .handle = frame_color_history.published_slot != invalid_frame_index &&
+                                  frame_color_history.published_slot <
+                                      frame_color_history.slots.size()
+                    ? frame_color_history.slots[frame_color_history.published_slot]
+                          .handle
+                    : render::invalid_render_target_handle,
+                .resource_revision =
+                    frame_color_history.published_slot != invalid_frame_index &&
+                            frame_color_history.published_slot <
+                                frame_color_history.slots.size()
+                        ? frame_color_history.slots[frame_color_history.published_slot]
+                              .resource_revision
+                        : 0U,
+            },
+        .current =
+            {
+                .handle = frame_color_history.write_slot <
+                                  frame_color_history.slots.size()
+                    ? frame_color_history.slots[frame_color_history.write_slot]
+                          .handle
+                    : render::invalid_render_target_handle,
+                .resource_revision =
+                    frame_color_history.write_slot <
+                            frame_color_history.slots.size()
+                        ? frame_color_history.slots[frame_color_history.write_slot]
+                              .resource_revision
+                        : 0U,
+            },
+        .previous_submission_id = frame_color_history.previous_submission_id,
+        .previous_frame_index = frame_color_history.previous_frame_index,
+        .invalidation_reason = frame_color_history.last_invalidation_reason,
+        .previous_available =
+            frame_color_history.published_slot != invalid_frame_index &&
+            frame_color_history.published_slot < frame_color_history.slots.size() &&
+            frame_color_history.last_invalidation_reason ==
+                render_graph::FrameHistoryInvalidationReason::none,
+        .current_writable =
+            frame_color_history.initialized &&
+            frame_color_history.write_slot < frame_color_history.slots.size() &&
+            render::IsValidRenderTargetHandle(
+                frame_color_history.slots[frame_color_history.write_slot].handle),
+    };
+    if (include_gpu_timing) {
+        diagnostics.timing.available = has_compiled_graph;
+        diagnostics.timing.enabled = true;
+        diagnostics.timing.gpu_timestamp_supported = false;
+        diagnostics.timing.domain =
+            last_recorded_queue_batch_timings.empty()
+                ? vr::runtime::RenderGraphTimingDomain::unavailable
+                : vr::runtime::RenderGraphTimingDomain::cpu_record;
+        diagnostics.timing.queue_batch_range_count = static_cast<std::uint32_t>(
+            last_recorded_queue_batch_timings.size());
+        diagnostics.timing.resolved_queue_batch_range_count =
+            diagnostics.timing.queue_batch_range_count;
+        diagnostics.timing.total_duration_ns =
+            last_recorded_timing_total_duration_ns;
+        diagnostics.timing.queue_batch_ranges =
+            last_recorded_queue_batch_timings;
+    }
+    if (include_capture) {
+        diagnostics.capture.available = has_compiled_graph;
+        diagnostics.capture.enabled = true;
+
+        if (!last_recorded_queue_batch_timings.empty()) {
+            diagnostics.capture.markers.reserve(
+                last_recorded_queue_batch_timings.size());
+            for (const auto& timing_ : last_recorded_queue_batch_timings) {
+                diagnostics.capture.markers.push_back(
+                    vr::runtime::RenderGraphCaptureMarkerDiagnostics{
+                        .batch_id = timing_.batch_id,
+                        .queue = timing_.queue,
+                        .pass_ids = timing_.pass_ids,
+                        .pass_debug_names = timing_.pass_debug_names,
+                        .label = timing_.marker_label,
+                    });
+            }
+        } else {
+            diagnostics.capture.markers.reserve(
+                diagnostics.effective_queue_batches.size());
+            for (const auto& batch_ : diagnostics.effective_queue_batches) {
+                diagnostics.capture.markers.push_back(
+                    vr::runtime::RenderGraphCaptureMarkerDiagnostics{
+                        .batch_id = batch_.batch_id,
+                        .queue = batch_.queue,
+                        .pass_ids = batch_.pass_ids,
+                        .pass_debug_names = batch_.pass_debug_names,
+                        .label = BuildQueueBatchMarkerLabel(
+                            batch_.queue,
+                            batch_.batch_id.value,
+                            batch_.pass_debug_names),
+                    });
+            }
+        }
+        diagnostics.capture.marker_count = static_cast<std::uint32_t>(
+            diagnostics.capture.markers.size());
+
+        if (has_compiled_graph &&
+            vr::render_graph::CompiledRenderGraphObservabilityAvailableInBuild()) {
+            diagnostics.capture.artifacts.push_back(
+                vr::runtime::RenderGraphCaptureArtifactDiagnostics{
+                    .captured = true,
+                    .kind = vr::runtime::RenderGraphCaptureArtifactKind::observability_snapshot,
+                    .artifact_label =
+                        "render_graph_capture.frame_" + std::to_string(frame_index),
+                    .topology_json =
+                        vr::render_graph::BuildCompiledRenderGraphTopologyJson(
+                            vr::render_graph::BuildCompiledRenderGraphTopologyView(
+                                compiled_graph)),
+                    .queue_timeline_json =
+                        vr::runtime::BuildRenderGraphQueueTimelineJson(
+                            diagnostics),
+                });
+        }
+        diagnostics.capture.artifact_count = static_cast<std::uint32_t>(
+            diagnostics.capture.artifacts.size());
+    }
     last_diagnostics = std::move(diagnostics);
+#endif
 }
 
 } // namespace vr::runtime::services
